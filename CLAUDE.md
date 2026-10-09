@@ -51,8 +51,8 @@ checks are in `nix/checks/default.nix` and use a test NixOS system with both
 modules and a user alice (the `home-manager` input exists only for it).
 
 - `claude-desktop-eval`: assertions hold, the NixOS wrapper appears only when
-  a user enables the module, for group users, the users-group assertion
-  fires, the netns assertion fires when `sandbox`
+  a user enables the module, for group users, the users-group and
+  graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks

@@ -516,6 +516,10 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
+        assertion = osConfig.hardware.graphics.enable;
+        message = "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
+      }
+      {
         assertion =
           sandboxed.config.bubblewrap.network
           && sandboxed.config.pasta.enable

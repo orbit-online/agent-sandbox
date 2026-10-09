@@ -85,6 +85,16 @@ let
       expr = (nixos { }).config.security.wrappers ? netns-macvlan;
       expected = false;
     };
+    testGraphicsAssertion = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          system.extendModules { modules = [ { hardware.graphics.enable = lib.mkForce false; } ]; }
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server."
+      ];
+    };
     testUsersGroupAssertion = {
       expr = map (a: a.message) (lib.filter (a: !a.assertion) ownGroup.config.assertions);
       expected = [
