@@ -1,4 +1,4 @@
-module github.com/andsens/nixos-andsens/netns-macvlan
+module github.com/orbit-online/agent-sandbox/nix/packages/netns-macvlan
 
 go 1.26.0
 

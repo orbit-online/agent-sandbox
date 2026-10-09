@@ -54,7 +54,7 @@ let
   stateDir = "${config.xdg.dataHome}/claude-desktop";
   bwrapHome = "${stateDir}/home";
   # PATH for the app (so the Code tab's shells) and the claude-code MCP server. ~/.claude/bin first: its gh wraps the real one
-  searchPath = "${config.home.homeDirectory}/.claude/bin:${lib.makeBinPath sandboxPackages}:/run/wrappers/bin:/run/current-system/sw/bin";
+  searchPath = "${config.home.homeDirectory}/.claude/bin:${lib.makeBinPath sandboxPackages}:${osConfig.security.wrapperDir}:/run/current-system/sw/bin";
   # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
   # .out: the man output is a symlink, see storeRoots
   sandboxPackages = cfg.path ++ [ osConfig.nix.package.out ];
@@ -223,10 +223,10 @@ let
         "org.freedesktop.Notifications" = "talk";
       }
       // lib.optionalAttrs cfg.tray {
-        # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 10
-        # in the sandbox's pid ns (after bwrap, the FHS init and its /etc/profile forks)
+        # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 18 in the sandbox's pid ns, after
+        # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap and its init. The VM test checks the stub's pid
         "org.kde.StatusNotifierWatcher" = "talk";
-        "org.freedesktop.StatusNotifierItem-10-1" = "own";
+        "org.freedesktop.StatusNotifierItem-18-1" = "own";
       };
       dbus.rules.call."org.freedesktop.portal.Desktop" = [
         "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"

@@ -143,7 +143,9 @@ pkgs.testers.runNixOSTest {
           )
           workstation.wait_until_succeeds("test -s ${sandboxHome}/stub-app.log", timeout=300)
           workstation.succeed("test -L /home/alice/.local/share/claude-desktop/nix/var/nix/gcroots/claude-desktop")
-          app_netns = workstation.succeed("cut -d' ' -f2 ${sandboxHome}/stub-app.log").strip()
+          app_pid, app_netns = workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
+          # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-18-1
+          assert app_pid == "18", f"the app is pid {app_pid} in the sandbox, update the tray rule"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
 
       keyfile = "${sandboxHome}/.config/glib-2.0/settings/keyfile"
