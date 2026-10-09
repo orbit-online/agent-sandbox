@@ -30,13 +30,25 @@ let
     types
     escapeShellArg
     ;
-  # No browser in the sandbox; hand links (incl. OAuth sign-in) to the host via the OpenURI portal.
-  # The D-Bus proxy blocks Introspect, so gdbus can't look up the signature: type the options explicitly
-  xdgOpen = pkgs.writeShellScriptBin "xdg-open" ''
-    exec ${lib.getExe' pkgs.glib "gdbus"} call --session \
-      --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop \
-      --method org.freedesktop.portal.OpenURI.OpenURI "" "$1" "@a{sv} {}"
-  '';
+  # A script from this directory as a writeShellApplication. `vars` become readonly variables ahead of it,
+  # `prelude` is raw bash between those and the script
+  script =
+    file:
+    {
+      name ? lib.removeSuffix ".sh" file,
+      vars ? { },
+      prelude ? "",
+      runtimeInputs ? [ ],
+    }:
+    pkgs.writeShellApplication {
+      inherit name runtimeInputs;
+      text =
+        lib.concatLines (lib.mapAttrsToList (n: v: "readonly ${n}=${escapeShellArg v}") vars)
+        + prelude
+        + builtins.readFile (./. + "/${file}");
+    };
+
+  xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
 
   # Holds the sandbox's home directory and its Nix store (home/, nix/)
   stateDir = "${config.xdg.dataHome}/claude-desktop";
@@ -117,21 +129,13 @@ let
         done <"$closure/store-paths"
         printf '%s\n' ${lib.escapeShellArgs roots} >$out
       '';
-  storeSync = pkgs.writeShellApplication {
+  storeSync = script "store-sync.sh" {
     name = "claude-desktop-store-sync";
     runtimeInputs = [ osConfig.nix.package ];
-    text = ''
-      root=${escapeShellArg stateDir}/nix/var/nix/gcroots/claude-desktop
-      [[ $(readlink "$root" 2>/dev/null) == ${storeRoots} ]] && exit 0
-      echo "claude-desktop: Copying the sandbox closure to ${stateDir}/nix" >&2
-      # Unsigned local builds (the app, the patched asar) are fine: the source is the host's own store
-      nix --extra-experimental-features nix-command copy --no-check-sigs \
-        --to "local?root=${stateDir}" ${storeRoots}
-      ln -sfn ${storeRoots} "$root"
-      # The old closure is garbage now; ~/.claude/libexec/store-gc collects it from inside the sandbox
-      mkdir -p ${escapeShellArg stateDir}/nix/var/claude-desktop
-      touch ${escapeShellArg stateDir}/nix/var/claude-desktop/gc-pending
-    '';
+    vars = {
+      STATE_DIR = stateDir;
+      STORE_ROOTS = "${storeRoots}";
+    };
   };
   # Shallowest first, so nested binds override their parents. nixpak mounts all rw binds before the ro ones
   binds =
@@ -155,87 +159,39 @@ let
         )
       );
 
-  # The app only persists its sign-in when safeStorage.isEncryptionAvailable(), which is false under
-  # --password-store=basic. Opting into Chromium's fixed v10 key makes it true
   asar = "${cfg.package.unwrapped}/lib/claude-desktop/resources/app.asar";
-  patchedAsar =
-    pkgs.runCommand "claude-desktop-app.asar"
-      {
-        nativeBuildInputs = [
-          pkgs.asar
-          pkgs.jq
-        ];
-      }
-      ''
-        asar extract ${asar} app
-        main=app/$(jq -er .main app/package.json)
-        sed -i '1s/^"use strict";/&require("electron").safeStorage.setUsePlainTextEncryption(true);/' "$main"
-        grep -q setUsePlainTextEncryption "$main"
-        asar pack app app.asar --unpack '{*.node,github-mcp-server}'
-        # Bound at the original path, the patched asar reads the original app.asar.unpacked, so the lists must match
-        diff <(cd ${asar}.unpacked && find . -type f | sort) <(cd app.asar.unpacked && find . -type f | sort)
-        cp app.asar $out
-      '';
+  patchedAsar = pkgs.runCommand "claude-desktop-app.asar" {
+    nativeBuildInputs = [
+      pkgs.asar
+      pkgs.jq
+    ];
+    ASAR = asar;
+  } "source ${./patch-asar.sh}";
 
   # The sandbox gets its own netns with a macvlan on the LAN (netns-macvlan --help), so host
   # services, routes and abstract sockets stay out of reach. Its DHCP lease brings the DNS servers
   resolvConf = "${bwrapHome}/.config/resolv.conf";
   # The same file as the sandbox sees it, where bwrapHome is the home directory
   sandboxResolvConf = "${config.home.homeDirectory}/.config/resolv.conf";
-  dhcpScript = pkgs.writeShellScript "claude-desktop-udhcpc" ''
-    # $1: the udhcpc event; $interface, $ip, $mask, $router, $dns and $domain come from udhcpc
-    PATH=${lib.makeBinPath [ pkgs.iproute2 ]}
-    case $1 in
-      deconfig) ip -4 addr flush dev "$interface" ;;
-      bound | renew)
-        [[ $1 == bound ]] && ip -4 addr flush dev "$interface"
-        ip addr replace "$ip/$mask" dev "$interface"
-        [[ -z ''${router:-} ]] || ip route replace default via "''${router%% *}" dev "$interface"
-        # Written in place: the file is bind-mounted, a rename would leave the sandbox on the old inode
-        {
-          [[ -z ''${domain:-} ]] || echo "search $domain"
-          for d in ''${dns:-}; do echo "nameserver $d"; done
-        } >${escapeShellArg sandboxResolvConf}
-        ;;
-    esac
-  '';
-  # Runs in nixpak's pasta slot: the launcher calls it with `-- <pid>` once the sandbox exists and before the app starts
-  netSetup = pkgs.writeShellApplication {
+  dhcpScript = script "udhcpc.sh" {
+    name = "claude-desktop-udhcpc";
+    runtimeInputs = [ pkgs.iproute2 ];
+    vars.RESOLV_CONF = sandboxResolvConf;
+  };
+  # Runs in nixpak's pasta slot, see net-setup.sh
+  netSetup = script "net-setup.sh" {
     name = "pasta";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.util-linux
       pkgs.iproute2
     ];
-    text = ''
-      pid=''${!#}
-      # bwrap's parent reports the pid while the child is still building the mount tree; nixpak binds
-      # /.flatpak-info last, so once it shows up the sandbox's root is final
-      for _ in {1..50}; do
-        [[ -e /proc/$pid/root/.flatpak-info ]] && break
-        sleep 0.1
-      done
-      [[ -e /proc/$pid/root/.flatpak-info ]] || {
-        echo "claude-desktop: Sandbox root not ready after 5s" >&2
-        exit 1
-      }
-      ${escapeShellArg osConfig.security.wrapperDir}/netns-macvlan "$pid"
-      # By now the sandbox runs in a second userns (bwrap needs uid 0 in the first to mount devpts for --dev);
-      # the first owns the netns. nsenter 2.42 can't combine --user-parent with other namespaces, so two steps.
-      # --keep-caps: exec would otherwise drop the caps setns granted
-      ns() {
-        nsenter -t "$pid" --user-parent --preserve-credentials --keep-caps \
-          nsenter -t "$pid" -n --preserve-credentials --keep-caps "$@"
-      }
-      ns ip link set lo up
-      ns ip link set eth0 up
-      # In the sandbox's pid ns so it dies with it, and its mount ns: it parses packets from the LAN, so it gets
-      # no more of the host than the app does. -r: the sandbox process's root, as for the claude:// re-entry.
-      # Forks to the background once it has a lease or gives up (~10s)
-      ns -m -r -p ${lib.getExe' pkgs.util-linux "setpriv"} --inh-caps=-all,+net_admin,+net_raw --ambient-caps=-all,+net_admin,+net_raw \
-        --bounding-set=-all,+net_admin,+net_raw \
-        ${lib.getExe' pkgs.busybox "udhcpc"} -i eth0 -s ${dhcpScript} -b -t 5 -T 2
-    '';
+    vars = {
+      NETNS_MACVLAN = "${osConfig.security.wrapperDir}/netns-macvlan";
+      SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
+      UDHCPC = lib.getExe' pkgs.busybox "udhcpc";
+      UDHCPC_SCRIPT = lib.getExe dhcpScript;
+    };
   };
 
   # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
@@ -252,17 +208,7 @@ let
             "--ro-bind ${sandboxResolvConf} /.host-etc/resolv.conf"
             "--ro-bind ${environmentDoc} /etc/claude/environment.md"
           ];
-          # The FHS /etc/profile prepends /run/wrappers/bin:/usr/bin:/usr/sbin to PATH and is sourced twice on the
-          # way to the Code tab (buildFHSEnv's init, then the app's shell-path-worker running `$SHELL -l`). Move the
-          # FHS dirs behind the module's PATH, once, so its tools win and FHS-only ones (tar, gzip, xz) stay reachable
-          profile = args.profile or "" + ''
-            fhs_prefix=/run/wrappers/bin:/usr/bin:/usr/sbin:
-            while case $PATH in "$fhs_prefix"*) true ;; *) false ;; esac; do PATH=''${PATH#"$fhs_prefix"}; done
-            for fhs_dir in /usr/bin /usr/sbin; do
-              case :$PATH: in *:$fhs_dir:*) ;; *) PATH=$PATH:$fhs_dir ;; esac
-            done
-            unset fhs_prefix fhs_dir
-          '';
+          profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
         }
       );
   });
@@ -366,44 +312,24 @@ let
     ) (lib.filterAttrs (_: v: v.enable) cfg.env)
   );
 
-  wrapper = pkgs.writeShellApplication {
-    name = "claude-desktop";
+  wrapper = script "claude-desktop.sh" {
     runtimeInputs = [ pkgs.jq ];
-    text = ''
-      mkdir -p ${escapeShellArg bwrapHome}/.config
-      # Bind source for the sandbox's /etc/resolv.conf, filled in by the DHCP client
-      touch ${escapeShellArg resolvConf}
-      # Without user-dirs.dirs, Chromium saves downloads to $HOME
-      # shellcheck disable=SC2016
-      echo 'XDG_DOWNLOAD_DIR="$HOME/Downloads"' >${escapeShellArg bwrapHome}/.config/user-dirs.dirs
-      vars=(
+    vars = {
+      SANDBOX_HOME = bwrapHome;
+      RESOLV_CONF = resolvConf;
+      APP_ID = sandboxed.config.flatpak.appId;
+      FHS_ENV = lib.getExe package;
+      CONFIG = "${config.home.homeDirectory}/.config/Claude/claude_desktop_config.json";
+      MCP_SERVERS = "${mcpServers}";
+      TRAY = lib.boolToString cfg.tray;
+      STORE_SYNC = lib.getExe storeSync;
+      NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
+    };
+    prelude = ''
+      VARS=(
         ${vars}
       )
-      args=(--password-store=basic "$@")
-
-      # Further launches (claude:// URLs) join the running sandbox, so Electron's single-instance lock finds
-      # the first instance. The mount ns check stops a stale info file with a recycled pid from pointing at a host process.
-      for d in "$XDG_RUNTIME_DIR"/.flatpak/nixpak-app-*; do
-        grep -qxF name=${escapeShellArg sandboxed.config.flatpak.appId} "$d/info" 2>/dev/null || continue
-        pid=$(grep -oP '"child-pid":\s*\K\d+' "$d/bwrapinfo.json" 2>/dev/null) || continue
-        if [[ -e /proc/$pid/ns/mnt && ! /proc/$pid/ns/mnt -ef /proc/self/ns/mnt ]]; then
-          # Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns
-          exec env -i "''${vars[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus" \
-            nsenter -t "$pid" -U -m -p -n -i -u -C -r -w --preserve-credentials ${lib.getExe package} "''${args[@]}"
-        fi
-      done
-
-      # The app writes to this file too, so merge instead of symlinking a read-only store path
-      conf=${escapeShellArg config.home.homeDirectory}/.config/Claude/claude_desktop_config.json
-      mkdir -p "$(dirname "$conf")"
-      [[ -s $conf ]] || echo '{}' >"$conf"
-      jq --slurpfile m ${mcpServers} --argjson tray ${lib.boolToString cfg.tray} \
-        '.mcpServers = $m[0] | .preferences.menuBarEnabled = $tray' "$conf" >"$conf.tmp"
-      mv "$conf.tmp" "$conf"
-
-      ${lib.getExe storeSync}
-
-      exec env -i "''${vars[@]}" ${lib.getExe sandboxed.config.script} "''${args[@]}"
+      readonly VARS
     '';
   };
   claude-desktop = (
@@ -561,17 +487,9 @@ in
       default = {
         filesystem = {
           command = lib.getExe (
-            pkgs.writeShellApplication {
-              name = "mcp-server-filesystem";
+            script "mcp-server-filesystem.sh" {
               runtimeInputs = [ pkgs.jq ];
-              # Claude Desktop rejects the draft-07 $schema the server declares (modelcontextprotocol/servers#4841)
-              text = ''
-                # Drop the client's roots so the CLI args stay the allowed dirs
-                jq -c --unbuffered 'select(.method != "notifications/roots/list_changed")
-                  | if .method == "initialize" then del(.params.capabilities.roots) end' |
-                  ${lib.getExe pkgs.mcp-server-filesystem} "$@" |
-                  jq -c --unbuffered 'walk(if type == "object" then del(."$schema") else . end)'
-              '';
+              vars.MCP_SERVER_FILESYSTEM = lib.getExe pkgs.mcp-server-filesystem;
             }
           );
           args = lib.mapAttrsToList (_: b: b.bind) (lib.filterAttrs (_: b: b.enable && b.mcp) cfg.binds);

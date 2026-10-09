@@ -8,8 +8,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 - `nix/home/claude-desktop/`: the Home Manager module
   `agent-sandbox.claude-desktop` (`default.nix`, with a diagram of the
-  sandbox's namespaces at the top) and `environment.md`, which ships as
-  `/etc/claude/environment.md` in the sandbox.
+  sandbox's namespaces at the top), `environment.md`, which ships as
+  `/etc/claude/environment.md` in the sandbox, and the module's scripts
+  (`*.sh`). `default.nix` loads them with its `script` helper: Nix values
+  arrive as readonly variables ahead of the script, which names its inputs
+  with `: "${VAR:?}"` at the top.
 - `nix/nixos/claude-desktop.nix`: the NixOS module. Installs the
   `netns-macvlan` wrapper (`cap_net_admin`) when any Home Manager user enables
   the Home Manager module.
@@ -56,7 +59,7 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace.
-- `scripts`: shellcheck on `scripts/`.
+- `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself, which listens on 443. On the

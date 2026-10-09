@@ -138,7 +138,7 @@ in
   vm = import ./vm.nix { inherit pkgs aliceModule; };
 
   scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
-    shellcheck ${../../scripts}/*.sh
+    shellcheck ${../../scripts}/*.sh ${../home/claude-desktop}/*.sh
     touch $out
   '';
 }
