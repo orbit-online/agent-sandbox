@@ -68,14 +68,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   api.anthropic.com and github.com at itself, which listens on 443. On the
   workstation VM, alice launches the sandbox with a stub app
   (`nix/checks/stub-app.nix`, shaped like the real package so the asar patch
-  and FHS overrides apply). The test covers the setcap wrapper, the store
-  sync, the macvlan's DHCP lease, route and DNS, `nettest.sh` inside the
-  sandbox against a host service on the LAN address, loopback and a dummy
-  interface, the `claude://` re-entry, the wrapper refusing system users,
-  and `netns-macvlan` refusing a second user, bob, alice's namespaces, each
-  of its checks on its own. bob's commands go through `runuser`, not
-  `setpriv`, which keeps root's capabilities through the exec. Debug it with
-  `nix run .#checks.x86_64-linux.vm.driverInteractive`.
+  and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
+  serves the color scheme on her session bus. The test covers the setcap
+  wrapper, the store sync, the GTK theme following the color scheme (at
+  launch, live, and the watcher ending with the app), the macvlan's DHCP
+  lease, route and DNS, `nettest.sh` inside the sandbox against a host
+  service on the LAN address, loopback and a dummy interface, the
+  `claude://` re-entry, the wrapper refusing system users, and
+  `netns-macvlan` refusing a second user, bob, alice's namespaces, each of
+  its checks on its own. bob's commands go through `runuser`,
+  not `setpriv`, which keeps root's capabilities through the exec. Debug it
+  with `nix run .#checks.x86_64-linux.vm.driverInteractive`.
 
 CI (`.github/workflows/check.yaml`) runs `nix flake check` on pushes to
 `main` and on pull requests.

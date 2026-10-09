@@ -3,6 +3,15 @@
 { pkgs, aliceModule }:
 let
   sandboxHome = "/home/alice/.local/share/claude-desktop/home";
+  fakePortal = pkgs.writers.writePython3Bin "fake-portal" {
+    libraries = [ pkgs.python3Packages.dbus-next ];
+    # dbus-next's signatures are string annotations
+    flakeIgnore = [
+      "F722"
+      "F821"
+      "E501"
+    ];
+  } (builtins.readFile ./fake-portal.py);
 in
 pkgs.testers.runNixOSTest {
   name = "claude-desktop";
@@ -121,14 +130,30 @@ pkgs.testers.runNixOSTest {
           assert status != 0 and "Permission denied" in out, f"nobody ran the wrapper: {status} {out}"
 
       with subtest("launch"):
+          workstation.succeed("systemd-run --user -M alice@ --unit fake-portal -- ${pkgs.lib.getExe fakePortal}")
+          workstation.wait_until_succeeds(alice_cmd(
+              "${pkgs.lib.getExe' pkgs.glib "gdbus"} call --session --dest org.freedesktop.portal.Desktop"
+              " --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Settings.ReadOne"
+              " org.freedesktop.appearance color-scheme"
+          ))
+          # KillMode=process: like a desktop's app scope, ending the app leaves the rest alone
           workstation.succeed(
-              "systemd-run --user -M alice@ --unit claude-desktop -E WAYLAND_DISPLAY=wayland-0"
+              "systemd-run --user -M alice@ --unit claude-desktop -p KillMode=process -E WAYLAND_DISPLAY=wayland-0"
               " -- /etc/profiles/per-user/alice/bin/claude-desktop"
           )
           workstation.wait_until_succeeds("test -s ${sandboxHome}/stub-app.log", timeout=300)
           workstation.succeed("test -L /home/alice/.local/share/claude-desktop/nix/var/nix/gcroots/claude-desktop")
           app_netns = workstation.succeed("cut -d' ' -f2 ${sandboxHome}/stub-app.log").strip()
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
+
+      keyfile = "${sandboxHome}/.config/glib-2.0/settings/keyfile"
+      with subtest("GTK theme follows the portal's color scheme"):
+          workstation.succeed(f"grep -qx \"gtk-theme='Adwaita-dark'\" {keyfile}")
+          as_alice(
+              "${pkgs.lib.getExe' pkgs.glib "gdbus"} call --session --dest org.freedesktop.portal.Desktop"
+              " --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Settings.SetColorScheme 0"
+          )
+          workstation.wait_until_succeeds(f"grep -qx \"gtk-theme='Adwaita'\" {keyfile}", timeout=30)
 
       with subtest("claude:// re-entry joins the running sandbox"):
           reentry_netns = in_sandbox("readlink /proc/self/ns/net").strip()
@@ -169,5 +194,10 @@ pkgs.testers.runNixOSTest {
           status, out = as_bob(f"/run/wrappers/bin/netns-macvlan {bob_ns}")
           assert status == 0, out
           workstation.succeed(f"nsenter -t {bob_ns} -n ip link show eth0")
+
+      with subtest("the theme watcher ends with the app"):
+          workstation.succeed("pgrep -u alice -f claude-desktop-gtk-theme-watch")
+          workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop")
+          workstation.wait_until_fails("pgrep -u alice -f 'claude-desktop-gtk-theme-watch|gdbus monitor'", timeout=30)
     '';
 }

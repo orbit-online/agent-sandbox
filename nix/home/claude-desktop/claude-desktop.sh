@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix)
 : "${SANDBOX_HOME:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${FHS_ENV:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
-: "${STORE_SYNC:?}" "${NIXPAK_LAUNCHER:?}"
+: "${STORE_SYNC:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
 mkdir -p "$SANDBOX_HOME/.config"
 # Bind source for the sandbox's /etc/resolv.conf, filled in by the DHCP client
 touch "$RESOLV_CONF"
@@ -30,5 +30,9 @@ jq --slurpfile m "$MCP_SERVERS" --argjson tray "$TRAY" \
 mv "$CONFIG.tmp" "$CONFIG"
 
 "$STORE_SYNC"
+
+"$GTK_THEME" || true
+# Double fork: the launcher this script execs into must not wait for it. It stops once that pid ($$) exits
+("$GTK_THEME_WATCH" $$ </dev/null >/dev/null 2>&1 &)
 
 exec env -i "${VARS[@]}" "$NIXPAK_LAUNCHER" "${args[@]}"

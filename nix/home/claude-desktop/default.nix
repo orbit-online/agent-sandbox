@@ -114,6 +114,8 @@ let
         package
         netSetup
         xdgOpen
+        # The dark theme gtk-theme.sh switches to; GTK3 has none built in
+        pkgs.gnome-themes-extra
         nixConf
         currentSystemSw
         graphicsDrivers
@@ -315,6 +317,24 @@ let
     ) (lib.filterAttrs (_: v: v.enable) cfg.env)
   );
 
+  gtkTheme = script "gtk-theme.sh" {
+    name = "claude-desktop-gtk-theme";
+    runtimeInputs = [ pkgs.glib ];
+    vars = {
+      SANDBOX_CONFIG = "${bwrapHome}/.config";
+      SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
+    };
+  };
+  gtkThemeWatch = script "gtk-theme-watch.sh" {
+    name = "claude-desktop-gtk-theme-watch";
+    runtimeInputs = [
+      pkgs.glib
+      pkgs.coreutils
+      pkgs.procps
+    ];
+    vars.GTK_THEME = lib.getExe gtkTheme;
+  };
+
   wrapper = script "claude-desktop.sh" {
     runtimeInputs = [ pkgs.jq ];
     vars = {
@@ -326,6 +346,8 @@ let
       MCP_SERVERS = "${mcpServers}";
       TRAY = lib.boolToString cfg.tray;
       STORE_SYNC = lib.getExe storeSync;
+      GTK_THEME = lib.getExe gtkTheme;
+      GTK_THEME_WATCH = lib.getExe gtkThemeWatch;
       NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
     };
     prelude = ''
@@ -552,6 +574,9 @@ in
         SHELL = "/run/current-system/sw/bin/bash";
         NIXOS_OZONE_WL = "1";
         NIX_CONF_DIR = "${nixConf}";
+        # Where gtk-theme.sh writes the theme
+        GSETTINGS_BACKEND = "keyfile";
+        XDG_DATA_DIRS = "${pkgs.gnome-themes-extra}/share\${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}";
       };
     agent-sandbox.claude-desktop.binds =
       let
