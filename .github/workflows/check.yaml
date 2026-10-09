@@ -20,8 +20,6 @@ jobs:
             /usr/local/lib/android \
             /opt/ghc \
             /opt/hostedtoolcache/CodeQL
-      # netns-macvlan's tests create a user namespace in the build, which Ubuntu's AppArmor restricts
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: cachix/install-nix-action@v31
         with:
           # The VM test needs kvm; listing it replaces the defaults, so they're repeated
