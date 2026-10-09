@@ -47,6 +47,15 @@ let
   system = nixos enabled;
   alice = system.config.home-manager.users.alice;
   failedAssertions = sys: lib.filter (a: !a.assertion) sys.config.home-manager.users.alice.assertions;
+  # alice in a group of her own, not in users
+  ownGroup = system.extendModules {
+    modules = [
+      {
+        users.users.alice.group = "alice";
+        users.groups.alice = { };
+      }
+    ];
+  };
   sandboxed = lib.findFirst (p: p.name == "claude-desktop-sandboxed") null alice.home.packages;
 
   evalFailures = lib.runTests {
@@ -56,16 +65,31 @@ let
     };
     testWrapper = {
       expr = {
-        inherit (system.config.security.wrappers.netns-macvlan) source capabilities;
+        inherit (system.config.security.wrappers.netns-macvlan)
+          source
+          capabilities
+          owner
+          group
+          permissions
+          ;
       };
       expected = {
         source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.netns-macvlan;
         capabilities = "cap_net_admin+ep";
+        owner = "root";
+        group = "users";
+        permissions = "u+rx,g+x";
       };
     };
     testNoWrapperWhenDisabled = {
       expr = (nixos { }).config.security.wrappers ? netns-macvlan;
       expected = false;
+    };
+    testUsersGroupAssertion = {
+      expr = map (a: a.message) (lib.filter (a: !a.assertion) ownGroup.config.assertions);
+      expected = [
+        "agent-sandbox.claude-desktop: alice enables the sandbox but isn't in group users, which netns-macvlan is limited to. Add users to users.users.alice.extraGroups."
+      ];
     };
     # The module mkForces them, so only a higher priority gets past it
     testNetnsAssertionNetwork = {

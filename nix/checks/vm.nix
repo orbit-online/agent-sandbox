@@ -81,12 +81,21 @@ pkgs.testers.runNixOSTest {
       def in_sandbox(cmd):
           return workstation.succeed(sandbox_cmd(cmd))
 
-      def as_bob(cmd):
-          return workstation.execute(f"setpriv --reuid bob --regid users --init-groups -- {cmd} 2>&1")
+      # Not setpriv: it keeps root's capabilities through the exec permission check
+      def as_user(user, cmd):
+          return workstation.execute(f"runuser -u {user} -- {cmd} 2>&1")
 
-      # Runs cmd, which ends in an exec of sleep, as a transient root service and returns sleep's pid
-      def spawn(unit, cmd):
-          workstation.succeed(f"systemd-run --unit {unit} -- {cmd} /run/current-system/sw/bin/sleep infinity")
+      def as_bob(cmd):
+          return as_user("bob", cmd)
+
+      # Runs a sleep as `user` in a transient service (in the netns of `netns_pid` if given) and returns its pid.
+      # Not setpriv: it keeps root's capabilities until the exec, which leaves the process undumpable, so the
+      # kernel's ptrace check on /proc/<pid>/ns/net would refuse bob before netns-macvlan's own checks do
+      def spawn(unit, user, cmd="", netns_pid=None):
+          netns = f"-p NetworkNamespacePath=/proc/{netns_pid}/ns/net" if netns_pid else ""
+          workstation.succeed(
+              f"systemd-run --unit {unit} -p User={user} {netns} -- {cmd} /run/current-system/sw/bin/sleep infinity"
+          )
           pid = f"$(systemctl show -P MainPID {unit})"
           # Not comm: coreutils is one binary, so that reads coreutils
           workstation.wait_until_succeeds(f"grep -qz '^/run/current-system/sw/bin/sleep$' /proc/{pid}/cmdline", timeout=30)
@@ -107,6 +116,9 @@ pkgs.testers.runNixOSTest {
 
       with subtest("setcap wrapper"):
           workstation.succeed("getcap /run/wrappers/bin/netns-macvlan | grep -q cap_net_admin=ep")
+          # System users can't run it, only group users
+          status, out = as_user("nobody", "/run/wrappers/bin/netns-macvlan 1")
+          assert status != 0 and "Permission denied" in out, f"nobody ran the wrapper: {status} {out}"
 
       with subtest("launch"):
           workstation.succeed(
@@ -141,15 +153,9 @@ pkgs.testers.runNixOSTest {
       )["child-pid"]
 
       with subtest("netns-macvlan refuses other users' namespaces"):
-          bob_ns = spawn("bob-ns", "setpriv --reuid bob --regid users --init-groups -- unshare -Urn")
-          alice_in_bob_ns = spawn(
-              "alice-in-bob-ns",
-              f"nsenter -t {bob_ns} -n -- setpriv --reuid alice --regid users --init-groups --",
-          )
-          bob_in_alice_ns = spawn(
-              "bob-in-alice-ns",
-              f"nsenter -t {sandbox_pid} -n -- setpriv --reuid bob --regid users --init-groups --",
-          )
+          bob_ns = spawn("bob-ns", "bob", "/run/current-system/sw/bin/unshare -Urn")
+          alice_in_bob_ns = spawn("alice-in-bob-ns", "alice", netns_pid=bob_ns)
+          bob_in_alice_ns = spawn("bob-in-alice-ns", "bob", netns_pid=sandbox_pid)
           for pid, error in [
               (sandbox_pid, "belongs to uid 1000, not 1001"),
               # Only the process check stops these two: the netns is bob's
