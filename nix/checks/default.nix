@@ -5,27 +5,32 @@
 }:
 let
   inherit (pkgs) lib;
-  # A NixOS system with both modules and a user alice, who sets claude-desktop to `cfg`
+  # Both modules and a user alice, who sets claude-desktop to `cfg`
+  aliceModule = cfg: {
+    imports = [
+      inputs.home-manager.nixosModules.home-manager
+      self.nixosModules.claude-desktop
+    ];
+    system.stateVersion = "26.05";
+    hardware.graphics.enable = true;
+    users.users.alice.isNormalUser = true;
+    home-manager.sharedModules = [ self.homeModules.claude-desktop ];
+    home-manager.users.alice = {
+      home.stateVersion = "26.05";
+      agent-sandbox.claude-desktop = cfg;
+    };
+  };
   nixos =
     cfg:
     inputs.nixpkgs.lib.nixosSystem {
       inherit (pkgs.stdenv.hostPlatform) system;
       modules = [
-        inputs.home-manager.nixosModules.home-manager
-        self.nixosModules.claude-desktop
+        (aliceModule cfg)
         {
-          system.stateVersion = "26.05";
           boot.loader.grub.enable = false;
           fileSystems."/" = {
             device = "none";
             fsType = "tmpfs";
-          };
-          hardware.graphics.enable = true;
-          users.users.alice.isNormalUser = true;
-          home-manager.sharedModules = [ self.homeModules.claude-desktop ];
-          home-manager.users.alice = {
-            home.stateVersion = "26.05";
-            agent-sandbox.claude-desktop = cfg;
           };
         }
       ];
@@ -129,6 +134,8 @@ in
         need --dev-bind-try /dev/kvm /dev/kvm
         touch $out
       '';
+
+  vm = import ./vm.nix { inherit pkgs aliceModule; };
 
   scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
     shellcheck ${../../scripts}/*.sh

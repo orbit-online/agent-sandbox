@@ -15,6 +15,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   the Home Manager module.
 - `nix/packages/netns-macvlan/`: the Go helper that gives the sandbox's netns
   its macvlan (`netns-macvlan --help`).
+- `nix/checks/`: the flake checks, see Testing.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
@@ -56,6 +57,20 @@ modules and a user alice (the `home-manager` input exists only for it).
   including `openNetns` against a child in its own user and network
   namespace.
 - `scripts`: shellcheck on `scripts/`.
+- `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
+  dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
+  api.anthropic.com and github.com at itself, which listens on 443. On the
+  workstation VM, alice launches the sandbox with a stub app
+  (`nix/checks/stub-app.nix`, shaped like the real package so the asar patch
+  and FHS overrides apply). The test covers the setcap wrapper, the store
+  sync, the macvlan's DHCP lease, route and DNS, `nettest.sh` inside the
+  sandbox against a host service on the LAN address, loopback and a dummy
+  interface, the `claude://` re-entry, and `netns-macvlan` refusing a second
+  user, bob, each of its checks on its own. Debug it with
+  `nix run .#checks.x86_64-linux.vm.driverInteractive`.
+
+CI (`.github/workflows/check.yaml`) runs `nix flake check` on pushes to
+`main` and on pull requests.
 
 Every new test gets the revert check: break the implementation, see the test
 fail, restore it.
