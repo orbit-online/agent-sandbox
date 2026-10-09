@@ -38,10 +38,13 @@ let
   enabled = {
     enable = true;
     kvm = true;
+    extraPath = [ "/srv/bin" ];
     binds = {
       "/srv/project".rw = true;
       "/srv/docs" = { };
       "/srv/hidden".mcp = false;
+      # A module default, overridden by its sandbox path
+      "/home/alice/.claude".src = "/srv/claude";
     };
   };
   system = nixos enabled;
@@ -56,7 +59,16 @@ let
       }
     ];
   };
-  sandboxed = lib.findFirst (p: p.name == "claude-desktop-sandboxed") null alice.home.packages;
+  sandboxedOf =
+    sys:
+    lib.findFirst (
+      p: p.name == "claude-desktop-sandboxed"
+    ) null sys.config.home-manager.users.alice.home.packages;
+  sandboxed = sandboxedOf system;
+  # Another environmentFile, the rest as in enabled
+  customDoc = sandboxedOf (
+    nixos (enabled // { environmentFile = pkgs.writeText "custom-environment.md" "custom"; })
+  );
 
   evalFailures = lib.runTests {
     testAssertionsHold = {
@@ -114,6 +126,12 @@ let
       );
       expected = 1;
     };
+    testExtraPath = {
+      expr = lib.head (
+        lib.splitString ":" alice.agent-sandbox.claude-desktop.mcpServers.claude-code.env.PATH
+      );
+      expected = "/srv/bin";
+    };
     testMcpRoots = {
       expr = lib.sort lib.lessThan alice.agent-sandbox.claude-desktop.mcpServers.filesystem.args;
       expected = [
@@ -140,6 +158,7 @@ in
       {
         nativeBuildInputs = [ pkgs.jq ];
         closure = pkgs.closureInfo { rootPaths = [ sandboxed ]; };
+        customClosure = pkgs.closureInfo { rootPaths = [ customDoc ]; };
       }
       ''
         paths=$closure/store-paths
@@ -147,15 +166,21 @@ in
         # The static part is linked, so the sandbox needs it in its store
         import=$(grep -oxP '@\K/nix/store/[^/]+-environment\.md' "$doc") || { echo "environment.md lacks the import" >&2; exit 1; }
         grep -qxF -- "$import" "$paths" || { echo "$import is not in the closure" >&2; exit 1; }
+        grep -qxF '# Your environment: the Claude Desktop sandbox' "$import" || { echo "$import is not the module's environment.md" >&2; exit 1; }
+        custom=$(grep -- '-claude-environment\.md$' "$customClosure/store-paths")
+        grep -qxP '@/nix/store/[^/]+-custom-environment\.md' "$custom" || { echo "environmentFile is not imported" >&2; exit 1; }
         for line in \
           '- `/srv/project` (rw, MCP)' \
           '- `/srv/docs` (ro, MCP)' \
-          '- `/home/alice/.claude` (rw, MCP)' \
-          '- `/dev/kvm` (dev)'; do
+          '- `/home/alice/.claude` (rw, MCP, from `/srv/claude`)' \
+          '- `/nix` (rw, from `/home/alice/.local/share/claude-desktop/nix`)' \
+          '- `/tmp/claude-<uid>` (rw, from `/home/alice/.local/share/claude-desktop/tmp-scratchpad`): Claude Code'"'"'s temp dir with the session scratchpads' \
+          '- `/dev/kvm` (dev)' \
+          '`/srv/bin`, then the packages'; do
           grep -qxF -- "$line" "$doc" || { echo "environment.md lacks: $line" >&2; exit 1; }
         done
         ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
-        grep -qE '^coreutils, .*, nix$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
+        grep -qE '^coreutils, .*, nix\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
 
         args=$(grep -- '-bwrap-args\.json$' "$paths")
         # The args as consecutive elements of bwrap's argv
@@ -168,7 +193,13 @@ in
         need --ro-bind-try /srv/docs /srv/docs
         need --ro-bind-try /srv/hidden /srv/hidden
         need --bind-try /home/alice/.local/share/claude-desktop/nix /nix
+        need --bind-try /srv/claude /home/alice/.claude
         need --dev-bind-try /dev/kvm /dev/kvm
+        # After the /tmp tmpfs, the uid filled in by nixpak's launcher
+        has --tmpfs /tmp || { echo "bwrap args lack the /tmp tmpfs" >&2; exit 1; }
+        jq -e '. as $a | (index("--tmpfs") + 1) as $t | any(range($t; length); $a[.:. + 3] == ["--dev-bind-try",
+          "/home/alice/.local/share/claude-desktop/tmp-scratchpad", {type: "concat", a: "/tmp/claude-", b: {type: "uid"}}])' \
+          <"$args" >/dev/null || { echo "bwrap args lack the scratchpad bind after the /tmp tmpfs" >&2; exit 1; }
         touch $out
       '';
 

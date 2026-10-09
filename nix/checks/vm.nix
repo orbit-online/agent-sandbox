@@ -2,7 +2,9 @@
 # DHCP and DNS. The router also stands in for the internet: its DNS points api.anthropic.com and github.com at itself.
 { pkgs, aliceModule }:
 let
-  sandboxHome = "/home/alice/.local/share/claude-desktop/home";
+  stateDir = "/home/alice/.local/share/claude-desktop";
+  sandboxHome = "${stateDir}/home";
+  scratchpad = "${stateDir}/tmp-scratchpad";
   fakePortal = pkgs.writers.writePython3Bin "fake-portal" {
     libraries = [ pkgs.python3Packages.dbus-next ];
     # dbus-next's signatures are string annotations
@@ -77,6 +79,8 @@ pkgs.testers.runNixOSTest {
     ''
       import json, shlex
 
+      scratchpad = "${scratchpad}"
+
       def alice_cmd(cmd):
           return f"systemd-run --user -M alice@ --wait --pipe --quiet -- {cmd}"
 
@@ -147,6 +151,36 @@ pkgs.testers.runNixOSTest {
           # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-18-1
           assert app_pid == "18", f"the app is pid {app_pid} in the sandbox, update the tray rule"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
+
+      with subtest("Claude Code's temp dir is bound from the host"):
+          in_sandbox("touch /tmp/claude-1000/probe")
+          workstation.succeed(f"test -e {scratchpad}/probe")
+          assert workstation.succeed(f"stat -c %a {scratchpad}").strip() == "700"
+
+      with subtest("scratchpad prune"):
+          as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(
+              f"cd {scratchpad} && mkdir -p -- -p/old/scratchpad -p/new/scratchpad -gone/old/scratchpad harness"
+              " && touch -- -p/old/scratchpad/f -p/new/scratchpad/f -gone/old/scratchpad/f old.json new.json"
+              " && touch -d '31 days ago' -- -p/old/scratchpad/f -p/old/scratchpad -p/old"
+              " -gone/old/scratchpad/f -gone/old/scratchpad -gone/old old.json harness"
+          ))
+          in_sandbox("claude-desktop-scratchpad-prune")
+          left = sorted(workstation.succeed(f"cd {scratchpad} && find . -mindepth 1").split())
+          assert left == ["./-p", "./-p/new", "./-p/new/scratchpad", "./-p/new/scratchpad/f", "./harness", "./new.json", "./probe"], left
+
+      gc_dir = "${stateDir}/nix/var/claude-desktop"
+      with subtest("store GC"):
+          workstation.succeed(f"test -e {gc_dir}/gc-pending")
+          assert "nix-store --gc" in in_sandbox("claude-desktop-store-gc")
+          workstation.succeed(f"test ! -e {gc_dir}/gc-pending && test -e {gc_dir}/gc-last")
+          # Not due: no marker and the last run is recent
+          assert in_sandbox("claude-desktop-store-gc") == ""
+          workstation.succeed(f"touch -d '8 days ago' {gc_dir}/gc-last")
+          assert "nix-store --gc" in in_sandbox("claude-desktop-store-gc")
+          # On the host it would collect the host's store
+          gc = in_sandbox("readlink -f /run/current-system/sw/bin/claude-desktop-store-gc").strip()
+          status, out = as_user("alice", gc)
+          assert status != 0 and "Only runs inside the claude-desktop sandbox" in out, f"{status} {out}"
 
       keyfile = "${sandboxHome}/.config/glib-2.0/settings/keyfile"
       with subtest("GTK theme follows the portal's color scheme"):

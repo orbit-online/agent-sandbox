@@ -50,11 +50,19 @@ let
 
   xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
 
-  # Holds the sandbox's home directory and its Nix store (home/, nix/)
+  # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
   stateDir = "${config.xdg.dataHome}/claude-desktop";
   bwrapHome = "${stateDir}/home";
-  # PATH for the app (so the Code tab's shells) and the claude-code MCP server. ~/.claude/bin first: its gh wraps the real one
-  searchPath = "${config.home.homeDirectory}/.claude/bin:${lib.makeBinPath sandboxPackages}:${osConfig.security.wrapperDir}:/run/current-system/sw/bin";
+  scratchpad = "${stateDir}/tmp-scratchpad";
+  # PATH for the app (so the Code tab's shells) and the claude-code MCP server
+  searchPath = lib.concatStringsSep ":" (
+    cfg.extraPath
+    ++ [
+      (lib.makeBinPath sandboxPackages)
+      osConfig.security.wrapperDir
+      "/run/current-system/sw/bin"
+    ]
+  );
   # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
   # .out: the man output is a symlink, see storeRoots
   sandboxPackages = cfg.path ++ [ osConfig.nix.package.out ];
@@ -68,6 +76,24 @@ let
     substituters = https://cache.nixos.org/
     trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
   '';
+  # Run by the user's own hooks, see environment.md
+  storeGc = script "store-gc.sh" {
+    name = "claude-desktop-store-gc";
+    runtimeInputs = [
+      osConfig.nix.package
+      pkgs.coreutils
+      pkgs.findutils
+      pkgs.gnugrep
+      pkgs.util-linux
+    ];
+  };
+  scratchpadPrune = script "scratchpad-prune.sh" {
+    name = "claude-desktop-scratchpad-prune";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.findutils
+    ];
+  };
   # /run/current-system links into the system closure: the PATH tools, bash (SHELL) and glibc's fallback
   # locale archive come from this instead
   currentSystemSw = pkgs.buildEnv {
@@ -75,6 +101,8 @@ let
     paths = sandboxPackages ++ [
       pkgs.bashInteractive
       osConfig.i18n.glibcLocales
+      storeGc
+      scratchpadPrune
     ];
   };
   # The entries claude-desktop's FHS env takes from the host /etc, minus shadow, sudoers, nix (NIX_CONF_DIR) and the
@@ -145,17 +173,17 @@ let
     map
       (
         b:
-        if b.src == b.bind then
+        if b.src == b.path then
           b.src
         else
           [
             b.src
-            b.bind
+            b.path
           ]
       )
       (
-        lib.sortOn (b: lib.stringLength b.bind) (
-          lib.mapAttrsToList (src: b: b // { inherit src; }) (
+        lib.sortOn (b: lib.stringLength b.path) (
+          lib.mapAttrsToList (path: b: b // { inherit path; }) (
             lib.filterAttrs (_: b: b.enable && b.rw == rw) cfg.binds
           )
         )
@@ -216,76 +244,87 @@ let
   });
 
   sandboxed = inputs.nixpak.lib.nixpak { inherit lib pkgs; } {
-    config = {
-      imports = [ cfg.sandbox ];
-      app.package = package;
-      dbus.policies = {
-        "org.freedesktop.Notifications" = "talk";
-      }
-      // lib.optionalAttrs cfg.tray {
-        # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 18 in the sandbox's pid ns, after
-        # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap and its init. The VM test checks the stub's pid
-        "org.kde.StatusNotifierWatcher" = "talk";
-        "org.freedesktop.StatusNotifierItem-18-1" = "own";
-      };
-      dbus.rules.call."org.freedesktop.portal.Desktop" = [
-        "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
-        "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
-      ];
-      dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
-        "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
-      ];
-      gpu = {
-        enable = true;
-        # Not "nixos": /run/opengl-driver links into the system closure
-        provider = "bundle";
-        bundlePackage = graphicsDrivers;
-      };
-      # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf, no extra pasta args
-      bubblewrap.network = lib.mkForce true;
-      pasta = {
-        enable = lib.mkForce true;
-        package = lib.mkForce netSetup;
-        mode = lib.mkForce "transparent";
-        args = lib.mkForce [ ];
-      };
-      bubblewrap = {
-        bindEntireStore = false;
-        extraStorePaths = [ storeRoots ];
-        bind.rw = binds true;
-        bind.dev = lib.optional cfg.kvm "/dev/kvm";
-        bind.ro = binds false ++ [
-          [
-            "${currentSystemSw}"
-            "/run/current-system/sw"
-          ]
-        ];
-        tmpfs = [ "/tmp" ];
-        sockets = {
-          wayland = true;
-          pipewire = cfg.audio;
-          pulse = cfg.audio;
+    config =
+      { sloth, ... }:
+      {
+        imports = [ cfg.sandbox ];
+        app.package = package;
+        dbus.policies = {
+          "org.freedesktop.Notifications" = "talk";
+        }
+        // lib.optionalAttrs cfg.tray {
+          # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 18 in the sandbox's pid ns, after
+          # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap and its init. The VM test checks the stub's pid
+          "org.kde.StatusNotifierWatcher" = "talk";
+          "org.freedesktop.StatusNotifierItem-18-1" = "own";
         };
-        newSession = true;
-        dieWithParent = true;
+        dbus.rules.call."org.freedesktop.portal.Desktop" = [
+          "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
+          "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
+        ];
+        dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
+          "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
+        ];
+        gpu = {
+          enable = true;
+          # Not "nixos": /run/opengl-driver links into the system closure
+          provider = "bundle";
+          bundlePackage = graphicsDrivers;
+        };
+        # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf, no extra pasta args
+        bubblewrap.network = lib.mkForce true;
+        pasta = {
+          enable = lib.mkForce true;
+          package = lib.mkForce netSetup;
+          mode = lib.mkForce "transparent";
+          args = lib.mkForce [ ];
+        };
+        bubblewrap = {
+          bindEntireStore = false;
+          extraStorePaths = [ storeRoots ];
+          bind.rw = binds true;
+          # Claude Code's temp dir, so the session scratchpads survive restarts (pruned by scratchpad-prune.sh).
+          # A dev bind because nixpak mounts the /tmp tmpfs after the rw and ro binds and before the dev ones.
+          # The difference, no nodev, means nothing in an unprivileged userns, which can't mknod
+          bind.dev = [
+            [
+              scratchpad
+              (sloth.concat' "/tmp/claude-" sloth.uid)
+            ]
+          ]
+          ++ lib.optional cfg.kvm "/dev/kvm";
+          bind.ro = binds false ++ [
+            [
+              "${currentSystemSw}"
+              "/run/current-system/sw"
+            ]
+          ];
+          tmpfs = [ "/tmp" ];
+          sockets = {
+            wayland = true;
+            pipewire = cfg.audio;
+            pulse = cfg.audio;
+          };
+          newSession = true;
+          dieWithParent = true;
+        };
       };
-    };
   };
 
   mcpServers = pkgs.writeText "mcp-servers.json" (builtins.toJSON cfg.mcpServers);
   # The Bash tool sources CLAUDE_ENV_FILE before each command. The Code tab gets this from the SessionStart hook,
   # which claude mcp serve does not run. Drops the snapshot's ugrep/bfs shadows of grep and find
   bashEnv = pkgs.writeText "claude-bash-env" "unset -f grep find 2>/dev/null\n";
-  # /etc/claude/environment.md, imported by ~/.claude's CLAUDE.md: an import of environment.md (linked, so it's in the
-  # closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
+  # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
+  # the closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
   # `environment:` from the frontmatter. Claude Code follows imports four hops deep, and ~/.claude reaches this file
-  # in three (CLAUDE.md, the account's, the shared one), so environment.md is the last that loads
+  # in three (CLAUDE.md, the account's, the shared one), so environmentFile is the last that loads
   environmentDoc = pkgs.writeText "claude-environment.md" ''
     ---
     environment: bwrap
     ---
 
-    @${./environment.md}
+    @${cfg.environmentFile}
 
     ## Binds
 
@@ -293,19 +332,27 @@ let
       lib.concatMapStrings
         (
           b:
-          "- `${b.bind}` (${
-            lib.concatStringsSep ", " ([ (if b.rw then "rw" else "ro") ] ++ lib.optional b.mcp "MCP")
+          "- `${b.path}` (${
+            lib.concatStringsSep ", " (
+              [ (if b.rw then "rw" else "ro") ]
+              ++ lib.optional b.mcp "MCP"
+              ++ lib.optional (b.src != b.path) "from `${b.src}`"
+            )
           })\n"
         )
         (
-          lib.sortOn (b: b.bind) (
-            lib.attrValues (lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) cfg.binds)
+          lib.sortOn (b: b.path) (
+            lib.mapAttrsToList (path: b: b // { inherit path; }) (
+              lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) cfg.binds
+            )
           )
         )
-    }${lib.optionalString cfg.kvm "- `/dev/kvm` (dev)\n"}
-    ## PATH packages
+    }- `/tmp/claude-<uid>` (rw, from `${scratchpad}`): Claude Code's temp dir with the session scratchpads
+    ${lib.optionalString cfg.kvm "- `/dev/kvm` (dev)\n"}
+    ## PATH
 
-    ${lib.concatMapStringsSep ", " lib.getName sandboxPackages}
+    ${lib.concatMapStrings (d: "`${d}`, then ") cfg.extraPath}the packages
+    ${lib.concatMapStringsSep ", " lib.getName sandboxPackages}.
     ${cfg.environmentText}
   '';
 
@@ -339,6 +386,7 @@ let
     runtimeInputs = [ pkgs.jq ];
     vars = {
       SANDBOX_HOME = bwrapHome;
+      SCRATCHPAD = scratchpad;
       RESOLV_CONF = resolvConf;
       APP_ID = sandboxed.config.flatpak.appId;
       FHS_ENV = lib.getExe package;
@@ -380,6 +428,12 @@ in
       default = { };
       description = "Extra nixpak configuration.";
     };
+    environmentFile = mkOption {
+      type = types.path;
+      default = ./environment.md;
+      defaultText = lib.literalExpression "./environment.md";
+      description = "What Claude in the sandbox knows about it, imported by `/etc/claude/environment.md`. Replace it to describe a consumer's own setup.";
+    };
     environmentText = mkOption {
       type = types.lines;
       default = "";
@@ -396,11 +450,11 @@ in
                 default = true;
                 description = "Mount the path. Missing host paths are skipped.";
               };
-              bind = mkOption {
+              src = mkOption {
                 type = types.str;
                 default = name;
                 defaultText = lib.literalExpression "<name>";
-                description = "Path in the sandbox.";
+                description = "Host path.";
               };
               rw = mkOption {
                 type = types.bool;
@@ -417,7 +471,7 @@ in
         )
       );
       default = { };
-      description = "Host paths mounted in the sandbox, keyed by host path.";
+      description = "Host paths mounted in the sandbox, keyed by the path in the sandbox.";
     };
     env = mkOption {
       type =
@@ -459,6 +513,12 @@ in
       default = false;
       description = "Show a tray icon. Closing the window then hides the app instead of quitting it.";
     };
+    extraPath = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = lib.literalExpression ''[ "''${config.home.homeDirectory}/.claude/bin" ]'';
+      description = "Directories on PATH ahead of `path`'s packages, for the app, its Code tab shells and the claude-code MCP server.";
+    };
     path = mkOption {
       type = types.listOf types.package;
       default = with pkgs; [
@@ -476,7 +536,6 @@ in
         git-filter-repo
         python3
         unzip
-        # ~/.claude/libexec's git credential helper picks the PAT with it
         curl
         procps
         util-linux
@@ -517,7 +576,7 @@ in
               vars.MCP_SERVER_FILESYSTEM = lib.getExe pkgs.mcp-server-filesystem;
             }
           );
-          args = lib.mapAttrsToList (_: b: b.bind) (lib.filterAttrs (_: b: b.enable && b.mcp) cfg.binds);
+          args = lib.attrNames (lib.filterAttrs (_: b: b.enable && b.mcp) cfg.binds);
         };
         claude-code = {
           command = lib.getExe inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.claude-code;
@@ -585,13 +644,13 @@ in
         };
       in
       {
-        "${stateDir}/nix" = sys // {
-          bind = "/nix";
+        "/nix" = sys // {
+          src = "${stateDir}/nix";
           rw = true;
         };
         "/sys" = sys;
-        ${bwrapHome} = sys // {
-          bind = config.home.homeDirectory;
+        ${config.home.homeDirectory} = sys // {
+          src = bwrapHome;
           rw = true;
         };
         "${config.home.homeDirectory}/.claude".rw = true;

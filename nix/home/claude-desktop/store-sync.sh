@@ -8,6 +8,6 @@ echo "claude-desktop: Copying the sandbox closure to $STATE_DIR/nix" >&2
 nix --extra-experimental-features nix-command copy --no-check-sigs \
   --to "local?root=$STATE_DIR" "$STORE_ROOTS"
 ln -sfn "$STORE_ROOTS" "$root"
-# The old closure is garbage now; ~/.claude/libexec/store-gc collects it from inside the sandbox
+# The old closure is garbage now; store-gc.sh collects it from inside the sandbox
 mkdir -p "$STATE_DIR/nix/var/claude-desktop"
 touch "$STATE_DIR/nix/var/claude-desktop/gc-pending"
