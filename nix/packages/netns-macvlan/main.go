@@ -53,10 +53,11 @@ func run(pid int) error {
 	if err != nil {
 		return err
 	}
-	mac, err := stableMAC(uid)
+	machineID, err := os.ReadFile("/etc/machine-id")
 	if err != nil {
-		return err
+		return fmt.Errorf("Read machine ID: %w", err)
 	}
+	mac := stableMAC(machineID, uid)
 	link := &netlink.Macvlan{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:         "eth0",
@@ -133,27 +134,31 @@ func defaultRouteLink() (int, error) {
 		if err != nil {
 			return -1, fmt.Errorf("List default routes: %w", err)
 		}
-		best := -1
-		for i, r := range routes {
-			if r.LinkIndex > 0 && (best == -1 || r.Priority < routes[best].Priority) {
-				best = i
-			}
-		}
-		if best != -1 {
-			return routes[best].LinkIndex, nil
+		if link := lowestMetric(routes); link != -1 {
+			return link, nil
 		}
 	}
 	return -1, fmt.Errorf("No default route")
 }
 
-// Locally administered unicast MAC, stable per machine and uid so DHCP keeps handing out the same lease
-func stableMAC(uid int) (net.HardwareAddr, error) {
-	machineID, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		return nil, fmt.Errorf("Read machine ID: %w", err)
+// Device index of the route with the lowest metric, skipping routes without a device; -1 if none
+func lowestMetric(routes []netlink.Route) int {
+	best := -1
+	for i, r := range routes {
+		if r.LinkIndex > 0 && (best == -1 || r.Priority < routes[best].Priority) {
+			best = i
+		}
 	}
+	if best == -1 {
+		return -1
+	}
+	return routes[best].LinkIndex
+}
+
+// Locally administered unicast MAC, stable per machine and uid so DHCP keeps handing out the same lease
+func stableMAC(machineID []byte, uid int) net.HardwareAddr {
 	sum := sha256.Sum256(fmt.Appendf(nil, "netns-macvlan\x00%s\x00%d", machineID, uid))
 	mac := net.HardwareAddr(sum[:6])
 	mac[0] = mac[0]&^0x01 | 0x02
-	return mac, nil
+	return mac
 }

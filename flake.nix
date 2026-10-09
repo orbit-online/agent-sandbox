@@ -3,6 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # Only for the checks' test system
+    home-manager = {
+      url = "github:nix-community/home-manager/release-26.05";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     nixpak = {
       url = "github:nixpak/nixpak";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -27,5 +32,12 @@
       packages = forAllSystems (system: {
         netns-macvlan = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-macvlan { };
       });
+      checks = forAllSystems (
+        system:
+        import ./nix/checks {
+          inherit self inputs;
+          pkgs = nixpkgs.legacyPackages.${system};
+        }
+      );
     };
 }

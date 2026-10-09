@@ -41,13 +41,29 @@ the Home Manager one per user.
 
 ## Testing
 
-- `nix flake check`: evaluates the NixOS module and builds `netns-macvlan`.
-  It doesn't evaluate the Home Manager module; that needs a consumer.
+`nix flake check` runs everything below; run it before every commit. The
+checks are in `nix/checks/default.nix` and use a test NixOS system with both
+modules and a user alice (the `home-manager` input exists only for it).
+
+- `claude-desktop-eval`: assertions hold, the NixOS wrapper appears only when
+  a user enables the module, the netns assertion fires when `sandbox`
+  overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots.
+- `claude-desktop`: builds alice's sandboxed app (the patched asar and the
+  `writeShellApplication` scripts check themselves while building) and checks
+  its closure: the binds, `/dev/kvm` and PATH in `claude-environment.md`, and
+  nixpak's `bwrap-args.json` (own netns, no `--share-net`, the binds).
+- `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
+  including `openNetns` against a child in its own user and network
+  namespace.
+- `scripts`: shellcheck on `scripts/`.
+
+Every new test gets the revert check: break the implementation, see the test
+fail, restore it.
+
+Beyond the checks:
+
 - In a consumer: build its config with `--override-input agent-sandbox
-  path:<this checkout>`, e.g. the Home Manager profile at
-  `<config>.home-manager.users.<user>.home.path`. The sandboxed package is
-  `claude-desktop-sandboxed` in its `home.packages`; its closure holds the
-  generated `claude-environment.md` and nixpak's `bwrap-args.json`.
+  path:<this checkout>`.
 - On the host: `scripts/claude-desktop-test.sh` runs the real app from this
   checkout. Inside that sandbox, `scripts/nettest.sh HOST:PORT...` checks
   that the given host-only services are unreachable and the internet is

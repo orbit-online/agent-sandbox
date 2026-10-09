@@ -8,6 +8,7 @@ buildGoModule {
       ./go.mod
       ./go.sum
       ./main.go
+      ./main_test.go
     ];
   };
   vendorHash = "sha256-NGNdHlTTdSY56EcqKk7ce9Pn5ruK5/E5uHYe/wgeGYg=";
