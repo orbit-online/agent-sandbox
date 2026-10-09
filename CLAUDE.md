@@ -27,7 +27,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`. Consumers import both modules and enable
-the Home Manager one per user.
+the Home Manager one per user. The modules carry a `key`, so importing them
+twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
 ## Rules
 
@@ -59,7 +60,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   a user enables the module, for group users, the users-group and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
-  `extraPath` at the front of PATH.
+  `extraPath` at the front of PATH. The test system imports both modules
+  twice.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure) and of

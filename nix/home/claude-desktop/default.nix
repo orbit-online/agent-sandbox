@@ -285,7 +285,7 @@ let
           bind.rw = binds true;
           # Claude Code's temp dir, so the session scratchpads survive restarts (pruned by scratchpad-prune.sh).
           # A dev bind because nixpak mounts the /tmp tmpfs after the rw and ro binds and before the dev ones.
-          # The difference, no nodev, means nothing in an unprivileged userns, which can't mknod
+          # It still ends up nodev where the app runs: the FHS env's bwrap binds /tmp on with nodev
           bind.dev = [
             [
               scratchpad

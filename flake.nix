@@ -27,8 +27,15 @@
       ];
     in
     {
-      homeModules.claude-desktop = import ./nix/home/claude-desktop { inherit inputs; };
-      nixosModules.claude-desktop = import ./nix/nixos/claude-desktop.nix { inherit self; };
+      # Keyed, so a configuration that imports them twice (directly and through another flake's module) gets them once
+      homeModules.claude-desktop = {
+        key = "agent-sandbox#homeModules.claude-desktop";
+        imports = [ (import ./nix/home/claude-desktop { inherit inputs; }) ];
+      };
+      nixosModules.claude-desktop = {
+        key = "agent-sandbox#nixosModules.claude-desktop";
+        imports = [ (import ./nix/nixos/claude-desktop.nix { inherit self; }) ];
+      };
       packages = forAllSystems (system: {
         netns-macvlan = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-macvlan { };
       });

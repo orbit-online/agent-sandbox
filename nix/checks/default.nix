@@ -10,11 +10,16 @@ let
     imports = [
       inputs.home-manager.nixosModules.home-manager
       self.nixosModules.claude-desktop
+      # Twice, as when another flake's module imports it too
+      self.nixosModules.claude-desktop
     ];
     system.stateVersion = "26.05";
     hardware.graphics.enable = true;
     users.users.alice.isNormalUser = true;
-    home-manager.sharedModules = [ self.homeModules.claude-desktop ];
+    home-manager.sharedModules = [
+      self.homeModules.claude-desktop
+      self.homeModules.claude-desktop
+    ];
     home-manager.users.alice = {
       home.stateVersion = "26.05";
       agent-sandbox.claude-desktop = cfg;
