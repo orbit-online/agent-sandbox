@@ -274,14 +274,17 @@ let
   # The Bash tool sources CLAUDE_ENV_FILE before each command. The Code tab gets this from the SessionStart hook,
   # which claude mcp serve does not run. Drops the snapshot's ugrep/bfs shadows of grep and find
   bashEnv = pkgs.writeText "claude-bash-env" "unset -f grep find 2>/dev/null\n";
-  # /etc/claude/environment.md, imported by ~/.claude's CLAUDE.md: environment.md, the binds (minus the ro system
-  # ones) and PATH as configured, then environmentText. claude-env reads `environment:` from the frontmatter
+  # /etc/claude/environment.md, imported by ~/.claude's CLAUDE.md: an import of environment.md (linked, so it's in the
+  # closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
+  # `environment:` from the frontmatter. Claude Code follows imports four hops deep, and ~/.claude reaches this file
+  # in three (CLAUDE.md, the account's, the shared one), so environment.md is the last that loads
   environmentDoc = pkgs.writeText "claude-environment.md" ''
     ---
     environment: bwrap
     ---
 
-    ${builtins.readFile ./environment.md}
+    @${./environment.md}
+
     ## Binds
 
     ${

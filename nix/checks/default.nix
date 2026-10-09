@@ -110,6 +110,9 @@ in
       ''
         paths=$closure/store-paths
         doc=$(grep -- '-claude-environment\.md$' "$paths")
+        # The static part is linked, so the sandbox needs it in its store
+        import=$(grep -oxP '@\K/nix/store/[^/]+-environment\.md' "$doc") || { echo "environment.md lacks the import" >&2; exit 1; }
+        grep -qxF -- "$import" "$paths" || { echo "$import is not in the closure" >&2; exit 1; }
         for line in \
           '- `/srv/project` (rw, MCP)' \
           '- `/srv/docs` (ro, MCP)' \

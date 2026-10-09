@@ -1,10 +1,11 @@
 # Your environment: the Claude Desktop sandbox
 
-You run inside Claude Desktop's bubblewrap sandbox. This file is
-`/etc/claude/environment.md`, built into the sandbox by the Home Manager module
-`agent-sandbox.claude-desktop` (`nix/home/claude-desktop/` in the
-`orbit-online/agent-sandbox` repo: `default.nix` and this file,
-`environment.md`), on top of [nixpak](https://github.com/nixpak/nixpak). If
+You run inside Claude Desktop's bubblewrap sandbox, built by the Home Manager
+module `agent-sandbox.claude-desktop` on top of
+[nixpak](https://github.com/nixpak/nixpak): `nix/home/claude-desktop/` in the
+`orbit-online/agent-sandbox` repo, with this file as `environment.md`.
+`/etc/claude/environment.md` imports it and adds the binds and PATH packages
+as configured. If
 something here could work better for you, suggest a change to the module;
 widening the sandbox (binds, D-Bus rules, sockets, env, tokens) always needs
 the user's go first.
@@ -18,9 +19,9 @@ don't belong in a repo. `/tmp` is a private tmpfs, gone on restart.
 
 ## What you can see
 
-Only the binds listed at the end, plus the Nix store described below. The rest
-of the host (other repos, `~/.ssh`, the user's dotfiles) doesn't exist in
-here; if you need something that isn't bound, say what and why, and the user
+Only the binds in `/etc/claude/environment.md`, plus the Nix store described
+below. The rest of the host (other repos, `~/.ssh`, the user's dotfiles)
+doesn't exist in here; if you need something that isn't bound, say what and why, and the user
 adds it. `/proc/self/mountinfo` shows the live set.
 
 - Own PID, user, UTS and IPC namespaces (pid 1 is `bwrap`), new session.
@@ -36,8 +37,8 @@ adds it. `/proc/self/mountinfo` shows the live set.
 ## Tools
 
 - PATH, for the Code tab's shells and the MCP shell alike: `~/.claude/bin`,
-  then the packages listed at the end, then the FHS env's `/usr/bin`.
-  `SHELL` is bash from the sandbox's `/run/current-system/sw`; no shell rc
+  then the PATH packages in `/etc/claude/environment.md`, then the FHS env's
+  `/usr/bin`. `SHELL` is bash from the sandbox's `/run/current-system/sw`; no shell rc
   files come from the host `/etc`.
 - A tool is missing: work around it for now (`nix run`, `nix shell`), and in
   the same go add it to the module's `path` and tell the user to rebuild.

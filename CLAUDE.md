@@ -54,7 +54,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
-  its closure: the binds, `/dev/kvm` and PATH in `claude-environment.md`, and
+  its closure: the import of `environment.md` (in the closure), the binds,
+  `/dev/kvm` and PATH in `claude-environment.md`, and
   nixpak's `bwrap-args.json` (own netns, no `--share-net`, the binds).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
