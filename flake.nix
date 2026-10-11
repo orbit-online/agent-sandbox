@@ -25,6 +25,12 @@
         "x86_64-linux"
         "aarch64-linux"
       ];
+      checksFor =
+        system:
+        import ./nix/checks {
+          inherit self inputs;
+          pkgs = nixpkgs.legacyPackages.${system};
+        };
     in
     {
       # Keyed, so a configuration that imports them twice (directly and through another flake's module) gets them once
@@ -39,12 +45,8 @@
       packages = forAllSystems (system: {
         netns-macvlan = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-macvlan { };
       });
-      checks = forAllSystems (
-        system:
-        import ./nix/checks {
-          inherit self inputs;
-          pkgs = nixpkgs.legacyPackages.${system};
-        }
-      );
+      checks = forAllSystems (system: (checksFor system).checks);
+      # nix-unit's, run by checks.claude-desktop-eval
+      tests = forAllSystems (system: (checksFor system).tests);
     };
 }

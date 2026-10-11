@@ -56,8 +56,11 @@ twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 checks are in `nix/checks/default.nix` and use a test NixOS system with both
 modules and a user alice (the `home-manager` input exists only for it).
 
-- `claude-desktop-eval`: assertions hold, the NixOS wrapper appears only when
-  a user enables the module, for group users, the users-group and
+- `claude-desktop-eval`: nix-unit runs the flake's `tests` output, with every
+  input passed in from the store. Run them directly with `nix run
+  --inputs-from . nixpkgs#nix-unit -- --flake .#tests.x86_64-linux`. They
+  check that the assertions hold, the NixOS wrapper appears only when a user
+  enables the module, for group users, the users-group and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH. The test system imports both modules
