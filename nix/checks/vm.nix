@@ -48,6 +48,8 @@ pkgs.testers.runNixOSTest {
         (aliceModule {
           enable = true;
           package = pkgs.callPackage ./stub-app.nix { };
+          # Missing until the launch subtest creates it
+          binds."/srv/project" = { };
         })
       ];
       virtualisation = {
@@ -140,6 +142,14 @@ pkgs.testers.runNixOSTest {
               " --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Settings.ReadOne"
               " org.freedesktop.appearance color-scheme"
           ))
+          # A bind that isn't optional, with its source missing. The launch syncs the store first. RuntimeMaxSec:
+          # without the check it starts the app, and --wait would wait on it
+          status, out = workstation.execute(
+              "systemd-run --user -M alice@ --wait --pipe --quiet -p RuntimeMaxSec=600"
+              " -- /etc/profiles/per-user/alice/bin/claude-desktop 2>&1"
+          )
+          assert status != 0 and "Bind source /srv/project is missing" in out, f"{status} {out}"
+          workstation.succeed("mkdir /srv/project")
           # KillMode=process: like a desktop's app scope, ending the app leaves the rest alone
           workstation.succeed(
               "systemd-run --user -M alice@ --unit claude-desktop -p KillMode=process -E WAYLAND_DISPLAY=wayland-0"
@@ -147,6 +157,7 @@ pkgs.testers.runNixOSTest {
           )
           workstation.wait_until_succeeds("test -s ${sandboxHome}/stub-app.log", timeout=300)
           workstation.succeed("test -L /home/alice/.local/share/claude-desktop/nix/var/nix/gcroots/claude-desktop")
+          workstation.succeed("test -d /home/alice/.claude")
           app_pid, app_netns = workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
           # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-18-1
           assert app_pid == "18", f"the app is pid {app_pid} in the sandbox, update the tray rule"

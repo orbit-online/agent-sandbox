@@ -84,7 +84,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   (`nix/checks/stub-app.nix`, shaped like the real package so the asar patch
   and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
   serves the color scheme on her session bus. The test covers the setcap
-  wrapper, the store sync, the scratchpad bind (mode 0700) and
+  wrapper, the launcher refusing a missing bind source that isn't optional,
+  the store sync, the scratchpad bind (mode 0700) and
   `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
   launch, live, and the watcher ending with the app), the macvlan's DHCP

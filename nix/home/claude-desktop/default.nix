@@ -390,7 +390,8 @@ let
       RESOLV_CONF = resolvConf;
       APP_ID = sandboxed.config.flatpak.appId;
       FHS_ENV = lib.getExe package;
-      CONFIG = "${config.home.homeDirectory}/.config/Claude/claude_desktop_config.json";
+      DOT_CLAUDE = cfg.binds."${config.home.homeDirectory}/.claude".src;
+      CONFIG = "${cfg.binds."${config.home.homeDirectory}/.config/Claude".src}/claude_desktop_config.json";
       MCP_SERVERS = "${mcpServers}";
       TRAY = lib.boolToString cfg.tray;
       STORE_SYNC = lib.getExe storeSync;
@@ -402,7 +403,12 @@ let
       VARS=(
         ${vars}
       )
-      readonly VARS
+      REQUIRED_BINDS=(
+        ${lib.escapeShellArgs (
+          lib.mapAttrsToList (_: b: b.src) (lib.filterAttrs (_: b: b.enable && !b.optional) cfg.binds)
+        )}
+      )
+      readonly VARS REQUIRED_BINDS
     '';
   };
   claude-desktop = (
@@ -448,7 +454,12 @@ in
               enable = mkOption {
                 type = types.bool;
                 default = true;
-                description = "Mount the path. Missing host paths are skipped.";
+                description = "Mount the path.";
+              };
+              optional = mkOption {
+                type = types.bool;
+                default = false;
+                description = "Skip the bind when the host path is missing. Otherwise the launcher refuses to start.";
               };
               src = mkOption {
                 type = types.str;
@@ -658,6 +669,6 @@ in
           rw = true;
         };
       }
-      // lib.genAttrs (map (e: "/etc/${e}") ([ "static" ] ++ etcEntries)) (_: sys);
+      // lib.genAttrs (map (e: "/etc/${e}") ([ "static" ] ++ etcEntries)) (_: sys // { optional = true; });
   };
 }

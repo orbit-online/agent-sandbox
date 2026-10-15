@@ -1,8 +1,9 @@
 # shellcheck shell=bash
-# The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix)
-: "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${FHS_ENV:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
+# The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
+# $REQUIRED_BINDS: the sources of the binds that aren't optional
+: "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${FHS_ENV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
 : "${STORE_SYNC:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
-mkdir -p "$SANDBOX_HOME/.config"
+mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE"
 # Bind source for Claude Code's temp dir, which it wants private. Its parent exists from SANDBOX_HOME's mkdir
 [[ -d $SCRATCHPAD ]] || mkdir -m 700 "$SCRATCHPAD"
 # Bind source for the sandbox's /etc/resolv.conf, filled in by the DHCP client
@@ -32,6 +33,10 @@ jq --slurpfile m "$MCP_SERVERS" --argjson tray "$TRAY" \
 mv "$CONFIG.tmp" "$CONFIG"
 
 "$STORE_SYNC"
+# nixpak only passes bwrap the --*-bind-try variants, which skip a missing source
+for src in "${REQUIRED_BINDS[@]}"; do
+  [[ -e $src ]] || { echo "claude-desktop: Bind source $src is missing" >&2; exit 1; }
+done
 
 "$GTK_THEME" || true
 # Double fork: the launcher this script execs into must not wait for it. It stops once that pid ($$) exits
