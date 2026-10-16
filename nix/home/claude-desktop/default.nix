@@ -13,7 +13,7 @@
 #       │  runs (in N, M1, P): bwrap's init, the FHS env script, claude:// re-entry
 #       │
 #       └─ U3  buildFHSEnv's bwrap
-#             owns: M2 (tmpfs /etc, DHCP resolv.conf, patched app.asar)
+#             owns: M2 (tmpfs /etc, DHCP resolv.conf, own hosts, patched app.asar)
 #             runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers
 { inputs }:
 {
@@ -203,6 +203,23 @@ let
   resolvConf = "${bwrapHome}/.config/resolv.conf";
   # The same file as the sandbox sees it, where bwrapHome is the home directory
   sandboxResolvConf = "${config.home.homeDirectory}/.config/resolv.conf";
+  # Replaces the host's /etc/hosts, whose entries point at the host's loopback or networks the netns doesn't reach.
+  # The hostname line is the one NixOS writes: the UTS namespace starts with the host's hostname
+  hosts =
+    let
+      inherit (osConfig.networking) hostName domain;
+      # FQDN first, as in nixos/modules/config/networking.nix
+      hostNames =
+        lib.optional (hostName != "" && domain != null) "${hostName}.${domain}"
+        ++ lib.optional (hostName != "") hostName;
+    in
+    pkgs.writeText "claude-desktop-hosts" (
+      ''
+        127.0.0.1 localhost
+        ::1 localhost
+      ''
+      + lib.optionalString (hostNames != [ ]) "127.0.0.2 ${toString hostNames}\n"
+    );
   dhcpScript = script "udhcpc.sh" {
     name = "claude-desktop-udhcpc";
     runtimeInputs = [ pkgs.iproute2 ];
@@ -225,8 +242,8 @@ let
   };
 
   # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
-  # The inner bwrap mounts last, so its resolv.conf beats the host one that nixpak binds. Its /etc/resolv.conf
-  # is a symlink to /.host-etc/resolv.conf (the outer /etc), and bwrap won't mount onto symlinks
+  # The inner bwrap mounts last, so its resolv.conf and hosts beat the host ones that nixpak's pasta module binds.
+  # Its /etc entries are symlinks to /.host-etc (the outer /etc), and bwrap won't mount onto symlinks
   package = cfg.package.override (prev: {
     buildFHSEnv =
       args:
@@ -236,6 +253,7 @@ let
           extraBwrapArgs = args.extraBwrapArgs or [ ] ++ [
             "--ro-bind ${patchedAsar} ${asar}"
             "--ro-bind ${sandboxResolvConf} /.host-etc/resolv.conf"
+            "--ro-bind ${hosts} /.host-etc/hosts"
             "--ro-bind ${environmentDoc} /etc/claude/environment.md"
           ];
           profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
@@ -271,7 +289,7 @@ let
           provider = "bundle";
           bundlePackage = graphicsDrivers;
         };
-        # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf, no extra pasta args
+        # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in package), no extra pasta args
         bubblewrap.network = lib.mkForce true;
         pasta = {
           enable = lib.mkForce true;

@@ -61,6 +61,8 @@ pkgs.testers.runNixOSTest {
       networking.defaultGateway = nodes.router.networking.primaryIPAddress;
       # So the macvlan's isolation is what blocks the sandbox, not the firewall
       networking.firewall.enable = false;
+      # A host-only name, which the sandbox's own hosts file leaves out
+      networking.hosts."127.0.0.1" = [ "host-only.test" ];
       users.users.alice.linger = true;
       users.users.bob.isNormalUser = true;
       home-manager.useUserPackages = true;
@@ -216,6 +218,12 @@ pkgs.testers.runNixOSTest {
           assert "macvlan" in in_sandbox("ip -d link show eth0")
           assert "inet 192.168.1.1" in in_sandbox("ip -4 -o addr show dev eth0")
           assert "default via ${routerIP} dev eth0" in in_sandbox("ip route")
+
+      with subtest("Own hosts file"):
+          workstation.succeed("grep -qw host-only.test /etc/hosts")
+          hosts = in_sandbox("cat /etc/hosts")
+          assert "host-only.test" not in hosts, hosts
+          assert {"127.0.0.1 localhost", "127.0.0.2 workstation"} <= set(hosts.splitlines()), hosts
 
       with subtest("nettest.sh"):
           print(in_sandbox(f"nettest {' '.join(host_only)}"))
