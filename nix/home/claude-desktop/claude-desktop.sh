@@ -13,17 +13,62 @@ touch "$RESOLV_CONF"
 echo 'XDG_DOWNLOAD_DIR="$HOME/Downloads"' >"$SANDBOX_HOME/.config/user-dirs.dirs"
 args=(--password-store=basic "$@")
 
-# Further launches (claude:// URLs) join the running sandbox, so Electron's single-instance lock finds
-# the first instance. The mount ns check stops a stale info file with a recycled pid from pointing at a host process.
-for d in "$XDG_RUNTIME_DIR"/.flatpak/nixpak-app-*; do
-  grep -qxF "name=$APP_ID" "$d/info" 2>/dev/null || continue
-  pid=$(grep -oP '"child-pid":\s*\K\d+' "$d/bwrapinfo.json" 2>/dev/null) || continue
-  if [[ -e /proc/$pid/ns/mnt && ! /proc/$pid/ns/mnt -ef /proc/self/ns/mnt ]]; then
-    # Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns
-    exec env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus" \
-      nsenter -t "$pid" -U -m -p -n -i -u -C -r -w --preserve-credentials "$FHS_ENV" "${args[@]}"
+# The running sandbox's pid 1. The mount ns check stops a stale info file with a recycled pid from pointing at a
+# host process
+sandbox_pid() {
+  local d pid
+  for d in "$XDG_RUNTIME_DIR"/.flatpak/nixpak-app-*; do
+    grep -qxF "name=$APP_ID" "$d/info" 2>/dev/null || continue
+    pid=$(grep -oP '"child-pid":\s*\K\d+' "$d/bwrapinfo.json" 2>/dev/null) || continue
+    if [[ -e /proc/$pid/ns/mnt && ! /proc/$pid/ns/mnt -ef /proc/self/ns/mnt ]]; then
+      echo "$pid"
+      return
+    fi
+  done
+  return 1
+}
+
+# The app's main process: pid 1's grandchild in a user ns its parent isn't in, which only the FHS env's bwrap makes.
+# Re-entries come in through nsenter, so they aren't pid 1's descendants
+app_pid() {
+  local child children grandchild grandchildren
+  read -ra children <"/proc/$1/task/$1/children" || true
+  for child in "${children[@]}"; do
+    read -ra grandchildren <"/proc/$child/task/$child/children" 2>/dev/null || true
+    for grandchild in "${grandchildren[@]}"; do
+      if [[ ! /proc/$grandchild/ns/user -ef /proc/$child/ns/user ]]; then
+        echo "$grandchild"
+        return
+      fi
+    done
+  done
+  return 1
+}
+
+# Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns
+join=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus"
+  nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
+
+# --shell (the .desktop file's terminal action): a login shell where the app runs, so it gets the Code tab's environment
+if [[ ${1:-} == --shell ]]; then
+  if ! { pid=$(sandbox_pid) && app=$(app_pid "$pid"); }; then
+    echo "Starting Claude"
+    # As a unit of its own: run from the terminal, the app would stop with the terminal's unit
+    systemd-run --user --collect --quiet -- "$(readlink -f "$0")"
+    for ((i = 0; i < 300; i++)); do
+      pid=$(sandbox_pid) && app=$(app_pid "$pid") && break
+      sleep 1
+    done
   fi
-done
+  [[ -n ${app:-} ]] || { echo "claude-desktop: The app didn't start, see journalctl --user" >&2; exit 1; }
+  # shellcheck disable=SC2016
+  exec "${join[@]}" -t "$app" /bin/sh -c 'exec "$SHELL" -l'
+fi
+
+# Further launches (claude:// URLs) join the running sandbox, so Electron's single-instance lock finds the first instance
+if pid=$(sandbox_pid); then
+  exec "${join[@]}" -t "$pid" "$FHS_ENV" "${args[@]}"
+fi
 
 # The app writes to this file too, so merge instead of symlinking a read-only store path
 mkdir -p "$(dirname "$CONFIG")"

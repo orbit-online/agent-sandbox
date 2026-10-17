@@ -160,7 +160,7 @@ pkgs.testers.runNixOSTest {
           workstation.wait_until_succeeds("test -s ${sandboxHome}/stub-app.log", timeout=300)
           workstation.succeed("test -L /home/alice/.local/share/claude-desktop/nix/var/nix/gcroots/claude-desktop")
           workstation.succeed("test -d /home/alice/.claude")
-          app_pid, app_netns = workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
+          app_pid, app_netns, app_mntns = workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
           # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-18-1
           assert app_pid == "18", f"the app is pid {app_pid} in the sandbox, update the tray rule"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
@@ -209,6 +209,16 @@ pkgs.testers.runNixOSTest {
           assert reentry_netns == app_netns, f"re-entry in {reentry_netns}, app in {app_netns}"
           assert len(workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()) == 1
 
+      # A login shell, as the .desktop file's terminal action runs it, reading commands from stdin
+      def sandbox_shell(cmd):
+          return as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(
+              f"echo {shlex.quote(cmd)} | /etc/profiles/per-user/alice/bin/claude-desktop --shell"
+          ))
+
+      with subtest("--shell joins the app's namespaces"):
+          out = sandbox_shell("readlink /proc/self/ns/net /proc/self/ns/mnt")
+          assert out.split() == [app_netns, app_mntns], f"shell in {out.split()}, app in {[app_netns, app_mntns]}"
+
       with subtest("DHCP lease on the macvlan"):
           workstation.wait_until_succeeds(
               sandbox_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"), timeout=60
@@ -249,10 +259,19 @@ pkgs.testers.runNixOSTest {
           status, out = as_bob(f"/run/wrappers/bin/netns-macvlan {bob_ns}")
           assert status == 0, out
           workstation.succeed(f"nsenter -t {bob_ns} -n ip link show eth0")
+          # It holds the sandbox's netns, whose macvlan's MAC would then block the next sandbox's
+          workstation.succeed("systemctl stop bob-in-alice-ns")
 
       with subtest("the theme watcher ends with the app"):
           workstation.succeed("pgrep -u alice -f claude-desktop-gtk-theme-watch")
           workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop")
           workstation.wait_until_fails("pgrep -u alice -f 'claude-desktop-gtk-theme-watch|gdbus monitor'", timeout=30)
+
+      with subtest("--shell starts the app when it isn't running"):
+          workstation.wait_until_fails(f"test -e /proc/{sandbox_pid}", timeout=30)
+          out = sandbox_shell("readlink /proc/self/ns/net")
+          launches = workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()
+          assert len(launches) == 2, launches
+          assert out.splitlines()[-1] == launches[1].split()[1], f"{out} {launches}"
     '';
 }

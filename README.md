@@ -53,6 +53,15 @@ Other options: `extraPath` (directories ahead of the PATH packages),
 `sandbox` (extra nixpak configuration). The descriptions are in
 [`default.nix`](nix/home/claude-desktop/default.nix).
 
+## Shell in the sandbox
+
+The app's launcher entry gets a "New shell" action, which runs
+`claude-desktop --shell` in your terminal through
+[`xdg-terminal-exec`](https://gitlab.freedesktop.org/terminal-wg/specifications)
+(pick the terminal in `xdg-terminals.list`). It's a login shell where the app
+runs, with the environment its Code tab gets. If the app isn't running, it
+starts it first.
+
 ## State and maintenance
 
 Everything the sandbox keeps lives in `~/.local/share/claude-desktop` on the

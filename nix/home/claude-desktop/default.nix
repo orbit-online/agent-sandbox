@@ -14,7 +14,7 @@
 #       │
 #       └─ U3  buildFHSEnv's bwrap
 #             owns: M2 (tmpfs /etc, DHCP resolv.conf, own hosts, patched app.asar)
-#             runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers
+#             runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`
 { inputs }:
 {
   pkgs,
@@ -438,6 +438,18 @@ let
         wrapper
         sandboxed.config.env
       ];
+      postBuild = ''
+        # The package's only .desktop file, whose name changed upstream
+        set -- $out/share/applications/*.desktop
+        [[ $# == 1 ]]
+        d=$1
+        src=$(readlink -f "$d")
+        rm "$d"
+        sed 's/^Actions=.*/&;Shell/' "$src" >"$d"
+        grep -q '^Actions=.*;Shell$' "$d"
+        printf '\n[Desktop Action Shell]\nExec=%s %s --shell\nName=New shell\n' \
+          ${lib.getExe pkgs.xdg-terminal-exec} "$out/bin/claude-desktop" >>"$d"
+      '';
     }
   );
 in
