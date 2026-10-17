@@ -45,9 +45,9 @@ app_pid() {
   return 1
 }
 
+env=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus")
 # Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns
-join=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus"
-  nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
+nsenter=(nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
 
 # --shell (the .desktop file's terminal action): a login shell where the app runs, so it gets the Code tab's environment
 if [[ ${1:-} == --shell ]]; then
@@ -61,13 +61,17 @@ if [[ ${1:-} == --shell ]]; then
     done
   fi
   [[ -n ${app:-} ]] || { echo "claude-desktop: The app didn't start, see journalctl --user" >&2; exit 1; }
+  # The terminal's. Ghostty points TERMINFO at its own entry, which the sandbox's store lacks: xterm-256color then
+  term=()
+  for v in TERM TERMINFO COLORTERM; do [[ -z ${!v:-} ]] || term+=("$v=${!v}"); done
   # shellcheck disable=SC2016
-  exec "${join[@]}" -t "$app" /bin/sh -c 'exec "$SHELL" -l'
+  exec "${env[@]}" "${term[@]}" "${nsenter[@]}" -t "$app" /bin/sh -c \
+    '[ -z "${TERMINFO-}" ] || [ -d "$TERMINFO" ] || { TERM=xterm-256color; unset TERMINFO; }; exec "$SHELL" -l'
 fi
 
 # Further launches (claude:// URLs) join the running sandbox, so Electron's single-instance lock finds the first instance
 if pid=$(sandbox_pid); then
-  exec "${join[@]}" -t "$pid" "$FHS_ENV" "${args[@]}"
+  exec "${env[@]}" "${nsenter[@]}" -t "$pid" "$FHS_ENV" "${args[@]}"
 fi
 
 # The app writes to this file too, so merge instead of symlinking a read-only store path

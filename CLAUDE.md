@@ -92,7 +92,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   lease, route and DNS, its own `/etc/hosts`, `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, the
   `claude://` re-entry, `claude-desktop --shell` (in the app's namespaces,
-  and starting the app when it isn't running), the wrapper refusing system
+  the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
+  starting the app when it isn't running), the wrapper refusing system
   users, and
   `netns-macvlan` refusing a second user, bob, alice's namespaces, each of
   its checks on its own. bob's commands go through `runuser`,

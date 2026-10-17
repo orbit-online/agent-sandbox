@@ -210,14 +210,24 @@ pkgs.testers.runNixOSTest {
           assert len(workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()) == 1
 
       # A login shell, as the .desktop file's terminal action runs it, reading commands from stdin
-      def sandbox_shell(cmd):
+      def sandbox_shell(cmd, env=""):
           return as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(
-              f"echo {shlex.quote(cmd)} | /etc/profiles/per-user/alice/bin/claude-desktop --shell"
+              f"echo {shlex.quote(cmd)} | {env} /etc/profiles/per-user/alice/bin/claude-desktop --shell"
           ))
 
       with subtest("--shell joins the app's namespaces"):
           out = sandbox_shell("readlink /proc/self/ns/net /proc/self/ns/mnt")
           assert out.split() == [app_netns, app_mntns], f"shell in {out.split()}, app in {[app_netns, app_mntns]}"
+
+      with subtest("--shell keeps the terminal's TERM, unless its TERMINFO isn't in the sandbox"):
+          for env, want in [
+              ("TERM=xterm-ghostty TERMINFO=/nonexistent COLORTERM=truecolor", "xterm-256color - truecolor"),
+              ("TERM=xterm-ghostty TERMINFO=/etc", "xterm-ghostty /etc"),
+              ("TERM=konsole-256color", "konsole-256color -"),
+          ]:
+              # No ''${...}: systemd-run would expand it
+              out = sandbox_shell('[ -v TERMINFO ] && t=$TERMINFO || t=-; echo "$TERM $t $COLORTERM"', env).strip()
+              assert out == want, f"{env}: {out!r}, want {want!r}"
 
       with subtest("DHCP lease on the macvlan"):
           workstation.wait_until_succeeds(
