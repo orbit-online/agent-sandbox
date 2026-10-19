@@ -280,6 +280,8 @@ pkgs.testers.runNixOSTest {
       with subtest("--shell starts the app when it isn't running"):
           workstation.wait_until_fails(f"test -e /proc/{sandbox_pid}", timeout=30)
           out = sandbox_shell("readlink /proc/self/ns/net")
+          # --shell enters as soon as bwrap forks the app, which may not have logged yet
+          workstation.wait_until_succeeds("test $(wc -l <${sandboxHome}/stub-app.log) -ge 2", timeout=30)
           launches = workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()
           assert len(launches) == 2, launches
           assert out.splitlines()[-1] == launches[1].split()[1], f"{out} {launches}"
