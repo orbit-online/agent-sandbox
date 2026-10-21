@@ -70,6 +70,11 @@ host: `home/` (the sandbox's `$HOME`), `nix/` (its store, at `/nix`) and
 `/tmp/claude-<uid>`, so they survive restarts). The rest of `/tmp` is a
 tmpfs.
 
+The sandbox's store paths are bound from the host's store, so the launcher
+roots them there too, at `$XDG_RUNTIME_DIR/claude-desktop/store-roots`: a GC
+after a rebuild leaves a running sandbox alone. The next launch replaces the
+root and logging out removes it.
+
 Two scripts on the sandbox's PATH keep it in check. Nothing runs them on its
 own; hook them into Claude Code's `SessionStart`, detached:
 

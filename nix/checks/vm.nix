@@ -245,6 +245,21 @@ pkgs.testers.runNixOSTest {
           assert "host-only.test" not in hosts, hosts
           assert {"127.0.0.1 localhost", "127.0.0.2 workstation"} <= set(hosts.splitlines()), hosts
 
+      with subtest("A host GC leaves the sandbox's store paths and /etc alone"):
+          root = "/run/user/1000/claude-desktop/store-roots"
+          workstation.succeed(f"nix-store -q --roots $(readlink -e {root}) | grep -q '^{root} '")
+          # hosts and resolv.conf are links in the FHS env's rootfs, so nixpak's binds of the host's go unused
+          for f in ["hosts", "resolv.conf"]:
+              assert not in_sandbox(f"readlink -f /etc/{f}").startswith("/.host-etc/"), f
+          # The rest by the root of their mount: the host's own files only where activation writes them
+          mounts = {f[4]: f[3] for f in map(str.split, in_sandbox("cat /proc/self/mountinfo").splitlines())}
+          from_host = {
+              m for m, r in mounts.items()
+              if m.startswith("/.host-etc/") and r.startswith("/etc/") and m not in ["/.host-etc/hosts", "/.host-etc/resolv.conf"]
+          }
+          assert from_host == {f"/.host-etc/{e}" for e in ["passwd", "group", "machine-id"]}, from_host
+          in_sandbox("test -s /etc/ssl/certs/ca-certificates.crt")
+
       with subtest("nettest.sh"):
           print(in_sandbox(f"nettest {' '.join(host_only)}"))
 

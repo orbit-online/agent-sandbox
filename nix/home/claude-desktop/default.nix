@@ -13,7 +13,7 @@
 #       │  runs (in N, M1, P): bwrap's init, the FHS env script, claude:// re-entry
 #       │
 #       └─ U3  buildFHSEnv's bwrap
-#             owns: M2 (tmpfs /etc, DHCP resolv.conf, own hosts, patched app.asar)
+#             owns: M2 (tmpfs /etc with the rootfs' resolv.conf and hosts links, patched app.asar)
 #             runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`
 { inputs }:
 {
@@ -105,29 +105,50 @@ let
       scratchpadPrune
     ];
   };
-  # The entries claude-desktop's FHS env takes from the host /etc, minus shadow, sudoers, nix (NIX_CONF_DIR) and the
-  # shell rc files (the sandbox's shell is bash with the FHS env's /etc/profile, not the host's login shell)
-  etcEntries = [
+  # Written by the host's activation, bound from its /etc
+  hostEtc = [
     "passwd"
     "group"
+    "machine-id"
+  ];
+  # The entries claude-desktop's FHS env takes from /etc, minus shadow, sudoers, nix (NIX_CONF_DIR) and the
+  # shell rc files (the sandbox's shell is bash with the FHS env's /etc/profile, not the host's login shell)
+  etcEntries = hostEtc ++ [
     "nsswitch.conf"
     "localtime"
     "zoneinfo"
-    "machine-id"
     "os-release"
     "fonts"
     "ssl/certs"
     "pki"
   ]
   ++ lib.optional cfg.audio "alsa";
-  # They link through /etc/static into the system closure, so their targets go in storeRoots (localtime links to zoneinfo)
-  etcSources = lib.filter (lib.hasPrefix builtins.storeDir) (
-    lib.mapAttrsToList (_: e: toString e.source) (
-      lib.filterAttrs (
-        _: e: e.enable && lib.any (d: e.target == d || lib.hasPrefix "${d}/" e.target) etcEntries
-      ) osConfig.environment.etc
+  # Those NixOS generates, linked as in /etc/static (a source in /etc links within the tree, localtime to zoneinfo).
+  # Bound from here, as the host's /etc binds the generation's store paths, which a host GC empties under a running
+  # sandbox
+  under = d: target: target == d || lib.hasPrefix "${d}/" target;
+  etcFiles = lib.filterAttrs (_: e: e.enable && lib.any (d: under d e.target) etcEntries) osConfig.environment.etc;
+  etc = pkgs.runCommand "claude-desktop-etc" { } (
+    lib.concatLines (
+      lib.mapAttrsToList (
+        _: e:
+        let
+          src = toString e.source;
+          up = lib.concatStrings (lib.replicate (lib.length (lib.splitString "/" e.target) - 1) "../");
+        in
+        ''
+          mkdir -p "$(dirname "$out"/${escapeShellArg e.target})"
+          ln -s ${
+            escapeShellArg (if lib.hasPrefix "/etc/" src then up + lib.removePrefix "/etc/" src else src)
+          } "$out"/${escapeShellArg e.target}
+        ''
+      ) etcFiles
     )
   );
+  etcBinds = map (d: [
+    "${etc}/${d}"
+    "/etc/${d}"
+  ]) (lib.filter (d: lib.any (e: under d e.target) (lib.attrValues etcFiles)) etcEntries);
   # The host's /run/opengl-driver, as NixOS builds it
   graphicsDrivers = pkgs.buildEnv {
     name = "graphics-drivers";
@@ -149,8 +170,8 @@ let
         graphicsDrivers
         mcpServers
         bashEnv
-      ]
-      ++ etcSources;
+        etc
+      ];
     in
     pkgs.runCommand "claude-desktop-store-roots" { closure = pkgs.closureInfo { rootPaths = roots; }; }
       ''
@@ -242,8 +263,9 @@ let
   };
 
   # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
-  # The inner bwrap mounts last, so its resolv.conf and hosts beat the host ones that nixpak's pasta module binds.
-  # Its /etc entries are symlinks to /.host-etc (the outer /etc), and bwrap won't mount onto symlinks
+  # resolv.conf and hosts are links in its rootfs, which win over the host ones that nixpak's pasta module binds
+  # (the FHS env links the rest of /etc to /.host-etc, the outer /etc). A bind onto those would fail once the host
+  # replaced the file under it
   package = cfg.package.override (prev: {
     buildFHSEnv =
       args:
@@ -252,11 +274,13 @@ let
         // {
           extraBwrapArgs = args.extraBwrapArgs or [ ] ++ [
             "--ro-bind ${patchedAsar} ${asar}"
-            "--ro-bind ${sandboxResolvConf} /.host-etc/resolv.conf"
-            "--ro-bind ${hosts} /.host-etc/hosts"
             "--ro-bind ${environmentDoc} /etc/claude/environment.md"
           ];
           profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
+          extraBuildCommands = args.extraBuildCommands or "" + ''
+            ln -s ${sandboxResolvConf} $out/etc/resolv.conf
+            ln -s ${hosts} $out/etc/hosts
+          '';
         }
       );
   });
@@ -311,12 +335,15 @@ let
             ]
           ]
           ++ lib.optional cfg.kvm "/dev/kvm";
-          bind.ro = binds false ++ [
-            [
-              "${currentSystemSw}"
-              "/run/current-system/sw"
-            ]
-          ];
+          bind.ro =
+            binds false
+            ++ etcBinds
+            ++ [
+              [
+                "${currentSystemSw}"
+                "/run/current-system/sw"
+              ]
+            ];
           tmpfs = [ "/tmp" ];
           sockets = {
             wayland = true;
@@ -401,7 +428,10 @@ let
   };
 
   wrapper = script "claude-desktop.sh" {
-    runtimeInputs = [ pkgs.jq ];
+    runtimeInputs = [
+      pkgs.jq
+      osConfig.nix.package
+    ];
     vars = {
       SANDBOX_HOME = bwrapHome;
       SCRATCHPAD = scratchpad;
@@ -413,6 +443,7 @@ let
       MCP_SERVERS = "${mcpServers}";
       TRAY = lib.boolToString cfg.tray;
       STORE_SYNC = lib.getExe storeSync;
+      STORE_ROOTS = "${storeRoots}";
       GTK_THEME = lib.getExe gtkTheme;
       GTK_THEME_WATCH = lib.getExe gtkThemeWatch;
       NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
@@ -699,6 +730,6 @@ in
           rw = true;
         };
       }
-      // lib.genAttrs (map (e: "/etc/${e}") ([ "static" ] ++ etcEntries)) (_: sys // { optional = true; });
+      // lib.genAttrs (map (e: "/etc/${e}") hostEtc) (_: sys // { optional = true; });
   };
 }

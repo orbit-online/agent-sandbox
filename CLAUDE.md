@@ -89,7 +89,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
   launch, live, and the watcher ending with the app), the macvlan's DHCP
-  lease, route and DNS, its own `/etc/hosts`, `nettest.sh` inside the sandbox against a host
+  lease, route and DNS, its own `/etc/hosts`, the closure's GC root on the
+  host and `/etc` bound from the store except passwd, group and machine-id,
+  `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, the
   `claude://` re-entry, `claude-desktop --shell` (in the app's namespaces,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and

@@ -8,7 +8,7 @@ case $1 in
     [[ $1 == bound ]] && ip -4 addr flush dev "$interface"
     ip addr replace "$ip/$mask" dev "$interface"
     [[ -z ${router:-} ]] || ip route replace default via "${router%% *}" dev "$interface"
-    # Written in place: the file is bind-mounted, a rename would leave the sandbox on the old inode
+    # Written in place: Nix binds the file into fixed-output builds, a rename would leave them on the old inode
     {
       [[ -z ${domain:-} ]] || echo "search $domain"
       for d in ${dns:-}; do echo "nameserver $d"; done
