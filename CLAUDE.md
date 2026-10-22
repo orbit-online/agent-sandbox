@@ -17,16 +17,20 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `nix/nixos/claude-desktop.nix`: the NixOS module. Installs the
   `netns-macvlan` wrapper (`cap_net_admin`, group `users`) when any Home
   Manager user enables the Home Manager module, and asserts they're in
-  `users`.
+  `users` and have a subuid and subgid range.
 - `nix/packages/netns-macvlan/`: the Go helper that gives the sandbox's netns
   its macvlan (`netns-macvlan --help`).
+- `nix/packages/subid-broker/`: the Go helper that writes uid and gid maps for
+  user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
+  (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
+  and the FHS env run, maps the user's subuid range in and starts it.
 - `nix/checks/`: the flake checks, see Testing.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
-`packages.<system>.netns-macvlan`. Consumers import both modules and enable
+`packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`. Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
@@ -60,7 +64,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   input passed in from the store. Run them directly with `nix run
   --inputs-from . nixpkgs#nix-unit -- --flake .#tests.x86_64-linux`. They
   check that the assertions hold, the NixOS wrapper appears only when a user
-  enables the module, for group users, the users-group and
+  enables the module, for group users, the users-group, subid and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH. The test system imports both modules
@@ -76,6 +80,10 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace.
+- `subid-broker`: the package build runs its Go tests (`main_test.go`):
+  `parseMap`, and `authorize` against a client in a userns of its own and a
+  target below it, refusing a client outside one, a sibling userns, the
+  client's own and another uid.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
@@ -85,7 +93,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
   serves the color scheme on her session bus. The test covers the setcap
   wrapper, the launcher refusing a missing bind source that isn't optional,
-  the store sync, the scratchpad bind (mode 0700) and
+  the store sync, the subid maps (alice's auto range in the sandbox's userns
+  from the host's view, the FHS env's identity map, `/etc/subuid` and
+  `/etc/subgid` inside, `unshare --map-auto` and a root-mapping map through
+  the shims and the broker, the shim in `/usr/bin`, a file written inside
+  owned by alice, no capabilities over the netns, the broker refusing a
+  client on the host and ending with the app), the scratchpad bind (mode 0700) and
   `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
   launch, live, and the watcher ending with the app), the macvlan's DHCP

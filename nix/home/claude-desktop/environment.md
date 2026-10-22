@@ -48,6 +48,14 @@ why, and the user adds it. `/proc/self/mountinfo` shows the live set.
   services (VPN mesh, auth proxies, the host's `127.0.0.1`) are out of reach.
 - No SSH agent and no `~/.ssh`.
 
+## User namespaces
+
+Your userns has 65536 ids, the user's subuid and subgid range on the host,
+with your own uid and gid kept as themselves, so rootless tools (podman,
+`unshare --map-auto`) work. What you create in the binds under any other id
+belongs to a subuid on the host, where the user may not be able to change or
+remove it.
+
 ## Tools
 
 - PATH, for the Code tab's shells and the claude-code MCP server: the

@@ -1,20 +1,20 @@
-# Namespaces of the sandbox. Host uid 1000 is the only uid mapped all the way down (as 0 in U1),
-# so everything written to host paths is owned by it.
+# Namespaces of the sandbox. U1 maps the user's /etc/subuid and /etc/subgid range, inner id x as host start+x, except
+# the user's own uid and gid (1000 and 100 below), which stay themselves: everything the app writes to host paths is
+# the user's. U2 maps all of U1's ids as themselves. bwrap-subid.sh writes both maps.
 #
 # init userns (host)
 # │  runs: nixpak launcher, xdg-dbus-proxy, the pasta-slot script (netSetup), bwrap's parent,
-# │        netns-macvlan (cap_net_admin, creates eth0 in N)
+# │        netns-macvlan (cap_net_admin, creates eth0 in N), subid-broker (writes maps below U1 on request)
 # │
-# └─ U1  bwrap's first userns (uid 1000 mapped as 0, needed to mount devpts for --dev)
+# └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
 #    │  owns: N (netns: lo + eth0 macvlan), M1 (sandbox mount tree), P (pid ns), ipc, uts, cgroup
-#    │  runs: udhcpc + dhcpScript (in N, M1, P; net_admin and net_raw only), netSetup's ip calls (in N)
+#    │  runs (in N, M1, P): bwrap's init, the FHS env script, claude:// re-entry, all as uid 1000 without
+#    │        capabilities; udhcpc + dhcpScript (net_admin and net_raw only), netSetup's ip calls (in N)
 #    │
-#    └─ U2  bwrap's second userns (uid 1000), created after the mount setup; owns nothing
-#       │  runs (in N, M1, P): bwrap's init, the FHS env script, claude:// re-entry
-#       │
-#       └─ U3  buildFHSEnv's bwrap
-#             owns: M2 (tmpfs /etc with the rootfs' resolv.conf and hosts links, patched app.asar)
-#             runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`
+#    └─ U2  buildFHSEnv's bwrap (all of U1's ids)
+#          owns: M2 (tmpfs /etc with the rootfs' resolv.conf and hosts links, subuid and subgid, patched app.asar)
+#          runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`, and
+#                the user namespaces they create, whose maps the newuidmap and newgidmap shims ask subid-broker for
 { inputs }:
 {
   pkgs,
@@ -49,6 +49,33 @@ let
     };
 
   xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
+
+  subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
+  # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
+  bwrapSubid =
+    vars:
+    script "bwrap-subid.sh" {
+      name = "bwrap";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.gnugrep
+      ];
+      vars = {
+        BWRAP = lib.getExe' pkgs.bubblewrap "bwrap";
+      }
+      // vars;
+    };
+  bwrapHost = bwrapSubid {
+    SUBID_MAP = "subid";
+    NEWUIDMAP = "${osConfig.security.wrapperDir}/newuidmap";
+    NEWGIDMAP = "${osConfig.security.wrapperDir}/newgidmap";
+    SUBID_BROKER = lib.getExe subidBroker;
+  };
+  bwrapFhs = bwrapSubid {
+    SUBID_MAP = "parent";
+    NEWUIDMAP = lib.getExe' subidBroker "newuidmap";
+    NEWGIDMAP = lib.getExe' subidBroker "newgidmap";
+  };
 
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
   stateDir = "${config.xdg.dataHome}/claude-desktop";
@@ -265,21 +292,28 @@ let
   # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
   # resolv.conf and hosts are links in its rootfs, which win over the host ones that nixpak's pasta module binds
   # (the FHS env links the rest of /etc to /.host-etc, the outer /etc). A bind onto those would fail once the host
-  # replaced the file under it
+  # replaced the file under it. shadow's newuidmap and newgidmap in the rootfs are the broker's shims, for tools that
+  # run them by path: setuid can't work in bwrap, which sets no_new_privs
   package = cfg.package.override (prev: {
     buildFHSEnv =
       args:
-      prev.buildFHSEnv (
+      (prev.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (
         args
         // {
           extraBwrapArgs = args.extraBwrapArgs or [ ] ++ [
             "--ro-bind ${patchedAsar} ${asar}"
             "--ro-bind ${environmentDoc} /etc/claude/environment.md"
+            # Written by bwrap-subid.sh
+            "--ro-bind-data 22 /etc/subuid"
+            "--ro-bind-data 23 /etc/subgid"
           ];
           profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
           extraBuildCommands = args.extraBuildCommands or "" + ''
             ln -s ${sandboxResolvConf} $out/etc/resolv.conf
             ln -s ${hosts} $out/etc/hosts
+            for f in {bin,sbin}/new{u,g}idmap; do
+              ln -sf ${subidBroker}/bin/''${f#*/} $out/usr/$f
+            done
           '';
         }
       );
@@ -295,10 +329,11 @@ let
           "org.freedesktop.Notifications" = "talk";
         }
         // lib.optionalAttrs cfg.tray {
-          # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 18 in the sandbox's pid ns, after
-          # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap and its init. The VM test checks the stub's pid
+          # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 29 in the sandbox's pid ns, after
+          # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap-subid.sh (and what it forks), bwrap and init. The VM
+          # test checks the stub's pid
           "org.kde.StatusNotifierWatcher" = "talk";
-          "org.freedesktop.StatusNotifierItem-18-1" = "own";
+          "org.freedesktop.StatusNotifierItem-29-1" = "own";
         };
         dbus.rules.call."org.freedesktop.portal.Desktop" = [
           "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
@@ -322,6 +357,7 @@ let
           args = lib.mkForce [ ];
         };
         bubblewrap = {
+          package = bwrapHost;
           bindEntireStore = false;
           extraStorePaths = [ storeRoots ];
           bind.rw = binds true;

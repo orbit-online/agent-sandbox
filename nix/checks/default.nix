@@ -119,6 +119,17 @@ let
         "agent-sandbox.claude-desktop: alice enables the sandbox but isn't in group users, which netns-macvlan is limited to. Add users to users.users.alice.extraGroups."
       ];
     };
+    testSubIdsAssertion = {
+      expr = map (a: a.message) (
+        lib.filter (a: !a.assertion)
+          (system.extendModules {
+            modules = [ { users.users.alice.autoSubUidGidRange = lib.mkForce false; } ];
+          }).config.assertions
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: alice enables the sandbox but has no subordinate uid and gid range, which the sandbox maps into its user namespace. Set users.users.alice.autoSubUidGidRange, or subUidRanges and subGidRanges."
+      ];
+    };
     # The module mkForces them, so only a higher priority gets past it
     testNetnsAssertionNetwork = {
       expr = lib.length (
@@ -152,7 +163,7 @@ in
   tests = evalTests;
 
   checks = {
-    inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) netns-macvlan;
+    inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) netns-macvlan subid-broker;
 
     # nix-unit evaluates this flake again inside the build, which can't fetch, so every input (theirs too) comes from
     # the store

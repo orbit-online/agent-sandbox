@@ -13,12 +13,9 @@ done
   exit 1
 }
 "$NETNS_MACVLAN" "$pid"
-# By now the sandbox runs in a second userns (bwrap needs uid 0 in the first to mount devpts for --dev);
-# the first owns the netns. nsenter 2.42 can't combine --user-parent with other namespaces, so two steps.
-# --keep-caps: exec would otherwise drop the caps setns granted
+# The sandbox's userns owns its netns. --keep-caps: exec would otherwise drop the caps setns granted
 ns() {
-  nsenter -t "$pid" --user-parent --preserve-credentials --keep-caps \
-    nsenter -t "$pid" -n --preserve-credentials --keep-caps "$@"
+  nsenter -t "$pid" -U -n --preserve-credentials --keep-caps "$@"
 }
 ns ip link set lo up
 ns ip link set eth0 up

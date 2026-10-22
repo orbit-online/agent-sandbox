@@ -161,14 +161,48 @@ pkgs.testers.runNixOSTest {
           workstation.succeed("test -L /home/alice/.local/share/claude-desktop/nix/var/nix/gcroots/claude-desktop")
           workstation.succeed("test -d /home/alice/.claude")
           app_pid, app_netns, app_mntns = workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
-          # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-18-1
-          assert app_pid == "18", f"the app is pid {app_pid} in the sandbox, update the tray rule"
+          # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-29-1
+          assert app_pid == "29", f"the app is pid {app_pid} in the sandbox, update the tray rule"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
 
       with subtest("Claude Code's temp dir is bound from the host"):
           in_sandbox("touch /tmp/claude-1000/probe")
           workstation.succeed(f"test -e {scratchpad}/probe")
           assert workstation.succeed(f"stat -c %a {scratchpad}").strip() == "700"
+
+      with subtest("subordinate ids"):
+          info = json.loads(workstation.succeed("cat /run/user/1000/.flatpak/nixpak-app-*/bwrapinfo.json"))
+          # alice's auto range (65536 ids), her uid and gid (1000, 100) as themselves
+          for kind, own in [("uid", 1000), ("gid", 100)]:
+              start = int(workstation.succeed(f"grep ^alice: /etc/sub{kind}").split(":")[1])
+              got = workstation.succeed(f"grep . /proc/{info['child-pid']}/{kind}_map").split()
+              want = [str(n) for n in [0, start, own, own, own, 1, own + 1, start + own + 1, 65535 - own]]
+              assert got == want, f"{kind}_map {got}, want {want}"
+          # The FHS env's userns: all of the outer one's ids as themselves
+          got = in_sandbox("grep . /proc/self/uid_map").split()
+          assert got == ["0", "0", "1000", "1000", "1000", "1", "1001", "1001", "64535"], got
+          assert in_sandbox("id -u").strip() == "1000"
+          got = in_sandbox("cat /etc/subuid /etc/subgid")
+          assert got == "alice:0:1000\nalice:1001:64535\nalice:0:100\nalice:101:65435\n", repr(got)
+          # Through the shims and the broker: from /etc/subuid, and as podman maps a container's root to the user
+          got = in_sandbox("unshare --user --map-auto grep . /proc/self/uid_map").split()
+          assert got == ["0", "0", "1000"], got
+          out = in_sandbox("unshare --user --map-root-user --map-users=1:1001:10 grep . /proc/self/uid_map")
+          assert out.split() == ["0", "1000", "1", "1", "1001", "10"], out
+          # Tools that run shadow's by path get the shims too
+          shim = in_sandbox("readlink -f /usr/bin/newuidmap").strip()
+          assert shim.endswith("/bin/subid-broker"), shim
+          in_sandbox("touch /tmp/claude-1000/owner")
+          assert workstation.succeed(f"stat -c %U:%G {scratchpad}/owner").strip() == "alice:users"
+          # The app shares the netns's userns but has no capabilities in it
+          status, out = workstation.execute(sandbox_cmd("ip link add probe0 type dummy") + " 2>&1")
+          assert status != 0 and "Operation not permitted" in out, f"{status} {out}"
+          # The broker only serves clients in a sandbox
+          sock = workstation.succeed("ls /run/user/1000/claude-desktop/subid-broker-*.sock").strip()
+          status, out = as_user("alice", "sh -c " + shlex.quote(
+              f"unshare --user sleep 30 & sleep 1; SUBID_BROKER_SOCKET={sock} {shim.removesuffix('subid-broker')}newuidmap $! 0 1000 1"
+          ))
+          assert status != 0 and "Client isn't in a sandbox" in out, f"{status} {out}"
 
       with subtest("scratchpad prune"):
           as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(
@@ -179,7 +213,7 @@ pkgs.testers.runNixOSTest {
           ))
           in_sandbox("claude-desktop-scratchpad-prune")
           left = sorted(workstation.succeed(f"cd {scratchpad} && find . -mindepth 1").split())
-          assert left == ["./-p", "./-p/new", "./-p/new/scratchpad", "./-p/new/scratchpad/f", "./harness", "./new.json", "./probe"], left
+          assert left == ["./-p", "./-p/new", "./-p/new/scratchpad", "./-p/new/scratchpad/f", "./harness", "./new.json", "./owner", "./probe"], left
 
       gc_dir = "${stateDir}/nix/var/claude-desktop"
       with subtest("store GC"):
@@ -291,6 +325,8 @@ pkgs.testers.runNixOSTest {
           workstation.succeed("pgrep -u alice -f claude-desktop-gtk-theme-watch")
           workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop")
           workstation.wait_until_fails("pgrep -u alice -f 'claude-desktop-gtk-theme-watch|gdbus monitor'", timeout=30)
+          workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
+          workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")
 
       with subtest("--shell starts the app when it isn't running"):
           workstation.wait_until_fails(f"test -e /proc/{sandbox_pid}", timeout=30)

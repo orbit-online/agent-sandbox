@@ -20,6 +20,13 @@ let
     u.group == "users"
     || lib.elem "users" u.extraGroups
     || lib.elem name config.users.groups.users.members;
+  # The sandbox maps the first one into its user namespace, see bwrap-subid.sh
+  hasSubIds =
+    name:
+    let
+      u = config.users.users.${name};
+    in
+    u.autoSubUidGidRange || (u.subUidRanges != [ ] && u.subGidRanges != [ ]);
 in
 {
   config = lib.mkIf (users != [ ]) {
@@ -32,9 +39,15 @@ in
       group = "users";
       permissions = "u+rx,g+x";
     };
-    assertions = map (name: {
-      assertion = inUsersGroup name;
-      message = "agent-sandbox.claude-desktop: ${name} enables the sandbox but isn't in group users, which netns-macvlan is limited to. Add users to users.users.${name}.extraGroups.";
-    }) users;
+    assertions = lib.concatMap (name: [
+      {
+        assertion = inUsersGroup name;
+        message = "agent-sandbox.claude-desktop: ${name} enables the sandbox but isn't in group users, which netns-macvlan is limited to. Add users to users.users.${name}.extraGroups.";
+      }
+      {
+        assertion = hasSubIds name;
+        message = "agent-sandbox.claude-desktop: ${name} enables the sandbox but has no subordinate uid and gid range, which the sandbox maps into its user namespace. Set users.users.${name}.autoSubUidGidRange, or subUidRanges and subGidRanges.";
+      }
+    ]) users;
   };
 }
