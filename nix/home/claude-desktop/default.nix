@@ -260,7 +260,7 @@ let
     tray = mkOption {
       type = types.bool;
       default = false;
-      description = "Show a tray icon. Closing the window then hides the app instead of quitting it.";
+      description = "Show a tray icon. Closing the window then hides the app instead of quitting it. One launcher at most.";
     };
     extraPath = mkOption {
       type = types.listOf types.str;
@@ -842,6 +842,18 @@ in
         assertion = osConfig.hardware.graphics.enable;
         message = "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
       }
+      (
+        let
+          trays = lib.attrNames (lib.filterAttrs (_: l: l.tray) ({ "" = cfg; } // cfg.launchers));
+        in
+        {
+          # Every sandbox's app is pid 29 in its own pid ns, so they'd all own the same bus name on the host's bus
+          assertion = lib.length trays <= 1;
+          message = "agent-sandbox.claude-desktop: tray is on for more than one launcher (${
+            lib.concatMapStringsSep ", " (n: if n == "" then "the default" else n) trays
+          }), but only one can own org.freedesktop.StatusNotifierItem-29-1 on the session bus";
+        }
+      )
     ]
     ++ lib.concatLists (
       lib.mapAttrsToList (

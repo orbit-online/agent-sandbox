@@ -172,6 +172,26 @@ let
         "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; launchers.work.sandbox must not change bubblewrap.network or pasta"
       ];
     };
+    testLauncherTrays = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            enabled
+            // {
+              tray = true;
+              launchers.work.tray = true;
+            }
+          )
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: tray is on for more than one launcher (the default, work), but only one can own org.freedesktop.StatusNotifierItem-29-1 on the session bus"
+      ];
+    };
+    testLauncherTray = {
+      expr = failedAssertions (nixos (enabled // { launchers.work.tray = true; }));
+      expected = [ ];
+    };
     # Its own binds only: ~/.claude lives in its home
     testLauncherMcpRoots = {
       expr = alice.agent-sandbox.claude-desktop.launchers.work.mcpServers.filesystem.args;

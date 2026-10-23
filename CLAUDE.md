@@ -71,7 +71,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
-  name and per-launcher netns assertions, and a launcher's MCP roots without
+  name, tray and per-launcher netns assertions, and a launcher's MCP roots without
   `~/.claude`. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
