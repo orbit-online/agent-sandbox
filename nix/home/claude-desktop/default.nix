@@ -77,22 +77,24 @@ let
     NEWGIDMAP = lib.getExe' subidBroker "newgidmap";
   };
 
+  # A named launcher's suffix to file names, empty for the default one
+  suffixOf = name: lib.optionalString (name != null) "-${name}";
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
-  stateDir = "${config.xdg.dataHome}/claude-desktop";
-  bwrapHome = "${stateDir}/home";
-  scratchpad = "${stateDir}/tmp-scratchpad";
-  # PATH for the app (so the Code tab's shells) and the claude-code MCP server
-  searchPath = lib.concatStringsSep ":" (
-    cfg.extraPath
-    ++ [
-      (lib.makeBinPath sandboxPackages)
-      osConfig.security.wrapperDir
-      "/run/current-system/sw/bin"
-    ]
-  );
+  stateDirOf = name: "${config.xdg.dataHome}/claude-desktop${suffixOf name}";
   # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
   # .out: the man output is a symlink, see storeRoots
-  sandboxPackages = cfg.path ++ [ osConfig.nix.package.out ];
+  sandboxPackagesOf = lcfg: lcfg.path ++ [ osConfig.nix.package.out ];
+  # PATH for the app (so the Code tab's shells) and the claude-code MCP server
+  searchPathOf =
+    lcfg:
+    lib.concatStringsSep ":" (
+      lcfg.extraPath
+      ++ [
+        (lib.makeBinPath (sandboxPackagesOf lcfg))
+        osConfig.security.wrapperDir
+        "/run/current-system/sw/bin"
+      ]
+    );
 
   # The sandbox's own single-user Nix store, stateDir/nix bound rw at /nix. The host store isn't visible: nixpak binds
   # only storeRoots' closure (ro, over the store's copies of the same paths) and there is no daemon socket.
@@ -121,135 +123,18 @@ let
       pkgs.findutils
     ];
   };
-  # /run/current-system links into the system closure: the PATH tools, bash (SHELL) and glibc's fallback
-  # locale archive come from this instead
-  currentSystemSw = pkgs.buildEnv {
-    name = "claude-desktop-sw";
-    paths = sandboxPackages ++ [
-      pkgs.bashInteractive
-      osConfig.i18n.glibcLocales
-      storeGc
-      scratchpadPrune
-    ];
-  };
   # Written by the host's activation, bound from its /etc
   hostEtc = [
     "passwd"
     "group"
     "machine-id"
   ];
-  # The entries claude-desktop's FHS env takes from /etc, minus shadow, sudoers, nix (NIX_CONF_DIR) and the
-  # shell rc files (the sandbox's shell is bash with the FHS env's /etc/profile, not the host's login shell)
-  etcEntries = hostEtc ++ [
-    "nsswitch.conf"
-    "localtime"
-    "zoneinfo"
-    "os-release"
-    "fonts"
-    "ssl/certs"
-    "pki"
-  ]
-  ++ lib.optional cfg.audio "alsa";
-  # Those NixOS generates, linked as in /etc/static (a source in /etc links within the tree, localtime to zoneinfo).
-  # Bound from here, as the host's /etc binds the generation's store paths, which a host GC empties under a running
-  # sandbox
-  under = d: target: target == d || lib.hasPrefix "${d}/" target;
-  etcFiles = lib.filterAttrs (_: e: e.enable && lib.any (d: under d e.target) etcEntries) osConfig.environment.etc;
-  etc = pkgs.runCommand "claude-desktop-etc" { } (
-    lib.concatLines (
-      lib.mapAttrsToList (
-        _: e:
-        let
-          src = toString e.source;
-          up = lib.concatStrings (lib.replicate (lib.length (lib.splitString "/" e.target) - 1) "../");
-        in
-        ''
-          mkdir -p "$(dirname "$out"/${escapeShellArg e.target})"
-          ln -s ${
-            escapeShellArg (if lib.hasPrefix "/etc/" src then up + lib.removePrefix "/etc/" src else src)
-          } "$out"/${escapeShellArg e.target}
-        ''
-      ) etcFiles
-    )
-  );
-  etcBinds = map (d: [
-    "${etc}/${d}"
-    "/etc/${d}"
-  ]) (lib.filter (d: lib.any (e: under d e.target) (lib.attrValues etcFiles)) etcEntries);
   # The host's /run/opengl-driver, as NixOS builds it
   graphicsDrivers = pkgs.buildEnv {
     name = "graphics-drivers";
     paths = [ osConfig.hardware.graphics.package ] ++ osConfig.hardware.graphics.extraPackages;
   };
-  # Everything the sandbox runs from the store. nixpak's closure only covers the app and extraStorePaths, not
-  # env values or bind sources, so they all go in here. nixpak --ro-binds every closure path, and bwrap won't
-  # mount onto the symlink a symlink store path already is in the store, so those fail the build here
-  storeRoots =
-    let
-      roots = [
-        package
-        netSetup
-        xdgOpen
-        # The dark theme gtk-theme.sh switches to; GTK3 has none built in
-        pkgs.gnome-themes-extra
-        nixConf
-        currentSystemSw
-        graphicsDrivers
-        mcpServers
-        bashEnv
-        etc
-      ];
-    in
-    pkgs.runCommand "claude-desktop-store-roots" { closure = pkgs.closureInfo { rootPaths = roots; }; }
-      ''
-        while read -r p; do
-          [[ ! -L $p ]] || { echo "$p is a symlink, nixpak can't bind it over the sandbox store's copy" >&2; exit 1; }
-        done <"$closure/store-paths"
-        printf '%s\n' ${lib.escapeShellArgs roots} >$out
-      '';
-  storeSync = script "store-sync.sh" {
-    name = "claude-desktop-store-sync";
-    runtimeInputs = [ osConfig.nix.package ];
-    vars = {
-      STATE_DIR = stateDir;
-      STORE_ROOTS = "${storeRoots}";
-    };
-  };
-  # Shallowest first, so nested binds override their parents. nixpak mounts all rw binds before the ro ones
-  binds =
-    rw:
-    map
-      (
-        b:
-        if b.src == b.path then
-          b.src
-        else
-          [
-            b.src
-            b.path
-          ]
-      )
-      (
-        lib.sortOn (b: lib.stringLength b.path) (
-          lib.mapAttrsToList (path: b: b // { inherit path; }) (
-            lib.filterAttrs (_: b: b.enable && b.rw == rw) cfg.binds
-          )
-        )
-      );
-
-  asar = "${cfg.package.unwrapped}/lib/claude-desktop/resources/app.asar";
-  patchedAsar = pkgs.runCommand "claude-desktop-app.asar" {
-    nativeBuildInputs = [
-      pkgs.asar
-      pkgs.jq
-    ];
-    ASAR = asar;
-  } "source ${./patch-asar.sh}";
-
-  # The sandbox gets its own netns with a macvlan on the LAN (netns-macvlan --help), so host
-  # services, routes and abstract sockets stay out of reach. Its DHCP lease brings the DNS servers
-  resolvConf = "${bwrapHome}/.config/resolv.conf";
-  # The same file as the sandbox sees it, where bwrapHome is the home directory
+  # A launcher's resolv.conf (see resolvConf) as the sandbox sees it, where its home directory is bound
   sandboxResolvConf = "${config.home.homeDirectory}/.config/resolv.conf";
   # Replaces the host's /etc/hosts, whose entries point at the host's loopback or networks the netns doesn't reach.
   # The hostname line is the one NixOS writes: the UTS namespace starts with the host's hostname
@@ -273,256 +158,12 @@ let
     runtimeInputs = [ pkgs.iproute2 ];
     vars.RESOLV_CONF = sandboxResolvConf;
   };
-  # Runs in nixpak's pasta slot, see net-setup.sh
-  netSetup = script "net-setup.sh" {
-    name = "pasta";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.util-linux
-      pkgs.iproute2
-    ];
-    vars = {
-      NETNS_MACVLAN = "${osConfig.security.wrapperDir}/netns-macvlan";
-      SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
-      UDHCPC = lib.getExe' pkgs.busybox "udhcpc";
-      UDHCPC_SCRIPT = lib.getExe dhcpScript;
-    };
-  };
-
-  # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
-  # resolv.conf and hosts are links in its rootfs, which win over the host ones that nixpak's pasta module binds
-  # (the FHS env links the rest of /etc to /.host-etc, the outer /etc). A bind onto those would fail once the host
-  # replaced the file under it. shadow's newuidmap and newgidmap in the rootfs are the broker's shims, for tools that
-  # run them by path: setuid can't work in bwrap, which sets no_new_privs
-  package = cfg.package.override (prev: {
-    buildFHSEnv =
-      args:
-      (prev.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (
-        args
-        // {
-          extraBwrapArgs = args.extraBwrapArgs or [ ] ++ [
-            "--ro-bind ${patchedAsar} ${asar}"
-            "--ro-bind ${environmentDoc} /etc/claude/environment.md"
-            # Written by bwrap-subid.sh
-            "--ro-bind-data 22 /etc/subuid"
-            "--ro-bind-data 23 /etc/subgid"
-          ];
-          profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
-          extraBuildCommands = args.extraBuildCommands or "" + ''
-            ln -s ${sandboxResolvConf} $out/etc/resolv.conf
-            ln -s ${hosts} $out/etc/hosts
-            for f in {bin,sbin}/new{u,g}idmap; do
-              ln -sf ${subidBroker}/bin/''${f#*/} $out/usr/$f
-            done
-          '';
-        }
-      );
-  });
-
-  sandboxed = inputs.nixpak.lib.nixpak { inherit lib pkgs; } {
-    config =
-      { sloth, ... }:
-      {
-        imports = [ cfg.sandbox ];
-        app.package = package;
-        dbus.policies = {
-          "org.freedesktop.Notifications" = "talk";
-        }
-        // lib.optionalAttrs cfg.tray {
-          # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 29 in the sandbox's pid ns, after
-          # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap-subid.sh (and what it forks), bwrap and init. The VM
-          # test checks the stub's pid
-          "org.kde.StatusNotifierWatcher" = "talk";
-          "org.freedesktop.StatusNotifierItem-29-1" = "own";
-        };
-        dbus.rules.call."org.freedesktop.portal.Desktop" = [
-          "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
-          "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
-        ];
-        dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
-          "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
-        ];
-        gpu = {
-          enable = true;
-          # Not "nixos": /run/opengl-driver links into the system closure
-          provider = "bundle";
-          bundlePackage = graphicsDrivers;
-        };
-        # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in package), no extra pasta args
-        bubblewrap.network = lib.mkForce true;
-        pasta = {
-          enable = lib.mkForce true;
-          package = lib.mkForce netSetup;
-          mode = lib.mkForce "transparent";
-          args = lib.mkForce [ ];
-        };
-        bubblewrap = {
-          package = bwrapHost;
-          bindEntireStore = false;
-          extraStorePaths = [ storeRoots ];
-          bind.rw = binds true;
-          # Claude Code's temp dir, so the session scratchpads survive restarts (pruned by scratchpad-prune.sh).
-          # A dev bind because nixpak mounts the /tmp tmpfs after the rw and ro binds and before the dev ones.
-          # It still ends up nodev where the app runs: the FHS env's bwrap binds /tmp on with nodev
-          bind.dev = [
-            [
-              scratchpad
-              (sloth.concat' "/tmp/claude-" sloth.uid)
-            ]
-          ]
-          ++ lib.optional cfg.kvm "/dev/kvm";
-          bind.ro =
-            binds false
-            ++ etcBinds
-            ++ [
-              [
-                "${currentSystemSw}"
-                "/run/current-system/sw"
-              ]
-            ];
-          tmpfs = [ "/tmp" ];
-          sockets = {
-            wayland = true;
-            pipewire = cfg.audio;
-            pulse = cfg.audio;
-          };
-          newSession = true;
-          dieWithParent = true;
-        };
-      };
-  };
-
-  mcpServers = pkgs.writeText "mcp-servers.json" (builtins.toJSON cfg.mcpServers);
   # The Bash tool sources CLAUDE_ENV_FILE before each command. The Code tab gets this from the SessionStart hook,
   # which claude mcp serve does not run. Drops the snapshot's ugrep/bfs shadows of grep and find
   bashEnv = pkgs.writeText "claude-bash-env" "unset -f grep find 2>/dev/null\n";
-  # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
-  # the closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
-  # `environment:` from the frontmatter. Claude Code follows imports four hops deep, and ~/.claude reaches this file
-  # in three (CLAUDE.md, the account's, the shared one), so environmentFile is the last that loads
-  environmentDoc = pkgs.writeText "claude-environment.md" ''
-    ---
-    environment: bwrap
-    ---
 
-    @${cfg.environmentFile}
-
-    ## Binds
-
-    ${
-      lib.concatMapStrings
-        (
-          b:
-          "- `${b.path}` (${
-            lib.concatStringsSep ", " (
-              [ (if b.rw then "rw" else "ro") ]
-              ++ lib.optional b.mcp "MCP"
-              ++ lib.optional (b.src != b.path) "from `${b.src}`"
-            )
-          })\n"
-        )
-        (
-          lib.sortOn (b: b.path) (
-            lib.mapAttrsToList (path: b: b // { inherit path; }) (
-              lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) cfg.binds
-            )
-          )
-        )
-    }- `/tmp/claude-<uid>` (rw, from `${scratchpad}`): Claude Code's temp dir with the session scratchpads
-    ${lib.optionalString cfg.kvm "- `/dev/kvm` (dev)\n"}
-    ## PATH
-
-    ${lib.concatMapStrings (d: "`${d}`, then ") cfg.extraPath}the packages
-    ${lib.concatMapStringsSep ", " lib.getName sandboxPackages}.
-    ${cfg.environmentText}
-  '';
-
-  # nixpak's sloth.env panics on unset variables, so filter the environment before its launcher.
-  # Unset passthrough variables expand to nothing
-  vars = lib.concatStringsSep "\n  " (
-    lib.mapAttrsToList (
-      n: v: if v.value == null then "\${${n}+\"${n}=\$${n}\"}" else "\"${n}=${v.value}\""
-    ) (lib.filterAttrs (_: v: v.enable) cfg.env)
-  );
-
-  gtkTheme = script "gtk-theme.sh" {
-    name = "claude-desktop-gtk-theme";
-    runtimeInputs = [ pkgs.glib ];
-    vars = {
-      SANDBOX_CONFIG = "${bwrapHome}/.config";
-      SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
-    };
-  };
-  gtkThemeWatch = script "gtk-theme-watch.sh" {
-    name = "claude-desktop-gtk-theme-watch";
-    runtimeInputs = [
-      pkgs.glib
-      pkgs.coreutils
-      pkgs.procps
-    ];
-    vars.GTK_THEME = lib.getExe gtkTheme;
-  };
-
-  wrapper = script "claude-desktop.sh" {
-    runtimeInputs = [
-      pkgs.jq
-      osConfig.nix.package
-    ];
-    vars = {
-      SANDBOX_HOME = bwrapHome;
-      SCRATCHPAD = scratchpad;
-      RESOLV_CONF = resolvConf;
-      APP_ID = sandboxed.config.flatpak.appId;
-      FHS_ENV = lib.getExe package;
-      DOT_CLAUDE = cfg.binds."${config.home.homeDirectory}/.claude".src;
-      CONFIG = "${cfg.binds."${config.home.homeDirectory}/.config/Claude".src}/claude_desktop_config.json";
-      MCP_SERVERS = "${mcpServers}";
-      TRAY = lib.boolToString cfg.tray;
-      STORE_SYNC = lib.getExe storeSync;
-      STORE_ROOTS = "${storeRoots}";
-      GTK_THEME = lib.getExe gtkTheme;
-      GTK_THEME_WATCH = lib.getExe gtkThemeWatch;
-      NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
-    };
-    prelude = ''
-      VARS=(
-        ${vars}
-      )
-      REQUIRED_BINDS=(
-        ${lib.escapeShellArgs (
-          lib.mapAttrsToList (_: b: b.src) (lib.filterAttrs (_: b: b.enable && !b.optional) cfg.binds)
-        )}
-      )
-      readonly VARS REQUIRED_BINDS
-    '';
-  };
-  claude-desktop = (
-    pkgs.symlinkJoin {
-      name = "claude-desktop-sandboxed";
-      # First path wins on collisions: the wrapper shadows nixpak's bin/claude-desktop,
-      # while the .desktop file (Exec=claude-desktop, claude:// handler) and icons carry over
-      paths = [
-        wrapper
-        sandboxed.config.env
-      ];
-      postBuild = ''
-        # The package's only .desktop file, whose name changed upstream
-        set -- $out/share/applications/*.desktop
-        [[ $# == 1 ]]
-        d=$1
-        src=$(readlink -f "$d")
-        rm "$d"
-        sed 's/^Actions=.*/&;Shell/' "$src" >"$d"
-        grep -q '^Actions=.*;Shell$' "$d"
-        printf '\n[Desktop Action Shell]\nExec=%s %s --shell\nName=New shell\n' \
-          ${lib.getExe pkgs.xdg-terminal-exec} "$out/bin/claude-desktop" >>"$d"
-      '';
-    }
-  );
-in
-{
-  options.agent-sandbox.claude-desktop = {
-    enable = lib.mkEnableOption "Claude Desktop, sandboxed with nixpak";
+  # Options of the default launcher and each named one, lcfg being its settings
+  launcherOptions = lcfg: {
     package =
       lib.mkPackageOption inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system} "claude-desktop"
         { pkgsText = "inputs.llm-agents.packages.\${system}"; };
@@ -684,7 +325,7 @@ in
               vars.MCP_SERVER_FILESYSTEM = lib.getExe pkgs.mcp-server-filesystem;
             }
           );
-          args = lib.attrNames (lib.filterAttrs (_: b: b.enable && b.mcp) cfg.binds);
+          args = lib.attrNames (lib.filterAttrs (_: b: b.enable && b.mcp) lcfg.binds);
         };
         claude-code = {
           command = lib.getExe inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.claude-code;
@@ -693,12 +334,505 @@ in
             "serve"
           ];
           env = {
-            PATH = searchPath;
+            PATH = searchPathOf lcfg;
             CLAUDE_ENV_FILE = "${bashEnv}";
             NIX_CONF_DIR = "${nixConf}";
           };
         };
       };
+    };
+  };
+
+  # What every launcher's env and binds start with
+  launcherDefaults =
+    name: lcfg:
+    let
+      stateDir = stateDirOf name;
+      sys = {
+        mcp = false;
+      };
+    in
+    {
+      env =
+        lib.genAttrs [
+          "HOME"
+          "USER"
+          "LANG"
+          "LC_ALL"
+          "XDG_RUNTIME_DIR"
+          "WAYLAND_DISPLAY"
+          "XDG_CURRENT_DESKTOP"
+          "XDG_SESSION_TYPE"
+          "XDG_CONFIG_DIRS"
+          "XCURSOR_THEME"
+          "XCURSOR_SIZE"
+          # The host bus, for nixpak's D-Bus proxy. The sandbox gets the proxy's address
+          "DBUS_SESSION_BUS_ADDRESS"
+        ] (_: { })
+        // {
+          # nixpak binds /etc/localtime as a file, so ICU can't read the zone name from the link target
+          TZ.value = osConfig.time.timeZone;
+          PATH = "${xdgOpen}/bin:${searchPathOf lcfg}";
+          # Not the login shell from /etc/passwd
+          SHELL = "/run/current-system/sw/bin/bash";
+          NIXOS_OZONE_WL = "1";
+          NIX_CONF_DIR = "${nixConf}";
+          # Where gtk-theme.sh writes the theme
+          GSETTINGS_BACKEND = "keyfile";
+          XDG_DATA_DIRS = "${pkgs.gnome-themes-extra}/share\${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}";
+        };
+      binds = {
+        "/nix" = sys // {
+          src = "${stateDir}/nix";
+          rw = true;
+        };
+        "/sys" = sys;
+        ${config.home.homeDirectory} = sys // {
+          src = "${stateDir}/home";
+          rw = true;
+        };
+      }
+      # A named launcher keeps them in its own home
+      // lib.optionalAttrs (name == null) {
+        "${config.home.homeDirectory}/.claude".rw = true;
+        "${config.home.homeDirectory}/.config/Claude" = sys // {
+          rw = true;
+        };
+      }
+      // lib.genAttrs (map (e: "/etc/${e}") hostEtc) (_: sys // { optional = true; });
+    };
+
+  # What one launcher builds from its settings, lcfg. name is null for the default launcher
+  launcher =
+    name: lcfg:
+    let
+      suffix = suffixOf name;
+      stateDir = stateDirOf name;
+      bwrapHome = "${stateDir}/home";
+      scratchpad = "${stateDir}/tmp-scratchpad";
+      sandboxPackages = sandboxPackagesOf lcfg;
+      searchPath = searchPathOf lcfg;
+      # Where a path under the home directory is on the host: its bind's source, or the sandbox's home
+      hostPath =
+        rel:
+        let
+          b = lcfg.binds."${config.home.homeDirectory}/${rel}" or null;
+        in
+        if b != null && b.enable then b.src else "${bwrapHome}/${rel}";
+      # /run/current-system links into the system closure: the PATH tools, bash (SHELL) and glibc's fallback
+      # locale archive come from this instead
+      currentSystemSw = pkgs.buildEnv {
+        name = "claude-desktop-sw";
+        paths = sandboxPackages ++ [
+          pkgs.bashInteractive
+          osConfig.i18n.glibcLocales
+          storeGc
+          scratchpadPrune
+        ];
+      };
+      # The entries claude-desktop's FHS env takes from /etc, minus shadow, sudoers, nix (NIX_CONF_DIR) and the
+      # shell rc files (the sandbox's shell is bash with the FHS env's /etc/profile, not the host's login shell)
+      etcEntries =
+        hostEtc
+        ++ [
+          "nsswitch.conf"
+          "localtime"
+          "zoneinfo"
+          "os-release"
+          "fonts"
+          "ssl/certs"
+          "pki"
+        ]
+        ++ lib.optional lcfg.audio "alsa";
+      # Those NixOS generates, linked as in /etc/static (a source in /etc links within the tree, localtime to zoneinfo).
+      # Bound from here, as the host's /etc binds the generation's store paths, which a host GC empties under a running
+      # sandbox
+      under = d: target: target == d || lib.hasPrefix "${d}/" target;
+      etcFiles = lib.filterAttrs (
+        _: e: e.enable && lib.any (d: under d e.target) etcEntries
+      ) osConfig.environment.etc;
+      etc = pkgs.runCommand "claude-desktop-etc" { } (
+        lib.concatLines (
+          lib.mapAttrsToList (
+            _: e:
+            let
+              src = toString e.source;
+              up = lib.concatStrings (lib.replicate (lib.length (lib.splitString "/" e.target) - 1) "../");
+            in
+            ''
+              mkdir -p "$(dirname "$out"/${escapeShellArg e.target})"
+              ln -s ${
+                escapeShellArg (if lib.hasPrefix "/etc/" src then up + lib.removePrefix "/etc/" src else src)
+              } "$out"/${escapeShellArg e.target}
+            ''
+          ) etcFiles
+        )
+      );
+      etcBinds = map (d: [
+        "${etc}/${d}"
+        "/etc/${d}"
+      ]) (lib.filter (d: lib.any (e: under d e.target) (lib.attrValues etcFiles)) etcEntries);
+      # Everything the sandbox runs from the store. nixpak's closure only covers the app and extraStorePaths, not
+      # env values or bind sources, so they all go in here. nixpak --ro-binds every closure path, and bwrap won't
+      # mount onto the symlink a symlink store path already is in the store, so those fail the build here
+      storeRoots =
+        let
+          roots = [
+            package
+            netSetup
+            xdgOpen
+            # The dark theme gtk-theme.sh switches to; GTK3 has none built in
+            pkgs.gnome-themes-extra
+            nixConf
+            currentSystemSw
+            graphicsDrivers
+            mcpServers
+            bashEnv
+            etc
+          ];
+        in
+        pkgs.runCommand "claude-desktop-store-roots" { closure = pkgs.closureInfo { rootPaths = roots; }; }
+          ''
+            while read -r p; do
+              [[ ! -L $p ]] || { echo "$p is a symlink, nixpak can't bind it over the sandbox store's copy" >&2; exit 1; }
+            done <"$closure/store-paths"
+            printf '%s\n' ${lib.escapeShellArgs roots} >$out
+          '';
+      storeSync = script "store-sync.sh" {
+        name = "claude-desktop-store-sync";
+        runtimeInputs = [ osConfig.nix.package ];
+        vars = {
+          STATE_DIR = stateDir;
+          STORE_ROOTS = "${storeRoots}";
+        };
+      };
+      # Shallowest first, so nested binds override their parents. nixpak mounts all rw binds before the ro ones
+      binds =
+        rw:
+        map
+          (
+            b:
+            if b.src == b.path then
+              b.src
+            else
+              [
+                b.src
+                b.path
+              ]
+          )
+          (
+            lib.sortOn (b: lib.stringLength b.path) (
+              lib.mapAttrsToList (path: b: b // { inherit path; }) (
+                lib.filterAttrs (_: b: b.enable && b.rw == rw) lcfg.binds
+              )
+            )
+          );
+
+      asar = "${lcfg.package.unwrapped}/lib/claude-desktop/resources/app.asar";
+      patchedAsar = pkgs.runCommand "claude-desktop-app.asar" {
+        nativeBuildInputs = [
+          pkgs.asar
+          pkgs.jq
+        ];
+        ASAR = asar;
+      } "source ${./patch-asar.sh}";
+      # The sandbox gets its own netns with a macvlan on the LAN (netns-macvlan --help), so host
+      # services, routes and abstract sockets stay out of reach. Its DHCP lease brings the DNS servers
+      resolvConf = "${bwrapHome}/.config/resolv.conf";
+      # Runs in nixpak's pasta slot, see net-setup.sh
+      netSetup = script "net-setup.sh" {
+        name = "pasta";
+        runtimeInputs = [
+          pkgs.coreutils
+          pkgs.util-linux
+          pkgs.iproute2
+        ];
+        vars = {
+          NETNS_MACVLAN = "${osConfig.security.wrapperDir}/netns-macvlan";
+          SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
+          UDHCPC = lib.getExe' pkgs.busybox "udhcpc";
+          UDHCPC_SCRIPT = lib.getExe dhcpScript;
+          # Salts the macvlan's MAC, so launchers don't clash on the LAN
+          NAME = lib.optionalString (name != null) name;
+        };
+      };
+
+      # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
+      # resolv.conf and hosts are links in its rootfs, which win over the host ones that nixpak's pasta module binds
+      # (the FHS env links the rest of /etc to /.host-etc, the outer /etc). A bind onto those would fail once the host
+      # replaced the file under it. shadow's newuidmap and newgidmap in the rootfs are the broker's shims, for tools that
+      # run them by path: setuid can't work in bwrap, which sets no_new_privs
+      package = lcfg.package.override (prev: {
+        buildFHSEnv =
+          args:
+          (prev.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (
+            args
+            // {
+              extraBwrapArgs = args.extraBwrapArgs or [ ] ++ [
+                "--ro-bind ${patchedAsar} ${asar}"
+                "--ro-bind ${environmentDoc} /etc/claude/environment.md"
+                # Written by bwrap-subid.sh
+                "--ro-bind-data 22 /etc/subuid"
+                "--ro-bind-data 23 /etc/subgid"
+              ];
+              profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
+              extraBuildCommands = args.extraBuildCommands or "" + ''
+                ln -s ${sandboxResolvConf} $out/etc/resolv.conf
+                ln -s ${hosts} $out/etc/hosts
+                for f in {bin,sbin}/new{u,g}idmap; do
+                  ln -sf ${subidBroker}/bin/''${f#*/} $out/usr/$f
+                done
+              '';
+            }
+          );
+      });
+
+      sandboxed = inputs.nixpak.lib.nixpak { inherit lib pkgs; } {
+        config =
+          { sloth, ... }:
+          {
+            imports = [ lcfg.sandbox ];
+            # The wrapper finds its running sandbox by it
+            flatpak.appId = lib.mkIf (name != null) "com.nixpak.ClaudeDesktop.${name}";
+            app.package = package;
+            dbus.policies = {
+              "org.freedesktop.Notifications" = "talk";
+            }
+            // lib.optionalAttrs lcfg.tray {
+              # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 29 in the sandbox's pid ns, after
+              # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap-subid.sh (and what it forks), bwrap and init. The VM
+              # test checks the stub's pid
+              "org.kde.StatusNotifierWatcher" = "talk";
+              "org.freedesktop.StatusNotifierItem-29-1" = "own";
+            };
+            dbus.rules.call."org.freedesktop.portal.Desktop" = [
+              "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
+              "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
+            ];
+            dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
+              "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
+            ];
+            gpu = {
+              enable = true;
+              # Not "nixos": /run/opengl-driver links into the system closure
+              provider = "bundle";
+              bundlePackage = graphicsDrivers;
+            };
+            # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in package), no extra pasta args
+            bubblewrap.network = lib.mkForce true;
+            pasta = {
+              enable = lib.mkForce true;
+              package = lib.mkForce netSetup;
+              mode = lib.mkForce "transparent";
+              args = lib.mkForce [ ];
+            };
+            bubblewrap = {
+              package = bwrapHost;
+              bindEntireStore = false;
+              extraStorePaths = [ storeRoots ];
+              bind.rw = binds true;
+              # Claude Code's temp dir, so the session scratchpads survive restarts (pruned by scratchpad-prune.sh).
+              # A dev bind because nixpak mounts the /tmp tmpfs after the rw and ro binds and before the dev ones.
+              # It still ends up nodev where the app runs: the FHS env's bwrap binds /tmp on with nodev
+              bind.dev = [
+                [
+                  scratchpad
+                  (sloth.concat' "/tmp/claude-" sloth.uid)
+                ]
+              ]
+              ++ lib.optional lcfg.kvm "/dev/kvm";
+              bind.ro =
+                binds false
+                ++ etcBinds
+                ++ [
+                  [
+                    "${currentSystemSw}"
+                    "/run/current-system/sw"
+                  ]
+                ];
+              tmpfs = [ "/tmp" ];
+              sockets = {
+                wayland = true;
+                pipewire = lcfg.audio;
+                pulse = lcfg.audio;
+              };
+              newSession = true;
+              dieWithParent = true;
+            };
+          };
+      };
+
+      mcpServers = pkgs.writeText "mcp-servers.json" (builtins.toJSON lcfg.mcpServers);
+      # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
+      # the closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
+      # `environment:` from the frontmatter. Claude Code follows imports four hops deep, and ~/.claude reaches this file
+      # in three (CLAUDE.md, the account's, the shared one), so environmentFile is the last that loads
+      environmentDoc = pkgs.writeText "claude-environment.md" ''
+        ---
+        environment: bwrap
+        ---
+
+        @${lcfg.environmentFile}
+
+        ## Binds
+
+        ${
+          lib.concatMapStrings
+            (
+              b:
+              "- `${b.path}` (${
+                lib.concatStringsSep ", " (
+                  [ (if b.rw then "rw" else "ro") ]
+                  ++ lib.optional b.mcp "MCP"
+                  ++ lib.optional (b.src != b.path) "from `${b.src}`"
+                )
+              })\n"
+            )
+            (
+              lib.sortOn (b: b.path) (
+                lib.mapAttrsToList (path: b: b // { inherit path; }) (
+                  lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) lcfg.binds
+                )
+              )
+            )
+        }- `/tmp/claude-<uid>` (rw, from `${scratchpad}`): Claude Code's temp dir with the session scratchpads
+        ${lib.optionalString lcfg.kvm "- `/dev/kvm` (dev)\n"}
+        ## PATH
+
+        ${lib.concatMapStrings (d: "`${d}`, then ") lcfg.extraPath}the packages
+        ${lib.concatMapStringsSep ", " lib.getName sandboxPackages}.
+        ${lcfg.environmentText}
+      '';
+
+      # nixpak's sloth.env panics on unset variables, so filter the environment before its launcher.
+      # Unset passthrough variables expand to nothing
+      vars = lib.concatStringsSep "\n  " (
+        lib.mapAttrsToList (
+          n: v: if v.value == null then "\${${n}+\"${n}=\$${n}\"}" else "\"${n}=${v.value}\""
+        ) (lib.filterAttrs (_: v: v.enable) lcfg.env)
+      );
+
+      gtkTheme = script "gtk-theme.sh" {
+        name = "claude-desktop-gtk-theme";
+        runtimeInputs = [ pkgs.glib ];
+        vars = {
+          SANDBOX_CONFIG = "${bwrapHome}/.config";
+          SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
+        };
+      };
+      gtkThemeWatch = script "gtk-theme-watch.sh" {
+        name = "claude-desktop-gtk-theme-watch";
+        runtimeInputs = [
+          pkgs.glib
+          pkgs.coreutils
+          pkgs.procps
+        ];
+        vars.GTK_THEME = lib.getExe gtkTheme;
+      };
+
+      wrapper = script "claude-desktop.sh" {
+        name = "claude-desktop${suffix}";
+        runtimeInputs = [
+          pkgs.jq
+          osConfig.nix.package
+        ];
+        vars = {
+          SANDBOX_HOME = bwrapHome;
+          SCRATCHPAD = scratchpad;
+          RESOLV_CONF = resolvConf;
+          APP_ID = sandboxed.config.flatpak.appId;
+          FHS_ENV = lib.getExe package;
+          DOT_CLAUDE = hostPath ".claude";
+          CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
+          MCP_SERVERS = "${mcpServers}";
+          TRAY = lib.boolToString lcfg.tray;
+          STORE_SYNC = lib.getExe storeSync;
+          STORE_ROOTS = "${storeRoots}";
+          STORE_ROOTS_LINK = "store-roots${suffix}";
+          GTK_THEME = lib.getExe gtkTheme;
+          GTK_THEME_WATCH = lib.getExe gtkThemeWatch;
+          NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
+        };
+        prelude = ''
+          VARS=(
+            ${vars}
+          )
+          REQUIRED_BINDS=(
+            ${lib.escapeShellArgs (
+              lib.mapAttrsToList (_: b: b.src) (lib.filterAttrs (_: b: b.enable && !b.optional) lcfg.binds)
+            )}
+          )
+          readonly VARS REQUIRED_BINDS
+        '';
+      };
+      claude-desktop = pkgs.symlinkJoin {
+        name = "claude-desktop${suffix}-sandboxed";
+        # First path wins on collisions: the wrapper shadows nixpak's bin/claude-desktop, while the icons and the
+        # .desktop file (Exec=claude-desktop, claude:// handler) carry over. A named launcher takes only a .desktop file of
+        # its own: the default launcher installs the icons and keeps the claude:// handler
+        paths = [ wrapper ] ++ lib.optional (name == null) sandboxed.config.env;
+        postBuild = ''
+          # The package's only .desktop file, whose name changed upstream
+          set -- ${sandboxed.config.env}/share/applications/*.desktop
+          [[ $# == 1 ]]
+          d=$out/share/applications/${if name == null then "\${1##*/}" else "claude-desktop-${name}.desktop"}
+          mkdir -p "$out/share/applications"
+          rm -f "$d"
+          sed -e 's/^Actions=.*/&;Shell/' ${
+            lib.optionalString (name != null) (
+              lib.escapeShellArgs [
+                "-e"
+                "0,/^Name=/s/^Name=.*/Name=Claude (${name})/"
+                "-e"
+                "s/^Exec=claude-desktop /Exec=claude-desktop-${name} /"
+                "-e"
+                "/^MimeType=/d"
+              ]
+            )
+          } "$(readlink -f "$1")" >"$d"
+          grep -q '^Actions=.*;Shell$' "$d"
+          ${lib.optionalString (name != null) ''
+            grep -qxF 'Name=Claude (${name})' "$d"
+            ! grep -q '^Exec=claude-desktop ' "$d" || exit 1
+            ! grep -q '^MimeType=' "$d" || exit 1
+          ''}
+          printf '\n[Desktop Action Shell]\nExec=%s %s --shell\nName=New shell\n' \
+            ${lib.getExe pkgs.xdg-terminal-exec} "$out/bin/claude-desktop${suffix}" >>"$d"
+        '';
+      };
+    in
+    {
+      inherit sandboxed netSetup claude-desktop;
+    };
+  # Built, the default one under ""
+  launchers = {
+    "" = launcher null cfg;
+  }
+  // lib.mapAttrs launcher cfg.launchers;
+
+in
+{
+  options.agent-sandbox.claude-desktop = launcherOptions cfg // {
+    enable = lib.mkEnableOption "Claude Desktop, sandboxed with nixpak";
+    launchers = mkOption {
+      type = types.attrsOf (
+        types.submodule (
+          { name, config, ... }:
+          {
+            options = launcherOptions config;
+            config = launcherDefaults name config;
+          }
+        )
+      );
+      default = { };
+      example = lib.literalExpression ''{ work.binds."''${config.home.homeDirectory}/Workspace/work".rw = true; }'';
+      description = ''
+        More sandboxes next to the default one, which is always there. Each has the same options, starts from the
+        module's defaults rather than the default launcher's settings, and keeps its state in
+        `~/.local/share/claude-desktop-<name>`: its own home (`~/.claude` and `~/.config/Claude` included, unless bound),
+        Nix store and scratchpads. It runs as `claude-desktop-<name>`, shows as "Claude (<name>)", and leaves the
+        `claude://` handler to the default launcher.
+      '';
     };
   };
 
@@ -708,64 +842,30 @@ in
         assertion = osConfig.hardware.graphics.enable;
         message = "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
       }
-      {
-        assertion =
-          sandboxed.config.bubblewrap.network
-          && sandboxed.config.pasta.enable
-          && sandboxed.config.pasta.package == netSetup;
-        message = "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; sandbox must not change bubblewrap.network or pasta";
-      }
-    ];
-    home.packages = [ claude-desktop ];
-    agent-sandbox.claude-desktop.env =
-      lib.genAttrs [
-        "HOME"
-        "USER"
-        "LANG"
-        "LC_ALL"
-        "XDG_RUNTIME_DIR"
-        "WAYLAND_DISPLAY"
-        "XDG_CURRENT_DESKTOP"
-        "XDG_SESSION_TYPE"
-        "XDG_CONFIG_DIRS"
-        "XCURSOR_THEME"
-        "XCURSOR_SIZE"
-        # The host bus, for nixpak's D-Bus proxy. The sandbox gets the proxy's address
-        "DBUS_SESSION_BUS_ADDRESS"
-      ] (_: { })
-      // {
-        # nixpak binds /etc/localtime as a file, so ICU can't read the zone name from the link target
-        TZ.value = osConfig.time.timeZone;
-        PATH = "${xdgOpen}/bin:${searchPath}";
-        # Not the login shell from /etc/passwd
-        SHELL = "/run/current-system/sw/bin/bash";
-        NIXOS_OZONE_WL = "1";
-        NIX_CONF_DIR = "${nixConf}";
-        # Where gtk-theme.sh writes the theme
-        GSETTINGS_BACKEND = "keyfile";
-        XDG_DATA_DIRS = "${pkgs.gnome-themes-extra}/share\${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}";
-      };
-    agent-sandbox.claude-desktop.binds =
-      let
-        sys = {
-          mcp = false;
-        };
-      in
-      {
-        "/nix" = sys // {
-          src = "${stateDir}/nix";
-          rw = true;
-        };
-        "/sys" = sys;
-        ${config.home.homeDirectory} = sys // {
-          src = bwrapHome;
-          rw = true;
-        };
-        "${config.home.homeDirectory}/.claude".rw = true;
-        "${config.home.homeDirectory}/.config/Claude" = sys // {
-          rw = true;
-        };
-      }
-      // lib.genAttrs (map (e: "/etc/${e}") hostEtc) (_: sys // { optional = true; });
+    ]
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        name: l:
+        let
+          opt = if name == "" then "sandbox" else "launchers.${name}.sandbox";
+        in
+        [
+          {
+            assertion =
+              l.sandboxed.config.bubblewrap.network
+              && l.sandboxed.config.pasta.enable
+              && l.sandboxed.config.pasta.package == l.netSetup;
+            message = "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; ${opt} must not change bubblewrap.network or pasta";
+          }
+        ]
+        ++ lib.optional (name != "") {
+          # File names, the app ID and the .desktop file's Name take it as is
+          assertion = builtins.match "[a-z][a-z0-9-]*" name != null;
+          message = "agent-sandbox.claude-desktop: launcher name ${name} must match [a-z][a-z0-9-]*";
+        }
+      ) launchers
+    );
+    home.packages = lib.mapAttrsToList (_: l: l.claude-desktop) launchers;
+    agent-sandbox.claude-desktop = launcherDefaults null cfg;
   };
 }

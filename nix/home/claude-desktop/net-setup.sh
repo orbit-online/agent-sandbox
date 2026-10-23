@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Runs in nixpak's pasta slot: the launcher calls it with `-- <pid>` once the sandbox exists and before the app starts
+# Runs in nixpak's pasta slot: the launcher calls it with `-- <pid>` once the sandbox exists and before the app starts.
+# $NAME: the launcher's name, empty for the default one
 : "${NETNS_MACVLAN:?}" "${SETPRIV:?}" "${UDHCPC:?}" "${UDHCPC_SCRIPT:?}"
 pid=${!#}
 # bwrap's parent reports the pid while the child is still building the mount tree; nixpak binds
@@ -12,7 +13,7 @@ done
   echo "claude-desktop: Sandbox root not ready after 5s" >&2
   exit 1
 }
-"$NETNS_MACVLAN" "$pid"
+"$NETNS_MACVLAN" "$pid" ${NAME:+"$NAME"}
 # The sandbox's userns owns its netns. --keep-caps: exec would otherwise drop the caps setns granted
 ns() {
   nsenter -t "$pid" -U -n --preserve-credentials --keep-caps "$@"

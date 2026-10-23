@@ -26,11 +26,18 @@ file), since a GC can take minutes and the session waits for its hooks.
 
 ## Home
 
-`$HOME` is the host user's home path, but it's yours: on the host it's
-`~/.local/share/claude-desktop/home`, and it survives restarts and rebuilds.
+The user can run several of these sandboxes side by side, each from its own
+launcher with a state dir of its own on the host:
+`~/.local/share/claude-desktop` for the default one,
+`~/.local/share/claude-desktop-<name>` for a named one. The binds in
+`/etc/claude/environment.md` show which one this is.
+
+`$HOME` is the host user's home path, but it's yours: on the host it's `home/`
+in the state dir, and it survives restarts and rebuilds. In a named launcher's
+sandbox, `~/.claude` and `~/.config/Claude` are in it too, unless bound.
 `/tmp` is a private tmpfs, gone on restart, except Claude Code's temp dir
 `/tmp/claude-<uid>`. That one, with the session scratchpads in it, is bound
-from `~/.local/share/claude-desktop/tmp-scratchpad` on the host and survives.
+from `tmp-scratchpad/` in the state dir and survives.
 
 ## What you can see
 
@@ -40,7 +47,8 @@ doesn't exist in here; if you need something that isn't bound, say what and
 why, and the user adds it. `/proc/self/mountinfo` shows the live set.
 
 - Own PID, user, UTS and IPC namespaces (pid 1 is `bwrap`), new session.
-  Portals see the app as Flatpak `com.nixpak.ClaudeDesktop` (nixpak's
+  Portals see the app as Flatpak `com.nixpak.ClaudeDesktop`, or
+  `com.nixpak.ClaudeDesktop.<name>` for a named launcher (nixpak's
   `/.flatpak-info`, which the FHS env's inner bwrap doesn't bind).
 - Session D-Bus goes through nixpak's `xdg-dbus-proxy`: OpenURI and Settings
   portals and Notifications only. Links open in the host browser via OpenURI.
@@ -68,9 +76,9 @@ remove it.
 
 ## Nix
 
-A single-user store of its own: `~/.local/share/claude-desktop/nix` on the
-host, bound rw at `/nix`. No daemon, substitutes from cache.nixos.org only. The
-launcher copies the app's closure in and roots it
+A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`. No
+daemon, substitutes from cache.nixos.org only. The launcher copies the app's
+closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,
 which `claude-desktop-store-gc` picks up.

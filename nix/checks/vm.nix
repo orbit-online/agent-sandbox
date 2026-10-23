@@ -5,6 +5,8 @@ let
   stateDir = "/home/alice/.local/share/claude-desktop";
   sandboxHome = "${stateDir}/home";
   scratchpad = "${stateDir}/tmp-scratchpad";
+  workStateDir = "/home/alice/.local/share/claude-desktop-work";
+  stub = pkgs.callPackage ./stub-app.nix { };
   fakePortal = pkgs.writers.writePython3Bin "fake-portal" {
     libraries = [ pkgs.python3Packages.dbus-next ];
     # dbus-next's signatures are string annotations
@@ -47,15 +49,16 @@ pkgs.testers.runNixOSTest {
       imports = [
         (aliceModule {
           enable = true;
-          package = pkgs.callPackage ./stub-app.nix { };
+          package = stub;
           # Missing until the launch subtest creates it
           binds."/srv/project" = { };
+          launchers.work.package = stub;
         })
       ];
       virtualisation = {
         memorySize = 2048;
-        # The store sync copies the sandbox closure (graphics drivers included) into alice's home
-        diskSize = 8192;
+        # The store syncs copy the sandbox closure (graphics drivers included) into alice's home, once per launcher
+        diskSize = 12288;
       };
       # netns-macvlan puts the macvlan on the default route's device
       networking.defaultGateway = nodes.router.networking.primaryIPAddress;
@@ -118,6 +121,11 @@ pkgs.testers.runNixOSTest {
           workstation.wait_until_succeeds(f"grep -qz '^/run/current-system/sw/bin/sleep$' /proc/{pid}/cmdline", timeout=30)
           return workstation.succeed(f"echo {pid}").strip()
 
+      # The info of a running sandbox's bwrap, found by its app ID: the work launcher's lies next to the default one's
+      def bwrap_info(app_id="com.nixpak.ClaudeDesktop"):
+          d = workstation.succeed(f"grep -lx name={app_id} /run/user/1000/.flatpak/nixpak-app-*/info").split()[-1]
+          return json.loads(workstation.succeed(f"cat {d.removesuffix('/info')}/bwrapinfo.json"))
+
       start_all()
       router.wait_for_unit("dnsmasq.service")
       router.wait_for_unit("https.service")
@@ -171,7 +179,7 @@ pkgs.testers.runNixOSTest {
           assert workstation.succeed(f"stat -c %a {scratchpad}").strip() == "700"
 
       with subtest("subordinate ids"):
-          info = json.loads(workstation.succeed("cat /run/user/1000/.flatpak/nixpak-app-*/bwrapinfo.json"))
+          info = bwrap_info()
           # alice's auto range (65536 ids), her uid and gid (1000, 100) as themselves
           for kind, own in [("uid", 1000), ("gid", 100)]:
               start = int(workstation.succeed(f"grep ^alice: /etc/sub{kind}").split(":")[1])
@@ -273,6 +281,39 @@ pkgs.testers.runNixOSTest {
           assert "inet 192.168.1.1" in in_sandbox("ip -4 -o addr show dev eth0")
           assert "default via ${routerIP} dev eth0" in in_sandbox("ip route")
 
+      with subtest("A named launcher runs a sandbox of its own next to the default one"):
+          work_home = "${workStateDir}/home"
+          workstation.succeed(
+              "systemd-run --user -M alice@ --unit claude-desktop-work -p KillMode=process -E WAYLAND_DISPLAY=wayland-0"
+              " -- /etc/profiles/per-user/alice/bin/claude-desktop-work"
+          )
+          workstation.wait_until_succeeds(f"test -s {work_home}/stub-app.log", timeout=300)
+          _, work_netns, work_mntns = workstation.succeed(f"cat {work_home}/stub-app.log").split()
+          assert work_netns != app_netns and work_mntns != app_mntns, "work runs in the default sandbox"
+
+          def work_cmd(cmd):
+              return alice_cmd(f"/etc/profiles/per-user/alice/bin/claude-desktop-work --exec {cmd}")
+
+          def in_work(cmd):
+              return workstation.succeed(work_cmd(cmd))
+
+          # Its re-entry finds its own sandbox by its app ID
+          assert in_work("readlink /proc/self/ns/net").strip() == work_netns
+          # Both on the LAN, the MAC salted with the launcher's name
+          workstation.wait_until_succeeds(work_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"), timeout=60)
+          assert "inet 192.168.1.1" in in_work("ip -4 -o addr show dev eth0")
+          macs = {f("ip -br link show eth0").split()[2] for f in [in_sandbox, in_work]}
+          assert len(macs) == 2, macs
+          # Its own state dir, with ~/.claude and the app's config in its home
+          workstation.succeed(f"test -d {work_home}/.claude && test -s {work_home}/.config/Claude/claude_desktop_config.json")
+          workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
+          workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
+          work_pid = bwrap_info("com.nixpak.ClaudeDesktop.work")["child-pid"]
+          workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-work")
+          workstation.wait_until_fails(f"test -e /proc/{work_pid}", timeout=30)
+          # The default sandbox runs on
+          assert in_sandbox("readlink /proc/self/ns/net").strip() == app_netns
+
       with subtest("Own hosts file"):
           workstation.succeed("grep -qw host-only.test /etc/hosts")
           hosts = in_sandbox("cat /etc/hosts")
@@ -297,9 +338,7 @@ pkgs.testers.runNixOSTest {
       with subtest("nettest.sh"):
           print(in_sandbox(f"nettest {' '.join(host_only)}"))
 
-      sandbox_pid = json.loads(
-          workstation.succeed("cat /run/user/1000/.flatpak/nixpak-app-*/bwrapinfo.json")
-      )["child-pid"]
+      sandbox_pid = bwrap_info()["child-pid"]
 
       with subtest("netns-macvlan refuses other users' namespaces"):
           bob_ns = spawn("bob-ns", "bob", "/run/current-system/sw/bin/unshare -Urn")

@@ -17,12 +17,13 @@ import (
 const usage = `netns-macvlan - Give a user-owned network namespace its own macvlan on the LAN
 
 Usage:
-  netns-macvlan <pid>
+  netns-macvlan <pid> [<name>]
 
 Creates eth0 in the network namespace of <pid>: a macvlan in private mode on
-the device carrying the default route, with a MAC derived from the machine ID
-and the caller's uid. <pid> must belong to the caller, and its network
-namespace must be owned by a user namespace the caller owns.
+the device carrying the default route, with a MAC derived from the machine ID,
+the caller's uid and <name>, which tells one sandbox of the caller from
+another. <pid> must belong to the caller, and its network namespace must be
+owned by a user namespace the caller owns.
 `
 
 func main() {
@@ -36,13 +37,14 @@ func main() {
 		slog.Error("Parse <pid>", "err", err)
 		os.Exit(2)
 	}
-	if err := run(pid); err != nil {
+	name, _ := opts.String("<name>")
+	if err := run(pid, name); err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(pid int) error {
+func run(pid int, name string) error {
 	uid := unix.Getuid()
 	netnsFd, err := openNetns(pid, uid)
 	if err != nil {
@@ -57,7 +59,7 @@ func run(pid int) error {
 	if err != nil {
 		return fmt.Errorf("Read machine ID: %w", err)
 	}
-	mac := stableMAC(machineID, uid)
+	mac := stableMAC(machineID, uid, name)
 	link := &netlink.Macvlan{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:         "eth0",
@@ -155,9 +157,14 @@ func lowestMetric(routes []netlink.Route) int {
 	return routes[best].LinkIndex
 }
 
-// Locally administered unicast MAC, stable per machine and uid so DHCP keeps handing out the same lease
-func stableMAC(machineID []byte, uid int) net.HardwareAddr {
-	sum := sha256.Sum256(fmt.Appendf(nil, "netns-macvlan\x00%s\x00%d", machineID, uid))
+// Locally administered unicast MAC, stable per machine, uid and name so DHCP keeps handing out the same lease. The
+// empty name hashes as before names existed, which keeps the default launcher's lease
+func stableMAC(machineID []byte, uid int, name string) net.HardwareAddr {
+	in := fmt.Appendf(nil, "netns-macvlan\x00%s\x00%d", machineID, uid)
+	if name != "" {
+		in = fmt.Appendf(in, "\x00%s", name)
+	}
+	sum := sha256.Sum256(in)
 	mac := net.HardwareAddr(sum[:6])
 	mac[0] = mac[0]&^0x01 | 0x02
 	return mac

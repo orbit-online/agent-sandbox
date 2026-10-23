@@ -2,7 +2,7 @@
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
 # $REQUIRED_BINDS: the sources of the binds that aren't optional
 : "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${FHS_ENV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
-: "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
+: "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
 mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE"
 # Bind source for Claude Code's temp dir, which it wants private. Its parent exists from SANDBOX_HOME's mkdir
 [[ -d $SCRATCHPAD ]] || mkdir -m 700 "$SCRATCHPAD"
@@ -85,7 +85,7 @@ mv "$CONFIG.tmp" "$CONFIG"
 # nixpak binds the closure from the host store, where a GC would empty it under the running sandbox once a rebuild
 # dropped its generation. The runtime dir goes at logout, the next launch replaces the root
 mkdir -p "$XDG_RUNTIME_DIR/claude-desktop"
-nix-store --add-root "$XDG_RUNTIME_DIR/claude-desktop/store-roots" --realise "$STORE_ROOTS" >/dev/null
+nix-store --add-root "$XDG_RUNTIME_DIR/claude-desktop/$STORE_ROOTS_LINK" --realise "$STORE_ROOTS" >/dev/null
 # nixpak only passes bwrap the --*-bind-try variants, which skip a missing source
 for src in "${REQUIRED_BINDS[@]}"; do
   [[ -e $src ]] || { echo "claude-desktop: Bind source $src is missing" >&2; exit 1; }

@@ -8,8 +8,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 - `nix/home/claude-desktop/`: the Home Manager module
   `agent-sandbox.claude-desktop` (`default.nix`, with a diagram of the
-  sandbox's namespaces at the top), `environment.md`, the default
-  `environmentFile`, which `/etc/claude/environment.md` in the sandbox
+  sandbox's namespaces at the top). Its options configure the default
+  launcher; `launchers.<name>` adds sandboxes next to it with the same
+  options, each built by `launcher` from the module's defaults alone, with its
+  own state dir, app ID, MAC and `claude-desktop-<name>`. Then
+  `environment.md`, the default `environmentFile`, which `/etc/claude/environment.md` in the sandbox
   imports, and the module's scripts (`*.sh`; `store-gc.sh` and
   `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks). `default.nix` loads them with its `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
@@ -67,8 +70,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   enables the module, for group users, the users-group, subid and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
-  `extraPath` at the front of PATH. The test system imports both modules
-  twice.
+  `extraPath` at the front of PATH, the launchers' packages, the launcher
+  name and per-launcher netns assertions, and a launcher's MCP roots without
+  `~/.claude`. The test system imports both modules twice and has a launcher
+  `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure) and of
@@ -76,7 +81,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   `/dev/kvm` and PATH in `claude-environment.md`, and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the scratchpad's dev bind after
-  the `/tmp` tmpfs).
+  the `/tmp` tmpfs). For `work`: its wrapper alone in `bin`, its app ID,
+  `~/.claude` and the app's config in its home, its GC root link, the name
+  netns-macvlan gets, its `claude-environment.md`, and its `.desktop` file
+  (name, Exec, no `claude://` handler).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace.
@@ -102,7 +110,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
   launch, live, and the watcher ending with the app), the macvlan's DHCP
-  lease, route and DNS, its own `/etc/hosts`, the closure's GC root on the
+  lease, route and DNS, the launcher `work` running next to the default
+  sandbox (its own namespaces, MAC and lease, its re-entry found by app ID,
+  its state dir and GC root), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, the

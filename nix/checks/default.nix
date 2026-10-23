@@ -51,6 +51,7 @@ let
       # A module default, overridden by its sandbox path
       "/home/alice/.claude".src = "/srv/claude";
     };
+    launchers.work.binds."/srv/work".rw = true;
   };
   system = nixos enabled;
   alice = system.config.home-manager.users.alice;
@@ -70,6 +71,7 @@ let
       p: p.name == "claude-desktop-sandboxed"
     ) null sys.config.home-manager.users.alice.home.packages;
   sandboxed = sandboxedOf system;
+  work = lib.findFirst (p: p.name == "claude-desktop-work-sandboxed") null alice.home.packages;
   # Another environmentFile, the rest as in enabled
   customDoc = sandboxedOf (
     nixos (enabled // { environmentFile = pkgs.writeText "custom-environment.md" "custom"; })
@@ -149,6 +151,32 @@ let
       );
       expected = "/srv/bin";
     };
+    testLaunchers = {
+      expr = map (p: p.name) (lib.filter (p: lib.hasPrefix "claude-desktop" p.name) alice.home.packages);
+      expected = [
+        "claude-desktop-sandboxed"
+        "claude-desktop-work-sandboxed"
+      ];
+    };
+    testLauncherName = {
+      expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
+      expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
+    };
+    testLauncherNetnsAssertion = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (enabled // { launchers.work.sandbox.pasta.package = lib.mkOverride 10 pkgs.passt; })
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; launchers.work.sandbox must not change bubblewrap.network or pasta"
+      ];
+    };
+    # Its own binds only: ~/.claude lives in its home
+    testLauncherMcpRoots = {
+      expr = alice.agent-sandbox.claude-desktop.launchers.work.mcpServers.filesystem.args;
+      expected = [ "/srv/work" ];
+    };
     testMcpRoots = {
       expr = lib.sort lib.lessThan alice.agent-sandbox.claude-desktop.mcpServers.filesystem.args;
       expected = [
@@ -200,6 +228,8 @@ in
         {
           nativeBuildInputs = [ pkgs.jq ];
           closure = pkgs.closureInfo { rootPaths = [ sandboxed ]; };
+          workClosure = pkgs.closureInfo { rootPaths = [ work ]; };
+          inherit work;
           customClosure = pkgs.closureInfo { rootPaths = [ customDoc ]; };
         }
         ''
@@ -242,6 +272,33 @@ in
           jq -e '. as $a | (index("--tmpfs") + 1) as $t | any(range($t; length); $a[.:. + 3] == ["--dev-bind-try",
             "/home/alice/.local/share/claude-desktop/tmp-scratchpad", {type: "concat", a: "/tmp/claude-", b: {type: "uid"}}])' \
             <"$args" >/dev/null || { echo "bwrap args lack the scratchpad bind after the /tmp tmpfs" >&2; exit 1; }
+
+          # The work launcher: its own state dir, app ID and MAC, ~/.claude in its home, its own .desktop file
+          [[ $(ls $work/bin) == claude-desktop-work ]] || { echo "work has more than its wrapper: $(ls $work/bin)" >&2; exit 1; }
+          wrapper=$(readlink -f $work/bin/claude-desktop-work)
+          for line in \
+            "readonly APP_ID=com.nixpak.ClaudeDesktop.work" \
+            "readonly DOT_CLAUDE=/home/alice/.local/share/claude-desktop-work/home/.claude" \
+            "readonly CONFIG=/home/alice/.local/share/claude-desktop-work/home/.config/Claude/claude_desktop_config.json" \
+            "readonly STORE_ROOTS_LINK=store-roots-work"; do
+            grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
+          done
+          # The name netns-macvlan salts the MAC with
+          name() { grep -h '^readonly NAME=' "$(grep -- '-pasta$' "$1")/bin/pasta"; }
+          [[ $(name "$paths") == "readonly NAME='''" && $(name "$workClosure/store-paths") == "readonly NAME=work" ]] ||
+            { echo "pasta's NAME isn't empty for the default launcher and work for work" >&2; exit 1; }
+          doc=$(grep -- '-claude-environment\.md$' "$workClosure/store-paths")
+          for line in \
+            '- `/srv/work` (rw, MCP)' \
+            '- `/home/alice` (rw, from `/home/alice/.local/share/claude-desktop-work/home`)'; do
+            grep -qxF -- "$line" "$doc" || { echo "work's environment.md lacks: $line" >&2; exit 1; }
+          done
+          ! grep -qF -e /srv/project -e /home/alice/.claude "$doc" || { echo "work's environment.md has the default launcher's binds" >&2; exit 1; }
+          d=$work/share/applications/claude-desktop-work.desktop
+          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Name=New shell'; do
+            grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
+          done
+          ! grep -q -e '^MimeType=' -e '^Exec=claude-desktop ' "$d" || { echo "$d keeps the claude:// handler or the default Exec" >&2; exit 1; }
           touch $out
         '';
 

@@ -30,8 +30,10 @@ let
       mkdir -p app $out/bin $out/share/applications $out/lib/claude-desktop/resources
       echo '{"main": "main.js"}' >app/package.json
       echo '"use strict";' >app/main.js
-      # The .desktop file the module adds its shell action to
-      printf '[Desktop Entry]\nActions=NewChat\nExec=claude-desktop %%U\n' >$out/share/applications/com.anthropic.Claude.desktop
+      # The .desktop file the module adds its shell action to, and rewrites for a named launcher
+      printf '%s\n' '[Desktop Entry]' Name=Claude Actions=NewChat 'Exec=claude-desktop %U' 'MimeType=x-scheme-handler/claude;' \
+        "" '[Desktop Action NewChat]' 'Name=New chat' 'Exec=claude-desktop claude://claude.ai/new' \
+        >$out/share/applications/com.anthropic.Claude.desktop
       # Unpacked like the real app's native modules, so app.asar.unpacked exists
       touch app/stub.node
       asar pack app $out/lib/claude-desktop/resources/app.asar --unpack '{*.node,github-mcp-server}'

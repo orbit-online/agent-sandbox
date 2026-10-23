@@ -23,21 +23,27 @@ func TestMain(m *testing.M) {
 
 func TestStableMAC(t *testing.T) {
 	id := []byte("0123456789abcdef0123456789abcdef\n")
-	mac := stableMAC(id, 1000)
+	mac := stableMAC(id, 1000, "")
 	// A changed derivation hands every sandbox a new DHCP lease
 	if got := mac.String(); got != "0a:47:3f:c0:f2:e7" {
 		t.Errorf("stableMAC = %s, want 0a:47:3f:c0:f2:e7", got)
 	}
 	for uid := range 64 {
-		if mac := stableMAC(id, uid); mac[0]&0x01 != 0 || mac[0]&0x02 == 0 {
+		if mac := stableMAC(id, uid, ""); mac[0]&0x01 != 0 || mac[0]&0x02 == 0 {
 			t.Errorf("%s is not a locally administered unicast MAC", mac)
 		}
 	}
-	if stableMAC(id, 1001).String() == mac.String() {
+	if stableMAC(id, 1001, "").String() == mac.String() {
 		t.Error("Same MAC for different uids")
 	}
-	if stableMAC([]byte("fedcba9876543210fedcba9876543210\n"), 1000).String() == mac.String() {
+	if stableMAC([]byte("fedcba9876543210fedcba9876543210\n"), 1000, "").String() == mac.String() {
 		t.Error("Same MAC for different machine IDs")
+	}
+	if stableMAC(id, 1000, "work").String() == mac.String() {
+		t.Error("Same MAC for different names")
+	}
+	if mac := stableMAC(id, 1000, "work"); mac[0]&0x01 != 0 || mac[0]&0x02 == 0 {
+		t.Errorf("%s is not a locally administered unicast MAC", mac)
 	}
 }
 
