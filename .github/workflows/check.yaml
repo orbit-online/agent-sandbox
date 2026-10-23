@@ -20,6 +20,9 @@ jobs:
             /usr/local/lib/android \
             /opt/ghc \
             /opt/hostedtoolcache/CodeQL
+      # subid-broker's TestAuthorize nests a user namespace in one of its own, inside the build. Ubuntu's AppArmor gives
+      # a process in an unprivileged userns no capabilities, so the inner map can't be written
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: cachix/install-nix-action@v31
         with:
           # The VM test needs kvm; listing it replaces the defaults, so they're repeated

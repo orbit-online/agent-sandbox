@@ -23,6 +23,7 @@ func TestMain(m *testing.M) {
 	case "nest":
 		child, _, err := start()
 		if err != nil {
+			os.Stderr.WriteString("Start a userns in the client's: " + err.Error() + "\n")
 			os.Exit(1)
 		}
 		os.Stdout.WriteString(strconv.Itoa(child.Process.Pid) + "\n")
@@ -83,6 +84,7 @@ func TestAuthorize(t *testing.T) {
 	client := exec.Command("/proc/self/exe")
 	client.Env = append(os.Environ(), "SUBID_BROKER_TEST=nest")
 	client.SysProcAttr = ownUserns()
+	client.Stderr = os.Stderr
 	clientIn, err := client.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
