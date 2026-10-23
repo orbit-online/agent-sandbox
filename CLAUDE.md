@@ -78,7 +78,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure) and of
   another `environmentFile`, the binds (with their `src`), the scratchpad,
-  `/dev/kvm` and PATH in `claude-environment.md`, and nixpak's
+  `/dev/kvm` and PATH in `claude-environment.md`, the patched asar's tray
+  icon (by the colour scheme, also on GNOME), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the scratchpad's dev bind after
   the `/tmp` tmpfs). For `work`: its wrapper alone in `bin`, its app ID,

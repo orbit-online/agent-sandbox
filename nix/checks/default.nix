@@ -267,6 +267,13 @@ in
           ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
           grep -qE '^coreutils, .*, nix\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
 
+          # The tray icon by the colour scheme, also on GNOME (an asar stores its files as they are)
+          asar=$(grep -- '-claude-desktop-app\.asar$' "$paths")
+          ! grep -qaE '\(\)==="gnome"\|\|[A-Za-z0-9_$.]+\.nativeTheme\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png"' "$asar" ||
+            { echo "the asar picks the white tray icon on GNOME" >&2; exit 1; }
+          grep -qaF 'nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"' "$asar" ||
+            { echo "the asar lost the tray icon's colour scheme check" >&2; exit 1; }
+
           args=$(grep -- '-bwrap-args\.json$' "$paths")
           # The args as consecutive elements of bwrap's argv
           has() { jq -e '. as $a | $ARGS.positional as $p | any(range(length); $a[.:. + ($p | length)] == $p)' --args -- "$@" <"$args" >/dev/null; }

@@ -42,6 +42,8 @@ let
       mkdir -p app $out/bin $out/share/applications $out/lib/claude-desktop/resources
       echo '{"main": "main.js"}' >app/package.json
       echo '"use strict";' >app/main.js
+      # The real app's tray icon choice, minified, for the module's patch
+      echo 'function c(e){return e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"}' >>app/main.js
       # The .desktop file the module adds its shell action to, and rewrites for a named launcher
       printf '%s\n' '[Desktop Entry]' Name=Claude Actions=NewChat 'Exec=claude-desktop %U' 'MimeType=x-scheme-handler/claude;' \
         "" '[Desktop Action NewChat]' 'Name=New chat' 'Exec=claude-desktop claude://claude.ai/new' \
