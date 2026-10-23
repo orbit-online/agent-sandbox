@@ -365,7 +365,6 @@ let
           "LC_ALL"
           "XDG_RUNTIME_DIR"
           "WAYLAND_DISPLAY"
-          "XDG_CURRENT_DESKTOP"
           "XDG_SESSION_TYPE"
           "XDG_CONFIG_DIRS"
           "XCURSOR_THEME"
@@ -380,6 +379,10 @@ let
           # Not the login shell from /etc/passwd
           SHELL = "/run/current-system/sw/bin/bash";
           NIXOS_OZONE_WL = "1";
+          # Chromium takes the first desktop it knows. On GNOME it hands the tray its icon as a file in the sandbox's
+          # /tmp, which the shell can't read; on COSMIC as pixmaps, with the same GTK theme and proxy settings. GLib and
+          # the app's own checks still find GNOME in the list. Empty when the host's is unset
+          XDG_CURRENT_DESKTOP = "\${XDG_CURRENT_DESKTOP:+\${XDG_CURRENT_DESKTOP/GNOME/COSMIC:GNOME}}";
           NIX_CONF_DIR = "${nixConf}";
           # Where gtk-theme.sh writes the theme
           GSETTINGS_BACKEND = "keyfile";

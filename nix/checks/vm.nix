@@ -259,6 +259,14 @@ pkgs.testers.runNixOSTest {
           assert reentry == [app_netns, app_pidns], f"re-entry in {reentry}, app in {[app_netns, app_pidns]}"
           assert len(workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()) == 1
 
+      with subtest("Chromium sees COSMIC ahead of GNOME, and KDE as is"):
+          for host, want in [("ubuntu:GNOME", "ubuntu:COSMIC:GNOME"), ("KDE", "KDE")]:
+              got = workstation.succeed(
+                  f"systemd-run --user -M alice@ --wait --pipe --quiet -E XDG_CURRENT_DESKTOP={host}"
+                  " -- /etc/profiles/per-user/alice/bin/claude-desktop --exec printenv XDG_CURRENT_DESKTOP"
+              ).strip()
+              assert got == want, f"{host}: {got!r}, want {want!r}"
+
       # A login shell, as the .desktop file's terminal action runs it, reading commands from stdin
       def sandbox_shell(cmd, env=""):
           return as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(

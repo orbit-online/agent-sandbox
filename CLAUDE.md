@@ -118,7 +118,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, the
-  `claude://` re-entry (in the app's netns and pid ns), `claude-desktop --shell` (in the app's namespaces,
+  `claude://` re-entry (in the app's netns and pid ns), `XDG_CURRENT_DESKTOP`
+  with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
   starting the app when it isn't running), the wrapper refusing system
   users, and
