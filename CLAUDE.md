@@ -71,8 +71,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
-  name, tray and per-launcher netns assertions, and a launcher's MCP roots without
-  `~/.claude`. The test system imports both modules twice and has a launcher
+  name and per-launcher netns assertions, a tray on two launchers at once,
+  and a launcher's MCP roots without `~/.claude`. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
@@ -101,7 +101,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
   serves the color scheme on her session bus. The test covers the setcap
   wrapper, the launcher refusing a missing bind source that isn't optional,
-  the store sync, the subid maps (alice's auto range in the sandbox's userns
+  the store sync, the app's tray item (it owns
+  `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
+  set, with no capabilities left), the subid maps (alice's auto range in the sandbox's userns
   from the host's view, the FHS env's identity map, `/etc/subuid` and
   `/etc/subgid` inside, `unshare --map-auto` and a root-mapping map through
   the shims and the broker, the shim in `/usr/bin`, a file written inside
@@ -111,12 +113,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
   launch, live, and the watcher ending with the app), the macvlan's DHCP
   lease, route and DNS, the launcher `work` running next to the default
-  sandbox (its own namespaces, MAC and lease, its re-entry found by app ID,
-  its state dir and GC root), its own `/etc/hosts`, the closure's GC root on the
+  sandbox (its own namespaces, MAC and lease, its own tray item at another
+  pid, its re-entry found by app ID, its state dir and GC root), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, the
-  `claude://` re-entry, `claude-desktop --shell` (in the app's namespaces,
+  `claude://` re-entry (in the app's netns and pid ns), `claude-desktop --shell` (in the app's namespaces,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
   starting the app when it isn't running), the wrapper refusing system
   users, and

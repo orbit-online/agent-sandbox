@@ -8,13 +8,15 @@
 # │
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
 #    │  owns: N (netns: lo + eth0 macvlan), M1 (sandbox mount tree), P (pid ns), ipc, uts, cgroup
-#    │  runs (in N, M1, P): bwrap's init, the FHS env script, claude:// re-entry, all as uid 1000 without
-#    │        capabilities; udhcpc + dhcpScript (net_admin and net_raw only), netSetup's ip calls (in N)
+#    │  runs (in N, M1, P): bwrap's init and the FHS env script as uid 1000 without capabilities; udhcpc +
+#    │        dhcpScript (net_admin and net_raw only), netSetup's ip calls (in N)
 #    │
 #    └─ U2  buildFHSEnv's bwrap (all of U1's ids)
-#          owns: M2 (tmpfs /etc with the rootfs' resolv.conf and hosts links, subuid and subgid, patched app.asar)
-#          runs (in N, M2, P): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`, and
-#                the user namespaces they create, whose maps the newuidmap and newgidmap shims ask subid-broker for
+#          owns: M2 (tmpfs /etc with the rootfs' resolv.conf and hosts links, subuid and subgid, patched app.asar),
+#                P2 (pid ns, where app-pid.sh starts the app at a pid of the launcher's, with CAP_CHECKPOINT_RESTORE)
+#          runs (in N, M2, P2): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`,
+#                claude:// re-entry, and the user namespaces they create, whose maps the newuidmap and newgidmap
+#                shims ask subid-broker for
 { inputs }:
 {
   pkgs,
@@ -81,6 +83,8 @@ let
   suffixOf = name: lib.optionalString (name != null) "-${name}";
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
   stateDirOf = name: "${config.xdg.dataHome}/claude-desktop${suffixOf name}";
+  # The app's pid in the FHS env's pid ns (see app-pid.sh), one per launcher: their tray items share the session bus
+  appPidOf = name: 100 + lib.lists.findFirstIndex (n: n == name) null ([ null ] ++ lib.attrNames cfg.launchers);
   # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
   # .out: the man output is a symlink, see storeRoots
   sandboxPackagesOf = lcfg: lcfg.path ++ [ osConfig.nix.package.out ];
@@ -260,7 +264,7 @@ let
     tray = mkOption {
       type = types.bool;
       default = false;
-      description = "Show a tray icon. Closing the window then hides the app instead of quitting it. One launcher at most.";
+      description = "Show a tray icon. Closing the window then hides the app instead of quitting it.";
     };
     extraPath = mkOption {
       type = types.listOf types.str;
@@ -408,6 +412,7 @@ let
     let
       suffix = suffixOf name;
       stateDir = stateDirOf name;
+      appPid = appPidOf name;
       bwrapHome = "${stateDir}/home";
       scratchpad = "${stateDir}/tmp-scratchpad";
       sandboxPackages = sandboxPackagesOf lcfg;
@@ -557,6 +562,16 @@ let
         };
       };
 
+      # The FHS env's runScript, see app-pid.sh
+      appPidScript = script "app-pid.sh" {
+        name = "claude-desktop-app-pid";
+        vars = {
+          APP_PID = toString appPid;
+          SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
+          SETSID = lib.getExe' pkgs.util-linux "setsid";
+        };
+      };
+
       # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
       # resolv.conf and hosts are links in its rootfs, which win over the host ones that nixpak's pasta module binds
       # (the FHS env links the rest of /etc to /.host-etc, the outer /etc). A bind onto those would fail once the host
@@ -568,7 +583,11 @@ let
           (prev.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (
             args
             // {
+              unsharePid = true;
+              runScript = "${lib.getExe appPidScript} ${args.runScript or "bash"}";
               extraBwrapArgs = args.extraBwrapArgs or [ ] ++ [
+                # For app-pid.sh, which drops it
+                "--cap-add CAP_CHECKPOINT_RESTORE"
                 "--ro-bind ${patchedAsar} ${asar}"
                 "--ro-bind ${environmentDoc} /etc/claude/environment.md"
                 # Written by bwrap-subid.sh
@@ -599,11 +618,9 @@ let
               "org.freedesktop.Notifications" = "talk";
             }
             // lib.optionalAttrs lcfg.tray {
-              # Chromium names it StatusNotifierItem-<pid>-<n>; the main process is pid 29 in the sandbox's pid ns, after
-              # bwrap, netSetup's nsenter and udhcpc, the FHS env's bwrap-subid.sh (and what it forks), bwrap and init. The VM
-              # test checks the stub's pid
+              # Chromium names it StatusNotifierItem-<pid>-<n>
               "org.kde.StatusNotifierWatcher" = "talk";
-              "org.freedesktop.StatusNotifierItem-29-1" = "own";
+              "org.freedesktop.StatusNotifierItem-${toString appPid}-1" = "own";
             };
             dbus.rules.call."org.freedesktop.portal.Desktop" = [
               "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
@@ -741,7 +758,8 @@ let
           SCRATCHPAD = scratchpad;
           RESOLV_CONF = resolvConf;
           APP_ID = sandboxed.config.flatpak.appId;
-          FHS_ENV = lib.getExe package;
+          APP_PID = toString appPid;
+          SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
           DOT_CLAUDE = hostPath ".claude";
           CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
           MCP_SERVERS = "${mcpServers}";
@@ -842,18 +860,6 @@ in
         assertion = osConfig.hardware.graphics.enable;
         message = "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
       }
-      (
-        let
-          trays = lib.attrNames (lib.filterAttrs (_: l: l.tray) ({ "" = cfg; } // cfg.launchers));
-        in
-        {
-          # Every sandbox's app is pid 29 in its own pid ns, so they'd all own the same bus name on the host's bus
-          assertion = lib.length trays <= 1;
-          message = "agent-sandbox.claude-desktop: tray is on for more than one launcher (${
-            lib.concatMapStringsSep ", " (n: if n == "" then "the default" else n) trays
-          }), but only one can own org.freedesktop.StatusNotifierItem-29-1 on the session bus";
-        }
-      )
     ]
     ++ lib.concatLists (
       lib.mapAttrsToList (

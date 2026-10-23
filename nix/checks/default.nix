@@ -172,24 +172,17 @@ let
         "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; launchers.work.sandbox must not change bubblewrap.network or pasta"
       ];
     };
+    # Each app gets a pid of its own, so their tray items don't clash on the session bus
     testLauncherTrays = {
-      expr = map (a: a.message) (
-        failedAssertions (
-          nixos (
-            enabled
-            // {
-              tray = true;
-              launchers.work.tray = true;
-            }
-          )
+      expr = failedAssertions (
+        nixos (
+          enabled
+          // {
+            tray = true;
+            launchers.work.tray = true;
+          }
         )
       );
-      expected = [
-        "agent-sandbox.claude-desktop: tray is on for more than one launcher (the default, work), but only one can own org.freedesktop.StatusNotifierItem-29-1 on the session bus"
-      ];
-    };
-    testLauncherTray = {
-      expr = failedAssertions (nixos (enabled // { launchers.work.tray = true; }));
       expected = [ ];
     };
     # Its own binds only: ~/.claude lives in its home

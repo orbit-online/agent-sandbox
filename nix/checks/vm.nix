@@ -50,9 +50,13 @@ pkgs.testers.runNixOSTest {
         (aliceModule {
           enable = true;
           package = stub;
+          tray = true;
           # Missing until the launch subtest creates it
           binds."/srv/project" = { };
-          launchers.work.package = stub;
+          launchers.work = {
+            package = stub;
+            tray = true;
+          };
         })
       ];
       virtualisation = {
@@ -168,9 +172,13 @@ pkgs.testers.runNixOSTest {
           workstation.wait_until_succeeds("test -s ${sandboxHome}/stub-app.log", timeout=300)
           workstation.succeed("test -L /home/alice/.local/share/claude-desktop/nix/var/nix/gcroots/claude-desktop")
           workstation.succeed("test -d /home/alice/.claude")
-          app_pid, app_netns, app_mntns = workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
-          # The module's tray D-Bus rule names the app's main process: StatusNotifierItem-29-1
-          assert app_pid == "29", f"the app is pid {app_pid} in the sandbox, update the tray rule"
+          app_pid, app_netns, app_mntns, app_pidns, app_caps, app_bus = (
+              workstation.succeed("cat ${sandboxHome}/stub-app.log").split()
+          )
+          # The proxy let it own the tray item's name with its pid in it, which app-pid.sh set
+          assert app_bus == "1", f"the app (pid {app_pid}) didn't get StatusNotifierItem-{app_pid}-1: {app_bus}"
+          # app-pid.sh dropped the FHS env's CAP_CHECKPOINT_RESTORE
+          assert app_caps == "0000000000000000", f"the app has capabilities {app_caps}"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
 
       with subtest("Claude Code's temp dir is bound from the host"):
@@ -247,8 +255,8 @@ pkgs.testers.runNixOSTest {
           workstation.wait_until_succeeds(f"grep -qx \"gtk-theme='Adwaita'\" {keyfile}", timeout=30)
 
       with subtest("claude:// re-entry joins the running sandbox"):
-          reentry_netns = in_sandbox("readlink /proc/self/ns/net").strip()
-          assert reentry_netns == app_netns, f"re-entry in {reentry_netns}, app in {app_netns}"
+          reentry = in_sandbox("readlink /proc/self/ns/net /proc/self/ns/pid").split()
+          assert reentry == [app_netns, app_pidns], f"re-entry in {reentry}, app in {[app_netns, app_pidns]}"
           assert len(workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()) == 1
 
       # A login shell, as the .desktop file's terminal action runs it, reading commands from stdin
@@ -288,8 +296,10 @@ pkgs.testers.runNixOSTest {
               " -- /etc/profiles/per-user/alice/bin/claude-desktop-work"
           )
           workstation.wait_until_succeeds(f"test -s {work_home}/stub-app.log", timeout=300)
-          _, work_netns, work_mntns = workstation.succeed(f"cat {work_home}/stub-app.log").split()
+          work_pid, work_netns, work_mntns, _, _, work_bus = workstation.succeed(f"cat {work_home}/stub-app.log").split()
           assert work_netns != app_netns and work_mntns != app_mntns, "work runs in the default sandbox"
+          # Its own tray item next to the default one's
+          assert work_bus == "1" and work_pid != app_pid, f"work is pid {work_pid}, the default {app_pid}: {work_bus}"
 
           def work_cmd(cmd):
               return alice_cmd(f"/etc/profiles/per-user/alice/bin/claude-desktop-work --exec {cmd}")

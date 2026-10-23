@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
 # $REQUIRED_BINDS: the sources of the binds that aren't optional
-: "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${FHS_ENV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
+: "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
 : "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
 mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE"
 # Bind source for Claude Code's temp dir, which it wants private. Its parent exists from SANDBOX_HOME's mkdir
@@ -28,19 +28,18 @@ sandbox_pid() {
   return 1
 }
 
-# The app's main process: pid 1's grandchild in a user ns its parent isn't in, which only the FHS env's bwrap makes.
+# The app's main process: the one at $APP_PID in the FHS env's pid ns, below the sandbox's (see app-pid.sh).
 # Re-entries come in through nsenter, so they aren't pid 1's descendants
 app_pid() {
-  local child children grandchild grandchildren
-  read -ra children <"/proc/$1/task/$1/children" || true
-  for child in "${children[@]}"; do
-    read -ra grandchildren <"/proc/$child/task/$child/children" 2>/dev/null || true
-    for grandchild in "${grandchildren[@]}"; do
-      if [[ ! /proc/$grandchild/ns/user -ef /proc/$child/ns/user ]]; then
-        echo "$grandchild"
-        return
-      fi
-    done
+  local queue=("$1") p children
+  while ((${#queue[@]})); do
+    p=${queue[0]} queue=("${queue[@]:1}")
+    if [[ ! /proc/$p/ns/pid -ef /proc/$1/ns/pid && $(grep -m1 '^NSpid:' "/proc/$p/status" 2>/dev/null) == *[[:space:]]"$APP_PID" ]]; then
+      echo "$p"
+      return
+    fi
+    read -ra children <"/proc/$p/task/$p/children" 2>/dev/null || true
+    queue+=("${children[@]}")
   done
   return 1
 }
@@ -69,9 +68,16 @@ if [[ ${1:-} == --shell ]]; then
     '[ -z "${TERMINFO-}" ] || [ -d "$TERMINFO" ] || { TERM=xterm-256color; unset TERMINFO; }; exec "$SHELL" -l'
 fi
 
-# Further launches (claude:// URLs) join the running sandbox, so Electron's single-instance lock finds the first instance
+# Further launches (claude:// URLs) join the running app's namespaces, its pid ns included, so Electron's
+# single-instance lock finds the first instance and checks its pid where it lives. /init is the FHS env's, which the
+# FHS env's bwrap would otherwise run, with no_new_privs as bwrap sets it
 if pid=$(sandbox_pid); then
-  exec "${env[@]}" "${nsenter[@]}" -t "$pid" "$FHS_ENV" "${args[@]}"
+  for ((i = 0; i < 30; i++)); do
+    app=$(app_pid "$pid") && break
+    sleep 1
+  done
+  [[ -n ${app:-} ]] || { echo "claude-desktop: The running sandbox has no app" >&2; exit 1; }
+  exec "${env[@]}" "${nsenter[@]}" -t "$app" "$SETPRIV" --no-new-privs /init "${args[@]}"
 fi
 
 # The app writes to this file too, so merge instead of symlinking a read-only store path
