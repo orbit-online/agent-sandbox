@@ -53,6 +53,13 @@ pkgs.testers.runNixOSTest {
           tray = true;
           # Missing until the launch subtest creates it
           binds."/srv/project" = { };
+          # Under /etc, which the FHS env doesn't take from nixpak's binds, and in the sandbox's home. Each references what
+          # the sandbox lacks otherwise
+          files =
+            pkgs.lib.genAttrs [ "/etc/agent-sandbox-test/hello" "/home/alice/.config/agent-sandbox-test/hello" ]
+              (_: {
+                source = pkgs.writeShellScript "hello" "exec ${pkgs.lib.getExe pkgs.hello}";
+              });
           launchers.work = {
             package = stub;
             tray = true;
@@ -337,6 +344,10 @@ pkgs.testers.runNixOSTest {
           hosts = in_sandbox("cat /etc/hosts")
           assert "host-only.test" not in hosts, hosts
           assert {"127.0.0.1 localhost", "127.0.0.2 workstation"} <= set(hosts.splitlines()), hosts
+
+      with subtest("A file from the store, with what it references"):
+          for d in ["/etc", "/home/alice/.config"]:
+              assert in_sandbox(f"{d}/agent-sandbox-test/hello").strip() == "Hello, world!", d
 
       with subtest("A host GC leaves the sandbox's store paths and /etc alone"):
           root = "/run/user/1000/claude-desktop/store-roots"

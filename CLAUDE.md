@@ -82,7 +82,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   icon (by the colour scheme, also on GNOME), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the scratchpad's dev bind after
-  the `/tmp` tmpfs). For `work`: its wrapper alone in `bin`, its app ID,
+  the `/tmp` tmpfs), and the `files` in the FHS env's bwrap (a directory's
+  bind before a file's in it, a disabled one left out, what a file
+  references in the closure). For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
   netns-macvlan gets, its `claude-environment.md`, and its `.desktop` file
   (name, Exec, no `claude://` handler).
@@ -118,7 +120,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   pid, its re-entry found by app ID, its state dir and GC root), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
-  service on the LAN address, loopback and a dummy interface, the
+  service on the LAN address, loopback and a dummy interface, a `files`
+  script each under `/etc` and `~/.config` running what it references, the
   `claude://` re-entry (in the app's netns and pid ns), `XDG_CURRENT_DESKTOP`
   with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and

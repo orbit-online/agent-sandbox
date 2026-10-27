@@ -226,6 +226,37 @@ let
       default = { };
       description = "Host paths mounted in the sandbox, keyed by the path in the sandbox.";
     };
+    files = mkOption {
+      type = types.attrsOf (
+        types.submodule (
+          { name, config, ... }:
+          {
+            options = {
+              enable = mkOption {
+                type = types.bool;
+                default = true;
+                description = "Mount the file.";
+              };
+              text = mkOption {
+                type = types.nullOr types.lines;
+                default = null;
+                description = "Content of the file. Sets `source`.";
+              };
+              source = mkOption {
+                type = types.path;
+                description = "File or directory. The sandbox's store gets it with everything it references.";
+              };
+            };
+            config.source = lib.mkIf (config.text != null) (
+              lib.mkDefault (pkgs.writeText (lib.strings.sanitizeDerivationName (baseNameOf name)) config.text)
+            );
+          }
+        )
+      );
+      default = { };
+      example = lib.literalExpression ''{ "/etc/foo/config.json".source = (pkgs.formats.json { }).generate "config.json" { }; }'';
+      description = "Files from the Nix store mounted read-only in the sandbox, keyed by the path in the sandbox.";
+    };
     env = mkOption {
       type =
         let
@@ -575,7 +606,8 @@ let
         };
       };
 
-      # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap.
+      # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own bwrap,
+      # as do the files: the FHS env links only some entries of the outer /etc. Being in the package, they're in storeRoots.
       # resolv.conf and hosts are links in its rootfs, which win over the host ones that nixpak's pasta module binds
       # (the FHS env links the rest of /etc to /.host-etc, the outer /etc). A bind onto those would fail once the host
       # replaced the file under it. shadow's newuidmap and newgidmap in the rootfs are the broker's shims, for tools that
@@ -596,7 +628,13 @@ let
                 # Written by bwrap-subid.sh
                 "--ro-bind-data 22 /etc/subuid"
                 "--ro-bind-data 23 /etc/subgid"
-              ];
+              ]
+              # Shallowest first, so a file in a bound directory overrides it
+              ++ map (f: "--ro-bind ${f.source} ${lib.escapeShellArg f.path}") (
+                lib.sortOn (f: lib.stringLength f.path) (
+                  lib.mapAttrsToList (path: f: f // { inherit path; }) (lib.filterAttrs (_: f: f.enable) lcfg.files)
+                )
+              );
               profile = args.profile or "" + builtins.readFile ./fhs-profile.sh;
               extraBuildCommands = args.extraBuildCommands or "" + ''
                 ln -s ${sandboxResolvConf} $out/etc/resolv.conf

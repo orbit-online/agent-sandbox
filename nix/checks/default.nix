@@ -51,6 +51,14 @@ let
       # A module default, overridden by its sandbox path
       "/home/alice/.claude".src = "/srv/claude";
     };
+    files = {
+      "/etc/agent-sandbox-test/hello".text = lib.getExe pkgs.hello;
+      "/etc/agent-sandbox-test".source = pkgs.writeTextDir "other" "";
+      "/srv/off" = {
+        enable = false;
+        text = "off";
+      };
+    };
     launchers.work.binds."/srv/work".rw = true;
   };
   system = nixos enabled;
@@ -292,6 +300,16 @@ in
           jq -e '. as $a | (index("--tmpfs") + 1) as $t | any(range($t; length); $a[.:. + 3] == ["--dev-bind-try",
             "/home/alice/.local/share/claude-desktop/tmp-scratchpad", {type: "concat", a: "/tmp/claude-", b: {type: "uid"}}])' \
             <"$args" >/dev/null || { echo "bwrap args lack the scratchpad bind after the /tmp tmpfs" >&2; exit 1; }
+
+          # The files, in the FHS env's bwrap, the directory before the file in it. What they reference is in the closure
+          fhs=$(grep -P -- '-claude-desktop-[^/]+-bwrap$' "$paths")
+          dir=$(grep -nP -- '^\s*--ro-bind /nix/store/[^/ ]+-other /etc/agent-sandbox-test$' "$fhs") || { echo "the FHS env lacks the directory's bind" >&2; exit 1; }
+          file=$(grep -nP -- '^\s*--ro-bind /nix/store/[^/ ]+-hello /etc/agent-sandbox-test/hello$' "$fhs") || { echo "the FHS env lacks the file's bind" >&2; exit 1; }
+          (( ''${dir%%:*} < ''${file%%:*} )) || { echo "the file's bind comes before its directory's" >&2; exit 1; }
+          hello=$(<"$(grep -oP -- '--ro-bind \K\S+' <<<"$file")")
+          [[ $hello == ${lib.getExe pkgs.hello} ]] || { echo "the file holds $hello" >&2; exit 1; }
+          grep -qxF -- "${pkgs.hello}" "$paths" || { echo "what the file references is not in the closure" >&2; exit 1; }
+          ! grep -qF /srv/off "$fhs" || { echo "the FHS env binds the disabled file" >&2; exit 1; }
 
           # The work launcher: its own state dir, app ID and MAC, ~/.claude in its home, its own .desktop file
           [[ $(ls $work/bin) == claude-desktop-work ]] || { echo "work has more than its wrapper: $(ls $work/bin)" >&2; exit 1; }
