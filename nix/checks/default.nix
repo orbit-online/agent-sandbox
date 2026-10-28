@@ -64,6 +64,25 @@ let
   system = nixos enabled;
   alice = system.config.home-manager.users.alice;
   failedAssertions = sys: lib.filter (a: !a.assertion) sys.config.home-manager.users.alice.assertions;
+  # alice's programs.mcp set to `mcp`
+  withMcp =
+    mcp:
+    (system.extendModules { modules = [ { home-manager.users.alice.programs.mcp = mcp; } ]; })
+    .config.home-manager.users.alice;
+  aliceMcp = withMcp {
+    enable = true;
+    servers = {
+      plain.command = "/srv/bin/plain";
+      secret = {
+        command = "/srv/bin/secret";
+        env.TOKEN.file = "/run/secrets/token";
+      };
+      off = {
+        command = "/srv/bin/off";
+        enabled = false;
+      };
+    };
+  };
   # alice in a group of her own, not in users
   ownGroup = system.extendModules {
     modules = [
@@ -205,6 +224,64 @@ let
         "/srv/docs"
         "/srv/project"
       ];
+    };
+    # The sandbox's own, then programs.mcp.servers, in every launcher. Disabled ones left out
+    testMcpServers = {
+      expr = map (l: lib.attrNames l.mcpServers) [
+        aliceMcp.agent-sandbox.claude-desktop
+        aliceMcp.agent-sandbox.claude-desktop.launchers.work
+      ];
+      expected = lib.replicate 2 [
+        "claude-code"
+        "filesystem"
+        "plain"
+        "secret"
+      ];
+    };
+    testMcpServersHmTransform = {
+      expr =
+        let
+          s = aliceMcp.agent-sandbox.claude-desktop.mcpServers;
+        in
+        {
+          inherit (s) plain;
+          secretWrapped = s.secret.command != "/srv/bin/secret" && !(s.secret ? env);
+        };
+      expected = {
+        plain.command = "/srv/bin/plain";
+        secretWrapped = true;
+      };
+    };
+    testMcpServersNeedMcpEnable = {
+      expr =
+        lib.attrNames
+          (withMcp { servers.plain.command = "/srv/bin/plain"; }).agent-sandbox.claude-desktop.mcpServers;
+      expected = [
+        "claude-code"
+        "filesystem"
+      ];
+    };
+    testMcpServersAssertion = {
+      expr = map (a: a.message) (
+        lib.filter (a: !a.assertion)
+          (withMcp {
+            enable = true;
+            servers = {
+              remote.url = "https://example.com/mcp";
+              filesystem.command = "/srv/bin/fs";
+            };
+          }).assertions
+      );
+      expected =
+        map
+          (
+            n:
+            "agent-sandbox.claude-desktop: programs.mcp.servers.${n} must be a local server (command) and not named filesystem or claude-code, which are the sandbox's own"
+          )
+          [
+            "filesystem"
+            "remote"
+          ];
     };
   };
 in

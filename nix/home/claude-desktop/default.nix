@@ -165,6 +165,20 @@ let
   # The Bash tool sources CLAUDE_ENV_FILE before each command. The Code tab gets this from the SessionStart hook,
   # which claude mcp serve does not run. Drops the snapshot's ugrep/bfs shadows of grep and find
   bashEnv = pkgs.writeText "claude-bash-env" "unset -f grep find 2>/dev/null\n";
+  # programs.mcp.servers as Home Manager's own clients take them, env files through a wrapper. Disabled ones left out
+  hmMcpServers = lib.optionalAttrs config.programs.mcp.enable (
+    lib.mapAttrs (_: s: removeAttrs s [ "enabled" ]) (
+      lib.filterAttrs (_: s: s.enabled or true) (
+        lib.mapAttrs (
+          name: server:
+          lib.hm.mcp.transformMcpServer {
+            inherit server;
+            extraTransforms = [ (lib.hm.mcp.wrapEnvFilesCommand { inherit pkgs name; }) ];
+          }
+        ) config.programs.mcp.servers
+      )
+    )
+  );
 
   # Options of the default launcher and each named one, lcfg being its settings
   launcherOptions = lcfg: {
@@ -330,29 +344,23 @@ let
       description = "Packages on PATH for the app, its Code tab shells and the local MCP servers.";
     };
     mcpServers = mkOption {
-      type = types.attrsOf (
-        types.submodule {
-          freeformType = (pkgs.formats.json { }).type;
-          options = {
-            command = mkOption {
-              type = types.str;
-              description = "Executable to spawn.";
-            };
-            args = mkOption {
-              type = types.listOf types.str;
-              default = [ ];
-              description = "Arguments to the command.";
-            };
-            env = mkOption {
-              type = types.attrsOf types.str;
-              default = { };
-              description = "Environment variables for the server.";
-            };
-          };
-        }
-      );
-      description = "Local MCP servers, replacing `mcpServers` in claude_desktop_config.json on launch.";
-      default = {
+      type = types.attrsOf (pkgs.formats.json { }).type;
+      readOnly = true;
+      description = "Local MCP servers the app gets, replacing `mcpServers` in claude_desktop_config.json on launch: the sandbox's `filesystem` and `claude-code`, and `programs.mcp.servers`.";
+    };
+  };
+
+  # What every launcher's env and binds start with
+  launcherDefaults =
+    name: lcfg:
+    let
+      stateDir = stateDirOf name;
+      sys = {
+        mcp = false;
+      };
+    in
+    {
+      mcpServers = {
         filesystem = {
           command = lib.getExe (
             script "mcp-server-filesystem.sh" {
@@ -374,20 +382,8 @@ let
             NIX_CONF_DIR = "${nixConf}";
           };
         };
-      };
-    };
-  };
-
-  # What every launcher's env and binds start with
-  launcherDefaults =
-    name: lcfg:
-    let
-      stateDir = stateDirOf name;
-      sys = {
-        mcp = false;
-      };
-    in
-    {
+      }
+      // hmMcpServers;
       env =
         lib.genAttrs [
           "HOME"
@@ -902,6 +898,15 @@ in
         message = "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
       }
     ]
+    ++ lib.mapAttrsToList (name: s: {
+      assertion =
+        s.command or null != null
+        && !lib.elem name [
+          "filesystem"
+          "claude-code"
+        ];
+      message = "agent-sandbox.claude-desktop: programs.mcp.servers.${name} must be a local server (command) and not named filesystem or claude-code, which are the sandbox's own";
+    }) hmMcpServers
     ++ lib.concatLists (
       lib.mapAttrsToList (
         name: l:

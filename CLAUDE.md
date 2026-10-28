@@ -72,7 +72,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
   name and per-launcher netns assertions, a tray on two launchers at once,
-  and a launcher's MCP roots without `~/.claude`. The test system imports both modules twice and has a launcher
+  a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
+  every launcher's MCP servers (disabled ones out, env files wrapped, none
+  without `programs.mcp.enable`, the assertion on remote servers and the
+  sandbox's names). The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks

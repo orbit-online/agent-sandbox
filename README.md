@@ -49,9 +49,18 @@ to be in it. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
 Other options: `extraPath` (directories ahead of the PATH packages),
 `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
-(appended to it), `env`, `path`, `mcpServers`, `kvm`, `audio`, `tray` and
-`sandbox` (extra nixpak configuration). The descriptions are in
+(appended to it), `env`, `path`, `kvm`, `audio`, `tray` and `sandbox` (extra
+nixpak configuration). The descriptions are in
 [`default.nix`](nix/home/claude-desktop/default.nix).
+
+## MCP servers
+
+The app gets the sandbox's own two (`filesystem` for the binds with `mcp`, and
+`claude-code`) and Home Manager's
+[`programs.mcp.servers`](https://nix-community.github.io/home-manager/options.xhtml#opt-programs.mcp.servers)
+when `programs.mcp.enable` is on, in every launcher. They run inside the
+sandbox, so what a server needs from the host (a socket directory, its config
+file) goes in `binds` or `files`. Only local servers (`command`) work.
 
 ## Shell in the sandbox
 
