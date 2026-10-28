@@ -22,6 +22,7 @@
   pkgs,
   lib,
   config,
+  options,
   osConfig,
   ...
 }:
@@ -165,6 +166,32 @@ let
   # The Bash tool sources CLAUDE_ENV_FILE before each command. The Code tab gets this from the SessionStart hook,
   # which claude mcp serve does not run. Drops the snapshot's ugrep/bfs shadows of grep and find
   bashEnv = pkgs.writeText "claude-bash-env" "unset -f grep find 2>/dev/null\n";
+  # environment.md split by its markers (see environment-split.sh): all of it, the part every session needs, and the
+  # rest as a memo store
+  environment =
+    pkgs.runCommand "claude-desktop-environment"
+      {
+        nativeBuildInputs = [ pkgs.gawk ];
+        SRC = ./environment.md;
+        NAME = "agent-sandbox/claude-desktop";
+        DESCRIPTION = "The Claude Desktop sandbox you run in: its home, its user namespaces and its Nix store.";
+      }
+      "source ${./environment-split.sh}";
+  # Home Manager's memo, when imported
+  memoCfg = config.programs.agent-memos or { };
+  # memo's config with the sandbox's store right after the embedded ones. The host's config can't list it: memo
+  # reports a missing store on every call
+  memoConfig =
+    let
+      stores = memoCfg.settings.stores or [ ];
+      embeds = lib.length (memoCfg.embeds or [ ]);
+    in
+    (pkgs.formats.yaml { }).generate "agent-memos-config.yaml" (
+      memoCfg.settings or { }
+      // {
+        stores = lib.take embeds stores ++ [ "/etc/claude/environment.memo" ] ++ lib.drop embeds stores;
+      }
+    );
   # programs.mcp.servers as Home Manager's own clients take them, env files through a wrapper. Disabled ones left out
   hmMcpServers = lib.optionalAttrs config.programs.mcp.enable (
     lib.mapAttrs (_: s: removeAttrs s [ "enabled" ]) (
@@ -192,9 +219,18 @@ let
     };
     environmentFile = mkOption {
       type = types.path;
-      default = ./environment.md;
-      defaultText = lib.literalExpression "./environment.md";
+      default = "${environment}/${lib.optionalString lcfg.memo.enable "core-"}environment.md";
+      defaultText = lib.literalMD "`environment.md`, with `memo.enable` only the sections every session needs";
       description = "What Claude in the sandbox knows about it, imported by `/etc/claude/environment.md`. Replace it to describe a consumer's own setup.";
+    };
+    memo.enable = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Give the sandbox Home Manager's memo (`programs.agent-memos`): its package on PATH, and its config with the
+        sandbox's own store, `/etc/claude/environment.memo`, right after the embedded stores. That store holds the
+        sections of `environment.md` that load by topic, and `environmentFile` keeps the rest.
+      '';
     };
     environmentText = mkOption {
       type = types.lines;
@@ -434,6 +470,11 @@ let
         };
       }
       // lib.genAttrs (map (e: "/etc/${e}") hostEtc) (_: sys // { optional = true; });
+      path = lib.mkIf lcfg.memo.enable (lib.mkOptionDefault [ memoCfg.package ]);
+      files = lib.mkIf lcfg.memo.enable {
+        "${config.home.homeDirectory}/.config/agent-memos/config.yaml".source = memoConfig;
+        "/etc/claude/environment.memo".source = "${environment}/environment.memo";
+      };
     };
 
   # What one launcher builds from its settings, lcfg. name is null for the default launcher
@@ -922,6 +963,12 @@ in
             message = "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; ${opt} must not change bubblewrap.network or pasta";
           }
         ]
+        ++ lib.optional (if name == "" then cfg else cfg.launchers.${name}).memo.enable {
+          assertion = options ? programs.agent-memos.package && memoCfg.enable;
+          message = "agent-sandbox.claude-desktop: ${
+            if name == "" then "memo.enable" else "launchers.${name}.memo.enable"
+          } needs Home Manager's memo: import agent-memos' module and set programs.agent-memos.enable";
+        }
         ++ lib.optional (name != "") {
           # File names, the app ID and the .desktop file's Name take it as is
           assertion = builtins.match "[a-z][a-z0-9-]*" name != null;

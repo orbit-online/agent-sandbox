@@ -98,7 +98,50 @@ let
       p: p.name == "claude-desktop-sandboxed"
     ) null sys.config.home-manager.users.alice.home.packages;
   sandboxed = sandboxedOf system;
-  work = lib.findFirst (p: p.name == "claude-desktop-work-sandboxed") null alice.home.packages;
+  # A stand-in for agent-memos' Home Manager module, with the options this module reads
+  memoStub =
+    { lib, ... }:
+    {
+      options.programs.agent-memos = {
+        enable = lib.mkEnableOption "memo";
+        package = lib.mkOption {
+          type = lib.types.package;
+          default = pkgs.hello;
+        };
+        embeds = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [
+            "core"
+            "docs"
+          ];
+        };
+        settings = lib.mkOption {
+          inherit ((pkgs.formats.yaml { })) type;
+          default = { };
+        };
+      };
+    };
+  # alice with memo, given to the work launcher
+  aliceMemo =
+    (system.extendModules {
+      modules = [
+        {
+          home-manager.users.alice = {
+            imports = [ memoStub ];
+            programs.agent-memos = {
+              enable = true;
+              settings.stores = [
+                "embed:core"
+                "embed:docs"
+                "/srv/team.memo"
+              ];
+            };
+            agent-sandbox.claude-desktop.launchers.work.memo.enable = true;
+          };
+        }
+      ];
+    }).config.home-manager.users.alice;
+  work = lib.findFirst (p: p.name == "claude-desktop-work-sandboxed") null aliceMemo.home.packages;
   # Another environmentFile, the rest as in enabled
   customDoc = sandboxedOf (
     nixos (enabled // { environmentFile = pkgs.writeText "custom-environment.md" "custom"; })
@@ -109,6 +152,50 @@ let
     testAssertionsHold = {
       expr = failedAssertions system;
       expected = [ ];
+    };
+    testMemoAssertionsHold = {
+      expr = lib.filter (a: !a.assertion) aliceMemo.assertions;
+      expected = [ ];
+    };
+    testMemoAssertion = {
+      expr = map (a: a.message) (failedAssertions (nixos (enabled // { memo.enable = true; })));
+      expected = [
+        "agent-sandbox.claude-desktop: memo.enable needs Home Manager's memo: import agent-memos' module and set programs.agent-memos.enable"
+      ];
+    };
+    # The work launcher gets memo's package, its config and the sandbox's store, and the part of environment.md every
+    # session needs. The default launcher none of it
+    testMemo = {
+      expr =
+        map
+          (l: {
+            files = lib.attrNames l.files;
+            hello = lib.elem pkgs.hello l.path;
+            environmentFile = baseNameOf l.environmentFile;
+          })
+          [
+            aliceMemo.agent-sandbox.claude-desktop
+            aliceMemo.agent-sandbox.claude-desktop.launchers.work
+          ];
+      expected = [
+        {
+          files = [
+            "/etc/agent-sandbox-test"
+            "/etc/agent-sandbox-test/hello"
+            "/srv/off"
+          ];
+          hello = false;
+          environmentFile = "environment.md";
+        }
+        {
+          files = [
+            "/etc/claude/environment.memo"
+            "/home/alice/.config/agent-memos/config.yaml"
+          ];
+          hello = true;
+          environmentFile = "core-environment.md";
+        }
+      ];
     };
     testWrapper = {
       expr = {
@@ -333,10 +420,12 @@ in
         ''
           paths=$closure/store-paths
           doc=$(grep -- '-claude-environment\.md$' "$paths")
-          # The static part is linked, so the sandbox needs it in its store
-          import=$(grep -oxP '@\K/nix/store/[^/]+-environment\.md' "$doc") || { echo "environment.md lacks the import" >&2; exit 1; }
-          grep -qxF -- "$import" "$paths" || { echo "$import is not in the closure" >&2; exit 1; }
+          # The static part is linked, so the sandbox needs it in its store. All of it without memo, markers dropped
+          import=$(grep -oxP '@\K/nix/store/[^/]+-claude-desktop-environment/environment\.md' "$doc") || { echo "environment.md lacks the import" >&2; exit 1; }
+          grep -qxF -- "''${import%/*}" "$paths" || { echo "$import is not in the closure" >&2; exit 1; }
           grep -qxF '# Your environment: the Claude Desktop sandbox' "$import" || { echo "$import is not the module's environment.md" >&2; exit 1; }
+          grep -qxF '## Nix' "$import" || { echo "$import lacks the sections memo would load" >&2; exit 1; }
+          ! grep -qF '<!-- memo' "$import" || { echo "$import keeps the memo markers" >&2; exit 1; }
           custom=$(grep -- '-claude-environment\.md$' "$customClosure/store-paths")
           grep -qxP '@/nix/store/[^/]+-custom-environment\.md' "$custom" || { echo "environmentFile is not imported" >&2; exit 1; }
           for line in \
@@ -409,6 +498,20 @@ in
             grep -qxF -- "$line" "$doc" || { echo "work's environment.md lacks: $line" >&2; exit 1; }
           done
           ! grep -qF -e /srv/project -e /home/alice/.claude "$doc" || { echo "work's environment.md has the default launcher's binds" >&2; exit 1; }
+          # work has memo: the part every session needs, the rest in the store, memo's config with the store after the
+          # embedded ones
+          import=$(grep -oxP '@\K/nix/store/[^/]+-claude-desktop-environment/core-environment\.md' "$doc") || { echo "work's environment.md lacks the core import" >&2; exit 1; }
+          ! grep -qxF -e '## Nix' -e '## Home' "$import" || { echo "$import has the sections memo loads" >&2; exit 1; }
+          grep -qF 'More loads through memo when the work touches it: Home (`topic=sandbox`)' "$import" || { echo "$import lacks the pointer to memo" >&2; exit 1; }
+          fhs=$(grep -P -- '-claude-desktop-[^/]+-bwrap$' "$workClosure/store-paths")
+          store=$(grep -oP -- '--ro-bind \K\S+(?= /etc/claude/environment\.memo$)' "$fhs") || { echo "work's FHS env lacks the store's bind" >&2; exit 1; }
+          for line in '-- nix/pragmas --' 'filter=topic={nix,sandbox}' 'topic=sandbox # The sandbox you run in: its home, what survives a restart, its namespaces'; do
+            grep -qxF -- "$line" "$store" || { echo "$store lacks: $line" >&2; exit 1; }
+          done
+          memo=$(grep -oP -- '--ro-bind \K\S+(?= /home/alice/\.config/agent-memos/config\.yaml$)' "$fhs") || { echo "work's FHS env lacks memo's config" >&2; exit 1; }
+          stores=$(grep '^- ' "$memo" | tr '\n' ' ')
+          [[ $stores == '- embed:core - embed:docs - /etc/claude/environment.memo - /srv/team.memo ' ]] ||
+            { echo "memo's stores in the sandbox: $stores" >&2; exit 1; }
           d=$work/share/applications/claude-desktop-work.desktop
           for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Name=New shell'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }

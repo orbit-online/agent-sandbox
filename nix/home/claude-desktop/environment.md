@@ -9,12 +9,16 @@ configured. If something here could work better for you, suggest a change to
 the module; widening the sandbox (binds, D-Bus rules, sockets, env, tokens)
 always needs the user's go first.
 
+<!-- memo-doc: topic=sandbox # The sandbox you run in: its home, what survives a restart, its namespaces -->
+<!-- memo-doc: topic=nix # Nix: building, running and installing packages, the Nix store -->
+<!-- memo-doc: topic=containers # Containers and user namespaces: podman, unshare, subordinate ids -->
+
 ## First startup
 
 Two maintenance scripts come with the sandbox, on PATH. Nothing runs them on
 its own:
 
-- `claude-desktop-store-gc`: collects the sandbox's Nix store (see Nix below)
+- `claude-desktop-store-gc`: collects the sandbox's Nix store (see Nix)
   when the launcher has moved its GC root or the last run is a week old.
   Otherwise it exits right away.
 - `claude-desktop-scratchpad-prune`: removes session scratchpads with nothing
@@ -25,6 +29,7 @@ once to add one. It should start both detached (`setsid -f`, output to a log
 file), since a GC can take minutes and the session waits for its hooks.
 
 ## Home
+<!-- memo: topic=sandbox -->
 
 The user can run several of these sandboxes side by side, each from its own
 launcher with a state dir of its own on the host:
@@ -57,6 +62,7 @@ why, and the user adds it. `/proc/self/mountinfo` shows the live set.
 - No SSH agent and no `~/.ssh`.
 
 ## User namespaces
+<!-- memo: topic={containers,sandbox} -->
 
 Your userns has 65536 ids, the user's subuid and subgid range on the host,
 with your own uid and gid kept as themselves, so rootless tools (podman,
@@ -75,6 +81,7 @@ remove it.
   user to rebuild.
 
 ## Nix
+<!-- memo: topic={nix,sandbox} -->
 
 A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`. No
 daemon, substitutes from cache.nixos.org only. The launcher copies the app's

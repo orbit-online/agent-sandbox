@@ -12,8 +12,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   launcher; `launchers.<name>` adds sandboxes next to it with the same
   options, each built by `launcher` from the module's defaults alone, with its
   own state dir, app ID, MAC and `claude-desktop-<name>`. Then
-  `environment.md`, the default `environmentFile`, which `/etc/claude/environment.md` in the sandbox
-  imports, and the module's scripts (`*.sh`; `store-gc.sh` and
+  `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
+  `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
+  `<!-- memo: FILTER -->` marker, the marked ones going into the memo store `/etc/claude/environment.memo`
+  (`<!-- memo-doc: ... -->` lines document its values). Then the module's scripts (`*.sh`; `store-gc.sh` and
   `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks). `default.nix` loads them with its `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
   with `: "${VAR:?}"` at the top.
@@ -46,7 +48,9 @@ twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
   share the host's; the module asserts it.
 - Gates and per-user opt-in live in the consumers.
 - `environment.md` is what Claude inside the sandbox knows about it, and
-  stays generic: consumers replace it with `environmentFile`. Change it in
+  stays generic: consumers replace it with `environmentFile`. A section only
+  some work needs gets a memo marker; one every session needs stays unmarked.
+  Change it in
   the same commit as the behaviour it describes, and tell the user when a
   consumer's own copy needs the same change.
 - Maintenance runs (store GC, scratchpad prune) are the user's: the module
@@ -66,7 +70,9 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `claude-desktop-eval`: nix-unit runs the flake's `tests` output, with every
   input passed in from the store. Run them directly with `nix run
   --inputs-from . nixpkgs#nix-unit -- --flake .#tests.x86_64-linux`. They
-  check that the assertions hold, the NixOS wrapper appears only when a user
+  check that the assertions hold (with memo too), the memo assertion, the
+  files, package and `environmentFile` a launcher with `memo.enable` gets
+  (and the default launcher doesn't), the NixOS wrapper appears only when a user
   enables the module, for group users, the users-group, subid and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
@@ -79,8 +85,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
-  its closure: the import of `environment.md` (in the closure) and of
-  another `environmentFile`, the binds (with their `src`), the scratchpad,
+  its closure: the import of `environment.md` (in the closure, all
+  sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
   `/dev/kvm` and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
@@ -89,7 +95,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   bind before a file's in it, a disabled one left out, what a file
   references in the closure). For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
-  netns-macvlan gets, its `claude-environment.md`, and its `.desktop` file
+  netns-macvlan gets, its `claude-environment.md` (with memo: the core
+  import, its pointer to memo, the store and memo's config in the FHS env,
+  the store right after the embedded ones), and its `.desktop` file
   (name, Exec, no `claude://` handler).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
