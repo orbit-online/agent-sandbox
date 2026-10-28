@@ -15,7 +15,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
   `<!-- memo: FILTER -->` marker, the marked ones going into the memo store `/etc/claude/environment.memo`
-  (`<!-- memo-doc: ... -->` lines document its values). Then the module's scripts (`*.sh`; `store-gc.sh` and
+  (`<!-- memo-doc: ... -->` lines document its values). The store also injects `environment`, the frontmatter's name
+  for the environment. Then the module's scripts (`*.sh`; `store-gc.sh` and
   `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks). `default.nix` loads them with its `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
   with `: "${VAR:?}"` at the top.

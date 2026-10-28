@@ -2,11 +2,12 @@
 # Splits environment.md by its markers into $out/environment.md (all of it, for consumers without memo),
 # $out/core-environment.md (the sections every session needs, for those with memo) and $out/environment.memo
 # (the rest, a memo store). `<!-- memo: FILTER -->` under a `## ` heading moves that section into the store as a memo
-# with that filter; `<!-- memo-doc: ATTRIBUTE=VALUE # TEXT -->` documents a value in the store
-: "${SRC:?}" "${NAME:?}" "${DESCRIPTION:?}" "${out:?}"
+# with that filter; `<!-- memo-doc: ATTRIBUTE=VALUE # TEXT -->` documents a value in the store. The store injects
+# `environment=$ENVIRONMENT`, the name in /etc/claude/environment.md's frontmatter
+: "${SRC:?}" "${NAME:?}" "${DESCRIPTION:?}" "${ENVIRONMENT:?}" "${out:?}"
 
 mkdir -p "$out"
-awk -v out="$out" -v name="$NAME" -v description="$DESCRIPTION" '
+awk -v out="$out" -v name="$NAME" -v description="$DESCRIPTION" -v environment="$ENVIRONMENT" '
   function flush(  slug) {
     if (filter == "") return
     slug = tolower(heading)
@@ -49,6 +50,8 @@ awk -v out="$out" -v name="$NAME" -v description="$DESCRIPTION" '
     printf "%s", full > (out "/environment.md")
     sub(/\n+$/, "\n", core)
     printf "%s\nMore loads through memo when the work touches it: %s.\n", core, pointer > (out "/core-environment.md")
-    printf "-- store/properties --\nversion=1.0\nname=%s\ndescription=%s\n-- store/docs --\n%s%s", name, description, docs, memos > (out "/environment.memo")
+    printf "-- store/properties --\nversion=1.0\nname=%s\ndescription=%s\n-- store/types --\nenvironment=string\n", name, description > (out "/environment.memo")
+    printf "-- store/docs --\nenvironment # The environment the agent runs in\n%s", docs > (out "/environment.memo")
+    printf "-- store/values/dynamic --\nunix=environment\n-- store/bin/environment --\n#!/bin/sh\necho environment=%s\n%s", environment, memos > (out "/environment.memo")
   }
 ' "$SRC"

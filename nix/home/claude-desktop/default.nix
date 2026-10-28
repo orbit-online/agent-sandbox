@@ -175,6 +175,8 @@ let
         SRC = ./environment.md;
         NAME = "agent-sandbox/claude-desktop";
         DESCRIPTION = "The Claude Desktop sandbox you run in: its home, its user namespaces and its Nix store.";
+        # As in environmentDoc's frontmatter
+        ENVIRONMENT = "bwrap";
       }
       "source ${./environment-split.sh}";
   # Home Manager's memo, when imported
