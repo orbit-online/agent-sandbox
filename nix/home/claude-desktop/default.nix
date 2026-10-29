@@ -344,6 +344,19 @@ let
       default = false;
       description = "Mount `/dev/kvm`, for VMs and NixOS tests in the sandbox. Exposes the host kernel's KVM interface: a KVM bug is a way out of the sandbox.";
     };
+    devices = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [
+        "/dev/nvidiactl"
+        "/dev/nvidia0"
+        "/dev/nvidia-modeset"
+      ];
+      description = ''
+        Device nodes mounted in the sandbox, each only if it exists on the host at launch. No globs. Exposes the
+        driver's ioctl interface: a driver bug is a way out of the sandbox.
+      '';
+    };
     tray = mkOption {
       type = types.bool;
       default = false;
@@ -606,6 +619,8 @@ let
             )
           );
 
+      devices = lib.unique (lib.optional lcfg.kvm "/dev/kvm" ++ lcfg.devices);
+
       asar = "${lcfg.package.unwrapped}/lib/claude-desktop/resources/app.asar";
       patchedAsar = pkgs.runCommand "claude-desktop-app.asar" {
         nativeBuildInputs = [
@@ -737,7 +752,7 @@ let
                   (sloth.concat' "/tmp/claude-" sloth.uid)
                 ]
               ]
-              ++ lib.optional lcfg.kvm "/dev/kvm";
+              ++ devices;
               bind.ro =
                 binds false
                 ++ etcBinds
@@ -793,7 +808,7 @@ let
               )
             )
         }- `/tmp/claude-<uid>` (rw, from `${scratchpad}`): Claude Code's temp dir with the session scratchpads
-        ${lib.optionalString lcfg.kvm "- `/dev/kvm` (dev)\n"}
+        ${lib.concatMapStrings (d: "- `${d}` (dev, if present)\n") devices}
         ## PATH
 
         ${lib.concatMapStrings (d: "`${d}`, then ") lcfg.extraPath}the packages

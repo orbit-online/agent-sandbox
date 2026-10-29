@@ -88,10 +88,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure, all
   sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
-  `/dev/kvm` and PATH in `claude-environment.md`, the patched asar's tray
+  the devices (`/dev/kvm` once, from `kvm` and `devices`) and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
-  default overridden by its sandbox path, the scratchpad's dev bind after
+  default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
   the `/tmp` tmpfs), and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
   references in the closure). For `work`: its wrapper alone in `bin`, its app ID,

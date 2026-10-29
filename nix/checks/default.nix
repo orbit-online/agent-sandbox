@@ -43,6 +43,11 @@ let
   enabled = {
     enable = true;
     kvm = true;
+    # /dev/kvm again, listed and bound once
+    devices = [
+      "/dev/nvidiactl"
+      "/dev/kvm"
+    ];
     extraPath = [ "/srv/bin" ];
     binds = {
       "/srv/project".rw = true;
@@ -434,10 +439,12 @@ in
             '- `/home/alice/.claude` (rw, MCP, from `/srv/claude`)' \
             '- `/nix` (rw, from `/home/alice/.local/share/claude-desktop/nix`)' \
             '- `/tmp/claude-<uid>` (rw, from `/home/alice/.local/share/claude-desktop/tmp-scratchpad`): Claude Code'"'"'s temp dir with the session scratchpads' \
-            '- `/dev/kvm` (dev)' \
+            '- `/dev/kvm` (dev, if present)' \
+            '- `/dev/nvidiactl` (dev, if present)' \
             '`/srv/bin`, then the packages'; do
             grep -qxF -- "$line" "$doc" || { echo "environment.md lacks: $line" >&2; exit 1; }
           done
+          (( $(grep -cF '`/dev/kvm`' "$doc") == 1 )) || { echo "environment.md lists /dev/kvm twice" >&2; exit 1; }
           ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
           grep -qE '^coreutils, .*, nix\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
 
@@ -461,6 +468,8 @@ in
           need --bind-try /home/alice/.local/share/claude-desktop/nix /nix
           need --bind-try /srv/claude /home/alice/.claude
           need --dev-bind-try /dev/kvm /dev/kvm
+          need --dev-bind-try /dev/nvidiactl /dev/nvidiactl
+          (( $(jq '[.[] | select(. == "/dev/kvm")] | length' "$args") == 2 )) || { echo "bwrap args bind /dev/kvm twice" >&2; exit 1; }
           # After the /tmp tmpfs, the uid filled in by nixpak's launcher
           has --tmpfs /tmp || { echo "bwrap args lack the /tmp tmpfs" >&2; exit 1; }
           jq -e '. as $a | (index("--tmpfs") + 1) as $t | any(range($t; length); $a[.:. + 3] == ["--dev-bind-try",

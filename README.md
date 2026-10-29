@@ -49,7 +49,7 @@ to be in it. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
 Other options: `extraPath` (directories ahead of the PATH packages),
 `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
-(appended to it), `env`, `path`, `kvm`, `audio`, `tray` and `sandbox` (extra
+(appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray` and `sandbox` (extra
 nixpak configuration). The descriptions are in
 [`default.nix`](nix/home/claude-desktop/default.nix).
 
