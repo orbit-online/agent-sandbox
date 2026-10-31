@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,7 +54,7 @@ func (b *broker) validity(c *capability, g *grant) time.Duration {
 
 // grant makes a grant live: delivers type A and ties it to its lease
 func (b *broker) grant(c *capability, params json.RawMessage, summary, lease string, sess *session) (*grant, error) {
-	unlock, err := c.exclusiveLock(b.cfg.Launcher, params)
+	unlock, err := c.exclusiveLock(context.Background(), b.cfg.Launcher, params)
 	if err != nil {
 		return nil, err
 	}

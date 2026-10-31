@@ -145,7 +145,7 @@ assert P12replayIsStoreUnderCeiling {
   always all l: Launcher | start[l] implies
     { c: Capability, p: Param | some g: Live' & gl.l | g.gcap = c and g.gparams = p }
     = { c: Capability, p: Param | p in l.stored[c] and passes[c, p] and c.dtype != TypeB
-        and (c.dtype = TypeC implies l in SharedDir) and (c in Exclusive implies no p.(c.lockFile) - l) }
+        and (c.dtype = TypeC implies l in SharedDir) and (c in Exclusive implies no p.(c.matches).(c.lockFile) - l) }
 }
 check P12replayIsStoreUnderCeiling for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..4 steps expect 0
@@ -178,7 +178,7 @@ check P12forgetEndsAlways for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param
   1 Session, 3 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
 // P13. Two launchers never hold the same exclusive parameters at once
-// (exclusiveLock's O_EXCL file, plugins.go:369-392; a crashed daemon's
+// (exclusiveLock's O_EXCL files, instances.go; a crashed daemon's
 // stay until its cleanup).
 // Revert: exclusiveLockFree true: counterexample.
 assert P13exclusiveByParams {
@@ -192,15 +192,14 @@ run P13twoLaunchers {
   1 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..7 steps expect 1
 
 // P13 as the README states it: an exclusive instance (what `list`
-// prints) at most one launcher at a time. Known, latent: the lock is
-// named by all the parameters' hash, while a request matches an instance
-// when the instance's keys agree (inList, plugins.go:334-365). A
-// capability with a parameter `list` doesn't print (a mode, a read-only
-// flag) lets two launchers take one VM with different values of it.
-// windows-vm's manifest decides whether this is live.
+// prints) at most one launcher at a time. The lock is on each instance
+// the parameters match (instances.go). Holds. Revert: the lock named by
+// all the parameters' hash (as before the fix): a parameter `list`
+// doesn't print (a mode, a read-only flag) lets two launchers take one
+// VM with different values of it (counterexample found).
 assert P13exclusiveByInstance {
   always all disj g, h: Live | (g.gcap = h.gcap and g.gcap in Exclusive and g.gl != h.gl)
     implies no g.gparams.(g.gcap.matches) & h.gparams.(h.gcap.matches)
 }
 check P13exclusiveByInstance for 3 but 0 Process, 2 Launcher, 1 Capability, 2 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 1
+  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 0

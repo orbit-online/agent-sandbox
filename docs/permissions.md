@@ -228,7 +228,9 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
   refuses every request. `list` runs again when the user answers and when an `always` grant is replayed, so an
   instance gone by then (a VM shut down) isn't granted. Type C requests may name a folder below a listed root, so `sources` decide there.
 - `exclusive` (optional): an instance may be granted to one launcher at a time (a VM's QMP connection takes one
-  client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`; a request for an instance
+  client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance `list`
+  prints that the request matches (per parameters without a `list`), so parameters `list` doesn't print (a mode) don't
+  make one VM two instances; a request for an instance
   another launcher holds is refused, naming it.
 - `serve`, `issue`, `resolve` per type as above.
 - `watch` (optional) runs for as long as a grant lives; its exit ends the grant (VM shut down, device unplugged).

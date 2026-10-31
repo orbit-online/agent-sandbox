@@ -34,10 +34,13 @@ sig Capability {
   matches: Param -> Instance,
   // type B: maxValidity
   maxV: one Int,
-  // the exclusive lock files, by capability and hash of the parameters
-  var lockFile: Param -> lone Launcher
+  // the exclusive lock files, by capability and instance
+  var lockFile: Instance -> lone Launcher
 }
+// Exclusive capabilities are of types A and B, whose `list` names the
+// instances locked (a type C one would lock by its parameters; none is).
 sig Exclusive in Capability {}
+fact { no Exclusive & dtype.TypeC }
 // What a type C parameter resolves to now: the attacker renames
 // directories under a ceiling root at will.
 sig Param { var resolves: lone Dir }
@@ -146,12 +149,12 @@ pred mountChecks[N: set Grant] {
   all g: N & typed[TypeC] | some g.gparams.resolves and g.gparams.resolves in InCeiling
 }
 
-// exclusiveLock (plugins.go:369-392): O_EXCL on a file named by the
-// capability and the hash of the parameters. The locks of L were removed
-// first (a start's cleanup of its own launcher's).
+// exclusiveLock (instances.go): O_EXCL on a file per instance the
+// parameters match. The locks of L were removed first (a start's cleanup
+// of its own launcher's).
 pred exclusiveLockFree[N: set Grant, L: set Launcher] {
-  all g: N & gcap.Exclusive | no g.gparams.(g.gcap.lockFile) - L
-  all disj g, h: N & gcap.Exclusive | g.gcap != h.gcap or g.gparams != h.gparams
+  all g: N & gcap.Exclusive | no g.gparams.(g.gcap.matches).(g.gcap.lockFile) - L
+  all disj g, h: N & gcap.Exclusive | g.gcap != h.gcap or no g.gparams.(g.gcap.matches) & h.gparams.(h.gcap.matches)
 }
 
 // type A units are BindsTo= the daemon's unit (plugins.go:246-248).
@@ -162,15 +165,15 @@ pred bindsTo[l: Launcher] { UnitUp' = UnitUp - gl.l }
 pred cleanup[l: Launcher] {
   Mounted' = Mounted - gl.l
   UnitUp' = UnitUp - gl.l
-  lockFile' = lockFile - (Capability -> Param -> l)
+  lockFile' = lockFile - (Capability -> Instance -> l)
 }
 
 // ---------------------------------------------------------------------
 // Frames and the grant bookkeeping every event shares.
 
 fun typed[t: DType]: set Grant { (gcap.dtype).t }
-fun locksOf[G: set Grant]: Capability -> Param -> Launcher {
-  { c: Exclusive, p: Param, l: Launcher | some g: G | g.gcap = c and g.gparams = p and g.gl = l }
+fun locksOf[G: set Grant]: Capability -> Instance -> Launcher {
+  { c: Exclusive, i: Instance, l: Launcher | some g: G | g.gcap = c and i in g.gparams.(c.matches) and g.gl = l }
 }
 fun nref[l: Launcher, c: Capability]: Int { some c.(l.refused) implies c.(l.refused) else 0 }
 

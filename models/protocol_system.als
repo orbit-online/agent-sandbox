@@ -25,7 +25,7 @@ pred replayOK[l: Launcher, c: Capability, p: Param] {
   p in c.wellFormed
   c.dtype != TypeC implies some p.(c.matches) & Listed
   c.dtype = TypeC implies (some p.resolves and p.resolves in InCeiling)
-  c in Exclusive implies no p.(c.lockFile) - l
+  c in Exclusive implies no p.(c.matches).(c.lockFile) - l
 }
 
 // share from M1 (shareFrom, broker.go:485-497): shared, then replay C.
@@ -88,7 +88,7 @@ pred start[l: Launcher] {
     Ended' = Ended and Issuing' = Issuing
     UnitUp' = UnitUp - gl.l + (N & typed[TypeA])
     Mounted' = Mounted - gl.l + (N & typed[TypeC])
-    lockFile' = lockFile - (Capability -> Param -> l) + locksOf[N]
+    lockFile' = lockFile - (Capability -> Instance -> l) + locksOf[N]
     all g: N & typed[TypeC] | g.mdir' = g.gparams.resolves
     all g: Grant - (N & typed[TypeC]) | g.mdir' = g.mdir
   }
@@ -104,7 +104,7 @@ pred sandboxEnd[l: Launcher] {
   let E = Live & gl.l {
     Live' = Live - E and Ended' = Ended + E
     UnitUp' = UnitUp - gl.l and Mounted' = Mounted - gl.l and Issuing' = Issuing - gl.l
-    lockFile' = lockFile - (Capability -> Param -> l)
+    lockFile' = lockFile - (Capability -> Instance -> l)
   }
   gsess' = gsess and left' = left and mdir' = mdir
   Pending' = Pending - rl.l and Mature' = Mature - rl.l and Opened' = Opened - rl.l

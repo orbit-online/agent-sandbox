@@ -51,7 +51,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   One concern per file: `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go`, `leases.go` (and logind), `store.go`
   (always grants, replay, the log), `notify.go`, `views.go`, `types.go` and
-  `run.go`; `plugins.go` and `plugintools.go` for plugins and their MCP tools,
+  `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
+  locks) and `plugintools.go` for plugins and their MCP tools,
   `mcp.go` the MCP server, `sandbox.go` finding the sandbox and sessions.
   Type C: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
   (the helpers it runs through `nsenter` to clone a host path and mount it in
@@ -178,7 +179,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name), type A's systemd units (faked), exclusive instances across
-  launchers, `share` through nsenter into a child's user and mount namespace
+  launchers (locked by the instance `list` prints, whatever other parameters
+  a request carries), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace), `control.sock` refusing a peer in
   another user namespace, a peer gone after its `/proc` entries were read
   refused by `control.sock`, `share` and `request` (S13), the sandbox's

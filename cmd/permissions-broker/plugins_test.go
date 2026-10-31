@@ -90,3 +90,22 @@ func TestUnitPrefixes(t *testing.T) {
 		}
 	}
 }
+
+// P13: the lock is on the instance list prints, not on all the parameters: another value of a parameter list doesn't
+// print doesn't get a second launcher the same VM
+func TestExclusiveInstance(t *testing.T) {
+	fakeSystemd(t)
+	b, _ := testBroker(t, "allow")
+	other, _ := testBroker(t, "allow")
+	other.cfg.Launcher = "other"
+	c := testCap(t, "A")
+	c.Exclusive = true
+	writeList(t, c, `[{"path": "/vm"}]`)
+	b.caps[c.id()], other.caps[c.id()] = c, c
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": true}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": false}`, "PT1H")); err == nil {
+		t.Error("Another launcher got the instance with another value of a parameter list doesn't print")
+	}
+}
