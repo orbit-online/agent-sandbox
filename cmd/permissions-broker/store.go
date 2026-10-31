@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,10 @@ func (b *broker) replay(typ string) {
 				continue
 			}
 			summary = describeC(summary, src)
+		} else if err := c.inList(context.Background(), params); err != nil {
+			// As for a request: no instance list doesn't print (a VM no longer there)
+			slog.Warn("Replay", "capability", a.Capability, "err", err)
+			continue
 		}
 		if _, err := b.grant(c, params, summary, "always", nil); err != nil {
 			slog.Warn("Replay", "capability", a.Capability, "err", err)

@@ -106,12 +106,14 @@ pred forge[r: Req] {
 }
 
 // Allow on the notification: the lease it offered, the request's
-// parameters. Only type C is checked again, by mountC.
+// parameters, checked again: `list` for types A and B, mountC for C.
 pred notifAllow[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap {
     r in Pending - Opened and actionMature[r]
     // only the broker's own notification carries its allow key
     r not in Forged
+    // `list` runs again after the answer (inList, consent.go)
+    c.dtype != TypeC implies some r.rparams.(c.matches) & Listed
     l in Up - Gone
     // checked again at grant time (checkLease after the answer, and lockOK
     // under the lock in grant(), leases.go)

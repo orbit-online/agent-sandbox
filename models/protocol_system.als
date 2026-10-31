@@ -8,18 +8,21 @@ open protocol_events
 // ---------------------------------------------------------------------
 // The daemon's life.
 
-// replay (broker.go:1044-1071): every stored always grant of type t that
-// validates (and for C resolves beneath the ceiling) is granted again,
-// with no look for a live grant of the same and, for A, no `list`.
+// replay (store.go): every stored always grant of type t that validates,
+// matches an instance `list` prints (A) or resolves beneath the ceiling
+// (C) is granted again, with no look for a live grant of the same.
 pred replays[l: Launcher, t: DType, N: set Grant] {
   all g: N | g.gl = l and g.glease = LAlways and g.gcap.dtype = t and g.gparams in l.stored[g.gcap]
-  all c: Capability, p: l.stored[c] | (c.dtype = t and replayOK[c, p]) implies one g: N | g.gcap = c and g.gparams = p
-  all g: N | replayOK[g.gcap, g.gparams]
+  all c: Capability, p: l.stored[c] | (c.dtype = t and replayOK[l, c, p]) implies one g: N | g.gcap = c and g.gparams = p
+  all g: N | replayOK[l, g.gcap, g.gparams]
 }
-pred replayOK[c: Capability, p: Param] {
+// A start removes the launcher's own stale locks first (cleanup), so only
+// another launcher's lock keeps a grant from replaying.
+pred replayOK[l: Launcher, c: Capability, p: Param] {
   p in c.wellFormed
+  c.dtype != TypeC implies some p.(c.matches) & Listed
   c.dtype = TypeC implies (some p.resolves and p.resolves in InCeiling)
-  c in Exclusive implies no p.(c.lockFile)
+  c in Exclusive implies no p.(c.lockFile) - l
 }
 
 // share from M1 (shareFrom, broker.go:485-497): shared, then replay C.
@@ -75,7 +78,7 @@ pred start[l: Launcher] {
     l in SharedDir implies replays[l, TypeC, N & typed[TypeC]] else no N & typed[TypeC]
     no N & typed[TypeB]
     no N & (Live + Ended)
-    exclusiveLockFree[N]
+    exclusiveLockFree[N, l]
     mountChecks[N]
     Ended' = Ended and Issuing' = Issuing
     UnitUp' = UnitUp - gl.l + (N & typed[TypeA])

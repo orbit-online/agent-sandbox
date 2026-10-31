@@ -61,7 +61,7 @@ doc() {
 instance() {
   # shellcheck disable=SC2016 # `$0` is an atom name
   grep -vE '^(---|univ=|Int=|seq/Int=|String=|none=)' "$1" |
-    sed -E -e 's#this/##g' -e 's#(^|[ {>=,])[a-z_]+/#\1#g' |
+    sed -E -e 's#this/##g' -e 's#(^|[ {>=,])([a-z_]+/)+#\1#g' |
     grep -vE '^[^=]*=\{\}$' |
     grep -vE "^(${hide:-^})(<:[^=]*)?=" |
     sed -e 's/^/      /'

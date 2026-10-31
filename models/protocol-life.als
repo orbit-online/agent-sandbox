@@ -27,16 +27,16 @@ run P3folders {
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
 // P3, types A and B: the parameters match an instance `list` prints at
-// grant time. Known, minor: request() runs inList before asking
-// (broker.go:561) and again only for parameters the window sends
-// (611-625); an Allow on the notification up to 2 minutes later grants
-// whatever `list` says by then. replay("A") at start never runs `list`
-// (broker.go:1053-1066), see P12.
+// grant time. request() runs inList before asking and again on every
+// answer (consent.go), replay("A") before starting a stored grant
+// (store.go). Holds. Revert: notifAllow without its `list` (as before the
+// fix): an Allow up to 2 minutes later grants whatever `list` says by
+// then (counterexample found).
 assert P3listedAtGrant {
   always all g: Grant | (born[g] and g.gcap.dtype != TypeC) implies passes[g.gcap, g.gparams]
 }
 check P3listedAtGrant for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 1
+  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
 // The folder the user is asked about is the one mounted. Known, by design
 // (docs/permissions.md, "A grant is of the path"): between the question
@@ -136,11 +136,11 @@ run P11restarts {
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
 // P12. After the daemon starts, its live grants are exactly the stored
-// always grants that pass P3 (types A and C; B is issued on request),
-// C only once the grant directory is shared. Known, a finding: replay("A")
-// starts a stored type A grant without `list` (broker.go:1053-1066), so an
-// always grant of a VM that no longer runs, or another one's name, is
-// started again.
+// always grants that pass P3 (types A and C; B is issued on request), C
+// only once the grant directory is shared. replay("A") runs `list` as a
+// request does (store.go). Holds. Revert: replayOK without `list` (as
+// before the fix): an always grant of a VM that no longer runs is
+// started again (counterexample found).
 assert P12replayIsStoreUnderCeiling {
   always all l: Launcher | start[l] implies
     { c: Capability, p: Param | some g: Live' & gl.l | g.gcap = c and g.gparams = p }
@@ -148,7 +148,7 @@ assert P12replayIsStoreUnderCeiling {
         and (c.dtype = TypeC implies l in SharedDir) and (c in Exclusive implies no p.(c.lockFile) - l) }
 }
 check P12replayIsStoreUnderCeiling for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..4 steps expect 1
+  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..4 steps expect 0
 run P12replays {
   eventually some l: Launcher | start[l] and some (Live' - Live) & typed[TypeC]
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,

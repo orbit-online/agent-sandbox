@@ -129,9 +129,12 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 				return nil, "", err
 			}
 			summary = describeC(summary, src)
-		} else if err := c.inList(context.Background(), params); err != nil {
-			return nil, "", err
 		}
+	}
+	// What list prints may have changed while the user was asked (a VM shut down): checked at grant time. Type C's
+	// source is checked again when it's mounted
+	if err := c.inList(context.Background(), params); err != nil {
+		return nil, "", err
 	}
 	g, err = b.grant(c, params, summary, lease, sess)
 	if err != nil {

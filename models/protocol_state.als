@@ -147,9 +147,10 @@ pred mountChecks[N: set Grant] {
 }
 
 // exclusiveLock (plugins.go:369-392): O_EXCL on a file named by the
-// capability and the hash of the parameters.
-pred exclusiveLockFree[N: set Grant] {
-  all g: N & gcap.Exclusive | no g.gparams.(g.gcap.lockFile)
+// capability and the hash of the parameters. The locks of L were removed
+// first (a start's cleanup of its own launcher's).
+pred exclusiveLockFree[N: set Grant, L: set Launcher] {
+  all g: N & gcap.Exclusive | no g.gparams.(g.gcap.lockFile) - L
   all disj g, h: N & gcap.Exclusive | g.gcap != h.gcap or g.gparams != h.gparams
 }
 
@@ -190,7 +191,7 @@ pred keepGrants {
 pred change[N, E: set Grant] {
   no N & (Live + Ended)
   E in Live
-  exclusiveLockFree[N]
+  exclusiveLockFree[N, none]
   mountChecks[N]
   Live' = Live - E + N
   Ended' = Ended + E

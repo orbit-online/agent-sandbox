@@ -171,7 +171,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), a request or window answer naming no instance
   a capability's `list` prints refused without asking (and with a failing
-  `list`; not for type C), the refusal limit, `always` only from the
+  `list`; not for type C), and an Allow refused when the instance went away
+  while the user was asked, a replay of an always grant `list` no longer
+  prints, the refusal limit, `always` only from the
   window and with exact parameters, the store, duration, lock (none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none

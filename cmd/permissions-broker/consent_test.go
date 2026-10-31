@@ -215,3 +215,18 @@ func TestAnsweredInWindow(t *testing.T) {
 		t.Error("The notification wasn't taken down")
 	}
 }
+
+// P3: the instance goes away while the user is asked. Allow grants nothing
+func TestListChangedWhileAsking(t *testing.T) {
+	b, _ := testBroker(t)
+	c := testCap(t, "B")
+	writeList(t, c, `[{"path": "/a"}]`)
+	b.caps[c.id()] = c
+	b.ask = func(context.Context, prompt) (string, error) {
+		writeList(t, c, `[]`)
+		return "allow", nil
+	}
+	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
+		t.Errorf("Granted an instance list no longer prints: %+v", g)
+	}
+}
