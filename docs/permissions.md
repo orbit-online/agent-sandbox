@@ -1,6 +1,8 @@
 # Permissions: granting the sandbox outside access while it runs
 
-Status: design, nothing built yet. Written 2026-10-31.
+Status: written 2026-10-31. Built: the daemon (`nix/packages/permissions-broker/`) with types A and B, consent,
+leases, the grant store and the MCP server's core tools, behind a launcher's `permissions.enable`. Not yet: the
+Permissions window, type C and folder mounts, plugin tools in the MCP server, idle nudges.
 
 ## Why
 
@@ -74,7 +76,8 @@ host (user, no capabilities)                       sandbox
   `/run/permissions` in the sandbox. This is the one bind the feature adds. Connecting to a socket on a read-only
   bind works; creating, renaming or replacing anything in it doesn't, so the sandbox can't plant a symlink where a
   mountpoint or socket will go, or remove `request.sock`. The daemon creates every entry on the host side, through a
-  dirfd with `O_NOFOLLOW`, under names it picks at random.
+  dirfd with `O_NOFOLLOW`, under names it picks at random, and refuses to start when the directory isn't its own
+  or is a link.
 - `permissions-mcp`, the same binary as an MCP server, run inside the sandbox from the module's MCP servers. A client
   of `request.sock`.
 - The Permissions window, a Qt 6 QML app (PySide6) talking to `control.sock`, opened by the desktop action
@@ -119,10 +122,13 @@ permissions-broker clone-tree <src> [ro]` sends the detached tree's fd back over
 A plugin declares capabilities, each of one delivery type.
 
 **A. Mediated channel.** The daemon runs the plugin's `serve` command as a socket-activated transient unit:
-`systemd-run --user --unit=perm-<launcher>-<grant> --socket-property=ListenStream=<grant dir>/<grant>.sock`. The
-plugin gets the socket the standard way (`sd_listen_fds`, which needs `LISTEN_PID` to match, so the daemon can't
-hand the fd over itself). Revoking stops the unit, which kills its whole cgroup, double-forked children included, and
-removes the socket, which cuts live connections. After a crash the units are found by name. Fits: Windows VM, systemd
+`systemd-run --user --unit=perm-<launcher>_<grant> --socket-property=ListenStream=<grant dir>/<grant>.sock`
+(`perm_<grant>` for the default launcher; launcher names can't contain `_`, so no launcher's units match another's
+pattern). The plugin gets the socket the standard way (`sd_listen_fds`, which needs `LISTEN_PID` to match, so the
+daemon can't hand the fd over itself). Revoking stops the unit, which kills its whole cgroup, double-forked children
+included, and removes the socket (`RemoveOnStop`), which cuts live connections. After a crash the units are found by
+name. `serve` exiting doesn't end the grant: the next connection starts it again. A plugin ends grants through
+`watch`. Fits: Windows VM, systemd
 (a filtered systemd1 proxy), BlueZ, TPM operations, UEFI variable reads, journal queries (the plugin runs the query
 and streams it), D-Bus services (an xdg-dbus-proxy instance per grant, since rules can't change in a running one),
 website logins (an HTTP proxy that adds cookies the sandbox never sees).
@@ -188,8 +194,7 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
   client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`; a request for an instance
   another launcher holds is refused, naming it.
 - `serve`, `issue`, `resolve` per type as above.
-- `watch` (optional) runs for as long as a grant lives; its exit ends the grant (VM shut down, device unplugged). For
-  type A, the `serve` process exiting does the same.
+- `watch` (optional) runs for as long as a grant lives; its exit ends the grant (VM shut down, device unplugged).
 - `tools` (type A only): the plugin speaks MCP on its socket, and its tools appear in the core MCP server while the
   grant lives (see MCP).
 
@@ -211,7 +216,15 @@ is refused without asking the user.
 | `watch`   |                                         | a stream of grant events, one JSON per line |
 | `share`   |                                         | (from `bwrap-subid.sh` only, see above)     |
 
-`reason` is required and goes into the notification as text (markup escaped, 300 characters). `lease` is the
+`reason` is required and goes into the notification as text: whitespace and control characters folded to single
+spaces, 300 characters, quoted, markup escaped. Parameter values are quoted in the summary, and a string value is at
+most 200 characters without control characters, so neither can pass itself off as more of the notification.
+
+What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch
+streams included), so a full `request.sock` leaves `control.sock` to the window; a client has 10 seconds to send a
+request of at most 64 KiB; accept errors are waited out rather than ending the socket; at most four plugin commands
+run at once; `list` output is kept for five seconds; and requests a grant already covers are answered one at a time
+per capability, without logging them. `lease` is the
 caller's proposal: `session`, `lock`, `PT<n>H` or `always`.
 
 The caller's session comes from its pidfd (`SO_PEERPIDFD`): the daemon walks its ancestors to the first with
@@ -269,7 +282,9 @@ startup, which the app doesn't pass.
 
 ## Grant store
 
-`$stateDir/permissions.json` on the host, outside every bind, written only by the daemon. It holds `always` grants
+`$stateDir/permissions.json` on the host, outside every bind, written only by the daemon, one save at a time,
+synced before the rename that replaces it. A store that doesn't parse is set aside as `permissions.json.broken`, and
+the daemon starts without it. It holds `always` grants
 (capability, parameters, when granted) and a log of recent decisions for the window. At launch, after `share`, the
 daemon replays the `always` grants: type C mounts are attached, type A plugins started; type B is issued on request
 without asking. Persisting a grant needs no config change or rebuild; Nix only sets what may be granted at all.

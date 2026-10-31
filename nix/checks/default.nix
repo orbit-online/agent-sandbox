@@ -126,7 +126,7 @@ let
         };
       };
     };
-  # alice with memo, given to the work launcher
+  # alice with memo and the permissions broker, given to the work launcher
   aliceMemo =
     (system.extendModules {
       modules = [
@@ -141,7 +141,10 @@ let
                 "/srv/team.memo"
               ];
             };
-            agent-sandbox.claude-desktop.launchers.work.memo.enable = true;
+            agent-sandbox.claude-desktop.launchers.work = {
+              memo.enable = true;
+              permissions.enable = true;
+            };
           };
         }
       ];
@@ -330,6 +333,20 @@ let
         "secret"
       ];
     };
+    # Only a launcher with the broker gets its MCP server
+    testPermissionsMcp = {
+      expr = map (l: l.mcpServers.permissions or null) [
+        aliceMemo.agent-sandbox.claude-desktop
+        aliceMemo.agent-sandbox.claude-desktop.launchers.work
+      ];
+      expected = [
+        null
+        {
+          command = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
+          args = [ "mcp" ];
+        }
+      ];
+    };
     testMcpServersHmTransform = {
       expr =
         let
@@ -381,7 +398,7 @@ in
   tests = evalTests;
 
   checks = {
-    inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) netns-macvlan subid-broker;
+    inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) netns-macvlan subid-broker permissions-broker;
 
     # nix-unit evaluates this flake again inside the build, which can't fetch, so every input (theirs too) comes from
     # the store
@@ -521,6 +538,22 @@ in
           stores=$(grep '^- ' "$memo" | tr '\n' ' ')
           [[ $stores == '- embed:core - embed:docs - /etc/claude/environment.memo - /srv/team.memo ' ]] ||
             { echo "memo's stores in the sandbox: $stores" >&2; exit 1; }
+          # work has the permissions broker: its grant directory read-only at /run/permissions, its config, the daemon
+          # started by the wrapper; the default launcher has none of it
+          workArgs=$(grep -- '-bwrap-args\.json$' "$workClosure/store-paths")
+          jq -e 'any(.[]; . == "/run/permissions")' "$workArgs" >/dev/null &&
+            jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and $a[. + 2] == "/run/permissions")' "$workArgs" >/dev/null ||
+            { echo "work's bwrap args lack the read-only /run/permissions" >&2; exit 1; }
+          ! jq -e 'any(.[]; . == "/run/permissions")' "$args" >/dev/null || { echo "the default launcher binds /run/permissions" >&2; exit 1; }
+          grep -qxF "readonly PERMISSIONS_DIR=permissions-work" "$wrapper" || { echo "work's wrapper lacks PERMISSIONS_DIR" >&2; exit 1; }
+          pcfg=$(grep -oP '^readonly PERMISSIONS_CONFIG=\K/nix/store/\S+' "$wrapper") || { echo "work's wrapper lacks the broker's config" >&2; exit 1; }
+          jq -e '.appId == "com.nixpak.ClaudeDesktop.work" and .launcher == "work"
+            and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
+            and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
+            and .store == "/home/alice/.local/share/claude-desktop-work/permissions.json"
+            and .sandboxGrantDir == "/run/permissions"' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+          grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
+            { echo "the default launcher starts the broker" >&2; exit 1; }
           d=$work/share/applications/claude-desktop-work.desktop
           for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Name=New shell'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
@@ -529,7 +562,10 @@ in
           touch $out
         '';
 
-    vm = import ./vm.nix { inherit pkgs aliceModule; };
+    vm = import ./vm.nix {
+      inherit pkgs aliceModule;
+      broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
+    };
 
     scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
       shellcheck ${../../scripts}/*.sh ${../home/claude-desktop}/*.sh

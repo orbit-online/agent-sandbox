@@ -30,9 +30,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
   and the FHS env run, maps the user's subuid range in and starts it.
+- `nix/packages/permissions-broker/`: the Go daemon that grants the sandbox
+  outside access while it runs, per `docs/permissions.md`, and the sandbox's
+  `permissions` MCP server (`permissions-broker --help`). A launcher runs it
+  with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a
+  user unit, nixpak binds its grant directory read-only at `/run/permissions`,
+  and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
 - `nix/checks/`: the flake checks, see Testing.
-- `docs/permissions.md`: design of the permissions broker (granting outside
-  access while the sandbox runs). Not built yet.
+- `docs/permissions.md`: design of the permissions broker. Built so far: the
+  daemon with types A and B, consent, leases, the store and the MCP server's
+  core tools; not yet the window, type C or plugin tools in the MCP server.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
@@ -42,7 +49,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   part of the checks.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
-`packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`. Consumers import both modules and enable
+`packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
+`packages.<system>.permissions-broker`. Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
@@ -88,7 +96,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
-  sandbox's names). The test system imports both modules twice and has a launcher
+  sandbox's names), and the `permissions` MCP server only with
+  `permissions.enable`. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
@@ -104,8 +113,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   `~/.claude` and the app's config in its home, its GC root link, the name
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
-  the store right after the embedded ones), and its `.desktop` file
-  (name, Exec, no `claude://` handler).
+  the store right after the embedded ones), its permissions broker (the
+  read-only `/run/permissions` bind, the config, the wrapper's variables; none
+  of it for the default launcher), and its `.desktop` file (name, Exec, no
+  `claude://` handler).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace.
@@ -113,6 +124,21 @@ modules and a user alice (the `home-manager` input exists only for it).
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
   client's own and another uid.
+- `permissions-broker`: the package build runs its Go tests (`main_test.go`):
+  durations, parameter validation, consent (denied, allowed, a live grant
+  covering the same request only), the refusal limit, `always` only from the
+  window and with exact parameters, the store, duration, lock and session
+  leases (a session anchored at a copy of the test binary named `claude`, none
+  at another name), type A's systemd units (faked), exclusive instances across
+  launchers, `share` through nsenter into a child's user and mount namespace
+  (refused from another mount namespace), `control.sock` refusing a peer in
+  another user namespace, the sockets end to end with `watch` events, and what
+  the sandbox can't do to it: hold every connection (control.sock still
+  answers, idle clients time out), send an oversized request, dress up a
+  parameter or reason in the notification, anchor a session at or above the
+  sandbox, make one always grant start several units, get a credential after
+  its lease ran out; plus a window answer while the notification is up, unit
+  names per launcher, and a broken store set aside.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
@@ -135,7 +161,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   launch, live, and the watcher ending with the app), the macvlan's DHCP
   lease, route and DNS, the launcher `work` running next to the default
   sandbox (its own namespaces, MAC and lease, its own tray item at another
-  pid, its re-entry found by app ID, its state dir and GC root), its own `/etc/hosts`, the closure's GC root on the
+  pid, its re-entry found by app ID, its state dir and GC root, and its
+  permissions broker: the daemon's unit, `/run/permissions` read-only, shared
+  in the outer mount namespace and a slave where the app runs, `share` refused
+  from there, a grant of a test plugin through the MCP server after a restart
+  of the daemon with an `always` grant stored, the daemon ending with the
+  sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`

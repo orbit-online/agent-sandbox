@@ -1,7 +1,27 @@
 # The sandbox on a booted NixOS: alice's claude-desktop (the stub app) on a workstation whose LAN has a router with
 # DHCP and DNS. The router also stands in for the internet: its DNS points api.anthropic.com and github.com at itself.
-{ pkgs, aliceModule }:
+{
+  pkgs,
+  aliceModule,
+  broker,
+}:
 let
+  # A type B plugin for the permissions broker: issue prints the validity it was given
+  testPlugin = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" (
+    builtins.toJSON {
+      name = "test";
+      capabilities = [
+        {
+          name = "thing";
+          type = "B";
+          description = "a test credential";
+          issue = [
+            (pkgs.writeShellScript "issue" "echo issued-$(${pkgs.lib.getExe pkgs.jq} -r .validity)")
+          ];
+        }
+      ];
+    }
+  );
   stateDir = "/home/alice/.local/share/claude-desktop";
   sandboxHome = "${stateDir}/home";
   scratchpad = "${stateDir}/tmp-scratchpad";
@@ -63,6 +83,13 @@ pkgs.testers.runNixOSTest {
           launchers.work = {
             package = stub;
             tray = true;
+            permissions = {
+              enable = true;
+              plugins.test = {
+                package = testPlugin;
+                ceiling.maxValidity = "PT8H";
+              };
+            };
           };
         })
       ];
@@ -333,9 +360,42 @@ pkgs.testers.runNixOSTest {
           workstation.succeed(f"test -d {work_home}/.claude && test -s {work_home}/.config/Claude/claude_desktop_config.json")
           workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
           workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
+
+          # The permissions broker: its daemon runs, its grant directory is read-only inside, shared in the sandbox's
+          # outer mount namespace before the FHS env's bwrap copied it, so a slave where the app runs
+          workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=60)
           work_pid = bwrap_info("com.nixpak.ClaudeDesktop.work")["child-pid"]
+          m1 = [l for l in workstation.succeed(f"cat /proc/{work_pid}/mountinfo").splitlines() if " /run/permissions " in l]
+          assert len(m1) == 1 and " shared:" in m1[0], f"/run/permissions in M1: {m1}"
+          m2 = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions " in l]
+          assert len(m2) == 1 and " master:" in m2[0] and " ro," in m2[0], f"/run/permissions where the app runs: {m2}"
+          status, _ = workstation.execute(work_cmd("touch /run/permissions/x"))
+          assert status != 0, "the sandbox can write to its grant directory"
+          # request.sock answers from inside, and refuses share from where the app runs
+          status, out = workstation.execute(work_cmd("${pkgs.lib.getExe broker} share") + " 2>&1")
+          assert status != 0 and "outer mount namespace" in out, out
+          # A grant through the MCP server: with an always grant stored, after a restart of the daemon (which finds
+          # the sandbox again), it's issued without asking, for the ceiling's maxValidity
+          workstation.succeed(
+              "echo '{\"always\": [{\"capability\": \"test/thing\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"}]}'"
+              " | runuser -u alice -- tee ${workStateDir}/permissions.json"
+          )
+          workstation.succeed("systemctl --user -M alice@ restart claude-desktop-work-permissions")
+          rpc = "\n".join(json.dumps(m) for m in [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                  "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "vm", "version": "0"}}},
+              {"jsonrpc": "2.0", "method": "notifications/initialized"},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "request", "arguments": {
+                  "capability": "test/thing", "reason": "the VM test", "lease": "PT1H"}}},
+          ])
+          # Stdin stays open a while for the answer. Retried until the restarted daemon listens
+          mcp = f"(printf '%s\\n' {shlex.quote(rpc)}; sleep 3) | ${pkgs.lib.getExe broker} mcp"
+          workstation.wait_until_succeeds(work_cmd(f"sh -c {shlex.quote(mcp)}") + " | grep -q issued-PT28800S", timeout=60)
+
           workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-work")
           workstation.wait_until_fails(f"test -e /proc/{work_pid}", timeout=30)
+          # The daemon ends with its sandbox
+          workstation.wait_until_fails("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=30)
           # The default sandbox runs on
           assert in_sandbox("readlink /proc/self/ns/net").strip() == app_netns
 

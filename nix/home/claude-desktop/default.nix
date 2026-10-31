@@ -54,6 +54,7 @@ let
   xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
 
   subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
+  permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
   bwrapSubid =
     vars:
@@ -78,6 +79,7 @@ let
     SUBID_MAP = "parent";
     NEWUIDMAP = lib.getExe' subidBroker "newuidmap";
     NEWGIDMAP = lib.getExe' subidBroker "newgidmap";
+    PERMISSIONS_BROKER = lib.getExe permissionsBroker;
   };
 
   # A named launcher's suffix to file names, empty for the default one
@@ -394,6 +396,36 @@ let
       ];
       description = "Packages on PATH for the app, its Code tab shells and the local MCP servers.";
     };
+    permissions = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Run the permissions broker (`docs/permissions.md`), which grants the sandbox outside access while it runs,
+          asking the user each time. Binds its grant directory read-only at `/run/permissions`, with the socket
+          requests go to, and adds the `permissions` MCP server.
+        '';
+      };
+      plugins = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              package = mkOption {
+                type = types.package;
+                description = "The plugin, with its manifest at `share/agent-sandbox/permissions/<name>.json`.";
+              };
+              ceiling = mkOption {
+                type = (pkgs.formats.json { }).type;
+                default = { };
+                description = "What the plugin may grant at all: `maxValidity` for type B, `sources` for type C, and the plugin's own fields.";
+              };
+            };
+          }
+        );
+        default = { };
+        description = "Plugins whose capabilities the broker grants, by name.";
+      };
+    };
     mcpServers = mkOption {
       type = types.attrsOf (pkgs.formats.json { }).type;
       readOnly = true;
@@ -432,6 +464,12 @@ let
             CLAUDE_ENV_FILE = "${bashEnv}";
             NIX_CONF_DIR = "${nixConf}";
           };
+        };
+      }
+      // lib.optionalAttrs lcfg.permissions.enable {
+        permissions = {
+          command = lib.getExe permissionsBroker;
+          args = [ "mcp" ];
         };
       }
       // hmMcpServers;
@@ -755,6 +793,10 @@ let
               ++ devices;
               bind.ro =
                 binds false
+                ++ lib.optional lcfg.permissions.enable [
+                  (sloth.concat' (sloth.env "XDG_RUNTIME_DIR") "/claude-desktop/${permissionsDir}")
+                  "/run/permissions"
+                ]
                 ++ etcBinds
                 ++ [
                   [
@@ -775,6 +817,25 @@ let
       };
 
       mcpServers = pkgs.writeText "mcp-servers.json" (builtins.toJSON lcfg.mcpServers);
+      # The permissions broker's, under $XDG_RUNTIME_DIR/claude-desktop: its grant directory, the sandbox's
+      # /run/permissions, and its control socket next to it, which isn't bound
+      permissionsDir = "permissions${suffix}";
+      permissionsConfig = pkgs.writeText "permissions${suffix}.json" (
+        builtins.toJSON {
+          appId = sandboxed.config.flatpak.appId;
+          # Empty for the default launcher: no named one can take that name
+          launcher = if name == null then "" else name;
+          grantDir = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}";
+          controlSocket = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock";
+          store = "${stateDir}/permissions.json";
+          sandboxGrantDir = "/run/permissions";
+          window = [ ];
+          plugins = lib.mapAttrsToList (pname: p: {
+            manifest = "${p.package}/share/agent-sandbox/permissions/${pname}.json";
+            inherit (p) ceiling;
+          }) lcfg.permissions.plugins;
+        }
+      );
       # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
       # the closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
       # `environment:` from the frontmatter. Claude Code follows imports four hops deep, and ~/.claude reaches this file
@@ -847,8 +908,13 @@ let
         runtimeInputs = [
           pkgs.jq
           osConfig.nix.package
+          osConfig.systemd.package
         ];
         vars = {
+          PERMISSIONS_CONFIG = lib.optionalString lcfg.permissions.enable "${permissionsConfig}";
+          PERMISSIONS_DIR = permissionsDir;
+          PERMISSIONS_UNIT = "claude-desktop${suffix}-permissions";
+          PERMISSIONS_BROKER = lib.getExe permissionsBroker;
           SANDBOX_HOME = bwrapHome;
           SCRATCHPAD = scratchpad;
           RESOLV_CONF = resolvConf;

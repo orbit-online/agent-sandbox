@@ -2,6 +2,7 @@
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
 # $REQUIRED_BINDS: the sources of the binds that aren't optional
 : "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
+: "${PERMISSIONS_CONFIG?}" "${PERMISSIONS_DIR?}" "${PERMISSIONS_UNIT?}" "${PERMISSIONS_BROKER:?}"
 : "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
 mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE"
 # Bind source for Claude Code's temp dir, which it wants private. Its parent exists from SANDBOX_HOME's mkdir
@@ -96,6 +97,14 @@ nix-store --add-root "$XDG_RUNTIME_DIR/claude-desktop/$STORE_ROOTS_LINK" --reali
 for src in "${REQUIRED_BINDS[@]}"; do
   [[ -e $src ]] || { echo "claude-desktop: Bind source $src is missing" >&2; exit 1; }
 done
+
+# The permissions broker, a unit of its own that finds the sandbox once it runs (docs/permissions.md)
+if [[ -n $PERMISSIONS_CONFIG ]]; then
+  mkdir -p "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR"
+  systemctl --user -q is-active "$PERMISSIONS_UNIT" ||
+    systemd-run --user --quiet --collect --unit="$PERMISSIONS_UNIT" -p Restart=on-failure -- \
+      "$PERMISSIONS_BROKER" serve "$PERMISSIONS_CONFIG"
+fi
 
 "$GTK_THEME" || true
 # Double fork: the launcher this script execs into must not wait for it. It stops once that pid ($$) exits

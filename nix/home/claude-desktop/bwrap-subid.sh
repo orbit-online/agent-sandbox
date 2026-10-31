@@ -73,6 +73,13 @@ parent)
   # extraBwrapArgs bind fds 22 and 23, which have to come after the FHS env's /etc tmpfs
   args=("$@")
   exec 22< <(printf '%s\n' "$subuid") 23< <(printf '%s\n' "$subgid")
+  # With the permissions broker, its grant directory turns shared here, before this bwrap copies the mount
+  # namespace, so grants mounted there later reach the app (docs/permissions.md)
+  if [[ -d /run/permissions ]]; then
+    : "${PERMISSIONS_BROKER:?}"
+    "$PERMISSIONS_BROKER" share ||
+      echo "claude-desktop: No folder grants: the permissions broker didn't share /run/permissions" >&2
+  fi
   ;;
 *)
   echo "bwrap-subid: Unknown SUBID_MAP $SUBID_MAP" >&2

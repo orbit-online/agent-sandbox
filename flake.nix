@@ -45,6 +45,7 @@
       packages = forAllSystems (system: {
         netns-macvlan = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-macvlan { };
         subid-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/subid-broker { };
+        permissions-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-broker { };
       });
       checks = forAllSystems (system: (checksFor system).checks);
       # nix-unit's, run by checks.claude-desktop-eval
