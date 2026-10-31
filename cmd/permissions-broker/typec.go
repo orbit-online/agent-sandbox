@@ -126,7 +126,7 @@ func (b *broker) mountC(g *grant) error {
 		return fmt.Errorf("Create the mountpoint: %w", err)
 	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
-	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, b.cfg.Denied, g.Path); err != nil {
+	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, g.shown, b.cfg.Denied, g.Path); err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err
 	}

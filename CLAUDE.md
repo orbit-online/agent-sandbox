@@ -203,7 +203,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   ended (not a process outside the sandbox), detached with its mountpoint
   gone on revoke, a session lease two sessions hold, a daemon started again
   taking over the shared grant directory and replaying an always folder, and
-  the sandbox's attacks: a link out of the ceiling, a ceiling root swapped for
+  the sandbox's attacks: a link out of the ceiling, another folder renamed into the path
+  while the user is asked (refused), a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
   (found by identity, as the source or beneath it), and a re-bind in a nested
   mount namespace (reported as a holder). The MCP server: a type A plugin's

@@ -60,11 +60,15 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	if err := b.checkLease(lease, sess); err != nil {
 		return nil, "", err
 	}
-	summary := c.describe(params)
+	summary, shown := c.describe(params), ""
 	if c.Type == "C" {
-		// Checked before asking: what's outside the ceiling is refused without bothering the user
+		// Checked before asking: what's outside the ceiling is refused without bothering the user. What the path
+		// names now is what the user is asked about, and what gets mounted
 		src, err := b.resolveC(c, params)
 		if err != nil {
+			return nil, "", err
+		}
+		if shown, err = identify(src.root, src.rel); err != nil {
 			return nil, "", err
 		}
 		summary = describeC(summary, src)
@@ -81,7 +85,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		keepSess = b.addSession(g, sess)
 	}
 	if g == nil && b.isAlways(c, params) {
-		if g, err = b.grant(c, params, summary, "always", nil); err != nil {
+		if g, err = b.grant(c, params, summary, "always", nil, ""); err != nil {
 			c.covered.Unlock()
 			return nil, "", err
 		}
@@ -128,6 +132,10 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 			if err != nil {
 				return nil, "", err
 			}
+			// Narrowed in the window, it's what the path names as the user answers
+			if shown, err = identify(src.root, src.rel); err != nil {
+				return nil, "", err
+			}
 			summary = describeC(summary, src)
 		}
 	}
@@ -143,7 +151,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		if g.Lease == "session" && sess != nil {
 			keepSess = b.addSession(g, sess)
 		}
-	} else if g, err = b.grant(c, params, summary, lease, sess); err != nil {
+	} else if g, err = b.grant(c, params, summary, lease, sess, shown); err != nil {
 		c.covered.Unlock()
 		return nil, "", err
 	} else {

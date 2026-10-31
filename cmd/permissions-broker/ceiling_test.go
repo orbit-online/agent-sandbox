@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,5 +121,32 @@ func TestDeniedByIdentity(t *testing.T) {
 		if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+p+`"}`, "PT1H")); err == nil {
 			t.Errorf("Mounted %s, which is or holds a denied directory", g.Source)
 		}
+	}
+}
+
+// The sandbox renames another folder under the ceiling into the path while the user is asked: what's mounted is the
+// folder they were asked about, or nothing
+func TestFolderRenamedWhileAsking(t *testing.T) {
+	root := t.TempDir()
+	asked, other := filepath.Join(root, "notes"), filepath.Join(root, "secrets")
+	for _, d := range []string{asked, other} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _, _ := sandboxC(t)
+	c := folders(t, `{"path": "`+root+`"}`)
+	b.caps[c.id()] = c
+	b.ask = func(context.Context, prompt) (string, error) {
+		if err := os.Rename(asked, asked+".old"); err != nil {
+			t.Error(err)
+		}
+		if err := os.Rename(other, asked); err != nil {
+			t.Error(err)
+		}
+		return "allow", nil
+	}
+	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+asked+`"}`, "PT1H")); err == nil {
+		t.Errorf("Mounted the folder renamed into the path after asking: %+v", g)
 	}
 }

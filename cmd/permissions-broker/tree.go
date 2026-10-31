@@ -12,8 +12,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// attach clones root/rel and mounts it at mountpoint in the sandbox's mount namespace. Returns the source as resolved
-func (s *sandbox) attach(root, rel string, ro bool, denied []string, mountpoint string) (string, error) {
+// attach clones root/rel, the file expect names if set, and mounts it at mountpoint in the sandbox's mount namespace.
+// Returns the source as resolved
+func (s *sandbox) attach(root, rel string, ro bool, expect string, denied []string, mountpoint string) (string, error) {
 	if err := s.check(); err != nil {
 		return "", err
 	}
@@ -33,8 +34,12 @@ func (s *sandbox) attach(root, rel string, ro bool, denied []string, mountpoint 
 	}
 	// The sandbox's uts namespace too, though the helper has no use for it: with --user alone, nsenter (util-linux
 	// 2.42.3) enters the user namespace in its first pass, which then leaves --keep-caps without effect
-	clone := exec.Command(nsenter, append([]string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5",
-		"--preserve-credentials", "--keep-caps", "--", self, "clone-tree", root, rel, mode}, denied...)...)
+	args := []string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5", "--preserve-credentials", "--keep-caps", "--",
+		self, "clone-tree"}
+	if expect != "" {
+		args = append(args, "--expect="+expect)
+	}
+	clone := exec.Command(nsenter, append(append(args, root, rel, mode), denied...)...)
 	clone.ExtraFiles = []*os.File{s.userns, theirs, s.uts}
 	out, err := clone.CombinedOutput()
 	theirs.Close()
@@ -109,26 +114,26 @@ func recvTree(sock int) (*os.File, string, error) {
 // namespace of its own, copied from ours (open_tree only clones from the caller's own), it opens root without
 // following links, rel beneath it without following links or crossing mounts, refuses what is a denied directory,
 // lies beneath one or holds one, and clones that one mount, read-only if asked and without devices or setuid for a
-// directory. It sends the tree's fd and the path it resolved to on fd 4
-func cloneTree(root, rel, mode string, denied []string) error {
+// directory. With expect (device:inode), the source must be that file. It sends the tree's fd and the path it resolved
+// to on fd 4
+func cloneTree(root, rel, mode, expect string, denied []string) error {
 	// The new mount namespace is this thread's, so everything below stays on it; the process ends after
 	runtime.LockOSThread()
 	if err := unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err != nil {
 		return fmt.Errorf("Unshare a mount namespace: %w (%s)", err, credentials())
 	}
-	noLinks := uint64(unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS)
-	rootFd, err := unix.Openat2(unix.AT_FDCWD, root, &unix.OpenHow{
-		Flags: unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC, Resolve: noLinks})
+	fd, rootFd, err := openSource(root, rel)
 	if err != nil {
-		return fmt.Errorf("Open %s, which must be reached without links: %w", root, err)
-	}
-	defer unix.Close(rootFd)
-	fd, err := unix.Openat2(rootFd, rel, &unix.OpenHow{
-		Flags: unix.O_PATH | unix.O_CLOEXEC, Resolve: noLinks | unix.RESOLVE_BENEATH | unix.RESOLVE_NO_XDEV})
-	if err != nil {
-		return fmt.Errorf("Open %s beneath %s without links or crossing mounts: %w", rel, root, err)
+		return err
 	}
 	defer unix.Close(fd)
+	defer unix.Close(rootFd)
+	// What the user was asked about, if they were: another directory renamed into its path since isn't granted
+	if expect != "" {
+		if id, err := idOf(fd); err != nil || id.String() != expect {
+			return fmt.Errorf("%s isn't the folder you were asked about any more: it was renamed or replaced", rel)
+		}
+	}
 	if err := checkIdentity(fd, rootFd, denied); err != nil {
 		return err
 	}
