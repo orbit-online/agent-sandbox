@@ -44,8 +44,9 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 		Instructions: "Access outside the sandbox that the user grants while it runs: folders, devices, services, " +
 			"credentials. list shows what can be asked for. request asks the user, who sees what you ask for and your " +
 			"reason, and waits for their answer. Ask only for what the task needs, for as short as it needs, and " +
-			"release a grant as soon as you're done with it. Some grants bring tools of their own, named after their " +
-			"plugin, which are listed while the grant lives.",
+			"release a grant as soon as you're done with it. A grant belongs to the whole sandbox, not to the session " +
+			"that asked: every session can use it, and a session lease only ends with the session. Some grants bring " +
+			"tools of their own, named after their plugin, which are listed while the grant lives.",
 	})
 	call := func(req request) (response, error) { return callBroker(socket, req) }
 
@@ -69,14 +70,16 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 			}
 			return n.add(jsonResult(map[string]any{"grant": res.Grant, "credential": res.Credential}))
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "release", Description: "Give a grant back once you're done with it."},
+	mcp.AddTool(server, &mcp.Tool{Name: "release", Description: "Give a grant back once you're done with it. " +
+		"It ends once no session that was given it still holds it."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in releaseIn) (*mcp.CallToolResult, any, error) {
 			if _, err := call(request{Op: "release", Grant: in.Grant}); err != nil {
 				return nil, nil, err
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Released"}}}, nil, nil
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "This session's grants."},
+	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "The grants this session was given and hasn't " +
+		"released. Every live grant is usable from the whole sandbox; list shows them all."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 			res, err := call(request{Op: "status"})
 			if err != nil {

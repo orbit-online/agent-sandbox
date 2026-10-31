@@ -28,7 +28,7 @@ Item {
 
     // Leases the user can pick, always only here
     readonly property var leases: [
-        { value: "session", text: "For this session" },
+        { value: "session", text: "Until this Claude session ends" },
         { value: "lock", text: "Until the screen locks" },
         { value: "PT1H", text: "For an hour" },
         { value: "PT8H", text: "For eight hours" },

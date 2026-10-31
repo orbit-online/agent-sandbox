@@ -140,7 +140,7 @@ func escapeMarkup(s string) string {
 func leaseLabel(lease string) string {
 	switch lease {
 	case "session":
-		return "for this session"
+		return "until this Claude session ends"
 	case "lock":
 		return "until the screen locks"
 	}

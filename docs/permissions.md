@@ -158,8 +158,8 @@ certificates, Kubernetes client certs.
 **C. Namespace injection.** The daemon runs the plugin's `resolve` command, which answers with what to attach:
 `{"source": "/host/path", "ro": true}` for a folder or a device node. The daemon attaches it at
 `/run/permissions/<grant>`; the plugin never touches namespaces. The daemon, not the plugin, enforces the source
-ceiling (below), the same way for every type C plugin. Revoking detaches it. Grants are
-sandbox-wide, so session ties are counted: the mount goes when the last session holding it ends. Fits: live folder
+ceiling (below), the same way for every type C plugin. Revoking detaches it. Like every grant
+it is the sandbox's (see Requests): a session lease's mount goes when the last session holding it ends. Fits: live folder
 mounts, single `/dev` nodes, block devices mounted on the host and handed over as a folder. Moving a network device
 (a wifi phy) into the sandbox's netns is also type C, with an attach kind of its own, left for later.
 
@@ -278,10 +278,19 @@ The caller's session comes from its pidfd (`SO_PEERPIDFD`): the daemon walks its
 Claude Code binary (by `/proc/<pid>/exe`), in the sandbox and not a pid namespace's init. The walk never leaves the
 sandbox: a process is the sandbox's when its user namespace (or the one owning its mount namespace) is the sandbox's
 or below it. That counts re-entries (`claude-desktop --shell`), which nsenter starts from the host, and stops their
-walk at nsenter rather than at a host shell that may carry a host Claude Code session's variable. A caller without such an anchor gets no
-session leases. Anything in the sandbox can set that variable, so session ties serve leases and the window's
-bookkeeping. They don't authenticate a caller, and no grant relies on them for that: a grant is usable from the
-whole sandbox. The window says "this session" as "until this Claude session ends, at most until the app quits".
+walk at nsenter rather than at a host shell that may carry a host Claude Code session's variable. A caller without
+such an anchor gets no session leases.
+
+A grant belongs to the sandbox, not to the session that asked for it. Every process in the sandbox runs as the same
+user in the same namespaces, so nothing could keep one session from another's grant: any process in the sandbox can
+use any live grant (a folder is mounted in the mount namespace everyone shares, a type A socket sits in the grant
+directory everyone sees, a credential is a string), and every session's MCP server offers every grant's tools. The
+session id only ties a "this session" lease's lifetime to that session's `claude` process, and records who still
+holds a grant for `release` and the nudge. Anything in the sandbox can set the variable; nothing relies on it to
+authenticate a caller. A request a live grant covers is answered without asking, from any session: a Claude Code
+subagent runs in its parent's `claude` process with the parent's session id, and a new Claude session in the app
+gets what the sandbox already has. The notification and the window say "until this Claude session ends", at most
+until the app quits.
 
 ### Consent
 

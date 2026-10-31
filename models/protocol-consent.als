@@ -39,12 +39,13 @@ run P1grants {
 } for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
-// Known, consent confusion (P1, P8), by design per docs/permissions.md
-// ("session ties are counted"): a session lease the user allowed "for this
-// session" gains every other session that asks for the same parameters,
-// without asking (addSession, broker.go:569-572), so it lasts as long as
-// the longest of them. Any process can be a session: an anchor is any
-// binary named `claude` above a process with CLAUDE_CODE_SESSION_ID set.
+// Known, by design (Anders, 2026-10-31; docs/permissions.md, Requests): a
+// grant is the sandbox's, not a session's. A session lease the user
+// allowed "until this Claude session ends" gains every other session
+// that asks for the same parameters, without asking (hold, leases.go),
+// so it lasts as long as the longest of them; a subagent shares its
+// parent's session anyway. Sessions run as one user in one set of
+// namespaces, so no isolation between them could be enforced.
 assert P1sessionLeaseNotWidened {
   always all g: Grant | g in Live implies g.gsess' in g.gsess
 }
