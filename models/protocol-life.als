@@ -66,17 +66,18 @@ run P4ends {
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
-// P4, type B: no credential once the grant ended. Known, a finding:
-// deliver() issues for a grant `matching` found (broker.go:567-581,
-// 638-649) after waiting for one of four plugin slots (plugins.go:46-52),
-// and nothing checks the grant is still live. The sandbox queues many
-// requests that a live type B grant covers; the user revokes it; the
-// queued ones go on issuing credentials of the full maxValidity.
+// P4, type B: no credential once the grant ended. A request a live type
+// B grant covers waits for one of four plugin slots (plugins.go); deliver
+// checks the grant is still live once it has one, before `issue` runs,
+// and again before handing the credential out (consent.go). Holds.
+// Revert: issue without `g in Live` (as before the fix): the sandbox
+// queues requests, the user revokes, the queued ones issue credentials
+// of the full maxValidity (counterexample found).
 assert P4noCredentialAfterEnd {
   always all g: Grant | credential[g] implies g in Live
 }
 check P4noCredentialAfterEnd for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..7 steps expect 1
+  1 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..7 steps expect 0
 
 // P9. No lock lease is granted while the lock isn't watched. Known, a
 // finding: checkLease runs before asking (broker.go:550) and again only

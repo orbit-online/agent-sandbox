@@ -145,17 +145,37 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	return b.deliver(c, g)
 }
 
-// deliver returns a grant's delivery: for type B a credential, issued for the grant's validity
+// deliver returns a grant's delivery: for type B a credential, issued for the grant's validity. The grant must still
+// be live when the plugin runs and when the credential is handed out: a request may wait for a plugin slot while the
+// grant is revoked or runs out
 func (b *broker) deliver(c *capability, g *grant) (*grant, string, error) {
 	if c.Type != "B" {
 		return g, "", nil
 	}
-	v := b.validity(c, g)
-	if v <= 0 {
-		return nil, "", errors.New("The grant just ran out: ask again")
+	cred, err := c.issue(context.Background(), g.Params, func() (time.Duration, error) {
+		if !b.isLive(g) {
+			return 0, errors.New("The grant ended: ask again")
+		}
+		v := b.validity(c, g)
+		if v <= 0 {
+			return 0, errors.New("The grant just ran out: ask again")
+		}
+		return v, nil
+	})
+	if err != nil {
+		return nil, "", err
 	}
-	cred, err := c.issue(context.Background(), g.Params, v)
-	return g, cred, err
+	if !b.isLive(g) {
+		return nil, "", errors.New("The grant ended: ask again")
+	}
+	return g, cred, nil
+}
+
+// isLive reports whether g is still granted
+func (b *broker) isLive(g *grant) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.grants[g.ID] == g
 }
 
 func (b *broker) matching(c *capability, params json.RawMessage) *grant {

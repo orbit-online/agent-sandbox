@@ -129,3 +129,36 @@ func TestRanOut(t *testing.T) {
 		t.Errorf("Issued %q after the lease ran out", cred)
 	}
 }
+
+// P4: a request a live type B grant covers waits for a plugin slot; the grant is revoked meanwhile. No credential
+func TestNoCredentialAfterEnd(t *testing.T) {
+	b, _ := testBroker(t, "allow")
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range cap(pluginSlots) {
+		pluginSlots <- struct{}{}
+	}
+	type result struct {
+		cred string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
+		done <- result{cred, err}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if _, err := b.revoke(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range cap(pluginSlots) {
+		<-pluginSlots
+	}
+	if r := <-done; r.err == nil || r.cred != "" {
+		t.Errorf("Issued %q for a grant revoked while waiting for a plugin slot", r.cred)
+	}
+}

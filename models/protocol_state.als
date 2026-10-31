@@ -197,7 +197,7 @@ pred change[N, E: set Grant] {
   UnitUp' = UnitUp - E + (N & typed[TypeA])
   Mounted' = Mounted - E + (N & typed[TypeC])
   // deliver() issues for a new type B grant, after a plugin slot frees
-  Issuing' = Issuing + (N & typed[TypeB])
+  Issuing' = Issuing - E + (N & typed[TypeB])
   all g: N & typed[TypeC] | g.mdir' = g.gparams.resolves
   all g: Grant - (N & typed[TypeC]) | g.mdir' = g.mdir
   all g: N | g.glease = LDuration implies g.left' > 0 else no g.left'

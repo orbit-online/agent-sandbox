@@ -188,7 +188,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   the broker's notification or an `ActionInvoked` of its own allow (a fake
   notification server on a `dbus-daemon` of the test's), anchor a session at or above the
   sandbox, make one always grant start several units, get a credential after
-  its lease ran out; plus a window answer while the notification is up, unit
+  its lease ran out or for a grant revoked while its request waited for a
+  plugin slot; plus a window answer while the notification is up, unit
   names per launcher, and a broken store set aside. Type C against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, a folder mounted

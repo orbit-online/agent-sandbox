@@ -105,14 +105,14 @@ pred sandboxEnd[l: Launcher] {
   keepEnv and stored' = stored
 }
 
-// deliver() for type B (broker.go:638-649): the validity, refused when it
-// is not positive. Runs once a plugin slot frees; nothing checks the grant
-// is still live.
+// deliver() for type B (consent.go): the validity, refused when it is not
+// positive. Runs once a plugin slot frees, and only while the grant is
+// live, checked then and again before the credential is handed out.
 fun validity[g: Grant]: Int {
   (g.glease = LDuration and g.left < g.gcap.maxV) implies g.left else g.gcap.maxV
 }
 pred issue[g: Grant] {
-  g in Issuing
+  g in Issuing and g in Live
   Issuing' = Issuing - g
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted
   gsess' = gsess and left' = left and mdir' = mdir and lockFile' = lockFile

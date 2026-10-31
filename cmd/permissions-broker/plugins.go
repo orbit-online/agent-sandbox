@@ -45,9 +45,17 @@ type capability struct {
 // At most this many plugin commands run at once, whatever the sandbox sends
 var pluginSlots = make(chan struct{}, 4)
 
-func runPlugin(cmd *exec.Cmd) error {
+func runPlugin(cmd *exec.Cmd) error { return runPluginIf(cmd, nil) }
+
+// runPluginIf runs cmd once a slot is free, if ready, run then, doesn't refuse
+func runPluginIf(cmd *exec.Cmd, ready func() error) error {
 	pluginSlots <- struct{}{}
 	defer func() { <-pluginSlots }()
+	if ready != nil {
+		if err := ready(); err != nil {
+			return err
+		}
+	}
 	return cmd.Run()
 }
 
@@ -206,16 +214,29 @@ type pluginInput struct {
 	Validity string          `json:"validity,omitempty"`
 }
 
-// issue runs a type B plugin's issue command and returns what it prints
-func (c *capability) issue(ctx context.Context, params json.RawMessage, validity time.Duration) (string, error) {
-	in, _ := json.Marshal(pluginInput{Params: params, Ceiling: c.Ceiling.Raw, Validity: formatDuration(validity)})
+// issue runs a type B plugin's issue command and returns what it prints. validity runs once a plugin slot is free,
+// right before the command: the grant may have ended or run down while the request waited for one
+func (c *capability) issue(ctx context.Context, params json.RawMessage, validity func() (time.Duration, error)) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Issue[0], c.Issue[1:]...)
-	cmd.Stdin = bytes.NewReader(in)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
-	if err := runPlugin(cmd); err != nil {
+	var refused error
+	err := runPluginIf(cmd, func() error {
+		v, err := validity()
+		if err != nil {
+			refused = err
+			return err
+		}
+		in, _ := json.Marshal(pluginInput{Params: params, Ceiling: c.Ceiling.Raw, Validity: formatDuration(v)})
+		cmd.Stdin = bytes.NewReader(in)
+		return nil
+	})
+	if refused != nil {
+		return "", refused
+	}
+	if err != nil {
 		return "", fmt.Errorf("%s couldn't issue: %s", c.id(), strings.TrimSpace(errOut.String()))
 	}
 	return out.String(), nil
