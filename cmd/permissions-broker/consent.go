@@ -136,11 +136,20 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	if err := c.inList(context.Background(), params); err != nil {
 		return nil, "", err
 	}
-	g, err = b.grant(c, params, summary, lease, sess)
-	if err != nil {
+	// A grant of the same may have appeared while the user was asked (a replay, the window narrowing to what's
+	// granted): that one serves, rather than a second of the same
+	c.covered.Lock()
+	if g = b.matching(c, params); g != nil {
+		if g.Lease == "session" && sess != nil {
+			keepSess = b.addSession(g, sess)
+		}
+	} else if g, err = b.grant(c, params, summary, lease, sess); err != nil {
+		c.covered.Unlock()
 		return nil, "", err
+	} else {
+		keepSess = len(g.sessions) > 0
 	}
-	keepSess = len(g.sessions) > 0
+	c.covered.Unlock()
 	b.logDecision(summary, reason, "allowed ("+lease+")")
 	if lease == "always" {
 		b.addAlways(c, params)

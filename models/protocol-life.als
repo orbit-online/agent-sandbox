@@ -154,28 +154,28 @@ run P12replays {
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..6 steps expect 1
 
-// One live grant per launcher, capability and parameters. Known, a
-// finding: replay("C") looks for no live grant, and shareFrom runs it on
-// every `share` from M1 (broker.go:485-497), which udhcpc's script may
-// send: each `share` mounts every always folder once more. A window
-// answer narrowing to parameters already granted makes a second grant too
-// (broker.go:611-626 never calls `matching`).
+// One live grant per launcher, capability and parameters. share runs
+// once per sandbox (sockets.go), a replay grants nothing already live,
+// and an answer that finds a grant of the same made while the user was
+// asked uses it (consent.go, all under c.covered). Holds. Revert: share
+// without its once and replays without the look for a live grant (as
+// before the fix): udhcpc's script sends share again and every always
+// folder is mounted once more (counterexample found; either alone holds).
 assert P12noDuplicateGrants {
   always all disj g, h: Live | not (g.gl = h.gl and g.gcap = h.gcap and g.gparams = h.gparams)
 }
 check P12noDuplicateGrants for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..5 steps expect 1
+  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..5 steps expect 0
 
-// Forget leaves no live always grant of its parameters. Known, a finding,
-// from the duplicates above: forget ends the one grant `matching` returns
-// in map order (broker.go:1100-1102), and only if that one's lease is
-// always; the other copies stay mounted with no store entry behind them.
+// Forget leaves no live always grant of its parameters: it ends every
+// one (store.go), and with P12noDuplicateGrants there is at most one.
+// Holds (a counterexample before both fixes).
 assert P12forgetEndsAlways {
-  always all l: Launcher, c: Capability, p: Param, w: Principal, g: Grant |
-    forget[l, c, p, w, g] implies after no h: Live | h.gl = l and h.gcap = c and h.gparams = p and h.glease = LAlways
+  always all l: Launcher, c: Capability, p: Param, w: Principal |
+    forget[l, c, p, w] implies after no h: Live | h.gl = l and h.gcap = c and h.gparams = p and h.glease = LAlways
 }
 check P12forgetEndsAlways for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 3 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 1
+  1 Session, 3 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
 // P13. Two launchers never hold the same exclusive parameters at once
 // (exclusiveLock's O_EXCL file, plugins.go:369-392; a crashed daemon's

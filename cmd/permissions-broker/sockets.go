@@ -180,11 +180,19 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 }
 
 // shareFrom makes the sandbox's grant directory shared in M1, asked by the FHS env's launcher script in M1 before the
-// FHS env's bwrap copies it
+// FHS env's bwrap copies it. Once per sandbox: a later share (udhcpc's, after the FHS env's failed) would come after
+// the copy, and type C grants would never reach the app
 func (b *broker) shareFrom(p peer) error {
 	if b.sb.mnt == nil || !sameFile(b.sb.mnt, fmt.Sprintf("/proc/%d/ns/mnt", p.pid)) || p.gone() {
 		return errors.New("Only from the sandbox's outer mount namespace")
 	}
+	b.mu.Lock()
+	if b.shareAsked {
+		b.mu.Unlock()
+		return errors.New("Asked to share once already")
+	}
+	b.shareAsked = true
+	b.mu.Unlock()
 	if err := b.sb.share(b.cfg.SandboxGrantDir); err != nil {
 		return err
 	}
@@ -201,7 +209,7 @@ func (b *broker) adoptShared() {
 		return
 	}
 	b.mu.Lock()
-	b.shared = true
+	b.shared, b.shareAsked = true, true
 	b.mu.Unlock()
 	go b.replay("C")
 }

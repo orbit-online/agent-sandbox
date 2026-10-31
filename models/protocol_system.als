@@ -10,12 +10,15 @@ open protocol_events
 
 // replay (store.go): every stored always grant of type t that validates,
 // matches an instance `list` prints (A) or resolves beneath the ceiling
-// (C) is granted again, with no look for a live grant of the same.
+// (C), and isn't live already, is granted again.
 pred replays[l: Launcher, t: DType, N: set Grant] {
   all g: N | g.gl = l and g.glease = LAlways and g.gcap.dtype = t and g.gparams in l.stored[g.gcap]
-  all c: Capability, p: l.stored[c] | (c.dtype = t and replayOK[l, c, p]) implies one g: N | g.gcap = c and g.gparams = p
-  all g: N | replayOK[l, g.gcap, g.gparams]
+  all c: Capability, p: l.stored[c] | (c.dtype = t and replayOK[l, c, p] and no liveOf[l, c, p])
+    implies one g: N | g.gcap = c and g.gparams = p
+  all g: N | replayOK[l, g.gcap, g.gparams] and no liveOf[l, g.gcap, g.gparams]
 }
+// Under c.covered, a replay makes no grant of what is live already.
+fun liveOf[l: Launcher, c: Capability, p: Param]: set Grant { { h: Live | h.gl = l and h.gcap = c and h.gparams = p } }
 // A start removes the launcher's own stale locks first (cleanup), so only
 // another launcher's lock keeps a grant from replaying.
 pred replayOK[l: Launcher, c: Capability, p: Param] {
@@ -28,6 +31,8 @@ pred replayOK[l: Launcher, c: Capability, p: Param] {
 // share from M1 (shareFrom, broker.go:485-497): shared, then replay C.
 pred share[l: Launcher, w: Principal] {
   inM1[w] and l in Up - Gone
+  // once per sandbox (shareAsked, sockets.go)
+  l not in SharedDir
   SharedDir' = SharedDir + l
   Up' = Up and Dirty' = Dirty and Watched' = Watched and Gone' = Gone
   replays[l, TypeC, Live' - Live]
@@ -158,6 +163,6 @@ fact traces {
     or (some l: Launcher, w: Clients + BwrapInitP + UdhcpcP | share[l, w])
     or (some l: Launcher, c: Capability | unblock[l, c])
     or (some l: Launcher, c: Capability, p: Param, w: Clients |
-          forget[l, c, p, w, none] or (some g: Grant | forget[l, c, p, w, g]))
+          forget[l, c, p, w])
   )
 }

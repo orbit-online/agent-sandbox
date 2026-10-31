@@ -116,8 +116,10 @@ The FHS env's bwrap copies M1 when it starts. Before it does, `bwrap-subid.sh` (
 sends `share` on `request.sock` and waits for the answer (up to 10 s, for the daemon to come up). The daemon
 checks that the client is in M1 and makes
 `/run/permissions` shared there. In M1 that mount is a bind of the host directory, so it stays a slave of the host
-too; files the daemon creates on the host side (sockets) show up as before. If `share` fails, the launcher goes on
-without type C grants rather than not starting; the daemon then refuses type C requests and skips them when
+too; files the daemon creates on the host side (sockets) show up as before. The daemon serves `share` once per sandbox: a
+second one, from anything else in M1 such as udhcpc's script, would come after the FHS env's bwrap copied M1, where
+grants no longer reach the app. Replaying makes no grant of what's live already. If `share` fails, the launcher goes
+on without type C grants rather than not starting; the daemon then refuses type C requests and skips them when
 replaying, and the window says why.
 
 ### Privileged steps in a Go process

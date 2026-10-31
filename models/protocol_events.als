@@ -119,6 +119,9 @@ pred notifAllow[r: Req, g: Grant] {
     // under the lock in grant(), leases.go)
     leaseOK[l, r.asked, r.rsess]
     r.asked = LSession implies r.rsess in Alive
+    // a grant of the same made meanwhile serves instead (consent.go), as
+    // matchLive does
+    no h: Live | h.gl = l and h.gcap = c and h.gparams = r.rparams
     g.gl = l and g.gcap = c and g.gparams = r.rparams and g.glease = r.asked
     change[g, none]
     r.asked = LSession implies gsess' = gsess + g -> r.rsess else gsess' = gsess
@@ -140,6 +143,7 @@ pred windowAllow[r: Req, w: Principal, ls: Lease, p: Param, g: Grant] {
     passes[c, p]
     leaseOK[l, ls, r.rsess]
     ls = LSession implies r.rsess in Alive
+    no h: Live | h.gl = l and h.gcap = c and h.gparams = p
     g.gl = l and g.gcap = c and g.gparams = p and g.glease = ls
     change[g, none]
     ls = LSession implies gsess' = gsess + g -> r.rsess else gsess' = gsess
@@ -228,15 +232,12 @@ pred lockGained[l: Launcher] {
   keepGates and keepEnv and keepGrants and keepReqs and stored' = stored
 }
 
-// forget (broker.go:1081-1104): the store entry goes; `matching` picks one
-// live grant of the parameters, in map order, and ends it if its lease is
-// always. G is that pick, none when there is no such grant.
-pred forget[l: Launcher, c: Capability, p: Param, w: Principal, G: set Grant] {
+// forget (store.go): the store entry goes, and every live always grant
+// of the parameters ends.
+pred forget[l: Launcher, c: Capability, p: Param, w: Principal] {
   hostOnly[w] and l in Up and p in c.wellFormed
-  lone G and G in Live and G.gl in l and G.gcap in c and G.gparams in p
-  no G iff no h: Live | h.gl = l and h.gcap = c and h.gparams = p
   stored' = stored - l -> c -> p
-  change[none, G & glease.LAlways]
+  change[none, { h: Live | h.gl = l and h.gcap = c and h.gparams = p and h.glease = LAlways }]
   gsess' = gsess
   keepDaemons and keepGates and keepEnv and keepReqs
 }

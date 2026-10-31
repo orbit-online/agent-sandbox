@@ -154,8 +154,10 @@ type broker struct {
 	gates   map[string]*gate
 	store   storeData
 	shared  bool
-	lockOK  bool
-	watches map[chan []byte]bool
+	// share was asked for, or an earlier daemon's found: it's done once per sandbox
+	shareAsked bool
+	lockOK     bool
+	watches    map[chan []byte]bool
 	// Added to the time, by tests
 	skew atomic.Int64
 }

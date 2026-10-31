@@ -50,9 +50,15 @@ func (b *broker) replay(typ string) {
 			slog.Warn("Replay", "capability", a.Capability, "err", err)
 			continue
 		}
-		if _, err := b.grant(c, params, summary, "always", nil); err != nil {
-			slog.Warn("Replay", "capability", a.Capability, "err", err)
+		// Once per parameters: under c.covered, as requests look for a live grant, so a replay racing a request or
+		// another replay doesn't make a second grant (a second mount nothing ends)
+		c.covered.Lock()
+		if b.matching(c, params) == nil {
+			if _, err := b.grant(c, params, summary, "always", nil); err != nil {
+				slog.Warn("Replay", "capability", a.Capability, "err", err)
+			}
 		}
+		c.covered.Unlock()
 	}
 }
 
@@ -63,7 +69,7 @@ func (b *broker) addAlways(c *capability, params json.RawMessage) {
 	b.save()
 }
 
-// forget removes an always grant and ends its live grant
+// forget removes an always grant and ends its live grants
 func (b *broker) forget(capID string, params json.RawMessage) error {
 	c, ok := b.caps[capID]
 	if !ok {
@@ -83,8 +89,10 @@ func (b *broker) forget(capID string, params json.RawMessage) error {
 	b.store.Always = kept
 	b.mu.Unlock()
 	b.save()
-	if g := b.matching(c, params); g != nil && g.Lease == "always" {
-		g.end("forgotten by the user")
+	for _, g := range b.liveGrants("") {
+		if g.cap == c && string(g.Params) == string(params) && g.Lease == "always" {
+			g.end("forgotten by the user")
+		}
 	}
 	return nil
 }

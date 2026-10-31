@@ -190,7 +190,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   parameter or reason in the notification, make a click on its replacement of
   the broker's notification or an `ActionInvoked` of its own allow (a fake
   notification server on a `dbus-daemon` of the test's), anchor a session at or above the
-  sandbox, make one always grant start several units, get a credential after
+  sandbox, make one always grant start several units or
+  mount an always folder twice (replays, a second `share`), get a credential after
   its lease ran out or for a grant revoked while its request waited for a
   plugin slot; plus a window answer while the notification is up, unit
   names per launcher, and a broken store set aside. Type C against a stand-in

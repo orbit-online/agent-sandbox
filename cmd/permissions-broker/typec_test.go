@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -279,5 +280,31 @@ func TestCleanup(t *testing.T) {
 	cleanup(b.cfg, nil)
 	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, "stale")); err == nil {
 		t.Error("A stale mountpoint is left")
+	}
+}
+
+// P12: share is served once, and replays mount an always folder once however often they run
+func TestReplayOnce(t *testing.T) {
+	src := t.TempDir()
+	b, _, _ := sandboxC(t)
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	if err := b.shareFrom(peerAt(t, b.sb.pid)); err == nil {
+		t.Error("share served twice")
+	}
+	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{"path":"` + src + `"}`)}}
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Go(func() { b.replay("C") })
+	}
+	wg.Wait()
+	if gs := b.liveGrants(""); len(gs) != 1 {
+		t.Errorf("Replays made %d grants of one always folder", len(gs))
+	}
+	if err := b.forget(c.id(), json.RawMessage(`{"path":"`+src+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if gs := b.liveGrants(""); len(gs) != 0 {
+		t.Errorf("Forget left %d grants", len(gs))
 	}
 }
