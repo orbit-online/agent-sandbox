@@ -84,11 +84,12 @@ def attach(pid, src, dst, readonly=False):
     in_child(move)
 
 
-def detach(pid, dst):
+def detach(pid, dst, remove=True):
     def run():
         enter_owner(pid)
         check(libc.umount2(dst.encode(), MNT_DETACH), "umount2")
-        (os.rmdir if os.path.isdir(dst) else os.unlink)(dst)
+        if remove:
+            (os.rmdir if os.path.isdir(dst) else os.unlink)(dst)
 
     in_child(run)
 
@@ -130,14 +131,14 @@ def descendants(pid):
     return out
 
 
-def start_nested(bwrap, before_b2="", extra_b1=()):
+def start_nested(bwrap, before_b2="", extra_b1=(), grants_b1=("--tmpfs", "/grants")):
     """B1 with B2 inside, each with its own userns and mntns. Returns (the process, B1's sandboxed pid, B2's payload
     pid), the last None when before_b2 holds B2 back."""
     common = ["--ro-bind", "/nix", "/nix", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
     sleep, bash = shutil.which("sleep"), os.path.realpath(shutil.which("bash"))
     b2 = [bwrap, "--die-with-parent", "--unshare-user", "--unshare-pid", *common, "--bind", "/grants", "/grants",
           "--", sleep, "600"]
-    p = subprocess.Popen(["timeout", "600", bwrap, "--unshare-all", "--die-with-parent", *common, "--tmpfs", "/grants",
+    p = subprocess.Popen(["timeout", "600", bwrap, "--unshare-all", "--die-with-parent", *common, *grants_b1,
                           *extra_b1, "--", bash, "-c", f"{before_b2}exec \"$@\"", "-", *b2],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     for _ in range(100):
@@ -242,10 +243,13 @@ def main():
     finally:
         proc.kill()
 
-    # B1 waits for /grants to turn shared in M1 before B2 copies it, so B2's /grants is its slave
+    # B1 waits for /grants to turn shared in M1 before B2 copies it, so B2's /grants is its slave. As in the sandbox,
+    # M1's /grants is a read-only bind of a directory outside, where the mountpoints are made
     flag = os.path.join(work, "shared")
+    grants = os.path.join(work, "grants")
+    os.makedirs(os.path.join(grants, "prop"))
     proc, m1, _ = start_nested(bwrap, before_b2=f"while [ ! -e {flag} ]; do sleep 0.1; done; ",
-                               extra_b1=("--ro-bind", work, work))
+                               extra_b1=("--ro-bind", work, work), grants_b1=("--ro-bind", grants, "/grants"))
     try:
         def share():
             enter_owner(m1)
@@ -263,10 +267,12 @@ def main():
             sys.exit("B2 didn't come up")
         attach(m1, host, "/grants/prop", readonly=True)
         seen = os.listdir(f"/proc/{m2}/root/grants/prop")
-        detach(m1, "/grants/prop")
-        gone = not os.path.exists(f"/proc/{m2}/root/grants/prop")
-        results.append(report("attach and detach in M1 propagate to M2 when M1's /grants is shared before B2 starts",
-                              seen == ["file"] and gone))
+        e = errno_of(lambda: (enter_as_sandbox(m2), os.mkdir("/grants/new")))
+        detach(m1, "/grants/prop", remove=False)
+        gone = os.listdir(f"/proc/{m2}/root/grants/prop") == []
+        results.append(report("attach and detach in M1 propagate to M2 when M1's /grants, a read-only bind, is shared "
+                              "before B2 starts", seen == ["file"] and gone))
+        results.append(report("the sandbox can't write to the grant directory", e == errno.EROFS, os.strerror(e)))
     finally:
         proc.kill()
         shutil.rmtree(work)

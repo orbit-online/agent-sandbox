@@ -39,7 +39,8 @@ On kernel 6.18, bubblewrap 0.12.0, Claude Code 2.1.309 (`scripts/ns-inject-spike
 3. The sandbox can't unmount a grant. `MNT_DETACH` leaves files and cwds already open inside working.
 4. With the grant directory `MS_SHARED` in M1 (nixpak's mount namespace) before the FHS env's bwrap copies it,
    mounts and unmounts there propagate into M2, where the app runs, and further down to anything that keeps slave
-   propagation.
+   propagation. That holds with the grant directory a read-only bind of a directory outside, the mountpoints made
+   outside; the sandbox can't write to it.
 5. `SO_PEERCRED` and `SO_PEERPIDFD` give a peer's pid as seen by the daemon (and a pidfd) from three pid namespaces
    down; the daemon reads the peer's ancestors and environment in `/proc`.
 6. Claude Code sets `CLAUDE_CODE_SESSION_ID` in the environment of what it spawns (MCP servers, shells), not in its
@@ -62,13 +63,18 @@ host (user, no capabilities)                       sandbox
 └──────────────────────────────┘                   └──────────────────────────────────────────┘
 ```
 
-- `permissions-broker`, Go, in `nix/packages/permissions-broker/`. One per launcher, started by `bwrap-subid.sh`
-  next to subid-broker and ending with the sandbox the same way (parent death). It listens on:
+- `permissions-broker`, Go, in `nix/packages/permissions-broker/`. One per launcher, as the transient user unit
+  `claude-desktop[-<name>]-permissions.service` with `Restart=on-failure`, which `bwrap-subid.sh` starts with
+  `systemd-run --user` before it execs bwrap. It listens on:
   - `request.sock` in the grant directory, for the sandbox.
-  - `control.sock` in the launcher's runtime directory on the host, mode 0600, never bound into the sandbox, for
-    the window and the launcher.
-- The grant directory: `$XDG_RUNTIME_DIR/claude-desktop[-<name>]/permissions/` on the host, bound at
-  `/run/permissions` in the sandbox. This is the one bind the feature adds.
+  - `control.sock` in the launcher's runtime directory on the host, mode 0600, for the window and the launcher. It
+    answers only peers in the daemon's own user namespace, so nothing in the sandbox can use it even if a ceiling
+    exposes the path.
+- The grant directory: `$XDG_RUNTIME_DIR/claude-desktop[-<name>]/permissions/` on the host, bound **read-only** at
+  `/run/permissions` in the sandbox. This is the one bind the feature adds. Connecting to a socket on a read-only
+  bind works; creating, renaming or replacing anything in it doesn't, so the sandbox can't plant a symlink where a
+  mountpoint or socket will go, or remove `request.sock`. The daemon creates every entry on the host side, through a
+  dirfd with `O_NOFOLLOW`, under names it picks at random.
 - `permissions-mcp`, the same binary as an MCP server, run inside the sandbox from the module's MCP servers. A client
   of `request.sock`.
 - The Permissions window, a Qt 6 QML app (PySide6) talking to `control.sock`, opened by the desktop action
@@ -76,19 +82,29 @@ host (user, no capabilities)                       sandbox
   Qt's official binding, and Go has no Qt binding that is both maintained and standard. It is a client only: all
   state lives in the daemon.
 
-### Handle on the sandbox
+### Handle on the sandbox, and restarts
 
-`bwrap-subid.sh` (`SUBID_MAP=subid`) reads the outer bwrap's `child-pid` from its info fd while bwrap waits on
-`--userns-block-fd`, so the pid can't be reused yet. It starts the daemon with a pidfd for it on a fixed fd before
-unblocking bwrap. From that pidfd the daemon finds M1 and its owner userns, and learns when the sandbox ends.
+The daemon finds the sandbox the way `claude-desktop.sh`'s `sandbox_pid` does: nixpak's `bwrapinfo.json` for the
+launcher's app ID gives the outer bwrap's `child-pid`, valid once its mount namespace differs from the host's. The
+daemon takes a pidfd for it, checks the file still names that pid, and from then on uses the pidfd: M1 and its owner
+userns come from it, and the pidfd turning readable means the sandbox ended, upon which the daemon stops its plugin
+units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
+
+Started again after a crash, it finds the same sandbox the same way and reconciles before serving: it detaches
+everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and replays only
+the `always` grants. Leases that ran while it was down are gone rather than extended; Claude asks again. A daemon
+that keeps failing leaves no grant live except what was attached when it died, which the window can't revoke then;
+the unit's failure shows in `systemctl --user`.
 
 ### Sharing the grant directory
 
 The FHS env's bwrap copies M1 when it starts. Before it does, `bwrap-subid.sh` (`SUBID_MAP=parent`, inside M1)
-sends `share` on `request.sock` and waits for the answer. The daemon checks that the client is in M1 and makes
+sends `share` on `request.sock` and waits for the answer (up to 10 s, for the daemon to come up). The daemon
+checks that the client is in M1 and makes
 `/run/permissions` shared there. In M1 that mount is a bind of the host directory, so it stays a slave of the host
 too; files the daemon creates on the host side (sockets) show up as before. If `share` fails, the launcher goes on
-without type C grants rather than not starting.
+without type C grants rather than not starting; the daemon then refuses type C requests and skips them when
+replaying, and the window says why.
 
 ### Privileged steps in a Go process
 
@@ -102,29 +118,48 @@ permissions-broker clone-tree <src> [ro]` sends the detached tree's fd back over
 
 A plugin declares capabilities, each of one delivery type.
 
-**A. Mediated channel.** The daemon creates `<grant>.sock` in the grant directory and starts the plugin's `serve`
-command with the listening socket as fd 3 (`LISTEN_FDS=1`, as systemd socket activation does), in a process group of
-its own. Revoking kills the group and removes the socket, which cuts live connections. Fits: Windows VM, systemd
+**A. Mediated channel.** The daemon runs the plugin's `serve` command as a socket-activated transient unit:
+`systemd-run --user --unit=perm-<launcher>-<grant> --socket-property=ListenStream=<grant dir>/<grant>.sock`. The
+plugin gets the socket the standard way (`sd_listen_fds`, which needs `LISTEN_PID` to match, so the daemon can't
+hand the fd over itself). Revoking stops the unit, which kills its whole cgroup, double-forked children included, and
+removes the socket, which cuts live connections. After a crash the units are found by name. Fits: Windows VM, systemd
 (a filtered systemd1 proxy), BlueZ, TPM operations, UEFI variable reads, journal queries (the plugin runs the query
 and streams it), D-Bus services (an xdg-dbus-proxy instance per grant, since rules can't change in a running one),
 website logins (an HTTP proxy that adds cookies the sandbox never sees).
 
 **B. Issued credential.** The daemon runs the plugin's `issue` command with the request's parameters (the sandbox's
-public key or CSR among them) and the validity as JSON on stdin, and returns what it prints. The validity is capped
-at the lease. A credential can't be taken back: revoke means "won't issue again". Fits: certs from a host CA, SSH
+public key or CSR among them) and the validity as JSON on stdin, and returns what it prints. The validity is the
+shorter of the plugin's `maxValidity` (from its ceiling) and a duration lease. The lease decides only whether
+another `issue` asks the user first. A credential can't be taken back: revoke means "won't issue
+again". Fits: certs from a host CA, SSH
 certificates, Kubernetes client certs.
 
 **C. Namespace injection.** The daemon runs the plugin's `resolve` command, which answers with what to attach:
-`{"source": "/host/path", "ro": true}` for a folder or a device node. The daemon validates it against the ceiling
-and attaches it at `/run/permissions/<grant>`; the plugin never touches namespaces. Revoking detaches it. Grants are
+`{"source": "/host/path", "ro": true}` for a folder or a device node. The daemon attaches it at
+`/run/permissions/<grant>`; the plugin never touches namespaces. The daemon, not the plugin, enforces the source
+ceiling (below), the same way for every type C plugin. Revoking detaches it. Grants are
 sandbox-wide, so session ties are counted: the mount goes when the last session holding it ends. Fits: live folder
 mounts, single `/dev` nodes, block devices mounted on the host and handed over as a folder. Moving a network device
 (a wifi phy) into the sandbox's netns is also type C, with an attach kind of its own, left for later.
 
-Open files survive a revoke of type C (verified item 3). On revoke the daemon detaches, then lists the processes in
-the sandbox that still hold files or a cwd under the grant (`/proc/*/fd`, `/proc/*/cwd`); the window shows them and
-offers to end them. It doesn't refuse a revoke because something is in use, and it doesn't kill anything without
-the user saying so.
+Open files survive a revoke of type C (verified item 3). Before detaching, the daemon lists the processes in the
+sandbox holding files, mappings or a cwd on the grant's mounts: the `mnt_id` in `/proc/*/fdinfo/*` against the
+grant's mount ids in each mount namespace it propagated to, plus `/proc/*/map_files` and `/proc/*/cwd`. After the
+detach paths no longer resolve, so the list is taken first. The window shows the holders and offers to end them. The
+daemon doesn't refuse a revoke because something is in use, and doesn't kill anything without the user saying so.
+
+### Source ceiling and resolving paths
+
+A path check followed by `open_tree` on the path is open to symlinks and swaps: the sandbox has rw binds of its own
+and can plant `~/Workspace/agent/x -> ~/.ssh` before asking for `~/Workspace/agent/x`. So the clone helper, after its
+`unshare`, opens the ceiling's root (an allowed prefix) and resolves the requested path from it with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS)`, then calls `open_tree(fd, "", AT_EMPTY_PATH|OPEN_TREE_CLONE|
+AT_RECURSIVE)` on the result. The fd belongs to the helper's own mount namespace, so `open_tree` accepts it. The
+path shown to the user is the one resolved, read back from the fd.
+
+Never grantable, whatever a ceiling says: every launcher's state directory (the grant store) and
+`$XDG_RUNTIME_DIR` (the control sockets and every launcher's grant directory). A grant there would let the sandbox
+approve its own requests.
 
 ### Plugin manifest
 
@@ -149,6 +184,9 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
 
 - `params` is a JSON Schema properties object; the daemon validates requests against it.
 - `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`.
+- `exclusive` (optional): an instance may be granted to one launcher at a time (a VM's QMP connection takes one
+  client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`; a request for an instance
+  another launcher holds is refused, naming it.
 - `serve`, `issue`, `resolve` per type as above.
 - `watch` (optional) runs for as long as a grant lives; its exit ends the grant (VM shut down, device unplugged). For
   type A, the `serve` process exiting does the same.
@@ -156,9 +194,9 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
   grant lives (see MCP).
 
 The module's option `permissions.plugins.<name>` enables a plugin and sets its ceiling. The ceiling is
-plugin-specific JSON the daemon passes to the plugin's commands and checks itself where it can (for folder mounts:
-the path prefixes that may be granted and whether rw is allowed). A request outside the ceiling is refused without
-asking the user.
+plugin-specific JSON the daemon passes to the plugin's commands, plus fields the daemon enforces itself: `sources`
+(path prefixes, devices, rw allowed or not) for type C and `maxValidity` for type B. A request outside the ceiling
+is refused without asking the user.
 
 ## Requests
 
@@ -177,20 +215,34 @@ asking the user.
 caller's proposal: `session`, `lock`, `PT<n>H` or `always`.
 
 The caller's session comes from its pidfd (`SO_PEERPIDFD`): the daemon walks its ancestors to the first with
-`CLAUDE_CODE_SESSION_ID` in its environment, and takes that process's parent, the `claude` process, as the session's
-anchor. A caller without one gets no session leases. Anything in the sandbox can set that variable, so session ties
-serve leases and the window's bookkeeping. They don't authenticate a caller, and no grant relies on them for that.
+`CLAUDE_CODE_SESSION_ID` in its environment, and takes that process's parent as the session's anchor if it is the
+Claude Code binary (by `/proc/<pid>/exe`) and not a pid namespace's init. A caller without such an anchor gets no
+session leases. Anything in the sandbox can set that variable, so session ties serve leases and the window's
+bookkeeping. They don't authenticate a caller, and no grant relies on them for that: a grant is usable from the
+whole sandbox. The window says "this session" as "until this Claude session ends, at most until the app quits".
 
 ### Consent
 
-The daemon asks with a notification on the host (`notify-send` with actions, as windows-vm does): "Claude wants
-<capability>: <reason>", buttons Allow (with the proposed lease, "Allow for 1 hour"), Deny and Options. Options
-opens the window on the request, where the user picks another lease or narrows the parameters (read-only instead of
-rw). Lifted from windows-vm:
+The daemon asks with a notification on the host (`notify-send` with actions, as windows-vm does). Its summary is
+built by the daemon from the validated, resolved request ("Claude wants read-write access to
+~/Workspace/agent/notes"), and the reason follows below it, quoted and marked as Claude's. The reason never stands
+in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 hour"), Deny, and Options, which opens
+the window on the request to pick another lease or narrow it (read-only instead of rw). `always` is offered only in
+the window, never as a notification button.
 
-- No answer in 2 minutes denies, and the notification is replaced by one without buttons.
+The sandbox can post notifications too (its D-Bus policy talks to `org.freedesktop.Notifications`), with any app
+name, icon and buttons. A look-alike's buttons only reach the sandbox, so it can't grant anything, but it can be
+timed to sit where the user is about to click. The daemon ignores an action that arrives within a second of its
+notification appearing, and asks again.
+
+Lifted from windows-vm:
+
+- No answer in 2 minutes denies, and the notification is replaced by one without buttons. Once the user clicks
+  Options, the window owns the request: the timeout pauses while it's open, for 10 minutes at most.
 - One open request per capability; three refusals in a row stop requests for that capability for 2 minutes.
-- A grant with lease `always` skips the notification on later requests that match it.
+
+A grant with lease `always` skips the notification on later requests with exactly the same parameters. A read-only
+grant never covers a read-write request, and a folder never covers its subfolders or parent.
 
 The consent UI is only ever drawn on the host. Nothing the sandbox sends is shown other than as plain text.
 
@@ -199,14 +251,16 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 | lease     | ends when                                                                  |
 |-----------|----------------------------------------------------------------------------|
 | `session` | the session's anchor process exits (pidfd); type C counts holding sessions |
-| `lock`    | the logind session's `LockedHint` turns true, or `PrepareForSleep`         |
+| `lock`    | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep` |
 | duration  | the time runs out; the window can extend it                                |
 | `always`  | revoked in the window; replayed at every launch                            |
 
 Every grant also ends on revoke in the window, on `release` from inside, on its plugin's `watch` or `serve` exiting,
-and with the sandbox. The daemon watches logind on the system bus from the host, where it has access. `LockedHint`
-is set by the screen locker; whether Plasma's does is to be checked in step 1, with the `Lock` signal (a request to
-lock) as the fallback.
+and with the sandbox. The daemon watches logind on the system bus from the host, where it has access. It runs in a
+user unit, outside any login session, so `session/self` doesn't resolve for it, and logind sends no signals on that
+alias anyway: it reads the `Display` property of `user/self` for the graphical session's object path and watches that
+one. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
+a request to lock, also ends `lock` leases.
 
 Releasing voluntarily: the core MCP server appends a line to every tool result listing the session's grants that
 have been idle for more than 15 minutes (type A: no connection; type C: nothing open under it), asking Claude to
@@ -226,8 +280,9 @@ without asking. Persisting a grant needs no config change or rebuild; Nix only s
 enabled). Tools:
 
 - `list`: what can be granted, with instances, and what's granted.
-- `request(capability, params, reason, lease)`: blocks until the user answers. Returns the socket path (A), the
-  credential (B) or the path under `/run/permissions` (C).
+- `request(capability, params, reason, lease)`: blocks until the user answers, 2 minutes at most (10 with the
+  window open), well inside Claude Code's MCP tool timeouts (about 28 hours, 30 minutes idle for stdio servers).
+  Returns the socket path (A), the credential (B) or the path under `/run/permissions` (C).
 - `release(grant)`, `status`.
 
 Plugins with `tools`: while a grant of theirs lives, the core MCP server connects to the grant's socket as an MCP
@@ -248,6 +303,12 @@ hosts drop the `windows-vm-claude` bind.
 
 Designed for, not planned: certs from a host CA, SSH and Kubernetes certs (B); systemd, journal, BlueZ, TPM, UEFI
 variables, host applications, website logins (A); devices and wifi (C).
+
+## Launcher
+
+`claude-desktop[-<name>] --permissions` opens the window. `claude-desktop.sh` handles it first, before it looks for a
+running sandbox: otherwise it would hand the flag to the running app through nsenter, as it does with `claude://`
+URLs. With no sandbox running, the window says so and shows the stored `always` grants.
 
 ## Steps
 
@@ -271,3 +332,7 @@ These were open when the design was written and decided while the user was away.
    with an RPC API: nothing to supervise when no grant is live, and socket activation for type A is a convention
    plugin authors know.
 5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
+6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
+   a pidfd handed over: a crash then costs the live leases (Claude asks again) instead of leaving grants nobody can
+   revoke.
+7. Type A plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
