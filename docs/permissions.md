@@ -27,7 +27,7 @@ code.
 - Leases: this session, until the screen locks, for a duration, always. Grants end on their lease, on revoke, on
   release from inside, and on plugin triggers.
 - One plugin API with three delivery types (below). Folder mounts are the first plugin and live here; others, such
-  as the Windows VM, live in orbit-online/agent-sandbox-plugins.
+  as the Windows VM, live in secoya/agent-sandbox-plugins.
 - One MCP server inside the sandbox for every plugin.
 
 ## What's verified
@@ -350,7 +350,7 @@ plain client of its socket, with no consent code, which answers ungranted calls 
 
 Built in, here: folder mounts (type C). Ceiling: path prefixes, rw allowed or not. `list` shows the prefixes.
 
-In orbit-online/agent-sandbox-plugins: the Windows VM (type A, `tools`, `watch` on the VM's runtime directory). Its
+In secoya/agent-sandbox-plugins: the Windows VM (type A, `tools`, `watch` on the VM's runtime directory). Its
 consent code (notification, refusal limit, allow and revoke signals) goes away from secoya/nixos-windows-vm, and the
 hosts drop the `windows-vm-claude` bind.
 
