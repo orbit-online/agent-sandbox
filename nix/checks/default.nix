@@ -143,7 +143,10 @@ let
             };
             agent-sandbox.claude-desktop.launchers.work = {
               memo.enable = true;
-              permissions.enable = true;
+              permissions = {
+                enable = true;
+                folders = [ { path = "/srv/notes"; } ];
+              };
             };
           };
         }
@@ -558,7 +561,11 @@ in
             and .store == "/home/alice/.local/share/claude-desktop-work/permissions.json"
             and .sandboxGrantDir == "/run/permissions"
             and .window[1] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
-            and .window[2] == "Claude permissions (work)"' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+            and .window[2] == "Claude permissions (work)"
+            and .denied == ["/home/alice/.local/share/claude-desktop", "/home/alice/.local/share/claude-desktop-work",
+              "${"$"}{XDG_RUNTIME_DIR}"]
+            and (.plugins | length) == 1 and .plugins[0].ceiling == {sources: [{path: "/srv/notes", rw: false}]}
+            and (.plugins[0].manifest | endswith("/share/agent-sandbox/permissions/folders.json"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
             { echo "the default launcher starts the broker" >&2; exit 1; }
           ! grep -q '^Name=Permissions$' ${sandboxed}/share/applications/*.desktop ||

@@ -85,6 +85,11 @@ pkgs.testers.runNixOSTest {
             tray = true;
             permissions = {
               enable = true;
+              # Made by the subtest, before the launch
+              folders = [
+                { path = "/srv/notes"; }
+                { path = "/srv/mounted"; }
+              ];
               plugins.test = {
                 package = testPlugin;
                 ceiling.maxValidity = "PT8H";
@@ -376,8 +381,13 @@ pkgs.testers.runNixOSTest {
           assert status != 0 and "outer mount namespace" in out, out
           # A grant through the MCP server: with an always grant stored, after a restart of the daemon (which finds
           # the sandbox again), it's issued without asking, for the ceiling's maxValidity
+          workstation.succeed("mkdir -p /srv/notes && echo notes > /srv/notes/file && chown -R alice /srv/notes")
+          # A folder with a mount beneath it, which would come along unchecked: never mounted
+          workstation.succeed("mkdir -p /srv/mounted/sub && mount -t tmpfs none /srv/mounted/sub && chown -R alice /srv/mounted")
           workstation.succeed(
-              "echo '{\"always\": [{\"capability\": \"test/thing\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"}]}'"
+              "echo '{\"always\": [{\"capability\": \"test/thing\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"},"
+              " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/notes\"}, \"granted\": \"2026-01-01T00:00:00Z\"},"
+              " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/mounted\"}, \"granted\": \"2026-01-01T00:00:00Z\"}]}'"
               " | runuser -u alice -- tee ${workStateDir}/permissions.json"
           )
           workstation.succeed("systemctl --user -M alice@ restart claude-desktop-work-permissions")
@@ -391,6 +401,15 @@ pkgs.testers.runNixOSTest {
           # Stdin stays open a while for the answer. Retried until the restarted daemon listens
           mcp = f"(printf '%s\\n' {shlex.quote(rpc)}; sleep 3) | ${pkgs.lib.getExe broker} mcp"
           workstation.wait_until_succeeds(work_cmd(f"sh -c {shlex.quote(mcp)}") + " | grep -q issued-PT28800S", timeout=60)
+          # The always folder too: the restarted daemon takes over the shared grant directory, mounts the folder there
+          # from the host, and it reaches the app's mount namespace, read-only
+          workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)
+          status, _ = workstation.execute(work_cmd("sh -c 'touch /run/permissions/*/new'"))
+          assert status != 0, "the read-only folder grant is writable"
+          grants = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions/" in l]
+          assert len(grants) == 1, f"one folder mounted, not the one with a mount beneath it: {grants}"
+          opts = grants[0].split()[5].split(",")
+          assert {"ro", "nodev", "nosuid"} <= set(opts), grants[0]
 
           # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
           # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds

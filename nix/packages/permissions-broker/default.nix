@@ -17,6 +17,7 @@ buildGoModule {
       ./broker.go
       ./main.go
       ./mcp.go
+      ./mounts.go
       ./plugins.go
       ./sandbox.go
       ./main_test.go
@@ -26,11 +27,12 @@ buildGoModule {
   env.CGO_ENABLED = 0;
   ldflags = [
     "-X main.nsenter=${lib.getExe' util-linux "nsenter"}"
+    "-X main.unshareBin=${lib.getExe' util-linux "unshare"}"
     "-X main.notifySend=${lib.getExe' libnotify "notify-send"}"
     "-X main.systemdRun=${lib.getExe' systemd "systemd-run"}"
     "-X main.systemctl=${lib.getExe' systemd "systemctl"}"
   ];
-  # TestShare runs nsenter
+  # TestShare and the type C tests run nsenter and unshare
   nativeCheckInputs = [ util-linux ];
   meta = {
     description = "Grant a sandbox outside access while it runs";

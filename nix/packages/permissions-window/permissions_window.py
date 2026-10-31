@@ -44,6 +44,8 @@ class Broker(QObject):
         self._path = path
         self._state = {}
         self._error = ""
+        # What still held files on the grant revoked last, which the user may end
+        self._holders = []
         self._watch = QLocalSocket(self)
         # Bound methods, not lambdas: Qt disconnects those when the Broker goes
         self._watch.readyRead.connect(self._event)
@@ -94,8 +96,19 @@ class Broker(QObject):
 
     @Slot(str)
     def revoke(self, grant):
-        self._call({"op": "revoke", "grant": grant})
+        answer = self._call({"op": "revoke", "grant": grant})
+        self._holders = (answer or {}).get("holders") or []
         self.refresh()
+
+    @Slot()
+    def endHolders(self):
+        self._call({"op": "end", "pids": [h["pid"] for h in self._holders]})
+        self._holders = []
+        self.refresh()
+
+    @Property("QVariantList", notify=changed)
+    def holders(self):
+        return self._holders
 
     @Slot(str, str)
     def forget(self, capability, params):

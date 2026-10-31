@@ -127,6 +127,25 @@ ApplicationWindow {
                 }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+                visible: root.broker.holders.length > 0
+                Label {
+                    Layout.fillWidth: true
+                    // Revoking unmounts a folder, but what's open in it stays readable to whoever holds it
+                    text: "Still open in what you revoked: "
+                          + root.broker.holders.map(h => h.comm + " (" + h.pid + ")").join(", ")
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                }
+                Button {
+                    text: "End them"
+                    onClicked: root.broker.endHolders()
+                }
+            }
+
             Label {
                 Layout.leftMargin: 12
                 text: "Granted"

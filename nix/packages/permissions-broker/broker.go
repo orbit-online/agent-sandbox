@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,6 +60,8 @@ type request struct {
 	// control.sock's answer to a pending request
 	Pending string `json:"pending,omitempty"`
 	Allow   bool   `json:"allow,omitempty"`
+	// control.sock's end: processes holding a revoked grant
+	Pids []int `json:"pids,omitempty"`
 }
 
 type response struct {
@@ -68,6 +71,7 @@ type response struct {
 	Grants       []*grant         `json:"grants,omitempty"`
 	Capabilities []capabilityInfo `json:"capabilities,omitempty"`
 	Pending      []*pending       `json:"pending,omitempty"`
+	Holders      []holder         `json:"holders,omitempty"`
 	Always       []alwaysGrant    `json:"always,omitempty"`
 	Log          []logEntry       `json:"log,omitempty"`
 }
@@ -88,15 +92,24 @@ type grant struct {
 	Summary    string          `json:"summary"`
 	Lease      string          `json:"lease"`
 	Expires    time.Time       `json:"expires,omitzero"`
-	Session    string          `json:"session,omitempty"`
-	Socket     string          `json:"socket,omitempty"`
-	Granted    time.Time       `json:"granted"`
+	// The sessions holding a session lease: it ends with the last
+	Sessions []string `json:"sessions,omitempty"`
+	Socket   string   `json:"socket,omitempty"`
+	// Type C: where it's mounted in the sandbox, and what, as resolved
+	Path    string    `json:"path,omitempty"`
+	Source  string    `json:"source,omitempty"`
+	Granted time.Time `json:"granted"`
+	// Type C, once revoked: what still held files on it
+	Holders []holder `json:"holders,omitempty"`
+	// Type C: the device and root of its mount, by which copies of it are found
+	dev, root string
 
-	cap    *capability
-	sess   *session
-	ended  chan struct{}
-	end    func(why string)
-	unlock func()
+	cap      *capability
+	sessions map[string]*session // under broker.mu
+	sessGone chan struct{}       // closed when the last session leaves
+	ended    chan struct{}
+	end      func(why string)
+	unlock   func()
 }
 
 // A request waiting for the user, which the window can answer once they pick Options
@@ -188,6 +201,20 @@ func newBroker(cfg config, caps map[string]*capability, sb *sandbox, ask asker) 
 func (b *broker) run() error {
 	stopAllServes(b.cfg.Launcher)
 	b.removeOwnLocks()
+	// Type C grants an earlier daemon left, if it got as far as sharing the grant directory: detached, their
+	// mountpoints removed. At the first start the sandbox may not even have its mounts set up yet
+	if b.sb.isShared(b.cfg.SandboxGrantDir) {
+		if err := b.sb.detachBelow(b.cfg.SandboxGrantDir); err != nil {
+			slog.Warn("Detach leftover grants", "err", err)
+		}
+	}
+	if entries, err := os.ReadDir(b.cfg.GrantDir); err == nil {
+		for _, e := range entries {
+			if e.Name() != "request.sock" {
+				removeMountpoint(b.cfg.GrantDir, e.Name())
+			}
+		}
+	}
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		return fmt.Errorf("Create the grant directory: %w", err)
 	}
@@ -204,7 +231,8 @@ func (b *broker) run() error {
 	if err != nil {
 		return err
 	}
-	b.replay()
+	b.replay("A")
+	b.adoptShared()
 	go b.serveOn(reqLn, b.handleRequest)
 	go b.serveOn(ctlLn, b.handleControl)
 	slog.Info("Serving", "launcher", b.cfg.Launcher, "sandbox", b.sb.pid)
@@ -386,7 +414,9 @@ func (b *broker) handleControl(_ *net.UnixConn, pid int, req request) response {
 	case "answer":
 		err = b.answer(req)
 	case "revoke":
-		err = b.release(req.Grant, "revoked by the user")
+		res.Holders, err = b.revoke(req.Grant)
+	case "end":
+		err = b.endHolders(req.Pids)
 	case "forget":
 		err = b.forget(req.Capability, req.Params)
 	default:
@@ -422,7 +452,7 @@ func (b *broker) liveGrants(session string) []*grant {
 	defer b.mu.Unlock()
 	var gs []*grant
 	for _, g := range b.grants {
-		if session == "" || g.Session == session {
+		if session == "" || slices.Contains(g.Sessions, session) {
 			gs = append(gs, g)
 		}
 	}
@@ -442,7 +472,19 @@ func (b *broker) shareFrom(pid int) error {
 	b.mu.Lock()
 	b.shared = true
 	b.mu.Unlock()
+	go b.replay("C")
 	return nil
+}
+
+// adoptShared takes over a grant directory an earlier daemon shared, and replays the type C always grants into it
+func (b *broker) adoptShared() {
+	if !b.sb.isShared(b.cfg.SandboxGrantDir) {
+		return
+	}
+	b.mu.Lock()
+	b.shared = true
+	b.mu.Unlock()
+	go b.replay("C")
 }
 
 // request asks the user for a grant, or finds one already there that covers it, and delivers it
@@ -463,7 +505,13 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 		reason = string(r[:maxReason]) + "…"
 	}
 	if c.Type == "C" {
-		return nil, "", errors.New("Type C grants aren't implemented yet")
+		b.mu.Lock()
+		shared := b.shared
+		b.mu.Unlock()
+		if !shared {
+			return nil, "", errors.New("Folder and device grants need the sandbox's grant directory shared, which " +
+				"failed when it started: restart the app")
+		}
 	}
 	sess, err := sessionOf(pid, b.sb.pid)
 	if err != nil {
@@ -483,11 +531,23 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 		return nil, "", err
 	}
 	summary := c.describe(params)
+	if c.Type == "C" {
+		// Checked before asking: what's outside the ceiling is refused without bothering the user
+		src, err := b.resolveC(c, params)
+		if err != nil {
+			return nil, "", err
+		}
+		summary = describeC(summary, src)
+	}
 
 	// Already granted: always grants and, for type B, a live grant decide whether to ask again. One request per
 	// capability at a time here, so concurrent requests find the grant the first made instead of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
+	if g != nil && g.Lease == "session" && sess != nil {
+		// Another session wants it too: the grant now lasts until the last of them ends
+		keepSess = b.addSession(g, sess)
+	}
 	if g == nil && b.isAlways(c, params) {
 		if g, err = b.grant(c, params, summary, "always", nil); err != nil {
 			c.covered.Unlock()
@@ -531,12 +591,19 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 			return nil, "", err
 		}
 		summary = c.describe(params)
+		if c.Type == "C" {
+			src, err := b.resolveC(c, params)
+			if err != nil {
+				return nil, "", err
+			}
+			summary = describeC(summary, src)
+		}
 	}
 	g, err = b.grant(c, params, summary, lease, sess)
 	if err != nil {
 		return nil, "", err
 	}
-	keepSess = g.sess != nil
+	keepSess = len(g.sessions) > 0
 	b.logDecision(summary, reason, "allowed ("+lease+")")
 	if lease == "always" {
 		b.addAlways(c, params)
@@ -752,9 +819,10 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 		return nil, err
 	}
 	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Lease: lease,
-		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock}
+		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock, sessions: map[string]*session{},
+		sessGone: make(chan struct{})}
 	if lease == "session" {
-		g.sess, g.Session = sess, sess.id
+		g.sessions[sess.id], g.Sessions = sess, []string{sess.id}
 	}
 	if d, err := parseDuration(lease); err == nil {
 		g.Expires = g.Granted.Add(d)
@@ -767,10 +835,19 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 		}
 		g.Socket = filepath.Join(b.cfg.SandboxGrantDir, g.ID+".sock")
 	}
+	if c.Type == "C" {
+		if err := b.mountC(g); err != nil {
+			unlock()
+			return nil, err
+		}
+	}
 	stopWatch, watchDone, err := c.startWatch(params)
 	if err != nil {
-		if c.Type == "A" {
+		switch c.Type {
+		case "A":
 			_ = stopServe(b.cfg.Launcher, g.ID)
+		case "C":
+			b.unmountC(g)
 		}
 		unlock()
 		return nil, err
@@ -782,14 +859,20 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 			delete(b.grants, g.ID)
 			b.mu.Unlock()
 			stopWatch()
-			if c.Type == "A" {
+			switch c.Type {
+			case "A":
 				if err := stopServe(b.cfg.Launcher, g.ID); err != nil {
 					slog.Warn("Revoke", "grant", g.ID, "err", err)
 				}
+			case "C":
+				b.unmountC(g)
 			}
-			if g.sess != nil {
-				unix.Close(g.sess.pidfd)
+			b.mu.Lock()
+			for id, s := range g.sessions {
+				unix.Close(s.pidfd)
+				delete(g.sessions, id)
 			}
+			b.mu.Unlock()
 			g.unlock()
 			close(g.ended)
 			slog.Info("Grant ended", "grant", g.ID, "capability", g.Capability, "why", why)
@@ -814,36 +897,64 @@ func (b *broker) lease(g *grant, watchDone <-chan struct{}) {
 		defer t.Stop()
 		timeout = t.C
 	}
-	anchorDone := make(chan struct{})
-	if g.sess != nil {
-		go func() {
-			fds := []unix.PollFd{{Fd: int32(g.sess.pidfd), Events: unix.POLLIN}}
-			for {
-				// Wakes every few seconds to notice the grant ending otherwise
-				n, err := unix.Poll(fds, 5000)
-				if n > 0 {
-					close(anchorDone)
-					return
-				}
-				select {
-				case <-g.ended:
-					return
-				default:
-				}
-				if err != nil && !errors.Is(err, unix.EINTR) {
-					return
-				}
-			}
-		}()
+	b.mu.Lock()
+	for _, s := range g.sessions {
+		go b.watchSession(g, s)
 	}
+	b.mu.Unlock()
 	select {
 	case <-timeout:
 		g.end("its time ran out")
-	case <-anchorDone:
-		g.end("its session ended")
+	case <-g.sessGone:
+		g.end("its sessions ended")
 	case <-watchDone:
 		g.end("its plugin's watch ended")
 	case <-g.ended:
+	}
+}
+
+// addSession ties a session lease to one more session. Returns whether it took the session's pidfd
+func (b *broker) addSession(g *grant, s *session) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := g.sessions[s.id]; ok || len(g.sessions) == 0 {
+		// Known, or the grant is ending: its last session left
+		return false
+	}
+	g.sessions[s.id] = s
+	g.Sessions = append(g.Sessions, s.id)
+	go b.watchSession(g, s)
+	return true
+}
+
+// watchSession drops s from g when its anchor exits, and closes g.sessGone when it was the last
+func (b *broker) watchSession(g *grant, s *session) {
+	fds := []unix.PollFd{{Fd: int32(s.pidfd), Events: unix.POLLIN}}
+	for {
+		// Wakes every few seconds to notice the grant ending otherwise
+		n, err := unix.Poll(fds, 5000)
+		select {
+		case <-g.ended:
+			return
+		default:
+		}
+		if n > 0 {
+			break
+		}
+		if err != nil && !errors.Is(err, unix.EINTR) {
+			return
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if g.sessions[s.id] != s {
+		return
+	}
+	unix.Close(s.pidfd)
+	delete(g.sessions, s.id)
+	g.Sessions = slices.DeleteFunc(g.Sessions, func(id string) bool { return id == s.id })
+	if len(g.sessions) == 0 {
+		close(g.sessGone)
 	}
 }
 
@@ -854,6 +965,37 @@ func (b *broker) lockEvent(why string) {
 			g.end(why)
 		}
 	}
+}
+
+// revoke ends a grant for the user and returns what still held files on it (type C)
+func (b *broker) revoke(id string) ([]holder, error) {
+	b.mu.Lock()
+	g, ok := b.grants[id]
+	b.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("No grant %q", id)
+	}
+	g.end("revoked by the user")
+	return g.Holders, nil
+}
+
+// endHolders ends processes the window lists as holding a revoked grant, if they are in the sandbox
+func (b *broker) endHolders(pids []int) error {
+	var errs []error
+	for _, pid := range pids {
+		// Through a pidfd taken before the check, so the pid can't be another process's by the signal
+		fd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			continue // gone already
+		}
+		if !b.sb.isDescendant(pid) {
+			errs = append(errs, fmt.Errorf("%d isn't in the sandbox", pid))
+		} else if err := unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+			errs = append(errs, fmt.Errorf("End %d: %w", pid, err))
+		}
+		unix.Close(fd)
+	}
+	return errors.Join(errs...)
 }
 
 func (b *broker) release(id, why string) error {
@@ -873,15 +1015,15 @@ func (b *broker) endAll(why string) {
 	}
 }
 
-// replay grants the stored always grants of type A at launch. Type B is issued on request without asking; type C
-// waits for share
-func (b *broker) replay() {
+// replay grants the stored always grants of a type: A at launch, C once the grant directory is shared. Type B is
+// issued on request without asking
+func (b *broker) replay(typ string) {
 	b.mu.Lock()
 	always := append([]alwaysGrant(nil), b.store.Always...)
 	b.mu.Unlock()
 	for _, a := range always {
 		c, ok := b.caps[a.Capability]
-		if !ok || c.Type != "A" {
+		if !ok || c.Type != typ {
 			continue
 		}
 		params, err := c.validate(a.Params)
@@ -889,7 +1031,16 @@ func (b *broker) replay() {
 			slog.Warn("Replay", "capability", a.Capability, "err", err)
 			continue
 		}
-		if _, err := b.grant(c, params, c.describe(params), "always", nil); err != nil {
+		summary := c.describe(params)
+		if typ == "C" {
+			src, err := b.resolveC(c, params)
+			if err != nil {
+				slog.Warn("Replay", "capability", a.Capability, "err", err)
+				continue
+			}
+			summary = describeC(summary, src)
+		}
+		if _, err := b.grant(c, params, summary, "always", nil); err != nil {
 			slog.Warn("Replay", "capability", a.Capability, "err", err)
 		}
 	}

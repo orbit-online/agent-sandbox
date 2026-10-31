@@ -62,7 +62,8 @@ class FakeBroker:
                 return
             if request["op"] != "state":
                 self.requests.append(request)
-            conn.sendall(json.dumps(STATE if request["op"] == "state" else {}).encode())
+            answers = {"state": STATE, "revoke": {"holders": [{"pid": 42, "comm": "cat"}]}}
+            conn.sendall(json.dumps(answers.get(request["op"], {})).encode())
 
     def close(self):
         self.sock.close()
@@ -145,6 +146,9 @@ class TestWindow(unittest.TestCase):
                                           "params": {"path": "/srv/notes", "ro": False}}])
         click(button("Revoke"))
         self.assertEqual(fake.requests[-1], {"op": "revoke", "grant": "g1"})
+        # What still held the revoked grant, to end
+        click(button("End them"))
+        self.assertEqual(fake.requests[-1], {"op": "end", "pids": [42]})
 
 
 if __name__ == "__main__":

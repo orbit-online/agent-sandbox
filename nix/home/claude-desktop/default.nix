@@ -56,6 +56,7 @@ let
   subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   permissionsWindow = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-window;
+  permissionsFolders = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-folders;
   # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
   bwrapSubid =
     vars:
@@ -425,6 +426,29 @@ let
         );
         default = { };
         description = "Plugins whose capabilities the broker grants, by name.";
+      };
+      folders = mkOption {
+        type = types.listOf (
+          types.submodule {
+            options = {
+              path = mkOption {
+                type = types.str;
+                description = "A host folder the sandbox may ask for, it or a folder beneath it.";
+              };
+              rw = mkOption {
+                type = types.bool;
+                default = false;
+                description = "Whether it may be granted read-write.";
+              };
+            };
+          }
+        );
+        default = [ ];
+        description = ''
+          Host folders the sandbox may ask for while it runs, through the built-in `folders` plugin: each is
+          mounted under `/run/permissions` once the user allows it. Never the launchers' state directories or
+          `$XDG_RUNTIME_DIR`, nor a folder holding one.
+        '';
       };
     };
     mcpServers = mkOption {
@@ -836,10 +860,17 @@ let
             "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock"
             permissionsTitle
           ];
-          plugins = lib.mapAttrsToList (pname: p: {
-            manifest = "${p.package}/share/agent-sandbox/permissions/${pname}.json";
-            inherit (p) ceiling;
-          }) lcfg.permissions.plugins;
+          # Every launcher's state directory and runtime directory, and anything holding one
+          denied = map stateDirOf ([ null ] ++ lib.attrNames cfg.launchers) ++ [ "\${XDG_RUNTIME_DIR}" ];
+          plugins =
+            lib.mapAttrsToList (pname: p: {
+              manifest = "${p.package}/share/agent-sandbox/permissions/${pname}.json";
+              inherit (p) ceiling;
+            }) lcfg.permissions.plugins
+            ++ lib.optional (lcfg.permissions.folders != [ ]) {
+              manifest = "${permissionsFolders}/share/agent-sandbox/permissions/folders.json";
+              ceiling.sources = lcfg.permissions.folders;
+            };
         }
       );
       # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in

@@ -36,6 +36,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
+  `mounts.go` holds type C: the source ceiling, and the helpers it runs
+  through `nsenter` to clone a host path and mount it in the sandbox.
+- `nix/packages/permissions-folders/`: the broker's built-in type C plugin,
+  a manifest and two jq scripts. `permissions.folders` lists what it may
+  grant.
 - `nix/packages/permissions-window/`: the Permissions window (PySide6 and
   QML), a client of the broker's `control.sock`. The launcher opens it with
   `--permissions` and the `.desktop` file's "Permissions" action; the broker
@@ -43,9 +48,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   paths to its own Qt's, Plasma's style and platform theme included: the
   host's may be another Qt.
 - `nix/checks/`: the flake checks, see Testing.
-- `docs/permissions.md`: design of the permissions broker. Built so far: the
-  daemon with types A and B, consent, leases, the store, the MCP server's
-  core tools and the window; not yet type C or plugin tools in the MCP server.
+- `docs/permissions.md`: design of the permissions broker. Built so far:
+  everything but plugin tools in the MCP server, idle nudges and device
+  grants.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
@@ -56,7 +61,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
-`packages.<system>.permissions-broker`, `packages.<system>.permissions-window`. Consumers import both modules and enable
+`packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
+`packages.<system>.permissions-folders`. Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
@@ -145,11 +151,22 @@ modules and a user alice (the `home-manager` input exists only for it).
   parameter or reason in the notification, anchor a session at or above the
   sandbox, make one always grant start several units, get a credential after
   its lease ran out; plus a window answer while the notification is up, unit
-  names per launcher, and a broken store set aside.
+  names per launcher, and a broken store set aside. Type C against a stand-in
+  sandbox (a child in a user and mount namespace of its own with the grant
+  directory bound in and shared): the source ceiling, a folder mounted
+  read-only where the app sees it and not on the host, its holders listed and
+  ended (not a process outside the sandbox), detached with its mountpoint
+  gone on revoke, a session lease two sessions hold, a daemon started again
+  taking over the shared grant directory and replaying an always folder, and
+  the sandbox's attacks: a link out of the ceiling, a ceiling root swapped for
+  a link, a link to a denied directory, a denied directory under another name
+  (found by identity, as the source or beneath it), and a re-bind in a nested
+  mount namespace (reported as a holder).
 - `permissions-window`: the package's install check runs `test_window.py`
   offscreen in Plasma's style: the model against a fake `control.sock`
   (state, answer, revoke, forget, no broker), and the window loading without
-  QML warnings, an answer narrowed in its fields and a revoke by clicking.
+  QML warnings, an answer narrowed in its fields, a revoke and ending what
+  still held it by clicking.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
@@ -176,7 +193,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   permissions broker: the daemon's unit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, a grant of a test plugin through the MCP server after a restart
-  of the daemon with an `always` grant stored, the Permissions window staying
+  of the daemon with `always` grants stored, an `always` folder then mounted
+  read-only, nodev and nosuid where the app runs and one with a mount beneath
+  it refused, the Permissions window staying
   up against it, the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host

@@ -18,6 +18,9 @@ Usage:
   permissions-broker mcp [<socket>]
   permissions-broker share [<socket>]
   permissions-broker make-shared <path>
+  permissions-broker clone-tree <root> <rel> <mode> [<denied>...]
+  permissions-broker move-tree <mountpoint>
+  permissions-broker detach <point>...
 
 serve runs the daemon for one launcher, as described in docs/permissions.md:
 it finds the launcher's running sandbox by app ID, listens on request.sock in
@@ -36,8 +39,9 @@ share asks the daemon to make the grant directory a shared mount, from the
 sandbox's outer mount namespace before the FHS env's bwrap copies it. Waits up
 to 10 s for <socket> (/run/permissions/request.sock by default) to appear.
 
-make-shared is the daemon's helper, run through nsenter in the sandbox's mount
-namespace: it makes <path> a shared mount.
+make-shared, clone-tree, move-tree and detach are the daemon's
+helpers for type C grants, run through nsenter in the sandbox's namespaces (see
+mounts.go).
 `
 
 // Set to store paths at build time
@@ -66,6 +70,18 @@ func main() {
 		if err = unix.Mount("", path, "", unix.MS_SHARED, ""); err != nil {
 			err = fmt.Errorf("Make %s shared: %w", path, err)
 		}
+	case opts["clone-tree"] == true:
+		root, _ := opts.String("<root>")
+		rel, _ := opts.String("<rel>")
+		mode, _ := opts.String("<mode>")
+		denied, _ := opts["<denied>"].([]string)
+		err = cloneTree(root, rel, mode, denied)
+	case opts["move-tree"] == true:
+		mp, _ := opts.String("<mountpoint>")
+		err = moveTree(mp)
+	case opts["detach"] == true:
+		points, _ := opts["<point>"].([]string)
+		err = detachHelper(points)
 	}
 	if err != nil {
 		slog.Error(err.Error())
@@ -99,7 +115,10 @@ type config struct {
 	Store           string   `json:"store"`
 	SandboxGrantDir string   `json:"sandboxGrantDir"`
 	Window          []string `json:"window"`
-	Plugins         []struct {
+	// Never granted as a type C source, whatever a ceiling says: every launcher's state directory and runtime
+	// directory
+	Denied  []string `json:"denied"`
+	Plugins []struct {
 		Manifest string          `json:"manifest"`
 		Ceiling  json.RawMessage `json:"ceiling"`
 	} `json:"plugins"`
@@ -119,6 +138,12 @@ func serve(path string) error {
 	}
 	for i := range cfg.Window {
 		cfg.Window[i] = os.ExpandEnv(cfg.Window[i])
+	}
+	for i := range cfg.Denied {
+		cfg.Denied[i] = os.ExpandEnv(cfg.Denied[i])
+	}
+	if cfg.Denied, err = checkDenied(cfg.Denied); err != nil {
+		return err
 	}
 	caps, err := loadPlugins(cfg)
 	if err != nil {

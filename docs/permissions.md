@@ -1,9 +1,12 @@
 # Permissions: granting the sandbox outside access while it runs
 
 Status: written 2026-10-31. Built: the daemon (`nix/packages/permissions-broker/`) with types A and B, consent,
-leases, the grant store, the MCP server's core tools and the Permissions window (`nix/packages/permissions-window/`),
-behind a launcher's `permissions.enable`. Not yet: type C and folder mounts, plugin tools in the MCP server, idle
-nudges.
+leases, the grant store, the MCP server's core tools, the Permissions window (`nix/packages/permissions-window/`) and
+type C with the folders plugin (`nix/packages/permissions-folders/`, `permissions.folders`), behind a launcher's
+`permissions.enable`. Not yet: plugin tools in the MCP server, idle nudges, device grants.
+
+A daemon started again while the sandbox runs finds the grant directory shared by the one before (its mountinfo
+says so) and replays the `always` folders into it.
 
 ## Why
 
@@ -149,24 +152,44 @@ sandbox-wide, so session ties are counted: the mount goes when the last session 
 mounts, single `/dev` nodes, block devices mounted on the host and handed over as a folder. Moving a network device
 (a wifi phy) into the sandbox's netns is also type C, with an attach kind of its own, left for later.
 
-Open files survive a revoke of type C (verified item 3). Before detaching, the daemon lists the processes in the
-sandbox holding files, mappings or a cwd on the grant's mounts: the `mnt_id` in `/proc/*/fdinfo/*` against the
-grant's mount ids in each mount namespace it propagated to, plus `/proc/*/map_files` and `/proc/*/cwd`. After the
-detach paths no longer resolve, so the list is taken first. The window shows the holders and offers to end them. The
-daemon doesn't refuse a revoke because something is in use, and doesn't kill anything without the user saying so.
+Open files survive a revoke of type C (verified item 3), and so does a copy of the mount a process in the sandbox
+made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
+mountpoint end the grant's mounts in every namespace it propagated to, not copies made elsewhere. Neither can be
+taken back short of ending the processes. So the daemon reads the grant's mount ids in each mount namespace in the
+sandbox, detaches, and then lists the holders, within ten seconds: processes whose working directory, open files
+or mappings are on those mounts (by `statx`'s mount id, which an open file keeps), and processes whose mount
+namespace has a mount of the grant's filesystem and root. The window shows them and offers to end them (`SIGTERM`
+through a pidfd, only for processes in the sandbox). The daemon doesn't refuse a revoke because something is in
+use, and doesn't kill anything without the user saying so.
 
 ### Source ceiling and resolving paths
 
-A path check followed by `open_tree` on the path is open to symlinks and swaps: the sandbox has rw binds of its own
-and can plant `~/Workspace/agent/x -> ~/.ssh` before asking for `~/Workspace/agent/x`. So the clone helper, after its
-`unshare`, opens the ceiling's root (an allowed prefix) and resolves the requested path from it with
-`openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS)`, then calls `open_tree(fd, "", AT_EMPTY_PATH|OPEN_TREE_CLONE|
-AT_RECURSIVE)` on the result. The fd belongs to the helper's own mount namespace, so `open_tree` accepts it. The
-path shown to the user is the one resolved, read back from the fd.
+The sandbox has rw binds of its own, which may lie under a ceiling root, and there it can plant links and rename
+directories at will. So a path check followed by a mount of the path isn't enough. The daemon checks the path
+lexically first, refusing early what no ceiling source covers (the longest matching source decides whether rw is
+allowed). Then the clone helper, after its `unshare`:
+
+- opens the ceiling root without following any link (`openat2(RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)`): a root
+  swapped for a link to elsewhere fails;
+- opens the requested path beneath it without following links or crossing mounts
+  (`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`);
+- refuses the source if it, or a directory between it and the root, is a denied directory, or if a denied directory
+  lies beneath it, by device and inode, so no other path to a denied directory (a link, a bind mount, the host's
+  own links) gets around the list;
+- clones that one mount without its submounts (no `AT_RECURSIVE`): in the helper's namespace every mount is locked,
+  so a source with mounts beneath it fails instead of bringing them along unchecked;
+- mounts it read-only if asked, and a directory always `nodev` and `nosuid`.
+
+The path shown to the user is the one resolved, read back from the fd. A grant is of the path: whatever is at the
+path when the mount happens (or an `always` grant is replayed) is what's mounted. Between the question and the
+mount, the sandbox can rename one directory inside the ceiling over another; it can't reach anything outside the
+ceiling or the denied list that way.
 
 Never grantable, whatever a ceiling says: every launcher's state directory (the grant store) and
 `$XDG_RUNTIME_DIR` (the control sockets and every launcher's grant directory). A grant there would let the sandbox
-approve its own requests.
+approve its own requests. The daemon refuses to start when one of them expands to an empty or relative path.
+A ceiling over `$HOME` or `~/.config`, rw, would hand the sandbox code execution on the host (user units, autostart):
+that's the ceiling's choice, and one to avoid.
 
 ### Plugin manifest
 

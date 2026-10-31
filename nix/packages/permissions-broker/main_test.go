@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,7 +26,7 @@ import (
 // CLAUDE_CODE_SESSION_ID set, prints its pid and waits. mount: in a user and mount namespace of its own, mounts a
 // tmpfs on $MOUNT_AT, prints "ready" and waits
 func TestMain(m *testing.M) {
-	if len(os.Args) == 3 && os.Args[1] == "make-shared" {
+	if len(os.Args) > 2 && slices.Contains([]string{"make-shared", "clone-tree", "move-tree", "detach", "detach-all"}, os.Args[1]) {
 		main()
 		return
 	}
@@ -70,6 +73,48 @@ func TestMain(m *testing.M) {
 		io.Copy(io.Discard, os.Stdin)
 		stdin.Close()
 		cmd.Wait()
+		os.Exit(0)
+	case "bind":
+		// The sandbox's outer mount namespace: the grant directory bound in from outside. Then, for each "hold
+		// <path>" on stdin, a child with its working directory there, whose pid it prints
+		if err := unix.Mount(os.Getenv("MOUNT_FROM"), os.Getenv("MOUNT_AT"), "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		fmt.Println("ready")
+		sc := bufio.NewScanner(os.Stdin)
+		var held []*exec.Cmd
+		for sc.Scan() {
+			// run <shell command>: something in the sandbox, as a process of its own
+			if script, ok := strings.CutPrefix(sc.Text(), "run "); ok {
+				cmd := exec.Command("sh", "-c", script)
+				cmd.Stderr = os.Stderr
+				if err := cmd.Start(); err != nil {
+					fmt.Println(-1)
+					continue
+				}
+				held = append(held, cmd)
+				fmt.Println(cmd.Process.Pid)
+				continue
+			}
+			if path, ok := strings.CutPrefix(sc.Text(), "hold "); ok {
+				cmd := exec.Command("/proc/self/exe")
+				cmd.Env = append(os.Environ(), "BROKER_TEST=wait")
+				cmd.Dir = path
+				stdin, _ := cmd.StdinPipe()
+				defer stdin.Close()
+				if err := cmd.Start(); err != nil {
+					fmt.Println(-1)
+					continue
+				}
+				held = append(held, cmd)
+				fmt.Println(cmd.Process.Pid)
+			}
+		}
+		for _, c := range held {
+			c.Process.Kill()
+			c.Wait()
+		}
 		os.Exit(0)
 	case "mount":
 		if err := unix.Mount("tmpfs", os.Getenv("MOUNT_AT"), "tmpfs", 0, ""); err != nil {
@@ -443,8 +488,8 @@ func TestSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Session != "session-1" {
-		t.Errorf("Grant tied to %q", g.Session)
+	if !slices.Equal(g.Sessions, []string{"session-1"}) {
+		t.Errorf("Grant tied to %q", g.Sessions)
 	}
 	anchor.Process.Kill()
 	select {
@@ -775,5 +820,364 @@ func TestServeLimits(t *testing.T) {
 	var res response
 	if err := json.NewDecoder(c).Decode(&res); err != nil || res.Error == "" {
 		t.Errorf("Oversized request answered %+v, %v", res, err)
+	}
+}
+
+func TestCheckDenied(t *testing.T) {
+	for _, bad := range []string{"", "relative", "./x"} {
+		if _, err := checkDenied([]string{bad}); err == nil {
+			t.Errorf("checkDenied accepted %q", bad)
+		}
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(dir, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := checkDenied([]string{filepath.Join(dir, "link")}); err != nil || got[0] != dir {
+		t.Errorf("checkDenied = %v, %v; want the link resolved", got, err)
+	}
+}
+
+func TestCheckSource(t *testing.T) {
+	ceil := ceilingC{Sources: []source{{Path: "/srv/notes"}, {Path: "/srv/work", RW: true}, {Path: "/srv/work/keep-ro"},
+		{Path: "/dev/kvm"}}}
+	denied := []string{"/srv/work/state"}
+	for _, ok := range []struct {
+		src       string
+		ro        bool
+		root, rel string
+	}{
+		{"/srv/notes", true, "/srv/notes", "."},
+		{"/srv/notes/a/../b", true, "/srv/notes", "b"},
+		{"/srv/work/x", false, "/srv/work", "x"},
+		{"/srv/work/keep-ro/x", true, "/srv/work/keep-ro", "x"},
+		{"/dev/kvm", true, "/dev/kvm", "."},
+	} {
+		root, rel, err := checkSource(ceil, denied, ok.src, ok.ro)
+		if err != nil || root != ok.root || rel != ok.rel {
+			t.Errorf("checkSource(%s) = %s, %s, %v", ok.src, root, rel, err)
+		}
+	}
+	for _, bad := range []struct {
+		src string
+		ro  bool
+	}{
+		{"/srv/notes", false},       // read-only only
+		{"/srv/notesx", true},       // not beneath, only a prefix of the name
+		{"/srv/notes/../etc", true}, // out by ..
+		{"srv/notes", true},         // relative
+		{"/srv/work/state/x", true}, // denied
+		{"/srv/work", true},         // holds a denied directory
+		{"/srv", true},
+		{"/srv/work/keep-ro/x", false}, // the longest source decides, and it's read-only
+	} {
+		if _, _, err := checkSource(ceil, denied, bad.src, bad.ro); err == nil {
+			t.Errorf("checkSource(%s, ro=%v) accepted", bad.src, bad.ro)
+		}
+	}
+}
+
+// folders is a type C capability like the folders plugin: resolve takes path and ro (read-only unless false)
+func folders(t *testing.T, sources string) *capability {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "resolve")
+	if err := os.WriteFile(path, []byte(`#!/bin/sh
+exec sed -n 's/.*"params":{"path":"\([^"]*\)"\(,"ro":false\)\{0,1\}}.*/{"source":"\1","ro":RO\2}/p' |
+  sed 's/RO,"ro":false/false/; s/RO/true/'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &capability{Plugin: "folders", Name: "folder", Type: "C", Description: "a folder",
+		Params:  map[string]json.RawMessage{"path": json.RawMessage(`{"type": "string"}`), "ro": json.RawMessage(`{"type": "boolean"}`)},
+		Resolve: []string{path}, Ceiling: ceiling{Raw: json.RawMessage(`{"sources": [` + sources + `]}`)}}
+	if err := c.check(); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// sandboxC is a broker on a sandbox stand-in: a child in a user and mount namespace of its own, with the grant
+// directory bound in from outside and shared, as the launcher has it. Returns the child's stdin and stdout for hold
+func sandboxC(t *testing.T, answers ...string) (*broker, io.WriteCloser, *bufio.Reader) {
+	t.Helper()
+	b, _ := testBroker(t, answers...)
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inside := t.TempDir() // stands in for /run/permissions
+	b.cfg.SandboxGrantDir = inside
+	cmd := exec.Command("/proc/self/exe")
+	cmd.Env = append(os.Environ(), "BROKER_TEST=bind", "MOUNT_FROM="+b.cfg.GrantDir, "MOUNT_AT="+inside)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		// The user's ids as themselves, as the sandbox maps them, so the helpers keep their capabilities through
+		// nsenter's exec only as ambient ones (--keep-caps). A uts namespace of its own, as the sandbox has, which
+		// the clone helper joins for that. The child itself keeps CAP_SYS_ADMIN for its bind mount the same way
+		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
+		UidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getuid(), HostID: os.Getuid(), Size: 1}},
+		GidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getgid(), HostID: os.Getgid(), Size: 1}},
+		AmbientCaps: []uintptr{unix.CAP_SYS_ADMIN},
+	}
+	stdin, _ := cmd.StdinPipe()
+	stdoutPipe, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stdin.Close(); cmd.Wait() })
+	out := bufio.NewReader(stdoutPipe)
+	if line, _ := out.ReadString('\n'); line != "ready\n" {
+		t.Fatalf("Sandbox stand-in: %q", line)
+	}
+	fd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.sb = &sandbox{pid: cmd.Process.Pid, pidfd: fd}
+	if err := b.shareFrom(cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	return b, stdin, out
+}
+
+func TestFolder(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "file"), []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, hold, held := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+
+	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Summary, strconv.Quote(src)+", read-only") || g.Source != src {
+		t.Errorf("Grant %+v", g)
+	}
+	inside := fmt.Sprintf("/proc/%d/root%s", b.sb.pid, g.Path)
+	if data, err := os.ReadFile(inside + "/file"); err != nil || string(data) != "notes" {
+		t.Fatalf("In the sandbox: %q, %v", data, err)
+	}
+	if err := os.WriteFile(inside+"/new", nil, 0o600); !errors.Is(err, unix.EROFS) {
+		t.Errorf("Writing to a read-only grant: %v", err)
+	}
+	info, _ := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", b.sb.pid))
+	for _, line := range strings.Split(string(info), "\n") {
+		if f := strings.Fields(line); len(f) > 5 && f[4] == g.Path {
+			for _, opt := range []string{"ro", "nodev", "nosuid"} {
+				if !slices.Contains(strings.Split(f[5], ","), opt) {
+					t.Errorf("Mounted without %s: %s", opt, line)
+				}
+			}
+		}
+	}
+	// Not in our own mount namespace: the grant directory outside holds only the empty mountpoint
+	if entries, _ := os.ReadDir(filepath.Join(b.cfg.GrantDir, g.ID)); len(entries) != 0 {
+		t.Errorf("The mount reached the host: %v", entries)
+	}
+
+	fmt.Fprintf(hold, "hold %s\n", g.Path)
+	var holderPid int
+	if _, err := fmt.Fscan(held, &holderPid); err != nil || holderPid <= 0 {
+		t.Fatalf("Holder: %d, %v", holderPid, err)
+	}
+	holders, err := b.revoke(g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(holders) != 1 || holders[0].Pid != holderPid {
+		t.Errorf("Holders %+v, want %d", holders, holderPid)
+	}
+	if _, err := os.Stat(inside + "/file"); err == nil {
+		t.Error("Still mounted after the revoke")
+	}
+	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, g.ID)); err == nil {
+		t.Error("The mountpoint is left")
+	}
+	if err := b.endHolders([]int{os.Getpid()}); err == nil {
+		t.Error("Ended a process outside the sandbox")
+	}
+	if err := b.endHolders([]int{holderPid}); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestFolderLinkOut(t *testing.T) {
+	src, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(src, "out")); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`/out"}`, "PT1H")); err == nil {
+		t.Errorf("Followed a link out of the ceiling: %+v", g)
+	}
+	if entries, _ := os.ReadDir(b.cfg.GrantDir); len(entries) != 0 {
+		t.Errorf("Mountpoint left after a failed grant: %v", entries)
+	}
+}
+
+func TestFolderOutsideCeiling(t *testing.T) {
+	b, f := testBroker(t)
+	b.shared = true
+	c := folders(t, `{"path": "/srv/notes"}`)
+	b.caps[c.id()] = c
+	if _, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/etc"}`, "PT1H")); err == nil || f.count() != 0 {
+		t.Errorf("Outside the ceiling: %v, asked %d times", err, f.count())
+	}
+	if _, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/srv/notes", "ro": false}`, "PT1H")); err == nil || f.count() != 0 {
+		t.Errorf("Read-write where the ceiling says read-only: %v, asked %d times", err, f.count())
+	}
+}
+
+// A session lease two sessions hold lasts until both end
+func TestSessionsShare(t *testing.T) {
+	b, _ := testBroker(t, "allow")
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	anchor1, child1 := startAnchor(t, "claude")
+	g, _, err := b.request(child1, req(c.id(), `{}`, "session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The second session's id differs: its anchor sets the same variable, so give it another
+	anchor2, child2 := startAnchor(t, "claude")
+	s2, err := sessionOf(child2, os.Getpid())
+	if err != nil || s2 == nil {
+		t.Fatal(s2, err)
+	}
+	s2.id = "session-2"
+	if !b.addSession(g, s2) {
+		t.Fatal("Second session not added")
+	}
+	anchor1.Process.Kill()
+	time.Sleep(6 * time.Second)
+	select {
+	case <-g.ended:
+		t.Fatal("Ended with the first of two sessions")
+	default:
+	}
+	anchor2.Process.Kill()
+	select {
+	case <-g.ended:
+	case <-time.After(10 * time.Second):
+		t.Error("Outlived both sessions")
+	}
+}
+
+// A daemon started again while the sandbox runs takes over the shared grant directory and replays always grants
+func TestAdoptShared(t *testing.T) {
+	src := t.TempDir()
+	b, _, _ := sandboxC(t)
+	c := folders(t, `{"path": "`+src+`"}`)
+	again, err := newBroker(b.cfg, map[string]*capability{c.id(): c}, b.sb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { again.endAll("test over") })
+	again.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{"path":"` + src + `"}`)}}
+	again.adoptShared()
+	for range 50 {
+		if gs := again.liveGrants(""); len(gs) == 1 {
+			if _, err := os.Stat(fmt.Sprintf("/proc/%d/root%s", b.sb.pid, gs[0].Path)); err != nil {
+				t.Error(err)
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Error("The always folder wasn't replayed")
+}
+
+// The sandbox's attacks on type C, from its rw binds, which may lie under a ceiling root
+
+// A ceiling root swapped for a link to elsewhere
+func TestAttackRootSwap(t *testing.T) {
+	ws, secret := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(secret, "key"), []byte("SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(ws, "proj")
+	b, _, _ := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+root+`"}`)
+	b.caps[c.id()] = c
+	if err := os.Symlink(secret, root); err != nil {
+		t.Fatal(err)
+	}
+	if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+root+`"}`, "PT1H")); err == nil {
+		t.Errorf("Mounted %s through a link in place of the ceiling root", g.Source)
+	}
+}
+
+// A link beneath the root to a denied directory
+func TestAttackDeniedLink(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	for _, d := range []string{filepath.Join(root, "ws"), state} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("../state", filepath.Join(root, "ws", "x")); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := sandboxC(t, "allow")
+	b.cfg.Denied = []string{state}
+	c := folders(t, `{"path": "`+root+`", "rw": true}`)
+	b.caps[c.id()] = c
+	if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+root+`/ws/x", "ro": false}`, "PT1H")); err == nil {
+		t.Errorf("Mounted %s, a denied directory, through a link", g.Source)
+	}
+}
+
+// A denied directory under another name than the config's (a link the config's path goes through): found by
+// identity, whether the source is it or holds it
+func TestDeniedByIdentity(t *testing.T) {
+	root, elsewhere := t.TempDir(), t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(filepath.Join(state, "inner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(state, filepath.Join(elsewhere, "state")); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := sandboxC(t, "allow", "allow")
+	b.cfg.Denied = []string{filepath.Join(elsewhere, "state")} // lexically unrelated to root
+	c := folders(t, `{"path": "`+root+`"}`)
+	b.caps[c.id()] = c
+	for _, p := range []string{state + "/inner", root} {
+		if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+p+`"}`, "PT1H")); err == nil {
+			t.Errorf("Mounted %s, which is or holds a denied directory", g.Source)
+		}
+	}
+}
+
+// A re-bind of a grant in a nested mount namespace outlives the revoke: reported as a holder
+func TestAttackKeepBind(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "file"), []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keep := t.TempDir()
+	b, run, out := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(run, "run exec unshare -Urm sh -c 'mount --rbind %s %s && exec sleep 60'\n", g.Path, keep)
+	var pid int
+	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
+		t.Fatal(pid, err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	holders, err := b.revoke(g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+		t.Errorf("The re-bind's process %d isn't among the holders %+v", pid, holders)
 	}
 }
