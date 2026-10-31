@@ -26,7 +26,8 @@ window, asks the user about each request with a notification, and ends grants
 on their lease. Exits when the sandbox does. <config> is the JSON the module
 writes: appId, launcher, grantDir, controlSocket, store, sandboxGrantDir,
 window (the command opening the Permissions window) and plugins (each a
-manifest path and a ceiling). Environment variables in the paths are expanded.
+manifest path and a ceiling). Environment variables in the paths and the window
+command are expanded.
 
 mcp is the MCP server inside the sandbox, a client of <socket>
 (/run/permissions/request.sock by default).
@@ -115,6 +116,9 @@ func serve(path string) error {
 	}
 	for _, p := range []*string{&cfg.GrantDir, &cfg.ControlSocket, &cfg.Store} {
 		*p = os.ExpandEnv(*p)
+	}
+	for i := range cfg.Window {
+		cfg.Window[i] = os.ExpandEnv(cfg.Window[i])
 	}
 	caps, err := loadPlugins(cfg)
 	if err != nil {

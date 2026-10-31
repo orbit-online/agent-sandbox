@@ -55,6 +55,7 @@ let
 
   subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
+  permissionsWindow = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-window;
   # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
   bwrapSubid =
     vars:
@@ -820,6 +821,7 @@ let
       # The permissions broker's, under $XDG_RUNTIME_DIR/claude-desktop: its grant directory, the sandbox's
       # /run/permissions, and its control socket next to it, which isn't bound
       permissionsDir = "permissions${suffix}";
+      permissionsTitle = "Claude permissions${lib.optionalString (name != null) " (${name})"}";
       permissionsConfig = pkgs.writeText "permissions${suffix}.json" (
         builtins.toJSON {
           appId = sandboxed.config.flatpak.appId;
@@ -829,7 +831,11 @@ let
           controlSocket = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock";
           store = "${stateDir}/permissions.json";
           sandboxGrantDir = "/run/permissions";
-          window = [ ];
+          window = [
+            (lib.getExe permissionsWindow)
+            "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock"
+            permissionsTitle
+          ];
           plugins = lib.mapAttrsToList (pname: p: {
             manifest = "${p.package}/share/agent-sandbox/permissions/${pname}.json";
             inherit (p) ceiling;
@@ -915,6 +921,8 @@ let
           PERMISSIONS_DIR = permissionsDir;
           PERMISSIONS_UNIT = "claude-desktop${suffix}-permissions";
           PERMISSIONS_BROKER = lib.getExe permissionsBroker;
+          PERMISSIONS_WINDOW = lib.getExe permissionsWindow;
+          PERMISSIONS_TITLE = permissionsTitle;
           SANDBOX_HOME = bwrapHome;
           SCRATCHPAD = scratchpad;
           RESOLV_CONF = resolvConf;
@@ -957,7 +965,7 @@ let
           d=$out/share/applications/${if name == null then "\${1##*/}" else "claude-desktop-${name}.desktop"}
           mkdir -p "$out/share/applications"
           rm -f "$d"
-          sed -e 's/^Actions=.*/&;Shell/' ${
+          sed -e 's/^Actions=.*/&;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}/' ${
             lib.optionalString (name != null) (
               lib.escapeShellArgs [
                 "-e"
@@ -969,7 +977,7 @@ let
               ]
             )
           } "$(readlink -f "$1")" >"$d"
-          grep -q '^Actions=.*;Shell$' "$d"
+          grep -q '^Actions=.*;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}$' "$d"
           ${lib.optionalString (name != null) ''
             grep -qxF 'Name=Claude (${name})' "$d"
             ! grep -q '^Exec=claude-desktop ' "$d" || exit 1
@@ -977,6 +985,10 @@ let
           ''}
           printf '\n[Desktop Action Shell]\nExec=%s %s --shell\nName=New shell\n' \
             ${lib.getExe pkgs.xdg-terminal-exec} "$out/bin/claude-desktop${suffix}" >>"$d"
+          ${lib.optionalString lcfg.permissions.enable ''
+            printf '\n[Desktop Action Permissions]\nExec=%s --permissions\nName=Permissions\n' \
+              "$out/bin/claude-desktop${suffix}" >>"$d"
+          ''}
         '';
       };
     in

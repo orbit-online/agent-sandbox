@@ -1,8 +1,9 @@
 # Permissions: granting the sandbox outside access while it runs
 
 Status: written 2026-10-31. Built: the daemon (`nix/packages/permissions-broker/`) with types A and B, consent,
-leases, the grant store and the MCP server's core tools, behind a launcher's `permissions.enable`. Not yet: the
-Permissions window, type C and folder mounts, plugin tools in the MCP server, idle nudges.
+leases, the grant store, the MCP server's core tools and the Permissions window (`nix/packages/permissions-window/`),
+behind a launcher's `permissions.enable`. Not yet: type C and folder mounts, plugin tools in the MCP server, idle
+nudges.
 
 ## Why
 

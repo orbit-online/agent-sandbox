@@ -392,6 +392,11 @@ pkgs.testers.runNixOSTest {
           mcp = f"(printf '%s\\n' {shlex.quote(rpc)}; sleep 3) | ${pkgs.lib.getExe broker} mcp"
           workstation.wait_until_succeeds(work_cmd(f"sh -c {shlex.quote(mcp)}") + " | grep -q issued-PT28800S", timeout=60)
 
+          # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
+          # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds
+          as_alice("/run/current-system/sw/bin/sh -c 'QT_QPA_PLATFORM=offscreen timeout 5 /etc/profiles/per-user/alice/bin/claude-desktop-work"
+                   " --permissions; [ $? = 124 ]'")
+
           workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-work")
           workstation.wait_until_fails(f"test -e /proc/{work_pid}", timeout=30)
           # The daemon ends with its sandbox

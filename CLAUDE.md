@@ -36,10 +36,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
+- `nix/packages/permissions-window/`: the Permissions window (PySide6 and
+  QML), a client of the broker's `control.sock`. The launcher opens it with
+  `--permissions` and the `.desktop` file's "Permissions" action; the broker
+  opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
+  paths to its own Qt's, Plasma's style and platform theme included: the
+  host's may be another Qt.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker. Built so far: the
-  daemon with types A and B, consent, leases, the store and the MCP server's
-  core tools; not yet the window, type C or plugin tools in the MCP server.
+  daemon with types A and B, consent, leases, the store, the MCP server's
+  core tools and the window; not yet type C or plugin tools in the MCP server.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
@@ -50,7 +56,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
-`packages.<system>.permissions-broker`. Consumers import both modules and enable
+`packages.<system>.permissions-broker`, `packages.<system>.permissions-window`. Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
@@ -115,8 +121,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
   read-only `/run/permissions` bind, the config, the wrapper's variables; none
-  of it for the default launcher), and its `.desktop` file (name, Exec, no
-  `claude://` handler).
+  of it for the default launcher), and its `.desktop` file (name, Exec, the
+  Permissions action, which the default launcher lacks, no `claude://`
+  handler).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace.
@@ -139,6 +146,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox, make one always grant start several units, get a credential after
   its lease ran out; plus a window answer while the notification is up, unit
   names per launcher, and a broken store set aside.
+- `permissions-window`: the package's install check runs `test_window.py`
+  offscreen in Plasma's style: the model against a fake `control.sock`
+  (state, answer, revoke, forget, no broker), and the window loading without
+  QML warnings, an answer narrowed in its fields and a revoke by clicking.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
@@ -165,8 +176,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   permissions broker: the daemon's unit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, a grant of a test plugin through the MCP server after a restart
-  of the daemon with an `always` grant stored, the daemon ending with the
-  sandbox), its own `/etc/hosts`, the closure's GC root on the
+  of the daemon with an `always` grant stored, the Permissions window staying
+  up against it, the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`

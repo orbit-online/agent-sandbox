@@ -2,7 +2,7 @@
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
 # $REQUIRED_BINDS: the sources of the binds that aren't optional
 : "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
-: "${PERMISSIONS_CONFIG?}" "${PERMISSIONS_DIR?}" "${PERMISSIONS_UNIT?}" "${PERMISSIONS_BROKER:?}"
+: "${PERMISSIONS_CONFIG?}" "${PERMISSIONS_DIR?}" "${PERMISSIONS_UNIT?}" "${PERMISSIONS_BROKER:?}" "${PERMISSIONS_WINDOW:?}" "${PERMISSIONS_TITLE:?}"
 : "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
 mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE"
 # Bind source for Claude Code's temp dir, which it wants private. Its parent exists from SANDBOX_HOME's mkdir
@@ -48,6 +48,13 @@ app_pid() {
 env=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus")
 # Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns
 nsenter=(nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
+
+# --permissions (the .desktop file's action with the broker): the Permissions window, on the host. Ahead of the
+# running sandbox's lookup, which would hand the flag to the app
+if [[ ${1:-} == --permissions ]]; then
+  [[ -n $PERMISSIONS_CONFIG ]] || { echo "claude-desktop: This launcher has no permissions broker" >&2; exit 1; }
+  exec "$PERMISSIONS_WINDOW" "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR-control.sock" "$PERMISSIONS_TITLE"
+fi
 
 # --shell (the .desktop file's terminal action): a login shell where the app runs, so it gets the Code tab's environment
 if [[ ${1:-} == --shell ]]; then

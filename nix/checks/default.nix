@@ -398,7 +398,12 @@ in
   tests = evalTests;
 
   checks = {
-    inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) netns-macvlan subid-broker permissions-broker;
+    inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
+      netns-macvlan
+      subid-broker
+      permissions-broker
+      permissions-window
+      ;
 
     # nix-unit evaluates this flake again inside the build, which can't fetch, so every input (theirs too) comes from
     # the store
@@ -551,11 +556,15 @@ in
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .store == "/home/alice/.local/share/claude-desktop-work/permissions.json"
-            and .sandboxGrantDir == "/run/permissions"' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+            and .sandboxGrantDir == "/run/permissions"
+            and .window[1] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
+            and .window[2] == "Claude permissions (work)"' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
             { echo "the default launcher starts the broker" >&2; exit 1; }
+          ! grep -q '^Name=Permissions$' ${sandboxed}/share/applications/*.desktop ||
+            { echo "the default launcher has the Permissions action" >&2; exit 1; }
           d=$work/share/applications/claude-desktop-work.desktop
-          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Name=New shell'; do
+          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Name=New shell' 'Name=Permissions'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
           done
           ! grep -q -e '^MimeType=' -e '^Exec=claude-desktop ' "$d" || { echo "$d keeps the claude:// handler or the default Exec" >&2; exit 1; }
