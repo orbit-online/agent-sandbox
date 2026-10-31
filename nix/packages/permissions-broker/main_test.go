@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/sys/unix"
 )
 
@@ -488,8 +489,8 @@ func TestSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(g.Sessions, []string{"session-1"}) {
-		t.Errorf("Grant tied to %q", g.Sessions)
+	if sessions := b.view(g).Sessions; !slices.Equal(sessions, []string{"session-1"}) {
+		t.Errorf("Grant tied to %q", sessions)
 	}
 	anchor.Process.Kill()
 	select {
@@ -1179,5 +1180,475 @@ func TestAttackKeepBind(t *testing.T) {
 	}
 	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
 		t.Errorf("The re-bind's process %d isn't among the holders %+v", pid, holders)
+	}
+}
+
+type echoIn struct {
+	Text string `json:"text"`
+}
+
+// fakePlugin serves MCP on a unix socket, as a type A plugin with tools does on its grant socket: one tool, echo
+func fakePlugin(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "plugin.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	server := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "Echoes."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in echoIn) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "echo: " + in.Text}}}, nil, nil
+		})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				ss, err := server.Connect(context.Background(), &mcp.IOTransport{Reader: conn, Writer: conn}, nil)
+				if err == nil {
+					_ = ss.Wait()
+				}
+			}()
+		}
+	}()
+	return path
+}
+
+// rawPlugin answers MCP by hand, as the VM test's plugin does: the bare minimum of the protocol, one tool, echo
+func rawPlugin(t *testing.T) string {
+	t.Helper()
+	return rawPluginWith(t, false, "echo")
+}
+
+// rawPluginWith is rawPlugin with tools of the given names, all echoing, or with hang one that accepts connections
+// and never answers, as a plugin socket systemd accepts on while the plugin is stuck
+func rawPluginWith(t *testing.T, hang bool, names ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "raw.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				if hang {
+					io.Copy(io.Discard, conn)
+					return
+				}
+				sc := bufio.NewScanner(conn)
+				for sc.Scan() {
+					var msg struct {
+						ID     json.RawMessage `json:"id"`
+						Method string          `json:"method"`
+						Params struct {
+							ProtocolVersion string         `json:"protocolVersion"`
+							Name            string         `json:"name"`
+							Arguments       map[string]any `json:"arguments"`
+						} `json:"params"`
+					}
+					if json.Unmarshal(sc.Bytes(), &msg) != nil || msg.ID == nil {
+						continue
+					}
+					var result any
+					switch msg.Method {
+					case "initialize":
+						result = map[string]any{"protocolVersion": msg.Params.ProtocolVersion,
+							"capabilities": map[string]any{"tools": map[string]any{}},
+							"serverInfo":   map[string]any{"name": "raw", "version": "0"}}
+					case "tools/list":
+						var tools []any
+						for _, name := range names {
+							tools = append(tools, map[string]any{"name": name, "description": "Echoes " + name + ".",
+								"inputSchema": map[string]any{"type": "object",
+									"properties": map[string]any{"text": map[string]any{"type": "string"}}}})
+						}
+						result = map[string]any{"tools": tools}
+					case "tools/call":
+						result = map[string]any{"content": []any{map[string]any{"type": "text",
+							"text": fmt.Sprint(msg.Params.Name, ": ", msg.Params.Arguments["text"])}}}
+					default:
+						out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": msg.ID,
+							"error": map[string]any{"code": -32601, "message": msg.Method}})
+						conn.Write(append(out, '\n'))
+						continue
+					}
+					out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
+					conn.Write(append(out, '\n'))
+				}
+			}()
+		}
+	}()
+	return path
+}
+
+func TestPluginToolsRaw(t *testing.T) {
+	fakeSystemd(t)
+	b, _ := testBroker(t, "allow")
+	c := testCap(t, "A")
+	c.Plugin, c.Tools = "vm", true
+	b.caps[c.id()] = c
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
+	ln, err := listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go b.serveOn(ln, b.handleRequest)
+	plugin := rawPlugin(t)
+	server := newMCPServer(sock, nil, func() {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tools := newPluginTools(sock, func(string) (net.Conn, error) { return net.Dial("unix", plugin) }, nil)
+	tools.server = server
+	go tools.follow(ctx)
+	if _, err := callBroker(sock, req(c.id(), `{}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	for range 50 {
+		out, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "vm_echo", Arguments: map[string]any{"text": "hi"}})
+		if err == nil && !out.IsError && len(out.Content) > 0 && out.Content[0].(*mcp.TextContent).Text == "echo: hi" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Error("No echo through a plugin speaking bare MCP")
+}
+
+// A type A plugin's tools appear in the MCP server while its grant lives, calls reach the plugin, and they go with
+// the grant, each change announced with list_changed
+func TestPluginTools(t *testing.T) {
+	fakeSystemd(t)
+	b, _ := testBroker(t, "allow", "allow")
+	c := testCap(t, "A")
+	c.Plugin, c.Tools = "vm", true
+	b.caps[c.id()] = c
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
+	ln, err := listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go b.serveOn(ln, b.handleRequest)
+
+	plugin := fakePlugin(t)
+	server := newMCPServer(sock, nil, func() {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The grant's socket is wherever systemd would have put it; the fake plugin stands in for it
+	tools := newPluginTools(sock, func(string) (net.Conn, error) { return net.Dial("unix", plugin) }, nil)
+	tools.server = server
+	go tools.follow(ctx)
+
+	changed := make(chan struct{}, 8)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) { changed <- struct{}{} },
+	})
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	has := func() bool {
+		res, err := cs.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(res.Tools, func(t *mcp.Tool) bool { return t.Name == "vm_echo" })
+	}
+	waitChanged := func(what string) {
+		select {
+		case <-changed:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("No list_changed %s", what)
+		}
+	}
+
+	if has() {
+		t.Fatal("A plugin tool before its grant")
+	}
+	res, err := callBroker(sock, req(c.id(), `{}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitChanged("for the grant")
+	if !has() {
+		t.Fatal("No plugin tool while its grant lives")
+	}
+	out, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "vm_echo", Arguments: map[string]any{"text": "hi"}})
+	if err != nil || len(out.Content) == 0 || out.Content[0].(*mcp.TextContent).Text != "echo: hi" {
+		t.Fatalf("Forwarded call: %+v, %v", out, err)
+	}
+	for len(changed) > 0 {
+		<-changed
+	}
+	// A second grant of it (another VM) offers its tools under names of their own
+	res2, err := callBroker(sock, req(c.id(), `{"path": "/other"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitChanged("for the second grant")
+	second := "vm_echo_" + res2.Grant.ID[:7]
+	list, _ := cs.ListTools(ctx, nil)
+	if !slices.ContainsFunc(list.Tools, func(t *mcp.Tool) bool { return t.Name == second }) || !has() {
+		t.Errorf("Tools with two grants: %v", list.Tools)
+	}
+	for len(changed) > 0 {
+		<-changed
+	}
+	if _, err := callBroker(sock, request{Op: "release", Grant: res.Grant.ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitChanged("for the release")
+	if has() {
+		t.Error("The plugin tool outlived its grant")
+	}
+	list, _ = cs.ListTools(ctx, nil)
+	if !slices.ContainsFunc(list.Tools, func(t *mcp.Tool) bool { return t.Name == second }) {
+		t.Error("Releasing one grant took the other's tools")
+	}
+}
+
+func TestObjectSchema(t *testing.T) {
+	if !objectSchema(map[string]any{"type": "object"}) || objectSchema(map[string]any{"type": "string"}) || objectSchema(nil) ||
+		objectSchema(map[string]any{"type": []string{"object"}}) || objectSchema(map[string]any{"properties": map[string]any{}}) {
+		t.Error("objectSchema")
+	}
+}
+
+func TestNudge(t *testing.T) {
+	b, _ := testBroker(t, "allow")
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
+	ln, err := listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go b.serveOn(ln, b.handleRequest)
+	if _, err := callBroker(sock, req(c.id(), `{}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	n := &nudger{socket: sock, now: func() time.Time { return now }}
+	if note := n.note(); note != "" {
+		t.Errorf("Nudged about a fresh grant: %s", note)
+	}
+	now = now.Add(nudgeAfter + time.Minute)
+	if note := n.note(); !strings.Contains(note, "the test thing") {
+		t.Errorf("No nudge after %s: %q", nudgeAfter, note)
+	}
+	if note := n.note(); note != "" {
+		t.Errorf("Nudged again right away: %s", note)
+	}
+}
+
+// pluginHarness is a broker serving request.sock with a type A capability with tools, and the MCP server following
+// it, its plugin connections dialled by dial. Returns a client session of the MCP server and the broker's socket
+func pluginHarness(t *testing.T, dial func(string) (net.Conn, error), answers ...string) (*broker, string, *mcp.ClientSession) {
+	t.Helper()
+	fakeSystemd(t)
+	b, _ := testBroker(t, answers...)
+	c := testCap(t, "A")
+	c.Plugin, c.Tools = "vm", true
+	b.caps[c.id()] = c
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
+	ln, err := listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go b.serveOn(ln, b.handleRequest)
+	server := newMCPServer(sock, nil, func() {})
+	tools := newPluginTools(sock, dial, nil)
+	tools.server = server
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go tools.follow(ctx)
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	return b, sock, cs
+}
+
+// toolNames polls the MCP server's tools until want holds, for up to three seconds
+func waitTools(t *testing.T, cs *mcp.ClientSession, want func([]string) bool) []string {
+	t.Helper()
+	var names []string
+	for range 60 {
+		res, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = names[:0]
+		for _, tool := range res.Tools {
+			names = append(names, tool.Name)
+		}
+		if want(names) {
+			return names
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return names
+}
+
+// A plugin that accepts and never answers holds up only its own grant's tools, and its grant is tried again once
+// the offer times out: when the plugin answers, its tools come
+func TestPluginHangs(t *testing.T) {
+	oldOffer, oldSync := offerTimeout, syncEvery
+	offerTimeout, syncEvery = 300*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { offerTimeout, syncEvery = oldOffer, oldSync })
+	hung, healthy := rawPluginWith(t, true), rawPluginWith(t, false, "echo")
+	var first string
+	recovered := false
+	var mu sync.Mutex
+	dial := func(path string) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if first == "" {
+			first = path
+		}
+		if path == first && !recovered {
+			return net.Dial("unix", hung)
+		}
+		return net.Dial("unix", healthy)
+	}
+	_, sock, cs := pluginHarness(t, dial, "allow", "allow")
+	if _, err := callBroker(sock, req("vm/thing", `{"path": "/hung"}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := callBroker(sock, req("vm/thing", `{"path": "/healthy"}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	names := waitTools(t, cs, func(n []string) bool {
+		return slices.ContainsFunc(n, func(s string) bool { return strings.HasPrefix(s, "vm_echo") })
+	})
+	if !slices.ContainsFunc(names, func(s string) bool { return strings.HasPrefix(s, "vm_echo") }) {
+		t.Errorf("A hanging plugin held up another grant's tools: %v", names)
+	}
+	mu.Lock()
+	recovered = true
+	mu.Unlock()
+	echoes := func(n []string) bool {
+		return len(slices.DeleteFunc(slices.Clone(n), func(s string) bool { return !strings.HasPrefix(s, "vm_echo") })) == 2
+	}
+	if names := waitTools(t, cs, echoes); !echoes(names) {
+		t.Errorf("The plugin that hung isn't tried again: %v", names)
+	}
+}
+
+// An offer that failed is tried again, without a grant event
+func TestPluginRetry(t *testing.T) {
+	oldSync := syncEvery
+	syncEvery = 200 * time.Millisecond
+	t.Cleanup(func() { syncEvery = oldSync })
+	plugin := rawPlugin(t)
+	var mu sync.Mutex
+	failed := false
+	dial := func(string) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !failed {
+			failed = true
+			return nil, errors.New("not up yet")
+		}
+		return net.Dial("unix", plugin)
+	}
+	_, sock, cs := pluginHarness(t, dial, "allow")
+	if _, err := callBroker(sock, req("vm/thing", `{}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	if names := waitTools(t, cs, func(n []string) bool { return slices.Contains(n, "vm_echo") }); !slices.Contains(names, "vm_echo") {
+		t.Errorf("A failed offer wasn't tried again: %v", names)
+	}
+}
+
+// Two of a grant's tools that come out under one name: the second gets the grant's id, and neither replaces the other
+func TestPluginNameCollision(t *testing.T) {
+	plugin := rawPluginWith(t, false, "a.b", "a_b")
+	_, sock, cs := pluginHarness(t, func(string) (net.Conn, error) { return net.Dial("unix", plugin) }, "allow")
+	res, err := callBroker(sock, req("vm/thing", `{}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := "vm_a_b_" + res.Grant.ID[:7]
+	names := waitTools(t, cs, func(n []string) bool { return slices.Contains(n, second) })
+	for name, want := range map[string]string{"vm_a_b": "a.b: x", second: "a_b: x"} {
+		out, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"text": "x"}})
+		if err != nil || out.IsError || out.Content[0].(*mcp.TextContent).Text != want {
+			t.Errorf("%s calls %+v, %v; want %q (tools %v)", name, out, err, want, names)
+		}
+	}
+}
+
+// The nudge reaches tool results
+func TestNudgeAdds(t *testing.T) {
+	b, _ := testBroker(t, "allow")
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
+	ln, err := listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go b.serveOn(ln, b.handleRequest)
+	if _, err := callBroker(sock, req(c.id(), `{}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	n := &nudger{socket: sock, now: func() time.Time { return time.Now().Add(nudgeAfter + time.Minute) }}
+	res, _, _ := n.add(&mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "result"}}}, nil, nil)
+	if len(res.Content) != 2 || !strings.Contains(res.Content[1].(*mcp.TextContent).Text, "release") {
+		t.Errorf("No nudge in the result: %+v", res.Content)
+	}
+	var none *nudger
+	if res, _, _ := none.add(&mcp.CallToolResult{}, nil, nil); res == nil {
+		t.Error("A nil nudger dropped the result")
 	}
 }

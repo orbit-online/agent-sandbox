@@ -6,7 +6,43 @@
   broker,
 }:
 let
-  # A type B plugin for the permissions broker: issue prints the validity it was given
+  # A type A plugin's serve: MCP on the socket systemd hands it, one tool, echo
+  echoServe = pkgs.writers.writePython3 "echo-serve" { flakeIgnore = [ "E501" ]; } ''
+    import json
+    import socket
+
+    listener = socket.socket(fileno=3)
+
+
+    def handle(conn):
+        with conn, conn.makefile("rw") as f:
+            for line in f:
+                msg = json.loads(line)
+                if "id" not in msg:
+                    continue
+                method, params = msg.get("method"), msg.get("params") or {}
+                if method == "initialize":
+                    result = {"protocolVersion": params.get("protocolVersion"), "capabilities": {"tools": {}},
+                              "serverInfo": {"name": "echo", "version": "0"}}
+                elif method == "tools/list":
+                    result = {"tools": [{"name": "echo", "description": "Echoes.",
+                                         "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}
+                elif method == "tools/call":
+                    text = (params.get("arguments") or {}).get("text", "")
+                    result = {"content": [{"type": "text", "text": "echo: " + text}]}
+                else:
+                    f.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": method}}) + "\n")
+                    f.flush()
+                    continue
+                f.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}) + "\n")
+                f.flush()
+
+
+    while True:
+        handle(listener.accept()[0])
+  '';
+  # Plugins for the permissions broker: a type B one whose issue prints the validity it was given, and a type A one
+  # with tools
   testPlugin = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" (
     builtins.toJSON {
       name = "test";
@@ -18,6 +54,13 @@ let
           issue = [
             (pkgs.writeShellScript "issue" "echo issued-$(${pkgs.lib.getExe pkgs.jq} -r .validity)")
           ];
+        }
+        {
+          name = "echo";
+          type = "A";
+          description = "a test service";
+          serve = [ "${echoServe}" ];
+          tools = true;
         }
       ];
     }
@@ -127,7 +170,7 @@ pkgs.testers.runNixOSTest {
       workstationIP = nodes.workstation.networking.primaryIPAddress;
     in
     ''
-      import json, shlex
+      import json, shlex, time
 
       scratchpad = "${scratchpad}"
 
@@ -387,7 +430,8 @@ pkgs.testers.runNixOSTest {
           workstation.succeed(
               "echo '{\"always\": [{\"capability\": \"test/thing\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"},"
               " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/notes\"}, \"granted\": \"2026-01-01T00:00:00Z\"},"
-              " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/mounted\"}, \"granted\": \"2026-01-01T00:00:00Z\"}]}'"
+              " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/mounted\"}, \"granted\": \"2026-01-01T00:00:00Z\"},"
+              " {\"capability\": \"test/echo\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"}]}'"
               " | runuser -u alice -- tee ${workStateDir}/permissions.json"
           )
           workstation.succeed("systemctl --user -M alice@ restart claude-desktop-work-permissions")
@@ -400,7 +444,23 @@ pkgs.testers.runNixOSTest {
           ])
           # Stdin stays open a while for the answer. Retried until the restarted daemon listens
           mcp = f"(printf '%s\\n' {shlex.quote(rpc)}; sleep 3) | ${pkgs.lib.getExe broker} mcp"
-          workstation.wait_until_succeeds(work_cmd(f"sh -c {shlex.quote(mcp)}") + " | grep -q issued-PT28800S", timeout=60)
+          # Retried until the restarted daemon listens; the MCP server's whole output, stderr too, if it never answers
+          def mcp_until(script, want, tries=20):
+              for _ in range(tries):
+                  _, out = workstation.execute(work_cmd(f"sh -c {shlex.quote(script + ' 2>&1')}"))
+                  if want in out:
+                      return
+                  time.sleep(3)
+              raise Exception(f"No {want!r} from the MCP server: {out}")
+
+          mcp_until(mcp, "issued-PT28800S")
+          # The always type A grant: its plugin runs socket-activated by systemd, on a socket in the grant directory,
+          # and the MCP server offers its tool and forwards a call to it
+          call = json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+              "name": "test_echo", "arguments": {"text": "from the sandbox"}}})
+          mcp = (f"(printf '%s\\n' {shlex.quote(rpc.splitlines()[0])} {shlex.quote(rpc.splitlines()[1])}; sleep 3;"
+                 f" printf '%s\\n' {shlex.quote(call)}; sleep 3) | ${pkgs.lib.getExe broker} mcp")
+          mcp_until(mcp, "echo: from the sandbox")
           # The always folder too: the restarted daemon takes over the shared grant directory, mounts the folder there
           # from the host, and it reaches the app's mount namespace, read-only
           workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)

@@ -49,8 +49,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   host's may be another Qt.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker. Built so far:
-  everything but plugin tools in the MCP server, idle nudges and device
-  grants.
+  everything but device grants.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
@@ -161,7 +160,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   the sandbox's attacks: a link out of the ceiling, a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
   (found by identity, as the source or beneath it), and a re-bind in a nested
-  mount namespace (reported as a holder).
+  mount namespace (reported as a holder). The MCP server: a type A plugin's
+  tools (a fake plugin speaking MCP on a socket) offered while its grant
+  lives, a call forwarded, a second grant's under names of their own, each
+  withdrawn with its grant and every change sent as `list_changed`, also
+  for a plugin answering bare JSON-RPC; a hanging plugin holding up only its
+  own grant, which is tried again once it answers; a failed offer tried
+  again; two tools of a grant under one name told apart; the nudge after 15
+  minutes, not again right after, and in tool results.
 - `permissions-window`: the package's install check runs `test_window.py`
   offscreen in Plasma's style: the model against a fake `control.sock`
   (state, answer, revoke, forget, no broker), and the window loading without
@@ -195,7 +201,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   from there, a grant of a test plugin through the MCP server after a restart
   of the daemon with `always` grants stored, an `always` folder then mounted
   read-only, nodev and nosuid where the app runs and one with a mount beneath
-  it refused, the Permissions window staying
+  it refused, an `always` type A plugin socket-activated by systemd whose tool
+  the MCP server inside offers and forwards a call to, the Permissions window
+  staying
   up against it, the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host

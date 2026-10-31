@@ -83,6 +83,8 @@ type capabilityInfo struct {
 	Params      map[string]json.RawMessage `json:"params,omitempty"`
 	Instances   json.RawMessage            `json:"instances,omitempty"`
 	Error       string                     `json:"error,omitempty"`
+	// Type A: whether the plugin speaks MCP on its grant socket, whose tools the MCP server offers
+	Tools bool `json:"tools,omitempty"`
 }
 
 type grant struct {
@@ -366,9 +368,11 @@ func (b *broker) handleRequest(_ *net.UnixConn, pid int, req request) response {
 	switch req.Op {
 	case "list":
 		res.Capabilities = b.listCapabilities()
-		res.Grants = b.liveGrants("")
+		res.Grants = b.grantViews("")
 	case "request":
-		res.Grant, res.Credential, err = b.request(pid, req)
+		var g *grant
+		g, res.Credential, err = b.request(pid, req)
+		res.Grant = b.view(g)
 	case "release":
 		err = b.release(req.Grant, "released from inside")
 	case "status":
@@ -378,7 +382,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, pid int, req request) response {
 			id = sess.id
 			unix.Close(sess.pidfd)
 		}
-		res.Grants = b.liveGrants(id)
+		res.Grants = b.grantViews(id)
 	case "share":
 		err = b.shareFrom(pid)
 	default:
@@ -407,7 +411,7 @@ func (b *broker) handleControl(_ *net.UnixConn, pid int, req request) response {
 		res.Always = append([]alwaysGrant(nil), b.store.Always...)
 		res.Log = append([]logEntry(nil), b.store.Log...)
 		b.mu.Unlock()
-		res.Grants = b.liveGrants("")
+		res.Grants = b.grantViews("")
 		res.Capabilities = b.listCapabilities()
 	case "options":
 		err = b.markOptions(req.Pending)
@@ -437,7 +441,8 @@ func (b *broker) listCapabilities() []capabilityInfo {
 	infos := make([]capabilityInfo, len(ids))
 	for i, id := range ids {
 		c := b.caps[id]
-		infos[i] = capabilityInfo{ID: id, Type: c.Type, Description: c.Description, Params: c.Params}
+		infos[i] = capabilityInfo{ID: id, Type: c.Type, Description: c.Description, Params: c.Params,
+			Tools: c.Type == "A" && c.Tools}
 		if inst, err := c.listInstances(context.Background()); err != nil {
 			infos[i].Error = err.Error()
 		} else {
@@ -457,6 +462,35 @@ func (b *broker) liveGrants(session string) []*grant {
 		}
 	}
 	sort.Slice(gs, func(i, j int) bool { return gs[i].Granted.Before(gs[j].Granted) })
+	return gs
+}
+
+// view is a copy of g for a response, taken under b.mu: the response is encoded outside it, while the grant's
+// sessions may change
+func (b *broker) view(g *grant) *grant {
+	if g == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return snapshot(g)
+}
+
+func snapshot(g *grant) *grant {
+	c := *g
+	c.Sessions = slices.Clone(g.Sessions)
+	c.Holders = slices.Clone(g.Holders)
+	return &c
+}
+
+// grantViews is liveGrants as copies, for responses
+func (b *broker) grantViews(session string) []*grant {
+	gs := b.liveGrants(session)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, g := range gs {
+		gs[i] = snapshot(g)
+	}
 	return gs
 }
 

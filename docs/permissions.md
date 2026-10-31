@@ -1,9 +1,9 @@
 # Permissions: granting the sandbox outside access while it runs
 
 Status: written 2026-10-31. Built: the daemon (`nix/packages/permissions-broker/`) with types A and B, consent,
-leases, the grant store, the MCP server's core tools, the Permissions window (`nix/packages/permissions-window/`) and
-type C with the folders plugin (`nix/packages/permissions-folders/`, `permissions.folders`), behind a launcher's
-`permissions.enable`. Not yet: plugin tools in the MCP server, idle nudges, device grants.
+leases, the grant store, the MCP server with plugin tools and nudges, the Permissions window
+(`nix/packages/permissions-window/`) and type C with the folders plugin (`nix/packages/permissions-folders/`,
+`permissions.folders`), behind a launcher's `permissions.enable`. Not yet: device grants.
 
 A daemon started again while the sandbox runs finds the grant directory shared by the one before (its mountinfo
 says so) and replays the `always` folders into it.
@@ -99,9 +99,11 @@ units and exits. At first start it waits for the sandbox to appear and creates `
 
 Started again after a crash, it finds the same sandbox the same way and reconciles before serving: it detaches
 everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and replays only
-the `always` grants. Leases that ran while it was down are gone rather than extended; Claude asks again. A daemon
-that keeps failing leaves no grant live except what was attached when it died, which the window can't revoke then;
-the unit's failure shows in `systemctl --user`.
+the `always` grants. Leases that ran while it was down are gone rather than extended; Claude asks again.
+
+The grants don't die with the daemon's process: type A units run on, folder mounts stay, and issued credentials stay
+valid until they expire. Until it's started again (normally right away), nothing ends them. A daemon that keeps
+failing leaves them in place, beyond the window's reach; the unit's failure shows in `systemctl --user`.
 
 ### Sharing the grant directory
 
@@ -299,10 +301,10 @@ alias anyway: it reads the `Display` property of `user/self` for the graphical s
 one. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
 a request to lock, also ends `lock` leases.
 
-Releasing voluntarily: the core MCP server appends a line to every tool result listing the session's grants that
-have been idle for more than 15 minutes (type A: no connection; type C: nothing open under it), asking Claude to
-release what it no longer needs. Claude Code's channels could push this instead, but they need `--channels` at
-startup, which the app doesn't pass.
+Releasing voluntarily: once the session has held grants for 15 minutes, the core MCP server appends a line to its
+tool results listing them and asking Claude to release what it no longer needs, at most every 10 minutes. By age,
+not idleness: the daemon can't tell whether a socket-activated plugin's socket or a folder is still in use. Claude
+Code's channels could push this instead, but they need `--channels` at startup, which the app doesn't pass.
 
 ## Grant store
 
@@ -325,9 +327,18 @@ enabled). Tools:
 - `release(grant)`, `status`.
 
 Plugins with `tools`: while a grant of theirs lives, the core MCP server connects to the grant's socket as an MCP
-client, lists its tools and offers them as `<plugin>_<tool>`, then sends `notifications/tools/list_changed`. When the
-grant ends they're gone with another `list_changed`. It learns about grants through `watch`. So Claude only sees
-tools it can use, and the plugin's MCP code runs on the host behind the socket, with nothing to install inside.
+client, lists its tools and offers them as `<plugin>_<tool>` (a second grant of the plugin, a second VM, adds its
+grant's id), then sends `notifications/tools/list_changed`. When the grant ends they're gone with another
+`list_changed`. It learns about grants through `watch` and syncs every 30 seconds besides, and each call is a session
+of its own with the plugin, which socket activation may have started anew. Offering a grant's tools runs on its own,
+with a 10-second deadline, since socket activation accepts a connection whether or not the plugin answers: a plugin
+that hangs holds up nothing else, and its grant is tried again. Tools without an object schema are left out; two of a
+grant's tools that come out under one name (`a.b`, `a_b`) are told apart by the grant's id. So Claude only sees tools
+it can use, and the plugin's MCP code runs on the host behind the socket, with nothing to install inside.
+
+Grants, and so their tools, are the sandbox's, not a session's: every session's MCP server offers them, and any
+process in the sandbox may release any grant it can name. The sandbox is one trust domain; session ties only decide
+when session leases end.
 
 Fallback, if `list_changed` turns out not to work in the app: such a plugin also ships a stdio MCP server that is a
 plain client of its socket, with no consent code, which answers ungranted calls with the `request` to make.
@@ -372,6 +383,6 @@ These were open when the design was written and decided while the user was away.
    plugin authors know.
 5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
 6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
-   a pidfd handed over: a crash then costs the live leases (Claude asks again) instead of leaving grants nobody can
-   revoke.
+   a pidfd handed over: after a crash it starts again and ends every grant but the `always` ones (Claude asks
+   again). Between the crash and the restart, the grants live on.
 7. Type A plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
