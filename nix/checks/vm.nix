@@ -425,6 +425,24 @@ pkgs.testers.runNixOSTest {
               out = sandbox_shell('[ -v TERMINFO ] && t=$TERMINFO || t=-; echo "$TERM $t $COLORTERM"', env).strip()
               assert out == want, f"{env}: {out!r}, want {want!r}"
 
+      with subtest("re-entries find the app past a process at its pid in a pid ns of the sandbox's own"):
+          # As anything in the sandbox can: a user and pid ns of its own, a process at the app's pid there, the
+          # unshare gone, so it hangs off the FHS env's init, nearer to the sandbox's pid 1 than the app. The
+          # pid is set from inside that ns, by a child: the unshare's own shell is still in the FHS env's
+          nest = ("unshare -Urpm sh -c 'sleep infinity & mount -t proc proc /proc;"
+                  " sh -c \"echo 99 >/proc/sys/kernel/ns_last_pid\"; sleep infinity &'; exec sleep infinity")
+          workstation.succeed(
+              "systemd-run --user -M alice@ --unit nest -- /etc/profiles/per-user/alice/bin/claude-desktop --exec sh -c "
+              + shlex.quote(nest)
+          )
+          workstation.wait_until_succeeds(
+              "grep -lP '^NSpid:\\t\\d+\\t\\d+\\t\\d+\\t100$' /proc/[0-9]*/status", timeout=30
+          )
+          assert in_sandbox("readlink /proc/self/ns/pid").strip() == app_pidns, "claude:// joined the nested pid ns"
+          out = sandbox_shell("readlink /proc/self/ns/pid /proc/self/ns/mnt").split()
+          assert out == [app_pidns, app_mntns], f"--shell in {out}, app in {[app_pidns, app_mntns]}"
+          workstation.succeed("systemctl --user -M alice@ stop nest")
+
       with subtest("DHCP lease on the macvlan"):
           workstation.wait_until_succeeds(
               sandbox_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"), timeout=60

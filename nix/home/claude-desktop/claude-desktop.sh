@@ -22,20 +22,26 @@ sandbox_pid() {
   return 1
 }
 
-# The app's main process: the one at $APP_PID in the FHS env's pid ns, below the sandbox's (see app-pid.sh).
+# The app's main process: the one at $APP_PID in the FHS env's pid ns, one level below the sandbox's (see app-pid.sh).
+# The level counts: the sandbox can put a process at $APP_PID in a pid ns of its own further down, nearer to pid 1 in
+# the tree than the app. Two at that level (a pid ns it made next to the FHS env's) leave the app unknown: status 2.
 # Re-entries come in through nsenter, so they aren't pid 1's descendants
 app_pid() {
-  local queue=("$1") p children
+  local queue=("$1") p children nspid found=() level
+  read -ra nspid < <(grep -m1 '^NSpid:' "/proc/$1/status") || return 1
+  level=$((${#nspid[@]} + 1))
   while ((${#queue[@]})); do
     p=${queue[0]} queue=("${queue[@]:1}")
-    if [[ ! /proc/$p/ns/pid -ef /proc/$1/ns/pid && $(grep -m1 '^NSpid:' "/proc/$p/status" 2>/dev/null) == *[[:space:]]"$APP_PID" ]]; then
-      echo "$p"
-      return
-    fi
+    read -ra nspid < <(grep -m1 '^NSpid:' "/proc/$p/status" 2>/dev/null) || continue
+    ((${#nspid[@]} != level)) || [[ ${nspid[-1]} != "$APP_PID" ]] || found+=("$p")
     read -ra children <"/proc/$p/task/$p/children" 2>/dev/null || true
     queue+=("${children[@]}")
   done
-  return 1
+  if ((${#found[@]} > 1)); then
+    echo "claude-desktop: Several processes in the sandbox sit at the app's pid $APP_PID: ${found[*]}" >&2
+    return 2
+  fi
+  ((${#found[@]} == 1)) && echo "${found[0]}"
 }
 
 env=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus")
@@ -51,12 +57,18 @@ fi
 
 # --shell (the .desktop file's terminal action): a login shell where the app runs, so it gets the Code tab's environment
 if [[ ${1:-} == --shell ]]; then
-  if ! { pid=$(sandbox_pid) && app=$(app_pid "$pid"); }; then
+  if pid=$(sandbox_pid); then
+    app=$(app_pid "$pid") || { (($? != 2)) || exit 1; }
+  fi
+  if [[ -z ${app:-} ]]; then
     echo "Starting Claude"
     # As a unit of its own: run from the terminal, the app would stop with the terminal's unit
     systemd-run --user --collect --quiet -- "$(readlink -f "$0")"
     for ((i = 0; i < 300; i++)); do
-      pid=$(sandbox_pid) && app=$(app_pid "$pid") && break
+      if pid=$(sandbox_pid); then
+        app=$(app_pid "$pid") && break
+        (($? != 2)) || exit 1
+      fi
       sleep 1
     done
   fi
@@ -75,6 +87,7 @@ fi
 if pid=$(sandbox_pid); then
   for ((i = 0; i < 30; i++)); do
     app=$(app_pid "$pid") && break
+    (($? != 2)) || exit 1
     sleep 1
   done
   [[ -n ${app:-} ]] || { echo "claude-desktop: The running sandbox has no app" >&2; exit 1; }
