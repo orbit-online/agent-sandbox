@@ -60,7 +60,7 @@ func TestControlFromHostOnly(t *testing.T) {
 // Through the sockets, as the MCP server and the window talk to the broker
 func TestSockets(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestPeerGoneAfterRead(t *testing.T) {
 	if res := b.handleControl(nil, recycled, request{Op: "state"}); res.Error == "" {
 		t.Error("control.sock answered a peer that's gone, for the process its pid went to")
 	}
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if _, _, err := b.request(recycled, req(c.id(), `{}`, "PT1H")); err == nil {
 		t.Error("request served a peer that's gone")

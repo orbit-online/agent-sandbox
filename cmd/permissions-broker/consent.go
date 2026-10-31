@@ -30,7 +30,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	if r := []rune(reason); len(r) > maxReason {
 		reason = string(r[:maxReason]) + "…"
 	}
-	if c.Type == "C" {
+	if c.Type == "attach" {
 		b.mu.Lock()
 		shared := b.shared
 		b.mu.Unlock()
@@ -61,22 +61,22 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		return nil, "", err
 	}
 	summary, shown := c.describe(params), ""
-	if c.Type == "C" {
+	if c.Type == "attach" {
 		// Checked before asking: what's outside the ceiling is refused without bothering the user. What the path
 		// names now is what the user is asked about, and what gets mounted
-		src, err := b.resolveC(c, params)
+		src, err := b.resolveAttach(c, params)
 		if err != nil {
 			return nil, "", err
 		}
 		if shown, err = identify(src.root, src.rel); err != nil {
 			return nil, "", err
 		}
-		summary = describeC(summary, src)
+		summary = describeAttach(summary, src)
 	} else if err := c.inList(context.Background(), params); err != nil {
 		return nil, "", err
 	}
 
-	// Already granted: always grants and, for type B, a live grant decide whether to ask again. One request per
+	// Already granted: always grants and, for a command, a live grant decide whether to ask again. One request per
 	// capability at a time here, so concurrent requests find the grant the first made instead of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
@@ -128,8 +128,8 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 			return nil, "", err
 		}
 		summary = c.describe(params)
-		if c.Type == "C" {
-			src, err := b.resolveC(c, params)
+		if c.Type == "attach" {
+			src, err := b.resolveAttach(c, params)
 			if err != nil {
 				return nil, "", err
 			}
@@ -137,11 +137,11 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 			if shown, err = identify(src.root, src.rel); err != nil {
 				return nil, "", err
 			}
-			summary = describeC(summary, src)
+			summary = describeAttach(summary, src)
 		}
 	}
-	// What list prints may have changed while the user was asked (a VM shut down): checked at grant time. Type C's
-	// source is checked again when it's mounted
+	// What list prints may have changed while the user was asked (a VM shut down): checked at grant time. An attach
+	// grant's source is checked again when it's mounted
 	if err := c.inList(context.Background(), params); err != nil {
 		return nil, "", err
 	}
@@ -164,14 +164,14 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	return b.deliver(c, g)
 }
 
-// deliver returns a grant's delivery: for type B a credential, issued for the grant's validity. The grant must still
-// be live when the plugin runs and when the credential is handed out: a request may wait for a plugin slot while the
-// grant is revoked or runs out
+// deliver returns a grant's delivery: for a command what its run command prints, run for the grant's validity. The
+// grant must still be live when the plugin runs and when the output is handed out: a request may wait for a plugin
+// slot while the grant is revoked or runs out
 func (b *broker) deliver(c *capability, g *grant) (*grant, string, error) {
-	if c.Type != "B" {
+	if c.Type != "command" {
 		return g, "", nil
 	}
-	cred, err := c.issue(context.Background(), g.Params, func() (time.Duration, error) {
+	cred, err := c.runCommand(context.Background(), g.Params, func() (time.Duration, error) {
 		if !b.isLive(g) {
 			return 0, errors.New("The grant ended: ask again")
 		}

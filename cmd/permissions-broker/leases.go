@@ -41,7 +41,7 @@ func (b *broker) checkLease(lease string, sess *session) error {
 	return nil
 }
 
-// validity is how long a type B credential lasts: maxValidity, or a duration lease's remainder if shorter
+// validity is how long a command's credential lasts: maxValidity, or a duration lease's remainder if shorter
 func (b *broker) validity(c *capability, g *grant) time.Duration {
 	v, _ := parseDuration(c.Ceiling.MaxValidity)
 	if !g.Expires.IsZero() {
@@ -52,8 +52,8 @@ func (b *broker) validity(c *capability, g *grant) time.Duration {
 	return v
 }
 
-// grant makes a grant live: delivers type A and ties it to its lease. shown is the identity of the folder the user was
-// asked about (type C), "" for a grant nobody was asked about now (always)
+// grant makes a grant live: starts a service's unit and ties it to its lease. shown is the identity of the folder the
+// user was asked about (attach grants), "" for a grant nobody was asked about now (always)
 func (b *broker) grant(c *capability, params json.RawMessage, summary, lease string, sess *session, shown string) (*grant, error) {
 	unlock, err := c.exclusiveLock(context.Background(), b.cfg.Launcher, params)
 	if err != nil {
@@ -68,7 +68,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 	if d, err := parseDuration(lease); err == nil {
 		g.Expires = g.Granted.Add(d)
 	}
-	if c.Type == "A" {
+	if c.Type == "service" {
 		host := filepath.Join(b.cfg.GrantDir, g.ID+".sock")
 		if err := c.startServe(b.cfg.Launcher, g.ID, host, b.cfg.Unit, params); err != nil {
 			unlock()
@@ -76,8 +76,8 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 		}
 		g.Socket = filepath.Join(b.cfg.SandboxGrantDir, g.ID+".sock")
 	}
-	if c.Type == "C" {
-		if err := b.mountC(g); err != nil {
+	if c.Type == "attach" {
+		if err := b.attachGrant(g); err != nil {
 			unlock()
 			return nil, err
 		}
@@ -85,10 +85,10 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 	stopWatch, watchDone, err := c.startWatch(params)
 	if err != nil {
 		switch c.Type {
-		case "A":
+		case "service":
 			_ = stopServe(b.cfg.Launcher, g.ID)
-		case "C":
-			b.unmountC(g)
+		case "attach":
+			b.detachGrant(g)
 		}
 		unlock()
 		return nil, err
@@ -101,12 +101,12 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 			b.mu.Unlock()
 			stopWatch()
 			switch c.Type {
-			case "A":
+			case "service":
 				if err := stopServe(b.cfg.Launcher, g.ID); err != nil {
 					slog.Warn("Revoke", "grant", g.ID, "err", err)
 				}
-			case "C":
-				b.unmountC(g)
+			case "attach":
+				b.detachGrant(g)
 				b.recordHeld(g, why)
 			}
 			b.mu.Lock()
@@ -234,8 +234,8 @@ func (b *broker) lockEvent(why string) {
 	}
 }
 
-// revoke ends a grant for the user and returns what still held files on it (type C). An always grant goes from the
-// store too: revoked is revoked, not back on the next request or launch
+// revoke ends a grant for the user and returns what still held files on it (attach grants). An always grant goes from
+// the store too: revoked is revoked, not back on the next request or launch
 func (b *broker) revoke(id string) ([]holder, error) {
 	b.mu.Lock()
 	g, ok := b.grants[id]

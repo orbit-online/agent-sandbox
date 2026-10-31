@@ -1,5 +1,5 @@
 /*
- * S5, S10, S11 and S14: mounts, their locks, the binds and the type C
+ * S5, S10, S11 and S14: mounts, their locks, the binds and the attach
  * grants, in one state. The sandbox's processes are wherever
  * structure-attacker shows they can get (structure.als's `reach`).
  *
@@ -98,7 +98,7 @@ one sig FsRoot, RuntimeDir, GrantDir, FlatpakDir, StateDir, GrantStore,
   SandboxHome, SandboxNix, Scratch extends File {}
 // tmpfs and other filesystems made in a namespace: no host file in them
 sig Anon extends File {}
-// The host directories a launcher's `binds` name, and those a type C
+// The host directories a launcher's `binds` name, and those an attach
 // ceiling allows
 sig UserBind in File {}
 sig CeilingRoot in File {}
@@ -163,7 +163,7 @@ pred defaultBinds {
 fact { BindsAsserted in Guards.on implies defaultBinds }
 
 // ---------------------------------------------------------------------
-// Type C grants (permissions-broker/mounts.go). The daemon checks the
+// Attach grants (permissions-broker/mounts.go). The daemon checks the
 // source lexically against the ceiling and the denied list
 // (mounts.go:54-83), clone-tree opens the root and the source without
 // links and the source without crossing mounts (mounts.go:234-245),

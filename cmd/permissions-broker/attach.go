@@ -15,9 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Type C: binding host paths into the running sandbox and detaching them, as scripts/ns-inject-spike.py verified.
-// The daemon checks the source against the ceiling, creates the mountpoint in the grant directory on the host, and
-// runs helpers of its own binary through nsenter for what a multithreaded Go process can't do (enter a user
+// The attach type: binding host paths into the running sandbox and detaching them, as scripts/ns-inject-spike.py
+// verified. The daemon checks the source against the ceiling, creates the mountpoint in the grant directory on the
+// host, and runs helpers of its own binary through nsenter for what a multithreaded Go process can't do (enter a user
 // namespace):
 //   clone-tree, in the owner of the sandbox's mount namespace, unshares a mount namespace of its own, opens the
 //     source beneath its ceiling root without following any link, checks it against the denied directories by
@@ -27,7 +27,7 @@ import (
 // The sandbox can't write the grant directory, but it can plant links and rename directories in its rw binds, which
 // may lie under a ceiling root: hence no links followed at all, and identities rather than paths for what's denied.
 
-// resolved is what a type C plugin's resolve command prints
+// resolved is what an attach plugin's resolve command prints
 type resolved struct {
 	Source string `json:"source"`
 	RO     bool   `json:"ro"`
@@ -70,16 +70,16 @@ func isDir(path string) bool {
 	return unix.Stat(path, &st) == nil && st.Mode&unix.S_IFMT == unix.S_IFDIR
 }
 
-// A type C request's source, resolved by its plugin and checked against its ceiling
-type sourceC struct {
+// An attach request's source, resolved by its plugin and checked against its ceiling
+type attachSource struct {
 	root, rel string
 	ro        bool
 }
 
-func (s sourceC) path() string { return filepath.Join(s.root, s.rel) }
+func (s attachSource) path() string { return filepath.Join(s.root, s.rel) }
 
-// resolveC runs a type C plugin's resolve command and checks what it names against the ceiling
-func (b *broker) resolveC(c *capability, params json.RawMessage) (sourceC, error) {
+// resolveAttach runs an attach plugin's resolve command and checks what it names against the ceiling
+func (b *broker) resolveAttach(c *capability, params json.RawMessage) (attachSource, error) {
 	in, _ := json.Marshal(pluginInput{Params: params, Ceiling: c.Ceiling.Raw})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -88,27 +88,27 @@ func (b *broker) resolveC(c *capability, params json.RawMessage) (sourceC, error
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := runPlugin(cmd); err != nil {
-		return sourceC{}, fmt.Errorf("%s couldn't resolve: %s", c.id(), strings.TrimSpace(errOut.String()))
+		return attachSource{}, fmt.Errorf("%s couldn't resolve: %s", c.id(), strings.TrimSpace(errOut.String()))
 	}
 	var r resolved
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
-		return sourceC{}, fmt.Errorf("%s resolved to something other than JSON: %w", c.id(), err)
+		return attachSource{}, fmt.Errorf("%s resolved to something other than JSON: %w", c.id(), err)
 	}
-	var ceil ceilingC
+	var ceil attachCeiling
 	if len(c.Ceiling.Raw) > 0 {
 		if err := json.Unmarshal(c.Ceiling.Raw, &ceil); err != nil {
-			return sourceC{}, fmt.Errorf("The ceiling of %s: %w", c.id(), err)
+			return attachSource{}, fmt.Errorf("The ceiling of %s: %w", c.id(), err)
 		}
 	}
 	root, rel, err := checkSource(ceil, b.cfg.Denied, r.Source, r.RO)
 	if err != nil {
-		return sourceC{}, err
+		return attachSource{}, err
 	}
-	return sourceC{root: root, rel: rel, ro: r.RO}, nil
+	return attachSource{root: root, rel: rel, ro: r.RO}, nil
 }
 
-// describeC adds what a type C grant attaches to its summary, as the daemon checked it
-func describeC(summary string, src sourceC) string {
+// describeAttach adds what an attach grant attaches to its summary, as the daemon checked it
+func describeAttach(summary string, src attachSource) string {
 	access := "read-write"
 	if src.ro {
 		access = "read-only"
@@ -116,9 +116,9 @@ func describeC(summary string, src sourceC) string {
 	return fmt.Sprintf("%s: %q, %s", summary, src.path(), access)
 }
 
-// mountC attaches a type C grant at its mountpoint in the sandbox
-func (b *broker) mountC(g *grant) error {
-	src, err := b.resolveC(g.cap, g.Params)
+// attachGrant attaches an attach grant at its mountpoint in the sandbox
+func (b *broker) attachGrant(g *grant) error {
+	src, err := b.resolveAttach(g.cap, g.Params)
 	if err != nil {
 		return err
 	}
@@ -137,9 +137,9 @@ func (b *broker) mountC(g *grant) error {
 	return nil
 }
 
-// unmountC detaches a type C grant and removes its mountpoint, which ends its mounts in every namespace it
+// detachGrant detaches an attach grant and removes its mountpoint, which ends its mounts in every namespace it
 // propagated to, then lists what still holds it. Its mount ids are taken first, while its mount points resolve
-func (b *broker) unmountC(g *grant) {
+func (b *broker) detachGrant(g *grant) {
 	if !b.sb.alive() {
 		// Its mounts went with the sandbox
 		removeMountpoint(b.cfg.GrantDir, g.ID)
@@ -157,7 +157,7 @@ func (b *broker) unmountC(g *grant) {
 }
 
 // cleanup ends the grants a daemon leaves when it stops, a crash included (the unit's ExecStopPost runs it, and a
-// daemon starting runs it too): its type A units stopped, its locks removed, its folder grants detached in the sandbox
+// daemon starting runs it too): its service units stopped, its locks removed, its folder grants detached in the sandbox
 // if it got as far as sharing the grant directory, and their mountpoints removed. sb is nil when the sandbox is gone,
 // and with it their mounts
 func cleanup(cfg config, sb *sandbox) {

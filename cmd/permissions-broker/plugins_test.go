@@ -9,7 +9,7 @@ import (
 )
 
 func TestValidate(t *testing.T) {
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	got, err := c.validate(json.RawMessage(`{"ro": true, "path": "/a"}`))
 	if err != nil || string(got) != `{"path":"/a","ro":true}` {
 		t.Errorf("validate = %s, %v; want sorted keys", got, err)
@@ -24,11 +24,11 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestTypeA(t *testing.T) {
+func TestService(t *testing.T) {
 	log := fakeSystemd(t)
 	b, _ := testBroker(t, "allow")
 	b.cfg.Unit = "daemon.service"
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	b.caps[c.id()] = c
 	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil {
@@ -58,7 +58,7 @@ func TestExclusive(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	other, _ := testBroker(t, "allow", "allow") // both now see its XDG_RUNTIME_DIR, the host-wide lock directory
 	other.cfg.Launcher = "other"
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	c.Exclusive = true
 	b.caps[c.id()], other.caps[c.id()] = c, c
 	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H"))
@@ -98,7 +98,7 @@ func TestExclusiveInstance(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	other, _ := testBroker(t, "allow")
 	other.cfg.Launcher = "other"
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	c.Exclusive = true
 	writeList(t, c, `[{"path": "/vm"}]`)
 	b.caps[c.id()], other.caps[c.id()] = c, c

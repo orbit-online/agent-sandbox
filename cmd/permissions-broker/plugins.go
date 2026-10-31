@@ -23,7 +23,7 @@ type capability struct {
 	Params      map[string]json.RawMessage `json:"params"`
 	List        []string                   `json:"list"`
 	Serve       []string                   `json:"serve"`
-	Issue       []string                   `json:"issue"`
+	Run         []string                   `json:"run"`
 	Resolve     []string                   `json:"resolve"`
 	Watch       []string                   `json:"watch"`
 	Tools       bool                       `json:"tools"`
@@ -108,23 +108,23 @@ func (c *capability) check() error {
 		return fmt.Errorf("Capability name %q", c.Name)
 	}
 	switch c.Type {
-	case "A":
+	case "service":
 		if len(c.Serve) == 0 {
-			return fmt.Errorf("%s is type A without serve", c.Name)
+			return fmt.Errorf("%s is of type service without serve", c.Name)
 		}
-	case "B":
-		if len(c.Issue) == 0 {
-			return fmt.Errorf("%s is type B without issue", c.Name)
+	case "command":
+		if len(c.Run) == 0 {
+			return fmt.Errorf("%s is of type command without run", c.Name)
 		}
 		if _, err := parseDuration(c.Ceiling.MaxValidity); err != nil {
-			return fmt.Errorf("%s is type B: its ceiling needs maxValidity: %w", c.Name, err)
+			return fmt.Errorf("%s is of type command: its ceiling needs maxValidity: %w", c.Name, err)
 		}
-	case "C":
+	case "attach":
 		if len(c.Resolve) == 0 {
-			return fmt.Errorf("%s is type C without resolve", c.Name)
+			return fmt.Errorf("%s is of type attach without resolve", c.Name)
 		}
 	default:
-		return fmt.Errorf("%s has type %q, not A, B or C", c.Name, c.Type)
+		return fmt.Errorf("%s has type %q, not service, command or attach", c.Name, c.Type)
 	}
 	for k, schema := range c.Params {
 		var s struct{ Type string }
@@ -211,12 +211,12 @@ type pluginInput struct {
 	Validity string          `json:"validity,omitempty"`
 }
 
-// issue runs a type B plugin's issue command and returns what it prints. validity runs once a plugin slot is free,
+// runCommand runs a command plugin's run command and returns what it prints. validity runs once a plugin slot is free,
 // right before the command: the grant may have ended or run down while the request waited for one
-func (c *capability) issue(ctx context.Context, params json.RawMessage, validity func() (time.Duration, error)) (string, error) {
+func (c *capability) runCommand(ctx context.Context, params json.RawMessage, validity func() (time.Duration, error)) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, c.Issue[0], c.Issue[1:]...)
+	cmd := exec.CommandContext(ctx, c.Run[0], c.Run[1:]...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	var refused error
@@ -234,12 +234,12 @@ func (c *capability) issue(ctx context.Context, params json.RawMessage, validity
 		return "", refused
 	}
 	if err != nil {
-		return "", fmt.Errorf("%s couldn't issue: %s", c.id(), strings.TrimSpace(errOut.String()))
+		return "", fmt.Errorf("%s couldn't run: %s", c.id(), strings.TrimSpace(errOut.String()))
 	}
 	return out.String(), nil
 }
 
-// unitPrefix starts the names of a launcher's type A units: perm_ for the default launcher, perm-<name>_ for a named
+// unitPrefix starts the names of a launcher's service units: perm_ for the default launcher, perm-<name>_ for a named
 // one. Launcher names can't contain _, so no launcher's prefix starts another's
 func unitPrefix(launcher string) string {
 	if launcher == "" {
@@ -248,10 +248,10 @@ func unitPrefix(launcher string) string {
 	return "perm-" + launcher + "_"
 }
 
-// unitName is a type A grant's transient unit, found by name again after a restart
+// unitName is a service grant's transient unit, found by name again after a restart
 func unitName(launcher, grant string) string { return unitPrefix(launcher) + grant }
 
-// startServe runs a type A plugin's serve command as a socket-activated transient user unit listening on socket.
+// startServe runs a service plugin's serve command as a socket-activated transient user unit listening on socket.
 // systemd hands the socket over the standard way (sd_listen_fds needs LISTEN_PID, which an exec can't set), and
 // stopping the unit kills its cgroup, double-forked children included. Both units are bound to the daemon's (BindsTo):
 // they stop when it does, a crash included, so no grant outlives it

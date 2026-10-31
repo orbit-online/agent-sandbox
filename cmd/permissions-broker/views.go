@@ -16,7 +16,7 @@ func (b *broker) listCapabilities() []capabilityInfo {
 	for i, id := range ids {
 		c := b.caps[id]
 		infos[i] = capabilityInfo{ID: id, Type: c.Type, Description: c.Description, Params: c.Params,
-			Tools: c.Type == "A" && c.Tools}
+			Tools: c.Type == "service" && c.Tools}
 		if inst, err := c.listInstances(context.Background()); err != nil {
 			infos[i].Error = err.Error()
 		} else {

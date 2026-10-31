@@ -13,7 +13,7 @@ import (
 func TestAlwaysConcurrent(t *testing.T) {
 	log := fakeSystemd(t)
 	b, _ := testBroker(t)
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	b.caps[c.id()] = c
 	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{}`)}}
 	var wg sync.WaitGroup
@@ -57,16 +57,16 @@ func writeList(t *testing.T, c *capability, instances string) {
 	c.List, c.listedAt = []string{list}, time.Time{}
 }
 
-// P12: replaying type A starts only the stored always grants whose instance list still prints
+// P12: replaying the service type starts only the stored always grants whose instance list still prints
 func TestReplayListed(t *testing.T) {
 	log := fakeSystemd(t)
 	b, _ := testBroker(t)
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	writeList(t, c, `[{"path": "/a"}]`)
 	b.caps[c.id()] = c
 	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{"path":"/b"}`)},
 		{Capability: c.id(), Params: json.RawMessage(`{"path":"/a"}`)}}
-	b.replay("A")
+	b.replay("service")
 	gs := b.liveGrants("")
 	if len(gs) != 1 || string(gs[0].Params) != `{"path":"/a"}` {
 		t.Errorf("Replayed %+v", gs)
@@ -79,7 +79,7 @@ func TestReplayListed(t *testing.T) {
 // Revoking an always grant ends it for good: the next request asks
 func TestRevokeAlways(t *testing.T) {
 	b, f := testBroker(t)
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{}`)}}
 	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))

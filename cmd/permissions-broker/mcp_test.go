@@ -12,7 +12,7 @@ import (
 
 func TestNudge(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestNudge(t *testing.T) {
 // The nudge reaches tool results
 func TestNudgeAdds(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		t.Fatal(err)

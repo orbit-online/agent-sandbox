@@ -21,8 +21,8 @@ func (b *broker) isAlways(c *capability, params json.RawMessage) bool {
 	return false
 }
 
-// replay grants the stored always grants of a type: A at launch, C once the grant directory is shared. Type B is
-// issued on request without asking
+// replay grants the stored always grants of a type: service at launch, attach once the grant directory is shared. A
+// command runs on request without asking
 func (b *broker) replay(typ string) {
 	b.mu.Lock()
 	always := append([]alwaysGrant(nil), b.store.Always...)
@@ -38,13 +38,13 @@ func (b *broker) replay(typ string) {
 			continue
 		}
 		summary := c.describe(params)
-		if typ == "C" {
-			src, err := b.resolveC(c, params)
+		if typ == "attach" {
+			src, err := b.resolveAttach(c, params)
 			if err != nil {
 				slog.Warn("Replay", "capability", a.Capability, "err", err)
 				continue
 			}
-			summary = describeC(summary, src)
+			summary = describeAttach(summary, src)
 		} else if err := c.inList(context.Background(), params); err != nil {
 			// As for a request: no instance list doesn't print (a VM no longer there)
 			slog.Warn("Replay", "capability", a.Capability, "err", err)

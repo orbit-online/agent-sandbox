@@ -6,7 +6,7 @@
   broker,
 }:
 let
-  # A type A plugin's serve: MCP on the socket systemd hands it, one tool, echo
+  # A service plugin's serve: MCP on the socket systemd hands it, one tool, echo
   echoServe = pkgs.writers.writePython3 "echo-serve" { flakeIgnore = [ "E501" ]; } ''
     import json
     import socket
@@ -41,23 +41,22 @@ let
     while True:
         handle(listener.accept()[0])
   '';
-  # Plugins for the permissions broker: a type B one whose issue prints the validity it was given, and a type A one
-  # with tools
+  # Plugins for the permissions broker: a command whose run prints the validity it was given, and a service with tools
   testPlugin = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" (
     builtins.toJSON {
       name = "test";
       capabilities = [
         {
           name = "thing";
-          type = "B";
+          type = "command";
           description = "a test credential";
-          issue = [
-            (pkgs.writeShellScript "issue" "echo issued-$(${pkgs.lib.getExe pkgs.jq} -r .validity)")
+          run = [
+            (pkgs.writeShellScript "run" "echo issued-$(${pkgs.lib.getExe pkgs.jq} -r .validity)")
           ];
         }
         {
           name = "echo";
-          type = "A";
+          type = "service";
           description = "a test service";
           serve = [ "${echoServe}" ];
           tools = true;
@@ -533,7 +532,7 @@ pkgs.testers.runNixOSTest {
               raise Exception(f"No {want!r} from the MCP server: {out}")
 
           mcp_until(mcp, "issued-PT28800S")
-          # The always type A grant: its plugin runs socket-activated by systemd, on a socket in the grant directory,
+          # The always service grant: its plugin runs socket-activated by systemd, on a socket in the grant directory,
           # and the MCP server offers its tool and forwards a call to it
           call = json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
               "name": "test_echo", "arguments": {"text": "from the sandbox"}}})
@@ -541,7 +540,7 @@ pkgs.testers.runNixOSTest {
                  f" printf '%s\\n' {shlex.quote(call)}; sleep 3) | ${pkgs.lib.getExe broker} mcp")
           mcp_until(mcp, "echo: from the sandbox")
 
-          # A crash ends the daemon's grants: ExecStopPost detaches the folder, and the type A units are bound to it.
+          # A crash ends the daemon's grants: ExecStopPost detaches the folder, and the service units are bound to it.
           # Started again, it replays the always grants under new ids
           socket_unit = workstation.succeed(
               "systemctl --user -M alice@ list-units --plain --no-legend 'perm-work_*.socket' | cut -d' ' -f1"

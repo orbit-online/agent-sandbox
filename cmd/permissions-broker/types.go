@@ -65,7 +65,7 @@ type capabilityInfo struct {
 	Params      map[string]json.RawMessage `json:"params,omitempty"`
 	Instances   json.RawMessage            `json:"instances,omitempty"`
 	Error       string                     `json:"error,omitempty"`
-	// Type A: whether the plugin speaks MCP on its grant socket, whose tools the MCP server offers
+	// Service: whether the plugin speaks MCP on its grant socket, whose tools the MCP server offers
 	Tools bool `json:"tools,omitempty"`
 }
 
@@ -80,15 +80,15 @@ type grant struct {
 	// ends with the last
 	Sessions []string `json:"sessions,omitempty"`
 	Socket   string   `json:"socket,omitempty"`
-	// Type C: where it's mounted in the sandbox, and what, as resolved
+	// Attach: where it's mounted in the sandbox, and what, as resolved
 	Path    string    `json:"path,omitempty"`
 	Source  string    `json:"source,omitempty"`
 	Granted time.Time `json:"granted"`
-	// Type C, once revoked: what still held files on it
+	// Attach, once revoked: what still held files on it
 	Holders []holder `json:"holders,omitempty"`
-	// Type C: the device and root of its mount, by which copies of it are found
+	// Attach: the device and root of its mount, by which copies of it are found
 	dev, root string
-	// Type C: the identity (device:inode) of the folder the user was asked about, which the mount must be
+	// Attach: the identity (device:inode) of the folder the user was asked about, which the mount must be
 	shown string
 
 	cap      *capability
@@ -166,7 +166,7 @@ type broker struct {
 	shareAsked bool
 	lockOK     bool
 	watches    map[chan []byte]bool
-	// What still held type C grants when they ended
+	// What still held attach grants when they ended
 	heldGrants []held
 	// Added to the time, by tests
 	skew atomic.Int64

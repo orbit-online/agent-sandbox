@@ -9,20 +9,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// A source a type C grant may attach: a path beneath one of the ceiling's roots
+// A source an attach grant may attach: a path beneath one of the ceiling's roots
 type source struct {
 	Path string `json:"path"`
 	RW   bool   `json:"rw"`
 }
 
-// ceilingC is what a type C plugin's ceiling says the daemon may attach at all
-type ceilingC struct {
+// attachCeiling is what an attach plugin's ceiling says the daemon may attach at all
+type attachCeiling struct {
 	Sources []source `json:"sources"`
 }
 
 // checkSource finds the ceiling root src lies beneath, the longest that matches, and whether it may be read-write.
 // Lexical, so it refuses early what the ceiling doesn't cover; clone-tree checks what the path is when it opens it
-func checkSource(ceil ceilingC, denied []string, src string, ro bool) (root, rel string, err error) {
+func checkSource(ceil attachCeiling, denied []string, src string, ro bool) (root, rel string, err error) {
 	if !filepath.IsAbs(src) {
 		return "", "", fmt.Errorf("Not an absolute path: %q", src)
 	}

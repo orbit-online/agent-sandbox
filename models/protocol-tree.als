@@ -23,7 +23,7 @@ one sig Tree {
   var claudeExe: set Process,
   // the init of its own pid namespace (innermost NSpid 1)
   var nsInit: set Process,
-  // after a type C grant's detach: cwd, open file or mapping on it, or a
+  // after an attach grant's detach: cwd, open file or mapping on it, or a
   // mount of its filesystem and root in the process's mount namespace
   var holds: set Process,
   // processes holdersAfter didn't get to before its 10 s deadline
@@ -120,7 +120,7 @@ run P8forgedInside {
 // (contains, members.go).
 fun listed: set Process { (inside - Tree.unscanned) & Tree.holds }
 
-// P5. After a type C grant ends, every sandbox process that still holds
+// P5. After an attach grant ends, every sandbox process that still holds
 // it is listed. The broker finds the sandbox's processes by user
 // namespace (members.go), so a --shell process (and what it starts),
 // whose parent is nsenter on the host, is among them. Holds. Revert:
@@ -143,7 +143,7 @@ assert P5holdersListedInside {
 }
 check P5holdersListedInside for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
 // How the grant ended, and what reaches the user: holdersAfter runs on
-// every end (unmountC, typec.go), and the daemon keeps them for the
+// every end (detachGrant, attach.go), and the daemon keeps them for the
 // window's state however the grant ended (recordHeld, holders.go).
 abstract sig Cause {}
 one sig Revoked, ReleasedInside, LeaseRanOut extends Cause {}

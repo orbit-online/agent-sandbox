@@ -115,7 +115,7 @@ done
 if [[ -n $PERMISSIONS_CONFIG ]]; then
   mkdir -p "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR"
   systemctl --user -q is-active "$PERMISSIONS_UNIT" ||
-    # ExecStopPost ends its grants when it stops, a crash included: type A units are bound to it, folder grants
+    # ExecStopPost ends its grants when it stops, a crash included: service units are bound to it, folder grants
     # are detached. It fails when it finds no sandbox within a minute: the start limit ends the restarts then
     systemd-run --user --quiet --collect --unit="$PERMISSIONS_UNIT" -p Restart=on-failure \
       -p StartLimitIntervalSec=10min -p StartLimitBurst=3 \

@@ -28,7 +28,7 @@ buildGoModule {
     "-X main.systemdRun=${lib.getExe' systemd "systemd-run"}"
     "-X main.systemctl=${lib.getExe' systemd "systemctl"}"
   ];
-  # TestShare and the type C tests run nsenter and unshare, the notification tests a bus of their own
+  # TestShare and the attach tests run nsenter and unshare, the notification tests a bus of their own
   nativeCheckInputs = [
     dbus
     util-linux

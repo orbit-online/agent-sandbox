@@ -18,7 +18,7 @@ TestCase {
             grants: [{ id: "g1", capability: "test/thing", params: {}, summary: "the test thing", lease: "session" }],
             always: [{ capability: "test/thing", params: { x: "y" } }],
             log: [],
-            capabilities: [{ id: "folders/folder", type: "C",
+            capabilities: [{ id: "folders/folder", type: "attach",
                              params: { path: { type: "string" }, ro: { type: "boolean" } } }]
         })
         property string error: ""

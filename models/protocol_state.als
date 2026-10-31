@@ -8,7 +8,7 @@ module protocol_state
 open sandbox
 
 abstract sig DType {}
-one sig TypeA, TypeB, TypeC extends DType {}
+one sig Service, Command, Attach extends DType {}
 
 // Requested or granted lease. A duration is LDuration with a counter.
 abstract sig Lease {}
@@ -32,16 +32,16 @@ sig Capability {
   wellFormed: set Param,
   // the instances `list` may print that these parameters match
   matches: Param -> Instance,
-  // type B: maxValidity
+  // command: maxValidity
   maxV: one Int,
   // the exclusive lock files, by capability and instance
   var lockFile: Instance -> lone Launcher
 }
-// Exclusive capabilities are of types A and B, whose `list` names the
-// instances locked (a type C one would lock by its parameters; none is).
+// Exclusive capabilities are of types service and command, whose `list` names the
+// instances locked (an attach one would lock by its parameters; none is).
 sig Exclusive in Capability {}
-fact { no Exclusive & dtype.TypeC }
-// What a type C parameter resolves to now: the attacker renames
+fact { no Exclusive & dtype.Attach }
+// What an attach parameter resolves to now: the attacker renames
 // directories under a ceiling root at will.
 sig Param { var resolves: lone Dir }
 sig Instance {}
@@ -60,17 +60,17 @@ sig Grant {
   var gsess: set Session,
   // a duration lease's remaining time
   var left: lone Int,
-  // type C: the directory mounted
+  // attach: the directory mounted
   var mdir: lone Dir
 }
-// UnitUp: the type A unit and socket. Mounted: the type C mount in M1 and
-// everywhere it propagated. Issuing: a type B delivery waiting for a plugin
-// slot to run `issue`.
-var sig Live, Ended, UnitUp, Mounted, Issuing in Grant {}
+// UnitUp: the service unit and socket. Mounted: the attach mount in M1 and
+// everywhere it propagated. ToRun: a command grant waiting for a plugin
+// slot to run its `run` command.
+var sig Live, Ended, UnitUp, Mounted, ToRun in Grant {}
 
 // One request on request.sock: what the sandbox sends and the daemon
 // derives from it. asked: the lease the notification offers. summary: the
-// daemon's text (describe, describeC). shows: what the notification with
+// daemon's text (describe, describeAttach). shows: what the notification with
 // the request's id draws now.
 sig Req {
   rl: one Launcher, rcap: one Capability, rparams: one Param, rlease: one Lease, rsess: lone Session,
@@ -110,14 +110,14 @@ fact sessions {
 // ---------------------------------------------------------------------
 // Checks the daemon makes, each named so a revert check can drop it.
 
-// The parameters validate, and match an instance `list` prints (A, B), or
-// resolve beneath the ceiling (C): request() before asking, and again
+// The parameters validate, and match an instance `list` prints (service, command),
+// or resolve beneath the ceiling (attach): request() before asking, and again
 // when the window narrows (broker.go:516-563, 611-625; plugins.go:334-365;
 // mounts.go:664-690).
 pred passes[c: Capability, p: Param] {
   p in c.wellFormed
-  c.dtype = TypeC implies (some p.resolves and p.resolves in InCeiling)
-  c.dtype != TypeC implies some p.(c.matches) & Listed
+  c.dtype = Attach implies (some p.resolves and p.resolves in InCeiling)
+  c.dtype != Attach implies some p.(c.matches) & Listed
 }
 
 // checkLease (broker.go:653-673): a session lease needs a session, a lock
@@ -143,10 +143,10 @@ pred inM1[w: Principal] { w in BwrapInitP + UdhcpcP }
 // appearing (broker.go:1237).
 pred actionMature[r: Req] { r in Mature }
 
-// mountC resolves again and clone-tree checks what it opens (mounts.go:
-// 702-716, 228-283): a type C grant mounts only what is in the ceiling now.
+// attachGrant resolves again and clone-tree checks what it opens (mounts.go:
+// 702-716, 228-283): an attach grant mounts only what is in the ceiling now.
 pred mountChecks[N: set Grant] {
-  all g: N & typed[TypeC] | some g.gparams.resolves and g.gparams.resolves in InCeiling
+  all g: N & typed[Attach] | some g.gparams.resolves and g.gparams.resolves in InCeiling
 }
 
 // exclusiveLock (instances.go): O_EXCL on a file per instance the
@@ -157,7 +157,7 @@ pred exclusiveLockFree[N: set Grant, L: set Launcher] {
   all disj g, h: N & gcap.Exclusive | g.gcap != h.gcap or no g.gparams.(g.gcap.matches) & h.gparams.(h.gcap.matches)
 }
 
-// type A units are BindsTo= the daemon's unit (plugins.go:246-248).
+// service units are BindsTo= the daemon's unit (plugins.go:246-248).
 pred bindsTo[l: Launcher] { UnitUp' = UnitUp - gl.l }
 
 // cleanup (mounts.go:742-757): stops the launcher's units, removes its
@@ -185,7 +185,7 @@ pred keepReqs {
   shownDir' = shownDir and shows' = shows and by' = by
 }
 pred keepGrants {
-  Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and Issuing' = Issuing
+  Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
   gsess' = gsess and left' = left and mdir' = mdir and lockFile' = lockFile
 }
 
@@ -198,12 +198,12 @@ pred change[N, E: set Grant] {
   mountChecks[N]
   Live' = Live - E + N
   Ended' = Ended + E
-  UnitUp' = UnitUp - E + (N & typed[TypeA])
-  Mounted' = Mounted - E + (N & typed[TypeC])
-  // deliver() issues for a new type B grant, after a plugin slot frees
-  Issuing' = Issuing - E + (N & typed[TypeB])
-  all g: N & typed[TypeC] | g.mdir' = g.gparams.resolves
-  all g: Grant - (N & typed[TypeC]) | g.mdir' = g.mdir
+  UnitUp' = UnitUp - E + (N & typed[Service])
+  Mounted' = Mounted - E + (N & typed[Attach])
+  // deliver() runs a new command grant's command, after a plugin slot frees
+  ToRun' = ToRun - E + (N & typed[Command])
+  all g: N & typed[Attach] | g.mdir' = g.gparams.resolves
+  all g: Grant - (N & typed[Attach]) | g.mdir' = g.mdir
   all g: N | g.glease = LDuration implies g.left' > 0 else no g.left'
   all g: Grant - N | g.left' = g.left
   lockFile' = lockFile - locksOf[E] + locksOf[N]
@@ -225,7 +225,7 @@ pred settle[r: Req, w: lone Principal] {
 
 pred init {
   no Up + Dirty + Gone
-  no Live + Ended + UnitUp + Mounted + Issuing
+  no Live + Ended + UnitUp + Mounted + ToRun
   no Pending + Mature + Opened + Asked + Forged
   no asking and no refused and no blocked and no lockFile
   no gsess and no left and no mdir and no shownDir and no shows

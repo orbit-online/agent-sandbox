@@ -36,7 +36,7 @@ open protocol_system
 
 run deliveries {
   all t: DType | eventually some g: Grant | g.gcap.dtype = t and born[g]
-  eventually some g: Grant | g in Ended and g.gcap.dtype = TypeC
+  eventually some g: Grant | g in Ended and g.gcap.dtype = Attach
 } for 3 but 0 Process, 1 Launcher, 3 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 

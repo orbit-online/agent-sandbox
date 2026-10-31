@@ -52,7 +52,7 @@ func (b *broker) run() error {
 	if err != nil {
 		return err
 	}
-	b.replay("A")
+	b.replay("service")
 	b.adoptShared()
 	go b.serveOn(reqLn, b.handleRequest)
 	go b.serveOn(ctlLn, b.handleControl)

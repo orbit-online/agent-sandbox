@@ -360,7 +360,7 @@ pred l7 { always Handle in Root }
 // outside the host's mount ns can hold: one in a pid ns of the sandbox's
 // own, or another launcher's sandbox. lookupSandbox takes the first dir in
 // glob order whose pid passes, so a broker started or restarted then
-// serves that process: `share` and type C go into its mount ns, and its
+// serves that process: `share` and attach go into its mount ns, and its
 // exit ends the broker. Not tried: needs a stale dir and the pid.
 assert L7 { system[Guard, NestPid + OtherSandbox + HostReuse + SandboxEnds] implies l7 }
 check L7 for 8 but 13 OwnedNS, 1..6 steps expect 1

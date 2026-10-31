@@ -27,7 +27,7 @@ func TestParseDuration(t *testing.T) {
 
 func TestDurationLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1S"))
 	if err != nil {
@@ -42,7 +42,7 @@ func TestDurationLease(t *testing.T) {
 
 func TestLockLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
 		t.Error("Lock lease granted without the screen lock watched")
@@ -73,7 +73,7 @@ func TestSession(t *testing.T) {
 
 	// The session lease ends with the anchor
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	g, _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
 	if err != nil {
@@ -96,7 +96,7 @@ func TestSessionNeedsClaude(t *testing.T) {
 		t.Errorf("Anchored at a process that isn't Claude Code: %v, %v", s, err)
 	}
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if _, _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session")); err == nil {
 		t.Error("Session lease granted without a session")
@@ -120,7 +120,7 @@ func TestSessionStopsAtSandbox(t *testing.T) {
 
 func TestRanOut(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
@@ -132,10 +132,10 @@ func TestRanOut(t *testing.T) {
 	}
 }
 
-// P4: a request a live type B grant covers waits for a plugin slot; the grant is revoked meanwhile. No credential
+// P4: a request a live command grant covers waits for a plugin slot; the grant is revoked meanwhile. No credential
 func TestNoCredentialAfterEnd(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
 	if err != nil {
@@ -176,7 +176,7 @@ func TestLockLostWhileAsking(t *testing.T) {
 		b.lockEvent("lost the system bus")
 		return "allow", nil
 	}
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
 		t.Errorf("Granted a lock lease nothing watches: %+v", g)
@@ -194,7 +194,7 @@ func TestLockLostWhileAsking(t *testing.T) {
 // caller without a session ends it outright
 func TestReleaseHold(t *testing.T) {
 	b, _ := testBroker(t, "allow", "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	_, a := startAnchor(t, "claude")
 	t.Setenv("SESSION_ID", "session-2")

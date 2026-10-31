@@ -34,7 +34,7 @@ manifest path and a ceiling). Environment variables in the paths and the window
 command are expanded.
 
 cleanup ends the grants of a daemon that stopped, as its unit's ExecStopPost:
-type A units stopped, folder grants detached. A daemon that starts does it too.
+service units stopped, folder grants detached. A daemon that starts does it too.
 
 mcp is the MCP server inside the sandbox, a client of <socket>
 (/run/permissions/request.sock by default).
@@ -44,7 +44,7 @@ sandbox's outer mount namespace before the FHS env's bwrap copies it. Waits up
 to 10 s for <socket> (/run/permissions/request.sock by default) to appear.
 
 make-shared, clone-tree, move-tree and detach are the daemon's
-helpers for type C grants, run through nsenter in the sandbox's namespaces (see
+helpers for attach grants, run through nsenter in the sandbox's namespaces (see
 tree.go).
 `
 
@@ -123,11 +123,11 @@ type config struct {
 	GrantDir      string `json:"grantDir"`
 	ControlSocket string `json:"controlSocket"`
 	Store         string `json:"store"`
-	// The daemon's systemd unit, which type A units are bound to
+	// The daemon's systemd unit, which service units are bound to
 	Unit            string   `json:"unit"`
 	SandboxGrantDir string   `json:"sandboxGrantDir"`
 	Window          []string `json:"window"`
-	// Never granted as a type C source, whatever a ceiling says: every launcher's state directory and runtime
+	// Never granted as an attach source, whatever a ceiling says: every launcher's state directory and runtime
 	// directory
 	Denied  []string `json:"denied"`
 	Plugins []struct {

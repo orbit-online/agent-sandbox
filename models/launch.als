@@ -68,7 +68,7 @@ one sig
   UdhcpcHostRoot,  // udhcpc started with the pre-pivot root (the host's tree)
   ShareTried,      // the FHS env's script ran `permissions-broker share`
   M1Shared,        // /run/permissions is a shared mount in M1
-  BrokerShared,          // the broker's b.shared: it accepts type C requests
+  BrokerShared,          // the broker's b.shared: it accepts attach requests
   M2Copied,        // the FHS env's bwrap copied M1 into M2
   M2Slave,         // M2's /run/permissions receives what M1's gets
   LastPidFail      // app-pid.sh's write to ns_last_pid failed

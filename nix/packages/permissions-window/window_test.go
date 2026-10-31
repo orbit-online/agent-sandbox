@@ -28,7 +28,7 @@ var state = map[string]any{
 		"decision": "allowed (session)"}},
 	"held": []any{map[string]any{"grant": "g0", "summary": "a folder", "why": "released from inside",
 		"holders": []any{map[string]any{"pid": 42, "comm": "cat", "start": 1}}}},
-	"capabilities": []any{map[string]any{"id": "folders/folder", "type": "C", "description": "a folder",
+	"capabilities": []any{map[string]any{"id": "folders/folder", "type": "attach", "description": "a folder",
 		"params": map[string]any{"path": map[string]any{"type": "string"}, "ro": map[string]any{"type": "boolean"}}}},
 }
 

@@ -23,7 +23,7 @@ func TestCheckDenied(t *testing.T) {
 }
 
 func TestCheckSource(t *testing.T) {
-	ceil := ceilingC{Sources: []source{{Path: "/srv/notes"}, {Path: "/srv/work", RW: true}, {Path: "/srv/work/keep-ro"},
+	ceil := attachCeiling{Sources: []source{{Path: "/srv/notes"}, {Path: "/srv/work", RW: true}, {Path: "/srv/work/keep-ro"},
 		{Path: "/dev/kvm"}}}
 	denied := []string{"/srv/work/state"}
 	for _, ok := range []struct {
@@ -61,7 +61,7 @@ func TestCheckSource(t *testing.T) {
 	}
 }
 
-// The sandbox's attacks on type C, from its rw binds, which may lie under a ceiling root
+// The sandbox's attacks on attach grants, from its rw binds, which may lie under a ceiling root
 
 // A ceiling root swapped for a link to elsewhere
 func TestAttackRootSwap(t *testing.T) {

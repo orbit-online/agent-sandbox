@@ -18,7 +18,7 @@ import (
 func TestPluginToolsRaw(t *testing.T) {
 	fakeSystemd(t)
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	c.Plugin, c.Tools = "vm", true
 	b.caps[c.id()] = c
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
@@ -60,12 +60,12 @@ func TestPluginToolsRaw(t *testing.T) {
 	t.Error("No echo through a plugin speaking bare MCP")
 }
 
-// A type A plugin's tools appear in the MCP server while its grant lives, calls reach the plugin, and they go with
+// A service plugin's tools appear in the MCP server while its grant lives, calls reach the plugin, and they go with
 // the grant, each change announced with list_changed
 func TestPluginTools(t *testing.T) {
 	fakeSystemd(t)
 	b, _ := testBroker(t, "allow", "allow")
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	c.Plugin, c.Tools = "vm", true
 	b.caps[c.id()] = c
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {

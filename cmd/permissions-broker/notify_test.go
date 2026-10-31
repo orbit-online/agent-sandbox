@@ -15,7 +15,7 @@ import (
 )
 
 func TestNotificationText(t *testing.T) {
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	params, err := c.validate(json.RawMessage(`{"path": "/a, ro=true"}`))
 	if err != nil {
 		t.Fatal(err)

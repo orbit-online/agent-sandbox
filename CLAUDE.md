@@ -55,12 +55,12 @@ single-user Nix store, and an environment doc for the Claude running inside.
   locks) and `plugintools.go` for plugins and their MCP tools,
   `mcp.go` the MCP server, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
   user namespace, `session.go` sessions.
-  Type C: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
+  The attach type: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
   (the helpers it runs through `nsenter` to clone a host path and mount it in
-  the sandbox), `mountinfo.go` (mount tables, holders) and `typec.go`
+  the sandbox), `mountinfo.go` (mount tables, holders) and `attach.go`
   (mounting, unmounting, cleanup). Each `*_test.go` follows its file;
   `main_test.go` has `TestMain` and the shared fakes.
-- `nix/packages/permissions-folders/`: the broker's built-in type C plugin,
+- `nix/packages/permissions-folders/`: the broker's built-in attach plugin,
   a manifest and two jq scripts. `permissions.folders` lists what it may
   grant.
 - `nix/packages/permissions-window/`: the Permissions window (Go with miqt's
@@ -173,13 +173,13 @@ modules and a user alice (the `home-manager` input exists only for it).
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), a request or window answer naming no instance
   a capability's `list` prints refused without asking (and with a failing
-  `list`; not for type C), and an Allow refused when the instance went away
+  `list`; not for attach capabilities), and an Allow refused when the instance went away
   while the user was asked, a replay of an always grant `list` no longer
   prints, the refusal limit, `always` only from the
   window and with exact parameters, and gone from the store when revoked, the store, duration, lock (none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
-  at another name), type A's systemd units (faked), exclusive instances across
+  at another name), service units in systemd (faked), exclusive instances across
   launchers (locked by the instance `list` prints, whatever other parameters
   a request carries), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace, a second time, and once a process of
@@ -199,7 +199,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   its lease ran out or for a grant revoked while its request waited for a
   plugin slot; plus a window answer while the notification is up, pending requests
   in arrival order, unit
-  names per launcher, and a broken store set aside. Type C against a stand-in
+  names per launcher, and a broken store set aside. Attach grants against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, a folder mounted
   read-only where the app sees it and not on the host, its holders listed and
@@ -214,14 +214,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   while the user is asked (refused), a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
   (found by identity, as the source or beneath it), and a re-bind in a nested
-  mount namespace (reported as a holder). The MCP server: a type A plugin's
+  mount namespace (reported as a holder). The MCP server: a service plugin's
   tools (a fake plugin speaking MCP on a socket) offered while its grant
   lives, a call forwarded, a second grant's under names of their own, each
   withdrawn with its grant and every change sent as `list_changed`, also
   for a plugin answering bare JSON-RPC; a hanging plugin holding up only its
   own grant, which is tried again once it answers; a failed offer tried
   again; two tools of a grant under one name told apart; the nudge after 15
-  minutes, not again right after, and in tool results; type A units bound
+  minutes, not again right after, and in tool results; service units bound
   to the daemon's unit, and the cleanup a stopped daemon's `ExecStopPost`
   runs (units stopped, locks removed, folder grants detached, mountpoints
   removed, also without the sandbox).
@@ -265,10 +265,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, a grant of a test plugin through the MCP server after a restart
   of the daemon with `always` grants stored, a SIGKILL of the daemon ending
-  its type A unit and its folder grant, both back under new ids after its
+  its service unit and its folder grant, both back under new ids after its
   restart, an `always` folder then mounted
   read-only, nodev and nosuid where the app runs and one with a mount beneath
-  it refused, an `always` type A plugin socket-activated by systemd whose tool
+  it refused, an `always` service plugin socket-activated by systemd whose tool
   the MCP server inside offers and forwards a call to, the Permissions window
   staying
   up against it, the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the

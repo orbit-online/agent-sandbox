@@ -14,7 +14,7 @@ import (
 	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
-// What still holds a type C grant after it ended, however it ended (revoked, released from inside, its lease ran out):
+// What still holds an attach grant after it ended, however it ended (revoked, released from inside, its lease ran out):
 // the window shows each and offers to end them
 
 // How many ended grants' holders are kept for the window

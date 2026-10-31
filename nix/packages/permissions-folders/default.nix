@@ -1,4 +1,4 @@
-# The permissions broker's built-in type C plugin: folders from the host, read-only unless asked otherwise and the
+# The permissions broker's built-in attach plugin: folders from the host, read-only unless asked otherwise and the
 # ceiling's source allows it. The broker checks the source against the ceiling and resolves it beneath its root
 {
   jq,
@@ -24,7 +24,7 @@ writeTextDir "share/agent-sandbox/permissions/folders.json" (
     capabilities = [
       {
         name = "folder";
-        type = "C";
+        type = "attach";
         description = "a folder from the host";
         params = {
           path = {

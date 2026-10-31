@@ -15,7 +15,7 @@ import (
 
 func TestConsent(t *testing.T) {
 	b, f := testBroker(t, "deny", "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 
 	if _, _, err := b.request(peerAt(t, os.Getpid()), request{Op: "request", Capability: c.id(), Lease: "PT1H"}); err == nil {
@@ -52,7 +52,7 @@ func TestConsent(t *testing.T) {
 // the instance's keys at the same value
 func TestListed(t *testing.T) {
 	b, f := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	list := filepath.Join(t.TempDir(), "list")
 	if err := os.WriteFile(list, []byte("#!/bin/sh\necho '[{\"path\": \"/a\"}, {\"path\": \"/b\", \"ro\": true}]'\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestListed(t *testing.T) {
 		t.Error("Granted the window's answer of an instance list doesn't name")
 	}
 
-	// A list that fails refuses, and type C's sources decide instead of its list
+	// A list that fails refuses, and an attach capability's sources decide instead of its list
 	if err := os.WriteFile(list, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +102,15 @@ func TestListed(t *testing.T) {
 	if err := c.inList(context.Background(), json.RawMessage(`{"path":"/a"}`)); err == nil {
 		t.Error("A failed list let a request through")
 	}
-	c.Type, c.listedAt = "C", time.Time{}
+	c.Type, c.listedAt = "attach", time.Time{}
 	if err := c.inList(context.Background(), json.RawMessage(`{"path":"/c"}`)); err != nil {
-		t.Errorf("Type C checked against its list: %v", err)
+		t.Errorf("Attach capability checked against its list: %v", err)
 	}
 }
 
 func TestRefusalLimit(t *testing.T) {
 	b, f := testBroker(t)
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	for i := range maxRefusals {
 		if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
@@ -130,7 +130,7 @@ func TestRefusalLimit(t *testing.T) {
 
 func TestAlwaysOnlyFromWindow(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "always"))
 	if err != nil {
@@ -143,7 +143,7 @@ func TestAlwaysOnlyFromWindow(t *testing.T) {
 
 func TestWindowAnswer(t *testing.T) {
 	b, _ := testBroker(t, "options")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	go func() {
 		for {
@@ -181,7 +181,7 @@ func TestWindowAnswer(t *testing.T) {
 
 func TestAnsweredInWindow(t *testing.T) {
 	b, _ := testBroker(t)
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	cause := make(chan error, 1)
 	// The notification stays up until it's taken down
@@ -221,7 +221,7 @@ func TestAnsweredInWindow(t *testing.T) {
 // P3: the instance goes away while the user is asked. Allow grants nothing
 func TestListChangedWhileAsking(t *testing.T) {
 	b, _ := testBroker(t)
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	writeList(t, c, `[{"path": "/a"}]`)
 	b.caps[c.id()] = c
 	b.ask = func(context.Context, prompt) (string, error) {

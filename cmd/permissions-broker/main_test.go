@@ -156,11 +156,11 @@ func testCap(t *testing.T, typ string) *capability {
 			"ro":   json.RawMessage(`{"type": "boolean"}`),
 		}}
 	switch typ {
-	case "A":
+	case "service":
 		c.Serve = []string{"/bin/true"}
-	case "B":
+	case "command":
 		// Prints its input, so tests see the validity it was given
-		c.Issue = script("issue", "cat")
+		c.Run = script("run", "cat")
 		c.Ceiling = ceiling{MaxValidity: "PT8H", Raw: json.RawMessage(`{"maxValidity": "PT8H"}`)}
 	}
 	if err := c.check(); err != nil {

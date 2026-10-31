@@ -47,10 +47,10 @@ func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error)
 }
 
 // instancesOf returns the instances list prints that params match: an instance matches when each of its keys has the
-// same value in params. Without a list, and for type C (whose requests may name a folder below a listed root, so its
-// sources decide), none and no error
+// same value in params. Without a list, and for attach capabilities (whose requests may name a folder below a listed
+// root, so its sources decide), none and no error
 func (c *capability) instancesOf(ctx context.Context, params json.RawMessage) ([]map[string]any, error) {
-	if len(c.List) == 0 || c.Type == "C" {
+	if len(c.List) == 0 || c.Type == "attach" {
 		return nil, nil
 	}
 	listed, err := c.listInstances(ctx)

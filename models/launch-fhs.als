@@ -156,14 +156,14 @@ check L4writeOk for 7 but 8 OwnedNS, 1..9 steps expect 0
 assert L4revert { (fhs[Guard - DropCapsBeforeFork, Move] and always LastPidFail not in On) implies l4 }
 check L4revert for 7 but 8 OwnedNS, 1..9 steps expect 1
 
-// L9: once the broker takes type C requests (b.shared), M2's
+// L9: once the broker takes attach requests (b.shared), M2's
 // /run/permissions receives what it mounts in M1.
 //
 // Known: when the FHS env's own `share` failed (the launch goes on,
 // bwrap-subid.sh:80-81), udhcpc can send `share` after the copy:
 // shareFrom (broker.go:485) checks only that the client is in M1, and
 // adoptShared (broker.go:500) would take the same state over after a
-// restart. The broker then grants type C into M1, where nothing but bwrap's
+// restart. The broker then grants attach into M1, where nothing but bwrap's
 // init and udhcpc sees it. Consent is still asked; the grant just never
 // reaches the app. Low: the user sees a grant that does nothing.
 pred l9 { always ((BrokerShared + M2Copied) in On implies M2Slave in On) }

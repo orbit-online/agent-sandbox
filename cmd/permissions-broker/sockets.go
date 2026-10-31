@@ -198,7 +198,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 
 // shareFrom makes the sandbox's grant directory shared in M1, asked by the FHS env's launcher script in M1 before the
 // FHS env's bwrap copies it. Once per sandbox: a later share (udhcpc's, after the FHS env's failed) would come after
-// the copy, and type C grants would never reach the app
+// the copy, and attach grants would never reach the app
 func (b *broker) shareFrom(p peer) error {
 	if b.sb.mnt == nil || !sameFile(b.sb.mnt, fmt.Sprintf("/proc/%d/ns/mnt", p.pid)) || p.gone() {
 		return errors.New("Only from the sandbox's outer mount namespace")
@@ -220,11 +220,11 @@ func (b *broker) shareFrom(p peer) error {
 	b.mu.Lock()
 	b.shared = true
 	b.mu.Unlock()
-	go b.replay("C")
+	go b.replay("attach")
 	return nil
 }
 
-// adoptShared takes over a grant directory an earlier daemon shared, and replays the type C always grants into it
+// adoptShared takes over a grant directory an earlier daemon shared, and replays the attach always grants into it
 func (b *broker) adoptShared() {
 	if !b.sb.isShared(b.cfg.SandboxGrantDir) {
 		return
@@ -232,7 +232,7 @@ func (b *broker) adoptShared() {
 	b.mu.Lock()
 	b.shared, b.shareAsked = true, true
 	b.mu.Unlock()
-	go b.replay("C")
+	go b.replay("attach")
 }
 
 // event tells watch streams (the MCP servers, the window) that something changed; they ask for the state

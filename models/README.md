@@ -50,8 +50,9 @@ in the init namespaces unless noted.
    there, and for all but `clone-tree` in M1 itself.
 3. **Permissions window**: Qt app, a client of `control.sock`. Answers
    pending requests, revokes, forgets `always` grants, ends holders.
-4. **Notification daemon** (Plasma's): draws the consent notification
-   `notify-send` posts and returns the action. The sandbox talks to it too.
+4. **Notification daemon** (Plasma's): draws the consent notification the
+   broker posts over D-Bus (godbus) and signals the action. The sandbox
+   talks to it too.
 5. **xdg-dbus-proxy**: nixpak's, in a plain bwrap; filters the session bus
    for the sandbox (Notifications talk, StatusNotifierWatcher talk and one
    StatusNotifierItem name with the tray, OpenURI and Settings calls on the
@@ -68,12 +69,12 @@ in the init namespaces unless noted.
    the sandbox, on `/run/subid-broker.sock`.
 8. **netns-macvlan**: setcap `cap_net_admin` wrapper, group `users`.
    Creates `eth0` in the sandbox's netns.
-9. **Type A plugin units**: `perm[-<launcher>]_<grant>` socket-activated
+9. **Service plugin units**: `perm[-<launcher>]_<grant>` socket-activated
    transient user units, `BindsTo=` the daemon's unit; listen on
-   `<grant dir>/<grant>.sock`. Type B `issue`, type C `resolve`, `list` and
-   `watch` run as the daemon's children.
+   `<grant dir>/<grant>.sock`. A command's `run`, an attach's `resolve`,
+   `list` and `watch` run as the daemon's children.
 10. **Windows VM**: the example plugin target, reached only through its
-    type A unit.
+    service unit.
 
 Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 
@@ -120,14 +121,14 @@ joining needs CAP_SYS_ADMIN in init).
 |---|---|---|---|
 | `request.sock` (`/run/permissions`, ro bind of `$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]`) | broker | M1, M2 and copies; the host | `SO_PEERPIDFD`, pid from fdinfo, peer alive after the read; 64 connections, 10 s, 64 KiB; `share` only from M1 (`sameNsAs` by pid); session from the peer's ancestors' environment and `/proc/<pid>/exe` |
 | `control.sock` (`$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
-| `<grant>.sock` | type A unit | the sandbox while the grant lives | none: a grant is the sandbox's, not a session's |
+| `<grant>.sock` | service unit | the sandbox while the grant lives | none: a grant is the sandbox's, not a session's |
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
 | netns-macvlan `<pid>` | netns-macvlan | the host (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
 | `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
-| notifications | notification daemon | host and sandbox (through the proxy) | none: the sandbox can post look-alikes; the broker ignores an action within 1 s of its own notification appearing |
+| notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox can still post look-alikes and replace the broker's notification by its id |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
 | grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory |
-| type C mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling (lexical, then `openat2` without links or mount crossings beneath the root), denied directories by identity, no submounts, ro/nodev/nosuid |
+| attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling (lexical, then `openat2` without links or mount crossings beneath the root), denied directories by identity, no submounts, ro/nodev/nosuid |
 | the grant store `$stateDir/permissions.json` | broker | host only (stateDir's `home/`, `nix/`, `tmp-scratchpad/` are bound, not stateDir) | written only by the daemon |
 | helper binaries | nsenter execs them after joining M1 or M2 | resolved in that mount namespace | must be read-only binds of the closure (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
@@ -219,7 +220,7 @@ process whose principal is in the Sandbox domain, at any time.
 - S9. `share` takes effect only for a client in M1.
 - S10. No sandbox process can create, rename or remove an entry of the
   grant directory, in any mount namespace.
-- S11. A type C source is beneath a ceiling root reached without links or
+- S11. An attach source is beneath a ceiling root reached without links or
   mount crossings, and is not a denied directory, beneath one, or above
   one, by identity; it carries no submounts; a read-only grant is mounted
   read-only, a directory nodev and nosuid.
@@ -245,12 +246,12 @@ process whose principal is in the Sandbox domain, at any time.
 - P2. An `always` grant enters the store only from a window answer with
   lease `always`, never from a notification or the request's proposal.
 - P3. Never above the ceiling: a grant's parameters validate, match an
-  instance `list` prints (types A, B), and its source passes S11 (type
-  C), at grant time and again after a window narrows it.
-- P4. A grant that ended is dead: no further delivery (type A socket gone
-  and unit stopped, type C detached in M1 and everywhere it propagated,
-  type B never issued again).
-- P5. After a type C grant ends, every sandbox process that still holds it
+  instance `list` prints (service, command), and its source passes S11
+  (attach), at grant time and again after a window narrows it.
+- P4. A grant that ended is dead: no further delivery (service socket gone
+  and unit stopped, attach detached in M1 and everywhere it propagated,
+  command never run again).
+- P5. After an attach grant ends, every sandbox process that still holds it
   (cwd, open file, mapping, or a mount of the same filesystem and root in
   its mount namespace) is listed as a holder.
 - P6. Only host principals answer: a pending request is decided by the
@@ -265,9 +266,9 @@ process whose principal is in the Sandbox domain, at any time.
   Forged session variables can't anchor it outside the sandbox.
 - P9. A lock lease ends on Lock, LockedHint or PrepareForSleep, and none is
   granted while the lock isn't watched.
-- P10. A type B credential's validity is at most the ceiling's
+- P10. The validity a command is given is at most the ceiling's
   `maxValidity` and at most what's left of a duration lease.
-- P11. Every grant ends with the daemon (type A by `BindsTo=`, type C by
+- P11. Every grant ends with the daemon (service by `BindsTo=`, attach by
   `ExecStopPost` or the next start's cleanup) and with the sandbox.
 - P12. After the daemon starts again, the live grants are exactly the
   stored `always` grants that still pass P3.
@@ -300,10 +301,10 @@ process whose principal is in the Sandbox domain, at any time.
   redirected to a host process or a nested one.
 - L8. The broker exits when the sandbox's pidfd turns readable, and stops
   restarting when it never finds one; subid-broker when bwrap exits, or at
-  once when its parent is gone already; type A units when the broker's
+  once when its parent is gone already; service units when the broker's
   unit stops.
 - L9. `share` runs before the FHS env's bwrap copies M1, or the launcher
-  goes on without type C (which the broker then refuses, P3).
+  goes on without attach (which the broker then refuses, P3).
 - L10. No host-side step reads a host file into the sandbox, or writes
   one, through a path the sandbox can write: its home, its store, the
   binds of `~/.claude` and `~/.config/Claude` (`launch-host.als`).

@@ -19,7 +19,7 @@ type echoIn struct {
 	Text string `json:"text"`
 }
 
-// fakePlugin serves MCP on a unix socket, as a type A plugin with tools does on its grant socket: one tool, echo
+// fakePlugin serves MCP on a unix socket, as a service plugin with tools does on its grant socket: one tool, echo
 func fakePlugin(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "plugin.sock")
@@ -124,13 +124,13 @@ func rawPluginWith(t *testing.T, hang bool, names ...string) string {
 	return path
 }
 
-// pluginHarness is a broker serving request.sock with a type A capability with tools, and the MCP server following
+// pluginHarness is a broker serving request.sock with a service capability with tools, and the MCP server following
 // it, its plugin connections dialled by dial. Returns a client session of the MCP server and the broker's socket
 func pluginHarness(t *testing.T, dial func(string) (net.Conn, error), answers ...string) (*broker, string, *mcp.ClientSession) {
 	t.Helper()
 	fakeSystemd(t)
 	b, _ := testBroker(t, answers...)
-	c := testCap(t, "A")
+	c := testCap(t, "service")
 	c.Plugin, c.Tools = "vm", true
 	b.caps[c.id()] = c
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {

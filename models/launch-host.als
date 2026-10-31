@@ -29,7 +29,7 @@ one sig
   Udhcpc,    // in P (net-setup.sh:26)
   Reentry,   // in P2, under a host nsenter
   Broker,    // the permissions broker's unit
-  TypeA      // a type A plugin unit
+  ServiceUnit      // a service plugin unit
   extends Thing {}
 var sig Alive in Thing {}
 
@@ -41,7 +41,7 @@ abstract sig Guard {}
 one sig
   Pdeathsig,   // subid-broker dieWith: PR_SET_PDEATHSIG, fired when its parent exits
   PidfdExit,   // broker.go:227-234: run returns when the sandbox's pidfd turns readable
-  BindsTo,     // type A units BindsTo= the daemon's unit (README.md, Principals 9)
+  BindsTo,     // service units BindsTo= the daemon's unit (README.md, Principals 9)
   ParentCheck, // subid-broker dieWith: getppid() after the prctl, against the pid bwrap-subid.sh passes
   StartLimit   // claude-desktop.sh: the broker unit's StartLimitBurst=3 in 10 min
   extends Guard {}
@@ -75,7 +75,7 @@ pred udhcpcStart { live[Sandbox] and not live[Udhcpc] and become[Udhcpc, none, n
 pred reentryStart { live[Sandbox] and not live[Reentry] and become[Reentry, none, none] }
 // findSandbox: its pidfd
 pred brokerFinds { live[Broker + Sandbox] and Found not in Marks and become[none, none, Found] }
-pred typeAStart { live[Broker] and Found in Marks and not live[TypeA] and become[TypeA, none, none] }
+pred serviceStart { live[Broker] and Found in Marks and not live[ServiceUnit] and become[ServiceUnit, none, none] }
 // P's init exits: the kernel kills P and P2, re-entries included
 pred sandboxEnds { live[Sandbox] and become[none, Sandbox + Udhcpc + Reentry, Ended] }
 // bwrap's parent half exits with its child; the death signal takes
@@ -87,7 +87,7 @@ pred bwrapExit[g: set Guard] {
 // The broker's poll returns; systemd stops the units bound to it
 pred brokerExit[g: set Guard] {
   live[Broker] and Found in Marks and not live[Sandbox] and PidfdExit in g
-  become[none, Broker + (BindsTo in g implies TypeA else none), none]
+  become[none, Broker + (BindsTo in g implies ServiceUnit else none), none]
 }
 // findSandbox gives up after a minute and the broker exits non-zero;
 // Restart=on-failure starts it again until the start limit stops it.
@@ -101,7 +101,7 @@ pred stay { Alive' = Alive and Marks' = Marks }
 pred lifetimes[g: set Guard] {
   Alive = Shell and no Marks
   always (brokerStart or subidSpawn or subidArm[g] or shellAbort[g] or execBwrap
-    or sandboxStart or udhcpcStart or reentryStart or brokerFinds or typeAStart
+    or sandboxStart or udhcpcStart or reentryStart or brokerFinds or serviceStart
     or sandboxEnds or bwrapExit[g] or brokerExit[g] or brokerGivesUp[g] or stay)
   // Weak fairness for the host's own reactions
   (eventually always (live[SubidB] and Armed not in Marks)) implies always eventually Armed in Marks
@@ -111,9 +111,9 @@ pred lifetimes[g: set Guard] {
     ((eventually always (live[Broker] and Found not in Marks and Ended in Marks)) implies always eventually not live[Broker])
 }
 
-// L8: once the sandbox ended (or never came up), the broker and its type A
+// L8: once the sandbox ended (or never came up), the broker and its service
 // units, subid-broker, udhcpc and the re-entries end too.
-pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + TypeA + SubidB + Udhcpc + Reentry)) }
+pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + ServiceUnit + SubidB + Udhcpc + Reentry)) }
 
 // L8, also when the sandbox never came up. Holds.
 assert L8 { lifetimes[Guard] implies l8 }
@@ -135,14 +135,14 @@ check L8limitRevert for 4 but 1..15 steps expect 1
 assert L8ran { (lifetimes[Guard] and always (Ended in Marks implies Found in Marks)) implies l8 }
 check L8ran for 4 but 1..15 steps expect 0
 
-// L8, revert: without BindsTo a type A unit outlives the broker.
+// L8, revert: without BindsTo a service unit outlives the broker.
 assert L8ranRevert { (lifetimes[Guard - BindsTo] and always (Ended in Marks implies Found in Marks)) implies l8 }
 check L8ranRevert for 4 but 1..15 steps expect 1
 
 // Vacuity: a sandbox with all of them runs and ends.
 run lifetimesRun {
   lifetimes[Guard]
-  eventually (live[Udhcpc + Reentry + TypeA + SubidB]) and eventually Ended in Marks
+  eventually (live[Udhcpc + Reentry + ServiceUnit + SubidB]) and eventually Ended in Marks
 } for 4 but 1..15 steps expect 1
 
 // ---------------------------------------------------------------------

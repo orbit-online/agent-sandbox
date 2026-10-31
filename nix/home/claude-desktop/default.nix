@@ -419,7 +419,7 @@ let
               ceiling = mkOption {
                 type = (pkgs.formats.json { }).type;
                 default = { };
-                description = "What the plugin may grant at all: `maxValidity` for type B, `sources` for type C, and the plugin's own fields.";
+                description = "What the plugin may grant at all: `maxValidity` for a command, `sources` for an attach, and the plugin's own fields.";
               };
             };
           }
@@ -1073,7 +1073,7 @@ let
   # A launcher's enabled binds whose source holds or lies in a launcher's state dir, holds $XDG_RUNTIME_DIR (any
   # /run/user/<uid>) or lies in its .flatpak or claude-desktop dirs: the sandbox would reach another sandbox's state,
   # the permissions broker's store and sockets, or the nixpak instance info the broker and the launcher read as the
-  # sandbox's identity. Its own home, store and scratchpad aside, which it holds anyway. As the broker's type C
+  # sandbox's identity. Its own home, store and scratchpad aside, which it holds anyway. As the broker's attach
   # ceiling denies them
   stateBinds =
     name: lcfg:

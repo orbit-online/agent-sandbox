@@ -11,7 +11,7 @@ open protocol_state
 // What request() checks before anything else (broker.go:512-563).
 pred reqOK[r: Req] {
   r.rl in Up - Gone and r not in Asked
-  r.rcap.dtype = TypeC implies r.rl in SharedDir
+  r.rcap.dtype = Attach implies r.rl in SharedDir
   leaseOK[r.rl, r.rlease, r.rsess]
   passes[r.rcap, r.rparams]
 }
@@ -36,7 +36,7 @@ pred ask[r: Req] {
 
 // matching (broker.go:565-582): a live grant with the same parameters
 // covers the request, whatever lease it asks for. A session lease gains
-// the caller's session (addSession); type B issues again.
+// the caller's session (addSession); a command runs again.
 pred matchLive[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap, p = r.rparams {
     reqOK[r]
@@ -46,7 +46,7 @@ pred matchLive[r: Req, g: Grant] {
     shownDir' = shownDir and shows' = shows and by' = by
     (g.glease = LSession and some r.rsess and r.rsess in Alive and some g.gsess)
       implies gsess' = gsess + g -> r.rsess else gsess' = gsess
-    Issuing' = Issuing + (g & typed[TypeB])
+    ToRun' = ToRun + (g & typed[Command])
     Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted
     left' = left and mdir' = mdir and lockFile' = lockFile
     keepDaemons and keepGates and keepEnv and stored' = stored
@@ -106,7 +106,8 @@ pred forge[r: Req] {
 }
 
 // Allow on the notification: the lease it offered, the request's
-// parameters, checked again: `list` for types A and B, mountC for C.
+// parameters, checked again: `list` for service and command, attachGrant
+// for attach.
 pred notifAllow[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap {
     r in Pending - Opened and actionMature[r]
@@ -114,8 +115,8 @@ pred notifAllow[r: Req, g: Grant] {
     r not in Forged
     // `list` runs again after the answer (inList, consent.go); a folder
     // is mounted only if it is the one shown (clone-tree --expect)
-    c.dtype != TypeC implies some r.rparams.(c.matches) & Listed
-    c.dtype = TypeC implies r.rparams.resolves = r.shownDir
+    c.dtype != Attach implies some r.rparams.(c.matches) & Listed
+    c.dtype = Attach implies r.rparams.resolves = r.shownDir
     l in Up - Gone
     // checked again at grant time (checkLease after the answer, and lockOK
     // under the lock in grant(), leases.go)
@@ -204,7 +205,7 @@ pred expire[g: Grant] { g in Live and g.glease = LDuration and g.left = 0 and en
 pred tick {
   all g: Grant | (g in Live and g.glease = LDuration and g.left > 0)
     implies g.left' = minus[g.left, 1] else g.left' = g.left
-  Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and Issuing' = Issuing
+  Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
   gsess' = gsess and mdir' = mdir and lockFile' = lockFile
   keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
 }

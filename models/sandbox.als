@@ -53,7 +53,7 @@ abstract sig Principal { domain: one Domain }
 // permissions broker daemon and its helpers, the Permissions window, the
 // notification daemon, nixpak's xdg-dbus-proxy, the launcher scripts
 // (claude-desktop.sh, nixpak's launcher, bwrap-subid.sh, net-setup.sh),
-// subid-broker, the netns-macvlan setcap wrapper, a type A plugin's
+// subid-broker, the netns-macvlan setcap wrapper, a service plugin's
 // units, and a plugin's target (the Windows VM).
 one sig HostUserP, BrokerP, WindowP, NotifierP, DbusProxyP, LauncherP,
   SubidBrokerP, NetnsMacvlanP, PluginUnitP, WindowsVMP extends Principal {}

@@ -1,8 +1,8 @@
 # Permissions: granting the sandbox outside access while it runs
 
-Status: written 2026-10-31. Built: the daemon (`cmd/permissions-broker/`) with types A and B, consent,
+Status: written 2026-10-31. Built: the daemon (`cmd/permissions-broker/`) with the service and command types, consent,
 leases, the grant store, the MCP server with plugin tools and nudges, the Permissions window
-(`nix/packages/permissions-window/`) and type C with the folders plugin (`nix/packages/permissions-folders/`,
+(`nix/packages/permissions-window/`) and the attach type with the folders plugin (`nix/packages/permissions-folders/`,
 `permissions.folders`), behind a launcher's `permissions.enable`. Not yet: device grants.
 
 A daemon started again while the sandbox runs finds the grant directory shared by the one before (its mountinfo
@@ -26,8 +26,8 @@ code.
   desktop actions, next to "New shell", listing what's granted and what can be.
 - Leases: this session, until the screen locks, for a duration, always. Grants end on their lease, on revoke, on
   release from inside, and on plugin triggers.
-- One plugin API with three delivery types (below). Folder mounts are the first plugin and live here; others, such
-  as the Windows VM, live in secoya/agent-sandbox-plugins.
+- One plugin API with three delivery types, `service`, `command` and `attach` (below). Folder mounts are the first
+  plugin and live here; others, such as the Windows VM, live in secoya/agent-sandbox-plugins.
 - One MCP server inside the sandbox for every plugin.
 
 ## What's verified
@@ -62,8 +62,8 @@ host (user, no capabilities)                       sandbox
 ┌──────────────────────────────┐                   ┌──────────────────────────────────────────┐
 │ permissions-broker (daemon)  │  request.sock     │ /run/permissions/                         │
 │  consent, leases, grant store├──────────────────►│   request.sock   (core requests)          │
-│  plugins, mount helpers      │  grant dir bind   │   <grant>/       (type C mounts)          │
-│                              │                   │   <grant>.sock   (type A channels)        │
+│  plugins, mount helpers      │  grant dir bind   │   <grant>/       (attach mounts)          │
+│                              │                   │   <grant>.sock   (service sockets)        │
 │ control.sock (host only) ◄───┼─ Permissions      │                                          │
 │                              │  window           │ permissions MCP server (stdio, per session)│
 └──────────────────────────────┘                   └──────────────────────────────────────────┘
@@ -107,10 +107,10 @@ Started again after a crash, it finds the same sandbox the same way and reconcil
 everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and replays only
 the `always` grants. Leases that ran while it was down are gone rather than extended; Claude asks again.
 
-Grants end with the daemon, a crash included: type A units are bound to its unit (`BindsTo=`), so systemd stops them
+Grants end with the daemon, a crash included: service units are bound to its unit (`BindsTo=`), so systemd stops them
 when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd runs after a
-crash too) detaches the folder grants and removes their mountpoints. Issued credentials stay valid until they
-expire: they can't be taken back. A daemon starting runs the same cleanup first, in case it didn't happen.
+crash too) detaches the folder grants and removes their mountpoints. Credentials a command printed stay valid until
+they expire: they can't be taken back. A daemon starting runs the same cleanup first, in case it didn't happen.
 
 ### Sharing the grant directory
 
@@ -121,7 +121,7 @@ checks that the client is in M1 and makes
 too; files the daemon creates on the host side (sockets) show up as before. The daemon serves `share` once per sandbox: a
 second one, from anything else in M1 such as udhcpc's script, would come after the FHS env's bwrap copied M1, where
 grants no longer reach the app. Replaying makes no grant of what's live already. If `share` fails, the launcher goes
-on without type C grants rather than not starting; the daemon then refuses type C requests and skips them when
+on without attach grants rather than not starting; the daemon then refuses attach requests and skips them when
 replaying, and the window says why.
 
 ### Privileged steps in a Go process
@@ -134,9 +134,9 @@ permissions-broker clone-tree <src> [ro]` sends the detached tree's fd back over
 
 ## Delivery types
 
-A plugin declares capabilities, each of one delivery type.
+A plugin declares capabilities, each of one delivery type: `service`, `command` or `attach`.
 
-**A. Mediated channel.** The daemon runs the plugin's `serve` command as a socket-activated transient unit:
+**`service`: a host-side unit.** The daemon runs the plugin's `serve` command as a socket-activated transient unit:
 `systemd-run --user --unit=perm-<launcher>_<grant> --socket-property=ListenStream=<grant dir>/<grant>.sock`
 (`perm_<grant>` for the default launcher; launcher names can't contain `_`, so no launcher's units match another's
 pattern). The plugin gets the socket the standard way (`sd_listen_fds`, which needs `LISTEN_PID` to match, so the
@@ -148,23 +148,22 @@ name. `serve` exiting doesn't end the grant: the next connection starts it again
 and streams it), D-Bus services (an xdg-dbus-proxy instance per grant, since rules can't change in a running one),
 website logins (an HTTP proxy that adds cookies the sandbox never sees).
 
-**B. Issued credential.** The daemon runs the plugin's `issue` command with the request's parameters (the sandbox's
-public key or CSR among them) and the validity as JSON on stdin, and returns what it prints. The validity is the
-shorter of the plugin's `maxValidity` (from its ceiling) and a duration lease. The lease decides only whether
-another `issue` asks the user first. A credential can't be taken back: revoke means "won't issue
-again". Fits: certs from a host CA, SSH
-certificates, Kubernetes client certs.
+**`command`: run once on the host.** The daemon runs the plugin's `run` command with the request's parameters (the
+sandbox's public key or CSR among them) and the validity as JSON on stdin, and returns what it prints. The validity
+is the shorter of the plugin's `maxValidity` (from its ceiling) and a duration lease. The lease decides only whether
+another `run` asks the user first. What a command printed can't be taken back: revoke means "won't run again". Fits:
+credentials (certs from a host CA, SSH certificates, Kubernetes client certs) and host actions.
 
-**C. Namespace injection.** The daemon runs the plugin's `resolve` command, which answers with what to attach:
-`{"source": "/host/path", "ro": true}` for a folder or a device node. The daemon attaches it at
+**`attach`: into the sandbox's namespaces.** The daemon runs the plugin's `resolve` command, which answers with what
+to attach: `{"source": "/host/path", "ro": true}` for a folder or a device node. The daemon attaches it at
 `/run/permissions/<grant>`; the plugin never touches namespaces. The daemon, not the plugin, enforces the source
-ceiling (below), the same way for every type C plugin. Revoking detaches it. Like every grant
+ceiling (below), the same way for every attach plugin. Revoking detaches it. Like every grant
 it is the sandbox's (see Requests): a session lease's mount goes when the last session holding it ends. Fits: live folder
 mounts, single `/dev` nodes, block devices mounted on the host and handed over as a folder. Moving a network device
-(a wifi phy) into the sandbox's netns is also type C, with an attach kind of its own, left for later.
+(a wifi phy) into the sandbox's netns is also `attach`, with an attach kind of its own, left for later.
 
-Open files survive a revoke of type C (verified item 3), and so does a copy of the mount a process in the sandbox
-made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
+Open files survive a revoke of an attach grant (verified item 3), and so does a copy of the mount a process in the
+sandbox made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
 mountpoint end the grant's mounts in every namespace it propagated to, not copies made elsewhere. Neither can be
 taken back short of ending the processes. So the daemon reads the grant's mount ids in each mount namespace in the
 sandbox (of every process of the sandbox's, found by user namespace as for sessions below, re-entries included),
@@ -217,7 +216,7 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
   "capabilities": [
     {
       "name": "vm",
-      "type": "A",
+      "type": "service",
       "description": "Control a running Windows VM",
       "params": { "vm": { "type": "string", "description": "the VM, as list names it" } },
       "list": ["windows-vm-plugin", "list"],
@@ -230,23 +229,24 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
 
 - `params` is a JSON Schema properties object; the daemon validates requests against it.
 - `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`, as
-  a JSON array of objects. Outside type C, a request must match one of them, or it is refused without asking the
+  a JSON array of objects. Outside `attach`, a request must match one of them, or it is refused without asking the
   user: an instance matches when each of its keys has the same value in the request's params. A `list` that fails
   refuses every request. `list` runs again when the user answers and when an `always` grant is replayed, so an
-  instance gone by then (a VM shut down) isn't granted. Type C requests may name a folder below a listed root, so `sources` decide there.
+  instance gone by then (a VM shut down) isn't granted. Attach requests may name a folder below a listed root, so
+  `sources` decide there.
 - `exclusive` (optional): an instance may be granted to one launcher at a time (a VM's QMP connection takes one
   client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance `list`
   prints that the request matches (per parameters without a `list`), so parameters `list` doesn't print (a mode) don't
   make one VM two instances; a request for an instance
   another launcher holds is refused, naming it.
-- `serve`, `issue`, `resolve` per type as above.
+- `serve`, `run`, `resolve` per type as above.
 - `watch` (optional) runs for as long as a grant lives; its exit ends the grant (VM shut down, device unplugged).
-- `tools` (type A only): the plugin speaks MCP on its socket, and its tools appear in the core MCP server while the
+- `tools` (`service` only): the plugin speaks MCP on its socket, and its tools appear in the core MCP server while the
   grant lives (see MCP).
 
 The module's option `permissions.plugins.<name>` enables a plugin and sets its ceiling. The ceiling is
 plugin-specific JSON the daemon passes to the plugin's commands, plus fields the daemon enforces itself: `sources`
-(path prefixes, devices, rw allowed or not) for type C and `maxValidity` for type B. A request outside the ceiling
+(path prefixes, devices, rw allowed or not) for `attach` and `maxValidity` for `command`. A request outside the ceiling
 is refused without asking the user.
 
 ## Requests
@@ -283,7 +283,7 @@ such an anchor gets no session leases.
 
 A grant belongs to the sandbox, not to the session that asked for it. Every process in the sandbox runs as the same
 user in the same namespaces, so nothing could keep one session from another's grant: any process in the sandbox can
-use any live grant (a folder is mounted in the mount namespace everyone shares, a type A socket sits in the grant
+use any live grant (a folder is mounted in the mount namespace everyone shares, a service's socket sits in the grant
 directory everyone sees, a credential is a string), and every session's MCP server offers every grant's tools. The
 session id only ties a "this session" lease's lifetime to that session's `claude` process, and records who still
 holds a grant for `release` and the nudge. Anything in the sandbox can set the variable; nothing relies on it to
@@ -325,7 +325,7 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 
 | lease     | ends when                                                                  |
 |-----------|----------------------------------------------------------------------------|
-| `session` | the session's anchor process exits (pidfd); type C counts holding sessions |
+| `session` | the session's anchor process exits (pidfd); attach counts holding sessions |
 | `lock`    | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep` |
 | duration  | the time runs out; the window can extend it                                |
 | `always`  | revoked (or forgotten) in the window, which removes it from the store too; replayed at every launch |
@@ -353,7 +353,7 @@ Code's channels could push this instead, but they need `--channels` at startup, 
 synced before the rename that replaces it. A store that doesn't parse is set aside as `permissions.json.broken`, and
 the daemon starts without it. It holds `always` grants
 (capability, parameters, when granted) and a log of recent decisions for the window. At launch, after `share`, the
-daemon replays the `always` grants: type C mounts are attached, type A plugins started; type B is issued on request
+daemon replays the `always` grants: attach grants are mounted, service plugins started; a command runs on request
 without asking. Persisting a grant needs no config change or rebuild; Nix only sets what may be granted at all.
 
 ## MCP
@@ -364,7 +364,7 @@ enabled). Tools:
 - `list`: what can be granted, with instances, and what's granted.
 - `request(capability, params, reason, lease)`: blocks until the user answers, 2 minutes at most (10 with the
   window open), well inside Claude Code's MCP tool timeouts (about 28 hours, 30 minutes idle for stdio servers).
-  Returns the socket path (A), the credential (B) or the path under `/run/permissions` (C).
+  Returns the socket path (service), the command's output (command) or the path under `/run/permissions` (attach).
 - `release(grant)`, `status`.
 
 Plugins with `tools`: while a grant of theirs lives, the core MCP server connects to the grant's socket as an MCP
@@ -386,14 +386,14 @@ plain client of its socket, with no consent code, which answers ungranted calls 
 
 ## Plugins planned
 
-Built in, here: folder mounts (type C). Ceiling: path prefixes, rw allowed or not. `list` shows the prefixes.
+Built in, here: folder mounts (`attach`). Ceiling: path prefixes, rw allowed or not. `list` shows the prefixes.
 
-In secoya/agent-sandbox-plugins: the Windows VM (type A, `tools`, `watch` on the VM's runtime directory). Its
+In secoya/agent-sandbox-plugins: the Windows VM (`service`, `tools`, `watch` on the VM's runtime directory). Its
 consent code (notification, refusal limit, allow and revoke signals) goes away from secoya/nixos-windows-vm, and the
 hosts drop the `windows-vm-claude` bind.
 
-Designed for, not planned: certs from a host CA, SSH and Kubernetes certs (B); systemd, journal, BlueZ, TPM, UEFI
-variables, host applications, website logins (A); devices and wifi (C).
+Designed for, not planned: certs from a host CA, SSH and Kubernetes certs (`command`); systemd, journal, BlueZ, TPM,
+UEFI variables, host applications, website logins (`service`); devices and wifi (`attach`).
 
 ## Launcher
 
@@ -404,9 +404,9 @@ URLs. With no sandbox running, the window says so and shows the stored `always` 
 ## Steps
 
 1. Daemon: request and control sockets, consent, refusal limit, leases with logind and session triggers, the grant
-   store, plugin runner for A and B, `share`, tests in Go and in the VM test.
+   store, plugin runner for `service` and `command`, `share`, tests in Go and in the VM test.
 2. Permissions window and the desktop action.
-3. Folder mounts as the first type C plugin, with the mount helpers, persisted grants and revoke reporting holders.
+3. Folder mounts as the first attach plugin, with the mount helpers, persisted grants and revoke reporting holders.
 4. Windows VM plugin in agent-sandbox-plugins; consent code out of windows-vm.
 5. Hosts switch over and drop the `windows-vm-claude` bind.
 
@@ -417,17 +417,17 @@ These were open when the design was written and decided while the user was away.
 1. The grant directory is made shared in M1 on a `share` request from the FHS env's launcher script, before the FHS
    env's bwrap starts. The alternative, injecting into M2 directly, would need the daemon to find the app's mount
    namespace and wouldn't reach namespaces nested in it.
-2. Revoking a type C grant detaches and reports the holders; ending them is the user's choice in the window.
+2. Revoking an attach grant detaches and reports the holders; ending them is the user's choice in the window.
 3. The window is Qt with QML: first PySide6, then ported to Go with miqt at Anders' word (one language, and the
    PySide6 closure came to 2.4 GB). miqt is young (v0.15, since 2024-08); the window uses only the QML engine
    and a property map.
 4. Plugins are executables with a JSON manifest, run per grant or per request, rather than long-running services
-   with an RPC API: nothing to supervise when no grant is live, and socket activation for type A is a convention
+   with an RPC API: nothing to supervise when no grant is live, and socket activation for `service` is a convention
    plugin authors know.
 5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
 6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
    a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it replays the
    `always` ones (Claude asks again for the rest).
-7. Type A plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
-8. Grants die with the daemon (Anders): type A units `BindsTo=` its unit, folder grants detached by its
+7. Service plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
+8. Grants die with the daemon (Anders): service units `BindsTo=` its unit, folder grants detached by its
    `ExecStopPost=`.

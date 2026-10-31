@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// folders is a type C capability like the folders plugin: resolve takes path and ro (read-only unless false)
+// folders is an attach capability like the folders plugin: resolve takes path and ro (read-only unless false)
 func folders(t *testing.T, sources string) *capability {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "resolve")
@@ -30,7 +30,7 @@ exec sed -n 's/.*"params":{"path":"\([^"]*\)"\(,"ro":false\)\{0,1\}}.*/{"source"
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	c := &capability{Plugin: "folders", Name: "folder", Type: "C", Description: "a folder",
+	c := &capability{Plugin: "folders", Name: "folder", Type: "attach", Description: "a folder",
 		Params:  map[string]json.RawMessage{"path": json.RawMessage(`{"type": "string"}`), "ro": json.RawMessage(`{"type": "boolean"}`)},
 		Resolve: []string{path}, Ceiling: ceiling{Raw: json.RawMessage(`{"sources": [` + sources + `]}`)}}
 	if err := c.check(); err != nil {
@@ -178,7 +178,7 @@ func TestFolderOutsideCeiling(t *testing.T) {
 // A session lease two sessions hold lasts until both end
 func TestSessionsShare(t *testing.T) {
 	b, _ := testBroker(t, "allow")
-	c := testCap(t, "B")
+	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	anchor1, child1 := startAnchor(t, "claude")
 	g, _, err := b.request(peerAt(t, child1), req(c.id(), `{}`, "session"))
@@ -272,7 +272,7 @@ func TestCleanup(t *testing.T) {
 		t.Error("The launcher's lock is left")
 	}
 	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "systemctl --user stop perm-work_*") {
-		t.Errorf("Type A units not stopped:\n%s", data)
+		t.Errorf("Service units not stopped:\n%s", data)
 	}
 	// Without the sandbox, what's left on the host goes all the same
 	if err := os.Mkdir(filepath.Join(b.cfg.GrantDir, "stale"), 0o700); err != nil {
@@ -296,7 +296,7 @@ func TestReplayOnce(t *testing.T) {
 	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{"path":"` + src + `"}`)}}
 	var wg sync.WaitGroup
 	for range 3 {
-		wg.Go(func() { b.replay("C") })
+		wg.Go(func() { b.replay("attach") })
 	}
 	wg.Wait()
 	if gs := b.liveGrants(""); len(gs) != 1 {

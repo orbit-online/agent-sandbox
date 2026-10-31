@@ -16,7 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// pluginTools offers the tools of the type A plugins that speak MCP on their grant sockets, while their grants live.
+// pluginTools offers the tools of the service plugins that speak MCP on their grant sockets, while their grants live.
 // It follows the broker's watch events, and syncs every so often besides, so an offer that failed is tried again.
 // Adding and removing tools sends list_changed. Grants are the whole sandbox's, so are their tools: every session
 // sees them

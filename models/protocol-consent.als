@@ -103,7 +103,7 @@ run P6answers {
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
 // P7. Consent text is the daemon's: what the broker's notification shows
-// is the summary the daemon built (describe, describeC; reason quoted and
+// is the summary the daemon built (describe, describeAttach; reason quoted and
 // escaped, notify.go, plugins.go).
 // Known, a finding (B4), confirmed against Plasma 6.6's source, not tried
 // live: the sandbox may call Notify with replaces_id set to the broker's
