@@ -164,7 +164,8 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `subid-broker`: the package build runs its Go tests (`main_test.go`):
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
-  client's own and another uid.
+  client's own and another uid, and `dieWith` ending the broker when the
+  parent it was given is gone already.
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), a request or window answer naming no instance
@@ -237,7 +238,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   lease, route and DNS, the launcher `work` running next to the default
   sandbox (its own namespaces, MAC and lease, its own tray item at another
   pid, its re-entry found by app ID, its state dir and GC root, and its
-  permissions broker: the daemon's unit, `/run/permissions` read-only, shared
+  permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, a grant of a test plugin through the MCP server after a restart
   of the daemon with `always` grants stored, a SIGKILL of the daemon ending

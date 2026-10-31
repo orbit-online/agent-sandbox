@@ -39,9 +39,9 @@ subid)
   done
   sock=$XDG_RUNTIME_DIR/claude-desktop/subid-broker-$$.sock
   mkdir -p "${sock%/*}"
-  # Its parent death signal fires when bwrap, which this shell execs into, exits. Without the info fd, which the
-  # launcher reads to EOF
-  "$SUBID_BROKER" "$sock" {info_out}>&- &
+  # Its parent death signal fires when bwrap, which this shell execs into, exits; it ends at once if this shell is
+  # gone by then. Without the info fd, which the launcher reads to EOF
+  "$SUBID_BROKER" "$sock" $$ {info_out}>&- &
   for _ in {1..50}; do
     [[ -S $sock ]] && break
     sleep 0.1

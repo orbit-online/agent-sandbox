@@ -486,6 +486,11 @@ pkgs.testers.runNixOSTest {
           # The permissions broker: its daemon runs, its grant directory is read-only inside, shared in the sandbox's
           # outer mount namespace before the FHS env's bwrap copied it, so a slave where the app runs
           workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=60)
+          # Restarted on failure, but not forever when it never finds a sandbox
+          limit = workstation.succeed(
+              "systemctl --user -M alice@ show -p StartLimitBurst -p StartLimitIntervalUSec claude-desktop-work-permissions"
+          ).split()
+          assert sorted(limit) == ["StartLimitBurst=3", "StartLimitIntervalUSec=10min"], f"start limit {limit}"
           work_pid = bwrap_info("com.nixpak.ClaudeDesktop.work")["child-pid"]
           m1 = [l for l in workstation.succeed(f"cat /proc/{work_pid}/mountinfo").splitlines() if " /run/permissions " in l]
           assert len(m1) == 1 and " shared:" in m1[0], f"/run/permissions in M1: {m1}"

@@ -14,11 +14,18 @@ import (
 )
 
 // Re-executed as the processes authorize inspects. wait: blocks until stdin closes. nest: also starts a wait child
-// in a user namespace of its own and prints its pid
+// in a user namespace of its own and prints its pid. die-with: dieWith($SUBID_BROKER_TEST_PARENT)
 func TestMain(m *testing.M) {
 	switch os.Getenv("SUBID_BROKER_TEST") {
 	case "wait":
 		io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	case "die-with":
+		parent, _ := strconv.Atoi(os.Getenv("SUBID_BROKER_TEST_PARENT"))
+		if err := dieWith(parent); err != nil {
+			os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
 		os.Exit(0)
 	case "nest":
 		child, _, err := start()
@@ -138,6 +145,25 @@ func TestAuthorize(t *testing.T) {
 	} {
 		if _, _, _, err := authorize(pidfd(t, tc.client), tc.uid, pidfd(t, tc.target)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// The death signal only helps while the parent that started the broker is still its parent
+func TestDieWith(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parent int
+		ok     bool
+	}{
+		{"its parent", os.Getpid(), true},
+		// As after the wrapper gave up on the socket and exited: the reaper is the parent now
+		{"parent gone", os.Getpid() + 1 << 20, false},
+	} {
+		cmd := exec.Command("/proc/self/exe")
+		cmd.Env = append(os.Environ(), "SUBID_BROKER_TEST=die-with", "SUBID_BROKER_TEST_PARENT="+strconv.Itoa(tc.parent))
+		if err := cmd.Run(); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok %t", tc.name, err, tc.ok)
 		}
 	}
 }
