@@ -17,6 +17,8 @@ type session struct {
 	id     string
 	anchor int // the claude process, by our pid
 	pidfd  int
+	// Closed when the session releases a session lease it held: its watch closes pidfd then
+	dropped chan struct{}
 }
 
 // Claude Code's binary, by the name of /proc/<pid>/exe
@@ -55,7 +57,7 @@ func (s *sandbox) sessionOf(pid int) (*session, error) {
 			unix.Close(fd)
 			return nil, nil
 		}
-		return &session{id: id, anchor: ppid, pidfd: fd}, nil
+		return &session{id: id, anchor: ppid, pidfd: fd, dropped: make(chan struct{})}, nil
 	}
 	return nil, nil
 }

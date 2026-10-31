@@ -36,7 +36,11 @@ func TestMain(m *testing.M) {
 			child = "middle"
 		}
 		cmd := exec.Command("/proc/self/exe")
-		cmd.Env = append(os.Environ(), "BROKER_TEST="+child, "CLAUDE_CODE_SESSION_ID=session-1")
+		id := os.Getenv("SESSION_ID")
+		if id == "" {
+			id = "session-1"
+		}
+		cmd.Env = append(os.Environ(), "BROKER_TEST="+child, "CLAUDE_CODE_SESSION_ID="+id)
 		stdin, _ := cmd.StdinPipe()
 		// middle prints the pids itself
 		cmd.Stdout = os.Stdout

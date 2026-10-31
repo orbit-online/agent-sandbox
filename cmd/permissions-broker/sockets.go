@@ -118,7 +118,15 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 		g, res.Credential, err = b.request(p, req)
 		res.Grant = b.view(g)
 	case "release":
-		err = b.release(req.Grant, "released from inside")
+		// The caller's session drops its hold; without one, the grant ends
+		sess, _ := b.sb.sessionOf(p.pid)
+		if p.gone() {
+			return response{Error: "Gone"}
+		}
+		err = b.release(req.Grant, sess, "released from inside")
+		if sess != nil {
+			unix.Close(sess.pidfd)
+		}
 	case "status":
 		sess, _ := b.sb.sessionOf(p.pid)
 		id := ""

@@ -162,17 +162,29 @@ func (b *broker) lease(g *grant, watchDone <-chan struct{}) {
 	}
 }
 
-// addSession ties a session lease to one more session. Returns whether it took the session's pidfd
-func (b *broker) addSession(g *grant, s *session) bool {
+// hold records that a caller of sess (nil: no session found) was given g: a release from a session drops its hold
+// only, and the grant ends on release once nobody holds it. A session lease is tied to sess's anchor too, taking its
+// pidfd: returns whether it did
+func (b *broker) hold(g *grant, sess *session) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := g.sessions[s.id]; ok || len(g.sessions) == 0 {
+	if sess == nil {
+		g.anon = true
+		return false
+	}
+	if g.Lease != "session" {
+		if !slices.Contains(g.Sessions, sess.id) {
+			g.Sessions = append(g.Sessions, sess.id)
+		}
+		return false
+	}
+	if _, ok := g.sessions[sess.id]; ok || len(g.sessions) == 0 {
 		// Known, or the grant is ending: its last session left
 		return false
 	}
-	g.sessions[s.id] = s
-	g.Sessions = append(g.Sessions, s.id)
-	go b.watchSession(g, s)
+	g.sessions[sess.id] = sess
+	g.Sessions = append(g.Sessions, sess.id)
+	go b.watchSession(g, sess)
 	return true
 }
 
@@ -182,6 +194,12 @@ func (b *broker) watchSession(g *grant, s *session) {
 	for {
 		// Wakes every few seconds to notice the grant ending otherwise
 		n, err := unix.Poll(fds, 5000)
+		select {
+		case <-s.dropped:
+			unix.Close(s.pidfd)
+			return
+		default:
+		}
 		select {
 		case <-g.ended:
 			return
@@ -232,13 +250,33 @@ func (b *broker) revoke(id string) ([]holder, error) {
 	return g.Holders, nil
 }
 
-func (b *broker) release(id, why string) error {
+// release drops sess's hold on a grant, and ends it once nobody holds it (a session lease: no session). A caller
+// without a session ends it: that only takes access away
+func (b *broker) release(id string, sess *session, why string) error {
 	b.mu.Lock()
 	g, ok := b.grants[id]
-	b.mu.Unlock()
 	if !ok {
+		b.mu.Unlock()
 		return fmt.Errorf("No grant %q", id)
 	}
+	if sess != nil {
+		g.Sessions = slices.DeleteFunc(g.Sessions, func(id string) bool { return id == sess.id })
+		if s, ok := g.sessions[sess.id]; ok {
+			delete(g.sessions, sess.id)
+			close(s.dropped)
+		}
+		held := len(g.Sessions) > 0 || g.anon
+		if g.Lease == "session" {
+			held = len(g.sessions) > 0
+		}
+		if held {
+			b.mu.Unlock()
+			slog.Info("Released by a session", "grant", g.ID, "session", sess.id)
+			b.event("released", g.ID)
+			return nil
+		}
+	}
+	b.mu.Unlock()
 	g.end(why)
 	return nil
 }

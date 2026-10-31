@@ -37,7 +37,7 @@ func TestTypeA(t *testing.T) {
 	if g.Socket != "/run/permissions/"+g.ID+".sock" {
 		t.Errorf("Socket %q", g.Socket)
 	}
-	if err := b.release(g.ID, "test"); err != nil {
+	if err := b.release(g.ID, nil, "test"); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(log)
@@ -69,7 +69,7 @@ func TestExclusive(t *testing.T) {
 		!strings.Contains(err.Error(), "launcher test") {
 		t.Errorf("Another launcher got an exclusive instance: %v", err)
 	}
-	_ = b.release(g.ID, "test")
+	_ = b.release(g.ID, nil, "test")
 	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err != nil {
 		t.Errorf("Not granted once released: %v", err)
 	}

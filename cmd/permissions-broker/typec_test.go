@@ -192,7 +192,7 @@ func TestSessionsShare(t *testing.T) {
 		t.Fatal(s2, err)
 	}
 	s2.id = "session-2"
-	if !b.addSession(g, s2) {
+	if !b.hold(g, s2) {
 		t.Fatal("Second session not added")
 	}
 	anchor1.Process.Kill()

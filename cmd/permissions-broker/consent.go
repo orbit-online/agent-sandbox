@@ -80,15 +80,16 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	// capability at a time here, so concurrent requests find the grant the first made instead of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
-	if g != nil && g.Lease == "session" && sess != nil {
-		// Another session wants it too: the grant now lasts until the last of them ends
-		keepSess = b.addSession(g, sess)
+	if g != nil {
+		// Another session wants it too: it holds it now, and a session lease lasts until the last of them ends
+		keepSess = b.hold(g, sess)
 	}
 	if g == nil && b.isAlways(c, params) {
 		if g, err = b.grant(c, params, summary, "always", nil, ""); err != nil {
 			c.covered.Unlock()
 			return nil, "", err
 		}
+		b.hold(g, sess)
 	}
 	c.covered.Unlock()
 	if g != nil {
@@ -148,14 +149,12 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	// granted): that one serves, rather than a second of the same
 	c.covered.Lock()
 	if g = b.matching(c, params); g != nil {
-		if g.Lease == "session" && sess != nil {
-			keepSess = b.addSession(g, sess)
-		}
+		keepSess = b.hold(g, sess)
 	} else if g, err = b.grant(c, params, summary, lease, sess, shown); err != nil {
 		c.covered.Unlock()
 		return nil, "", err
-	} else {
-		keepSess = len(g.sessions) > 0
+	} else if keepSess = len(g.sessions) > 0; !keepSess {
+		b.hold(g, sess)
 	}
 	c.covered.Unlock()
 	b.logDecision(summary, reason, "allowed ("+lease+")")

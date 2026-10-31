@@ -255,8 +255,8 @@ is refused without asking the user.
 |-----------|-----------------------------------------|---------------------------------------------|
 | `list`    |                                         | capabilities and instances, with live grants |
 | `request` | `capability`, `params`, `reason`, `lease` | the delivery: socket path, credential or mount path |
-| `release` | `grant`                                 |                                             |
-| `status`  |                                         | the caller's session's grants, idle times    |
+| `release` | `grant`                                 | drops the caller's session's hold; ends the grant once nobody holds it |
+| `status`  |                                         | the grants the caller's session holds        |
 | `watch`   |                                         | a stream of grant events, one JSON per line |
 | `share`   |                                         | (from `bwrap-subid.sh` only, see above)     |
 
@@ -319,14 +319,19 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 | duration  | the time runs out; the window can extend it                                |
 | `always`  | revoked (or forgotten) in the window, which removes it from the store too; replayed at every launch |
 
-Every grant also ends on revoke in the window, on `release` from inside, on its plugin's `watch` or `serve` exiting,
-and with the sandbox. The daemon watches logind on the system bus from the host, where it has access. It runs in a
+Every grant also ends on revoke in the window, on its plugin's `watch` or `serve` exiting, and with the sandbox.
+`release` from inside drops only the releasing session's hold: the daemon records every session a grant was given to
+(asked for it, or covered by it), whatever its lease, and the grant ends on release once none of them holds it. So one
+session releasing a grant, after the nudge below say, doesn't cut off another that's using it. A caller without a
+session (nothing found above it) ends the grant on release: that only takes access away. The lease's own end (time,
+lock, the session lease's last anchor), revoke and the plugin's triggers end it for everyone. An `always` grant ended
+by release is replayed at the next launch; only revoke and forget remove it from the store. The daemon watches logind on the system bus from the host, where it has access. It runs in a
 user unit, outside any login session, so `session/self` doesn't resolve for it, and logind sends no signals on that
 alias anyway: it reads the `Display` property of `user/self` for the graphical session's object path and watches that
 one. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
 a request to lock, also ends `lock` leases.
 
-Releasing voluntarily: once the session has held grants for 15 minutes, the core MCP server appends a line to its
+Releasing voluntarily: once a session has held grants for 15 minutes, the core MCP server appends a line to its
 tool results listing them and asking Claude to release what it no longer needs, at most every 10 minutes. By age,
 not idleness: the daemon can't tell whether a socket-activated plugin's socket or a folder is still in use. Claude
 Code's channels could push this instead, but they need `--channels` at startup, which the app doesn't pass.
@@ -362,8 +367,8 @@ grant's tools that come out under one name (`a.b`, `a_b`) are told apart by the 
 it can use, and the plugin's MCP code runs on the host behind the socket, with nothing to install inside.
 
 Grants, and so their tools, are the sandbox's, not a session's: every session's MCP server offers them, and any
-process in the sandbox may release any grant it can name. The sandbox is one trust domain; session ties only decide
-when session leases end.
+process in the sandbox may release any grant it can name (for its own session's hold, or outright without a session).
+The sandbox is one trust domain; session ties only decide when session leases end, and who still holds a grant.
 
 Fallback, if `list_changed` turns out not to work in the app: such a plugin also ships a stdio MCP server that is a
 plain client of its socket, with no consent code, which answers ungranted calls with the `request` to make.

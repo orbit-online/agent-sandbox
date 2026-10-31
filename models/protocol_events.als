@@ -186,8 +186,10 @@ pred unblock[l: Launcher, c: Capability] {
 // ---------------------------------------------------------------------
 // Ends of grants.
 
-// release from inside, any grant by id (broker.go:1025-1034), or its
-// plugin's watch exiting.
+// release from inside, any grant by id, or its plugin's watch exiting.
+// A release from a session ends the grant only once no session it was
+// given to holds it (leases.go); always ending it here over-approximates
+// the ends, which no claim here depends on being fewer.
 pred release[g: Grant] { g in Live and endOnly[g] }
 // revoke in the window (leases.go): an always grant leaves the store too.
 pred revoke[g: Grant, w: Principal] {

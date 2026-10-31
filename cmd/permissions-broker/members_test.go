@@ -112,7 +112,7 @@ func TestHoldersOnRelease(t *testing.T) {
 	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
 		t.Fatal(pid, err)
 	}
-	if err := b.release(g.ID, "released from inside"); err != nil {
+	if err := b.release(g.ID, nil, "released from inside"); err != nil {
 		t.Fatal(err)
 	}
 	res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"})

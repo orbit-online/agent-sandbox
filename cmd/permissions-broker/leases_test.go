@@ -189,3 +189,47 @@ func TestLockLostWhileAsking(t *testing.T) {
 		t.Errorf("grant made a lock lease nothing watches: %+v", g)
 	}
 }
+
+// A release drops the releasing session's hold only: the grant ends once no session that was given it holds it. A
+// caller without a session ends it outright
+func TestReleaseHold(t *testing.T) {
+	b, _ := testBroker(t, "allow", "allow")
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	_, a := startAnchor(t, "claude")
+	t.Setenv("SESSION_ID", "session-2")
+	_, other := startAnchor(t, "claude")
+	g, _, err := b.request(peerAt(t, a), req(c.id(), `{}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.request(peerAt(t, other), req(c.id(), `{}`, "PT1H")); err != nil {
+		t.Fatal(err)
+	}
+	release := func(pid int) {
+		t.Helper()
+		if res := b.handleRequest(nil, peerAt(t, pid), request{Op: "release", Grant: g.ID}); res.Error != "" {
+			t.Fatal(res.Error)
+		}
+	}
+	release(a)
+	if !b.isLive(g) {
+		t.Fatal("A release by one session ended the grant the other holds")
+	}
+	if gs := b.grantViews("session-1"); len(gs) != 0 {
+		t.Errorf("The released session still holds %+v", gs)
+	}
+	release(other)
+	if b.isLive(g) {
+		t.Error("The grant outlived its last holder's release")
+	}
+
+	g, _, err = b.request(peerAt(t, a), req(c.id(), `{"path": "/b"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(os.Getpid())
+	if b.isLive(g) {
+		t.Error("A release without a session didn't end the grant")
+	}
+}

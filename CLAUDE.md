@@ -205,7 +205,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   ended (not a process outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
   record), detached with its mountpoint
-  gone on revoke, a session lease two sessions hold, a daemon started again
+  gone on revoke, a session lease two sessions hold, a release dropping only the releasing
+  session's hold (the grant ends with the last, or at once for a caller
+  without a session), a daemon started again
   taking over the shared grant directory and replaying an always folder, and
   the sandbox's attacks: a link out of the ceiling, another folder renamed into the path
   while the user is asked (refused), a ceiling root swapped for
