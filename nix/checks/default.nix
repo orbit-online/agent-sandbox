@@ -441,7 +441,10 @@ in
     claude-desktop =
       pkgs.runCommand "claude-desktop-check"
         {
-          nativeBuildInputs = [ pkgs.jq ];
+          nativeBuildInputs = [
+            pkgs.jq
+            pkgs.util-linux
+          ];
           closure = pkgs.closureInfo { rootPaths = [ sandboxed ]; };
           workClosure = pkgs.closureInfo { rootPaths = [ work ]; };
           inherit work;
@@ -480,6 +483,12 @@ in
             { echo "the asar picks the white tray icon on GNOME" >&2; exit 1; }
           grep -qaF 'nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"' "$asar" ||
             { echo "the asar lost the tray icon's colour scheme check" >&2; exit 1; }
+
+          # app-pid.sh drops the FHS env's ambient capabilities on the way to the app, also when it can't set the pid:
+          # here, in a user namespace of its own with every capability ambient, but none over the build's pid ns
+          appPid=$(grep -- '-claude-desktop-app-pid$' "$paths")/bin/claude-desktop-app-pid
+          caps=$(unshare --user --map-user=1000 --keep-caps "$appPid" grep -E '^Cap(Eff|Amb):' /proc/self/status)
+          [[ $(grep -c ':\s*0*$' <<<"$caps") == 2 ]] || { echo "the app keeps capabilities: $caps" >&2; exit 1; }
 
           args=$(grep -- '-bwrap-args\.json$' "$paths")
           # The args as consecutive elements of bwrap's argv
