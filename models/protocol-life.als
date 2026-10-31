@@ -79,16 +79,18 @@ assert P4noCredentialAfterEnd {
 check P4noCredentialAfterEnd for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..7 steps expect 0
 
-// P9. No lock lease is granted while the lock isn't watched. Known, a
-// finding: checkLease runs before asking (broker.go:550) and again only
-// when the answer's lease differs (605-610); lockOK turning false while
-// the notification is up (the system bus lost, broker.go:1361-1364) ends
-// the live lock leases, then the Allow makes one nothing will end.
+// P9. No lock lease is granted while the lock isn't watched. checkLease
+// runs before asking and again on the answer, and grant() refuses a lock
+// lease when lockOK is false under the lock that watchLogind clears it
+// under (leases.go). Holds. Revert: the lease checked after the answer
+// only when it differs from the request's (as before the fix): lockOK
+// turning false while the notification is up ends the live lock leases,
+// then the Allow makes one nothing will end (counterexample found).
 assert P9noLockLeaseUnwatched {
   always all g: Grant | (born[g] and g.glease = LLock) implies g.gl in Watched
 }
 check P9noLockLeaseUnwatched for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 1
+  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 0
 
 // P9. A lock lease ends on Lock, LockedHint or PrepareForSleep, and when
 // the watch is lost (lockEvent, broker.go:986-992, 1364).

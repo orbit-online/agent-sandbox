@@ -118,7 +118,14 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 			b.event("ended", g.ID)
 		})
 	}
+	// A lock lease only while the lock is watched: checked under b.mu, so watchLogind losing the bus either finds the
+	// grant to end or makes this refuse it
 	b.mu.Lock()
+	if lease == "lock" && !b.lockOK {
+		b.mu.Unlock()
+		g.end("the screen lock isn't watched")
+		return nil, errors.New("Screen lock isn't watched any more, so no lock lease: ask for a duration")
+	}
 	b.grants[g.ID] = g
 	b.mu.Unlock()
 	go b.lease(g, watchDone)

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"slices"
 	"testing"
@@ -160,5 +162,30 @@ func TestNoCredentialAfterEnd(t *testing.T) {
 	}
 	if r := <-done; r.err == nil || r.cred != "" {
 		t.Errorf("Issued %q for a grant revoked while waiting for a plugin slot", r.cred)
+	}
+}
+
+// P9: the screen lock stops being watched while the user is asked about a lock lease. Allow grants nothing
+func TestLockLostWhileAsking(t *testing.T) {
+	b, _ := testBroker(t)
+	b.lockOK = true
+	b.ask = func(context.Context, prompt) (string, error) {
+		b.mu.Lock()
+		b.lockOK = false
+		b.mu.Unlock()
+		b.lockEvent("lost the system bus")
+		return "allow", nil
+	}
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
+		t.Errorf("Granted a lock lease nothing watches: %+v", g)
+	}
+	if gs := b.liveGrants(""); len(gs) != 0 {
+		t.Errorf("Live: %+v", gs)
+	}
+	// Made live after the bus went, it is refused there too
+	if g, err := b.grant(c, json.RawMessage(`{}`), "x", "lock", nil); err == nil {
+		t.Errorf("grant made a lock lease nothing watches: %+v", g)
 	}
 }

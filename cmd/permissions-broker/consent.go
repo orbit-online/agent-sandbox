@@ -112,12 +112,12 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		b.logDecision(summary, reason, "denied")
 		return nil, "", errors.New("The user didn't allow it")
 	}
-	if answer.Lease != lease {
-		if err := b.checkLease(answer.Lease, sess); err != nil {
-			return nil, "", err
-		}
-		lease = answer.Lease
+	// Again, whether or not the answer changed the lease: the screen lock may have stopped being watched while the
+	// user was asked
+	if err := b.checkLease(answer.Lease, sess); err != nil {
+		return nil, "", err
 	}
+	lease = answer.Lease
 	if len(answer.Params) > 0 {
 		if params, err = c.validate(answer.Params); err != nil {
 			return nil, "", err

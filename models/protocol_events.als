@@ -113,8 +113,9 @@ pred notifAllow[r: Req, g: Grant] {
     // only the broker's own notification carries its allow key
     r not in Forged
     l in Up - Gone
-    // re-checked only when the answer's lease differs from the request's
-    r.rlease != r.asked implies leaseOK[l, r.asked, r.rsess]
+    // checked again at grant time (checkLease after the answer, and lockOK
+    // under the lock in grant(), leases.go)
+    leaseOK[l, r.asked, r.rsess]
     r.asked = LSession implies r.rsess in Alive
     g.gl = l and g.gcap = c and g.gparams = r.rparams and g.glease = r.asked
     change[g, none]
@@ -135,7 +136,7 @@ pred windowAllow[r: Req, w: Principal, ls: Lease, p: Param, g: Grant] {
     r in Pending and hostOnly[w]
     l in Up - Gone
     passes[c, p]
-    ls != r.rlease implies leaseOK[l, ls, r.rsess]
+    leaseOK[l, ls, r.rsess]
     ls = LSession implies r.rsess in Alive
     g.gl = l and g.gcap = c and g.gparams = p and g.glease = ls
     change[g, none]
