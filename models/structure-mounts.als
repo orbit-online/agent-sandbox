@@ -151,11 +151,16 @@ fact m1 {
   }
 }
 
-// A default config: no bind holds the runtime dir or a state dir.
+// The module's assertion on `binds` (hm/default.nix stateBinds): no bind
+// holds the runtime dir or a state dir, or lies in the grant or .flatpak
+// dirs, or in a state dir outside the sandbox's home, store and
+// scratchpad.
 pred defaultBinds {
   no UserBind & (RuntimeDir + StateDir).*up
-  no UserBind & (GrantDir + FlatpakDir + GrantStore).*~up
+  no UserBind & (GrantDir + FlatpakDir).*~up
+  no UserBind & (StateDir.^~up - (SandboxHome + SandboxNix + Scratch).*~up)
 }
+fact { BindsAsserted in Guards.on implies defaultBinds }
 
 // ---------------------------------------------------------------------
 // Type C grants (permissions-broker/mounts.go). The daemon checks the
@@ -184,7 +189,7 @@ sig Grant {
 // Guards, so the revert checks can drop each.
 one sig Guards { on: set Guard }
 abstract sig Guard {}
-one sig NoLinks, WalkUp, DeniedIds, NoSubmounts extends Guard {}
+one sig NoLinks, WalkUp, DeniedIds, NoSubmounts, BindsAsserted extends Guard {}
 
 fact grants {
   all g: Grant {
@@ -271,16 +276,22 @@ assert S14identityNotWritable {
 }
 check S14identityNotWritable for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
 
-// S10 and S14 with any `binds`: the module refuses no bind holding a
-// state dir or $XDG_RUNTIME_DIR (a rw bind of ~/.local/share exposes
-// permissions.json, so `always` grants without consent), though the
-// ceiling's denied list refuses the same paths as grant sources. A
-// config gap. Known.
+// S10 and S14 with any `binds` the module accepts: its assertion refuses
+// the paths the ceiling's denied list refuses as grant sources. Holds.
 assert S14anyBinds {
   (world and guarded) implies
     no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir] or writes[p, GrantStore]
 }
-check S14anyBinds for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 1
+check S14anyBinds for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
+
+// S14, revert: without the assertion a bind holding a state dir or
+// $XDG_RUNTIME_DIR passes (a rw bind of ~/.local/share exposes
+// permissions.json, so `always` grants without consent).
+assert S14anyBindsRevert {
+  (world and Guards.on = Guard - BindsAsserted) implies
+    no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir] or writes[p, GrantStore]
+}
+check S14anyBindsRevert for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 1
 
 // S11: a granted source is beneath its ceiling root, is no denied
 // directory, beneath or above one, and brings no submount. Holds.

@@ -59,13 +59,15 @@ one sig HostUserP, BrokerP, WindowP, NotifierP, DbusProxyP, LauncherP,
   SubidBrokerP, NetnsMacvlanP, PluginUnitP, WindowsVMP extends Principal {}
 // Sandbox side: bwrap's init and the FHS env script (in U1), udhcpc (in
 // U1 with net caps, parses LAN packets), the app, Claude Code sessions
-// and what they spawn (shells, MCP servers incl. permissions-mcp), and
-// anything those start in user namespaces of their own.
-one sig BwrapInitP, UdhcpcP, AppP, SessionP, NestedP extends Principal {}
+// and what they spawn (shells, MCP servers incl. permissions-mcp),
+// anything those start in user namespaces of their own, and re-entries
+// (claude://, --shell): inside once joined, their parent a host nsenter
+// (README.md, Principals 16).
+one sig BwrapInitP, UdhcpcP, AppP, SessionP, NestedP, ReentryP extends Principal {}
 fact domains {
   (HostUserP + BrokerP + WindowP + NotifierP + DbusProxyP + LauncherP
     + SubidBrokerP + NetnsMacvlanP + PluginUnitP + WindowsVMP).domain = Host
-  (BwrapInitP + UdhcpcP + AppP + SessionP + NestedP).domain = Sandbox
+  (BwrapInitP + UdhcpcP + AppP + SessionP + NestedP + ReentryP).domain = Sandbox
 }
 
 // ---------------------------------------------------------------------
@@ -97,8 +99,10 @@ fact userTree {
   no InitUserNS.owner
   all u: UserNS - InitUserNS | one u.parent and one u.owner
   all u: UserNS | InitUserNS in u.*parent
-  // the creator ran in the parent, so its euid is mapped there
-  all u: UserNS - InitUserNS | u.owner in u.parent.mapped
+  // the creator ran in the parent, so its euid is mapped there once the
+  // parent has a map: a model may start before a map is written, with
+  // the namespaces below it already in its universe
+  always all u: UserNS - InitUserNS | some u.parent.mapped implies u.owner in u.parent.mapped
 }
 
 fact pidTree {

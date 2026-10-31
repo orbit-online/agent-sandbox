@@ -125,7 +125,7 @@ pred sandboxStart {
       p.userns = U1 and p.mnt = M1 and p.net = N and p.pidns = P
       p.caps in (p.principal = UdhcpcP => NetAdmin + NetRaw else none)
     }
-    p.principal in AppP + SessionP implies {
+    p.principal in AppP + SessionP + ReentryP implies {
       p.userns = U2 and p.mnt = M2 and p.net = N and p.pidns = P2 and no p.caps
     }
     p.principal != NestedP
@@ -226,17 +226,13 @@ run S9udhcpcShares {
 } for 4 but 11 OwnedNS, 1 steps expect 1
 
 // ---------------------------------------------------------------------
-// netns-macvlan (netns-macvlan/main.go:79-130): the target pid's
-// /proc entry belongs to the caller (checked against a pidfd), its
-// network namespace isn't the caller's, and NS_GET_OWNER_UID of the user
-// namespace owning it is the caller's uid. setcap cap_net_admin, so
-// only the host runs it with effect (no_new_privs in the sandbox).
-
-pred macvlanAccepts[c, q: Process] {
-  q.uid = c.uid
-  q.net != c.net
-  q.net.ownedBy.owner = c.uid
-}
+// netns-macvlan (netns-macvlan/main.go openNetns, ownedBelow): the
+// target pid's /proc entry belongs to the caller (checked against a
+// pidfd), its network namespace isn't the caller's, and walking up from
+// the user namespace owning it (NS_GET_PARENT), the one right below the
+// caller's is owned by the caller's uid (NS_GET_OWNER_UID). setcap
+// cap_net_admin, so only the host runs it with effect (no_new_privs in
+// the sandbox).
 
 // The owner rule alone: c could act on namespaces of u without any
 // file capability.
@@ -244,34 +240,48 @@ pred ownsBelow[c: Process, u: UserNS] {
   some a: u.*parent | a.parent = c.userns and a.owner = c.uid
 }
 
-// S8, as the code states it: eth0 lands only in a network namespace
-// other than the caller's whose owning user namespace the caller's uid
-// owns. Holds; revert: without the owner check, a netns owned by
-// another uid's user namespace passes (counterexample found).
+pred macvlanAccepts[c, q: Process] {
+  q.uid = c.uid
+  q.net != c.net
+  ownsBelow[c, q.net.ownedBy]
+}
+
+// The check before the fix: the immediate owner's uid only
+pred macvlanAcceptedBefore[c, q: Process] {
+  q.uid = c.uid
+  q.net != c.net
+  q.net.ownedBy.owner = c.uid
+}
+
+// S8: eth0 lands only in a network namespace other than the caller's
+// over which the caller's uid holds every capability by the owner rule,
+// so netns-macvlan does only what the caller could do there with
+// cap_net_admin of its own. Holds.
 assert S8macvlanOwned {
   all c, q: Process | (hostAt[c] and macvlanAccepts[c, q]) implies {
     q.net != c.net
-    q.net.ownedBy.owner = c.uid
+    ownsBelow[c, q.net.ownedBy]
   }
 }
-check S8macvlanOwned for 4 but 11 OwnedNS, 1 steps expect 0
+check S8macvlanOwned for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 0
 
 run S8macvlanOnN {
   world and sbPinned and some c: Process |
     c.principal = LauncherP and hostAt[c] and macvlanAccepts[c, sb] and sb.net = N
 } for 4 but 11 OwnedNS, 1 steps expect 1
 
-// S8's intent, that netns-macvlan does only what the caller could do
-// over that netns if it had cap_net_admin there, doesn't hold: the
-// check reads the immediate owner's uid only. A user namespace owned by
-// the user below one owned by another uid (a root-made container that
-// maps the user's uid) passes, though the user has no capability over
-// it. Outside the sandbox's attacker (it can't run setcap binaries);
-// a host-side gap of the setcap wrapper. Known.
-assert S8intentOwnerChain {
-  all c, q: Process | (hostAt[c] and macvlanAccepts[c, q]) implies ownsBelow[c, q.net.ownedBy]
+// S8, revert: the check before the fix read the immediate owner's uid
+// only. A user namespace owned by the user below one owned by another uid
+// (a root-made container that maps the user's uid) passed, though the
+// user has no capability over it. The kernel's ptrace check on
+// /proc/<pid>/ns/net already refuses the caller a process inside such a
+// namespace; one of the user's own processes that root put in that
+// netns passed. Outside the sandbox's attacker (it can't run setcap
+// binaries); a host-side gap of the setcap wrapper.
+assert S8ownerChainRevert {
+  all c, q: Process | (hostAt[c] and macvlanAcceptedBefore[c, q]) implies ownsBelow[c, q.net.ownedBy]
 }
-check S8intentOwnerChain for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
+check S8ownerChainRevert for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
 
 // ---------------------------------------------------------------------
 // Store paths the host execs after joining a sandbox mount namespace.

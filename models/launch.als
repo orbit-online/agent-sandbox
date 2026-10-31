@@ -32,17 +32,13 @@ open sandbox
 // HIDE: File Mount MountFlag Socket PeerCheck IpcNS UtsNS CgroupNS Guard Move
 
 // ---------------------------------------------------------------------
-// The namespaces of default.nix's diagram. U2, M2 and P2 exist only in
-// the fhs stage: base's userTree wants each owner mapped in the parent
-// in the first state, which U2's can't be before U1's map is written.
+// The namespaces of default.nix's diagram. U2, M2 and P2 are there from
+// the start; nothing runs in them before the fhs stage.
 
-one sig U1 extends UserNS {}
-lone sig U2 extends UserNS {}
-one sig HostMnt, M1 extends MountNS {}
-lone sig M2 extends MountNS {}
+one sig U1, U2 extends UserNS {}
+one sig HostMnt, M1, M2 extends MountNS {}
 one sig HostNet, N extends NetNS {}
-one sig P extends PidNS {}
-lone sig P2 extends PidNS {}
+one sig P, P2 extends PidNS {}
 // The user's /etc/subuid and /etc/subgid range, as one atom
 one sig SubIds extends Id {}
 
@@ -58,12 +54,8 @@ fact launchShape {
   (HostMnt + HostNet).ownedBy = InitUserNS
   (M1 + N + P).ownedBy = U1
   P.pparent = InitPidNS
-  some U2 iff some M2
-  some U2 iff some P2
-  some U2 implies {
-    U2.parent = U1 and U2.owner = HostUser
-    M2.ownedBy = U2 and P2.ownedBy = U2 and P2.pparent = P
-  }
+  U2.parent = U1 and U2.owner = HostUser
+  M2.ownedBy = U2 and P2.ownedBy = U2 and P2.pparent = P
 }
 
 // ---------------------------------------------------------------------
@@ -98,7 +90,8 @@ one sig
   KillOnMapFail,      // bwrap-subid.sh:103-106 kill -KILL "$pid" $$, and fd 21 written only after
   WaitRootFinal,      // net-setup.sh:8-15 waits for /proc/$pid/root/.flatpak-info
   NetCapsOnly,        // net-setup.sh:26-27 setpriv's inheritable, ambient and bounding sets
-  DropCapsBeforeFork, // app-pid.sh:9 setpriv --inh-caps=-all --ambient-caps=-all
+  DropCapsBeforeFork, // app-pid.sh:9-10 setpriv --inh-caps=-all --ambient-caps=-all, then setsid
+  DropCapsOnFail,     // app-pid.sh:12 the same setpriv when the ns_last_pid write fails
   ShareBeforeCopy     // bwrap-subid.sh:78-82 share before line 112's exec of bwrap
   extends Guard {}
 
@@ -262,7 +255,7 @@ pred hostProcess[l: Process] {
 }
 
 pred outerInit {
-  no U2
+  no U2.mapped
   one Process and hostProcess[Process]
   no U1.mapped
   no Blocked + Held + On + Eth0In + Root + Fhs + FhsChild + AppPidS

@@ -61,10 +61,10 @@ pred appPidStart {
   keepMaps and keepWaits and On' = On and Eth0In' = Eth0In
 }
 
-// app-pid.sh:7-11. When the write succeeds, setpriv clears the ambient
-// set before setsid forks the app. When it fails, `exec "$@"` runs the app
-// in app-pid.sh's place with the ambient set as it was (modelled as a
-// child, since a principal never changes)
+// app-pid.sh:8-12. When the write succeeds, setpriv clears the ambient
+// set before setsid forks the app. When it fails, the same setpriv runs
+// the app in app-pid.sh's place (modelled as a child, since a principal
+// never changes)
 pred appStart[g: set Guard] {
   no principal.AppP
   some a: AppPidS, n: Process' - Process {
@@ -74,7 +74,8 @@ pred appStart[g: set Guard] {
         (DropCapsBeforeFork in g implies none else a.caps)]
     } or {
       On' = On + LastPidFail
-      born[n, AppP, a, a.userns, a.mnt, a.net, a.pidns, a.uid, a.caps]
+      born[n, AppP, a, a.userns, a.mnt, a.net, a.pidns, a.uid,
+        (DropCapsOnFail in g implies none else a.caps)]
     }
     only[n, none]
   }
@@ -95,7 +96,6 @@ pred sessionFork {
 
 // started by bwrap's init
 pred fhsInit {
-  some U2
   U1.mapped = HostUser + SubIds and no U2.mapped
   On = RootFinal + NetDone and Eth0In = N
   no Blocked + Held + FhsChild + AppPidS
@@ -136,16 +136,17 @@ run fhsRuns {
   eventually (some principal.AppP and M2Slave in On)
 } for 7 but 8 OwnedNS, 1..9 steps expect 1
 
-// L4: the app and everything it starts hold no capability in U2.
-//
-// Known: app-pid.sh:11. When the write to ns_last_pid fails, `exec "$@"`
-// starts the app without setpriv, and the ambient CAP_CHECKPOINT_RESTORE
-// bwrap raised (default.nix: --cap-add) stays with the app and all it
-// starts. Nothing of the attacker runs in P2 before the app, so it can't
-// make the write fail; a fix is the same setpriv on that line.
+// L4: the app and everything it starts hold no capability in U2, whether
+// or not app-pid.sh's write to ns_last_pid succeeds. Holds.
 pred l4 { always all p: principal.(AppP + SessionP) | no p.caps }
 assert L4 { fhs[Guard, Move] implies l4 }
-check L4 for 7 but 8 OwnedNS, 1..9 steps expect 1
+check L4 for 7 but 8 OwnedNS, 1..9 steps expect 0
+
+// L4, revert: without DropCapsOnFail, as before the fix, a failed write
+// left the ambient CAP_CHECKPOINT_RESTORE bwrap raised (default.nix:
+// --cap-add) with the app and all it starts.
+assert L4failRevert { fhs[Guard - DropCapsOnFail, Move] implies l4 }
+check L4failRevert for 7 but 8 OwnedNS, 1..9 steps expect 1
 
 // L4 when the write succeeds: setpriv drops the capability before the fork.
 assert L4writeOk { (fhs[Guard, Move] and always LastPidFail not in On) implies l4 }

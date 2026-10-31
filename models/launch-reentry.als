@@ -22,12 +22,7 @@ one sig HostMnt, M1, M2, M3, MB extends MountNS {}
 one sig HostNet, N extends NetNS {}
 one sig P, P2, P3, PB extends PidNS {}
 one sig SubIds extends Id {}
-// A re-entry: inside once joined, its parent a host nsenter (README.md,
-// Principals 16). Proposed for the base.
-one sig ReentryP extends Principal {}
-
 fact reentryShape {
-  ReentryP.domain = Sandbox
   UserNS = InitUserNS + U1 + U2 + U3 + UB
   MountNS = HostMnt + M1 + M2 + M3 + MB
   NetNS = HostNet + N
@@ -64,7 +59,7 @@ one sig Cfg {
 
 abstract sig Guard {}
 one sig
-  NotRootPidNs,     // claude-desktop.sh:38: the match's pid ns isn't the sandbox's
+  AppLevel,         // claude-desktop.sh app_pid: the match's pid ns is one below the sandbox's, and it's the only one
   NnpOnUrl,         // claude-desktop.sh:88: setpriv --no-new-privs
   PermissionsFirst, // claude-desktop.sh:54-57, ahead of sandbox_pid
   MntCheck          // sandbox.go:47 and :55, claude-desktop.sh:24: not in our mount ns
@@ -194,17 +189,19 @@ pred cleanup {
 // ---------------------------------------------------------------------
 // The host's lookups
 
-// app_pid's breadth-first walk: the first match is one at the least depth
+// The old app_pid's breadth-first walk: the first match is one at the
+// least depth
 fun depth[top, p: Process]: Int { #(p.^ppid & top.*~ppid) }
 
-// sandbox_pid then app_pid (claude-desktop.sh:19-46). Without a match the
-// launcher sleeps and tries again, which skip covers
+// sandbox_pid then app_pid. Without a match the launcher sleeps and tries
+// again, which skip covers; with two at the app's level it gives up
 pred lookup[g: set Guard] {
   Cfg.mode != Perms or PermissionsFirst not in g
   no L.looked and no Reentry
   some x: pid.dirs & Process, c: AppTarget[g, x] {
     MntCheck in g implies x.mnt != HostMnt
-    no c2: AppTarget[g, x] | depth[x, c2] < depth[x, c]
+    AppLevel in g implies one AppTarget[g, x]
+    else no c2: AppTarget[g, x] | depth[x, c2] < depth[x, c]
     L.looked' = c.pid
   }
   LiveDir' = LiveDir
@@ -212,7 +209,7 @@ pred lookup[g: set Guard] {
 }
 
 fun AppTarget[g: set Guard, x: Process]: set Process {
-  { c: x.*~ppid & AtApp | NotRootPidNs in g implies c.pidns != x.pidns }
+  { c: x.*~ppid & AtApp | AppLevel in g implies c.pidns.pparent = x.pidns }
 }
 
 // nsenter -U -m -p -n -i -u -C -r -w -t <pid>, by the pid found before.
@@ -290,16 +287,23 @@ pred l5 {
   }
 }
 
-// L5. Known, confirmed: app_pid (claude-desktop.sh:34-46) takes the
-// first process breadth-first whose last NSpid is APP_PID outside P. The
-// app is at depth 4 below the outer child; anything in the sandbox can put
-// a process at APP_PID in a pid ns of its own at depth 3 (see nest), and
-// the re-entry then joins the attacker's user, mount and pid namespaces
-// and runs its /init or /bin/sh. It gains nothing the attacker didn't own,
-// but a claude:// URL or the user's --shell terminal lands in the
-// attacker's namespaces instead of the app's.
-assert L5 { system[Guard, NestPid + SpawnInP] implies l5 }
-check L5 for 8 but 13 OwnedNS, 1..6 steps expect 1
+// L5, with a process at APP_PID in a pid ns of the attacker's below P2
+// (see nest) and udhcpc's children at any pid in P: app_pid takes only a
+// process whose NSpid has one entry more than the sandbox's pid 1, so in a
+// pid ns right below P, and none if two qualify. Holds without stale
+// instance dirs: with one, sandbox_pid can name another process (L7), the
+// FHS env's init for one, and app_pid then looks below that.
+assert L5 { (system[Guard, NestPid + SpawnInP] and no Cfg.stale) implies l5 }
+check L5 for 8 but 13 OwnedNS, 1..6 steps expect 0
+
+// L5, revert: the old app_pid took the first process breadth-first whose
+// last NSpid is APP_PID outside P. The app is at depth 4 below the outer
+// child, the attacker's process at depth 3 (confirmed live), and the
+// re-entry joined the attacker's user, mount and pid namespaces: a
+// claude:// URL or the user's --shell terminal landed there instead of
+// the app's.
+assert L5nestRevert { system[Guard - AppLevel, NestPid] implies l5 }
+check L5nestRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // L5 without nested pid namespaces. Known: the launcher names the app by
 // pid, and nsenter -t uses that number later. If the app exits in
@@ -314,9 +318,9 @@ check L5noNest for 8 but 13 OwnedNS, 1..6 steps expect 1
 assert L5stable { system[Guard, SpawnInP] implies l5 }
 check L5stable for 8 but 13 OwnedNS, 1..6 steps expect 0
 
-// L5, revert: without NotRootPidNs udhcpc's child at APP_PID in P is a
+// L5, revert: without AppLevel udhcpc's child at APP_PID in P is a
 // match, at depth 2, and the re-entry joins U1 and M1.
-assert L5stableRevert { system[Guard - NotRootPidNs, SpawnInP] implies l5 }
+assert L5stableRevert { system[Guard - AppLevel, SpawnInP] implies l5 }
 check L5stableRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // L5, revert: without NnpOnUrl a claude:// re-entry runs without

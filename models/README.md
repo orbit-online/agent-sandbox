@@ -42,8 +42,8 @@ in the init namespaces unless noted.
 1. **Host user**: the terminal, the desktop, a host Claude Code session.
    Launches the sandbox and answers consent.
 2. **permissions-broker daemon**: one per launcher, the transient user
-   unit `claude-desktop[-<name>]-permissions.service` (`Restart=on-failure`,
-   `ExecStopPost=permissions-broker cleanup`). Listens on `request.sock`
+   unit `claude-desktop[-<name>]-permissions.service` (`Restart=on-failure`
+   up to 3 starts in 10 minutes, `ExecStopPost=permissions-broker cleanup`). Listens on `request.sock`
    and `control.sock`, runs plugin commands, holds the grant store. Its
    helpers (`make-shared`, `clone-tree`, `move-tree`, `detach`) run through
    `nsenter` in the user namespace that owns M1, with every capability
@@ -58,10 +58,13 @@ in the init namespaces unless noted.
    portal). Its rules are fixed at start.
 6. **Launcher**: `claude-desktop.sh`, nixpak's launcher, `bwrap-subid.sh`
    (`SUBID_MAP=subid` on the host), `net-setup.sh` in nixpak's pasta slot,
-   the GTK theme scripts. Re-entries (`claude://`, `--shell`) and
-   `--permissions` go through it.
+   the GTK theme scripts, `store-sync.sh`. What they do in the sandbox's
+   home and store runs confined (`confine.sh` and `state.sh`: a bwrap with
+   only its closure and those directories). Re-entries (`claude://`,
+   `--shell`) and `--permissions` go through it.
 7. **subid-broker**: started by `bwrap-subid.sh`, dies with bwrap
-   (`PR_SET_PDEATHSIG`). Writes uid and gid maps for user namespaces in
+   (`PR_SET_PDEATHSIG`, and at once if the shell that started it is gone
+   by then). Writes uid and gid maps for user namespaces in
    the sandbox, on `/run/subid-broker.sock`.
 8. **netns-macvlan**: setcap `cap_net_admin` wrapper, group `users`.
    Creates `eth0` in the sandbox's netns.
@@ -119,7 +122,7 @@ joining needs CAP_SYS_ADMIN in init).
 | `control.sock` (`$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
 | `<grant>.sock` | type A unit | the sandbox while the grant lives | none: a grant is the sandbox's, not a session's |
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
-| netns-macvlan `<pid>` | netns-macvlan | the host (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; netns owner userns owned by the caller's uid |
+| netns-macvlan `<pid>` | netns-macvlan | the host (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
 | `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
 | notifications | notification daemon | host and sandbox (through the proxy) | none: the sandbox can post look-alikes; the broker ignores an action within 1 s of its own notification appearing |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
@@ -127,7 +130,9 @@ joining needs CAP_SYS_ADMIN in init).
 | type C mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling (lexical, then `openat2` without links or mount crossings beneath the root), denied directories by identity, no submounts, ro/nodev/nosuid |
 | the grant store `$stateDir/permissions.json` | broker | host only (stateDir's `home/`, `nix/`, `tmp-scratchpad/` are bound, not stateDir) | written only by the daemon |
 | helper binaries | nsenter execs them after joining M1 or M2 | resolved in that mount namespace | must be read-only binds of the closure (S12) |
-| the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork |
+| the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
+| the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
+| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds | can't be renamed (a mountpoint), so host-side execs in M1 resolve to the binds |
 
 ## Trust boundaries
 
@@ -208,7 +213,9 @@ process whose principal is in the Sandbox domain, at any time.
   the target moves on (unshare, exit and pid reuse) between check and
   write.
 - S8. netns-macvlan attaches `eth0` only to a network namespace that isn't
-  the caller's and whose owning user namespace the caller's uid owns.
+  the caller's and over which the caller's uid holds every capability by
+  the owner rule: the user namespace right below the caller's, on the way
+  up from the one owning it, is the caller's uid's.
 - S9. `share` takes effect only for a client in M1.
 - S10. No sandbox process can create, rename or remove an entry of the
   grant directory, in any mount namespace.
@@ -219,11 +226,16 @@ process whose principal is in the Sandbox domain, at any time.
 - S12. Every binary a host-side process execs after joining a sandbox
   mount namespace with capabilities (the broker's helpers, net-setup's
   `setpriv` and udhcpc) resolves to a read-only bind of the host's store
-  path, which no sandbox process can replace.
+  path, which no sandbox process can replace. `/nix/store` is a mount of
+  its own for this: as a plain directory of the rw `/nix`, the sandbox
+  could rename it and put a link to its own directory in its place
+  (tried with a nested namespace, which renames it in M1 too).
 - S13. Every peer check that reads `/proc/<pid>` is about the process the
   pidfd names: no answer is based on a recycled pid.
 - S14. Nothing a sandbox process can write is read by a host process as
-  the sandbox's identity (`bwrapinfo.json`, `info`, the grant store).
+  the sandbox's identity (`bwrapinfo.json`, `info`, the grant store). The
+  module's assertion refuses a bind holding a state dir or
+  `$XDG_RUNTIME_DIR`, or in either's identity parts.
 
 ### Protocol (`protocol.als`)
 
@@ -275,19 +287,26 @@ process whose principal is in the Sandbox domain, at any time.
 - L3. udhcpc and its script run in N, M1, P with `net_admin` and
   `net_raw` alone, so a compromise of it gains nothing beyond S2's.
 - L4. The app and everything it starts hold no capability in U2:
-  CAP_CHECKPOINT_RESTORE is dropped before the fork.
+  CAP_CHECKPOINT_RESTORE is dropped before the app runs, whether or not
+  the pid could be set.
 - L5. A re-entry joins U2, M2, P2, N, ipc, uts and cgroup of the app's pid,
   never U1 or M1, and holds no capability after its exec; `claude://`
-  runs with no_new_privs.
+  runs with no_new_privs. The app's pid is the only process at `APP_PID`
+  in a pid ns one below the sandbox's.
 - L6. `--permissions` never enters the sandbox.
 - L7. The broker's and the launcher's handle on the sandbox names the
   outer bwrap's child, in a mount namespace other than the host's, by
   pidfd taken and re-checked against `bwrapinfo.json`; it can't be
   redirected to a host process or a nested one.
-- L8. The broker exits when the sandbox's pidfd turns readable; subid-broker
-  when bwrap exits; type A units when the broker's unit stops.
+- L8. The broker exits when the sandbox's pidfd turns readable, and stops
+  restarting when it never finds one; subid-broker when bwrap exits, or at
+  once when its parent is gone already; type A units when the broker's
+  unit stops.
 - L9. `share` runs before the FHS env's bwrap copies M1, or the launcher
   goes on without type C (which the broker then refuses, P3).
+- L10. No host-side step reads a host file into the sandbox, or writes
+  one, through a path the sandbox can write: its home, its store, the
+  binds of `~/.claude` and `~/.config/Claude` (`launch-host.als`).
 
 ## Not modelled
 
@@ -313,7 +332,7 @@ exhaustion of the host other than the broker's budgets.
 | `sandbox.als` | 1 | shared base: signatures and kernel facts, no sandbox claims |
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
 | `protocol.als` | 3 | P1-P14 |
-| `launch.als` | 4 | L1-L9, and S12 for the launch's `nsenter`s |
+| `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 
 `sandbox.als` has principals, processes (`var`: namespaces, ids,
 capabilities, parent and pid change), user namespaces with parent, owner
