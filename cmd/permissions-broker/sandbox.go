@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
 // The running sandbox: the outer bwrap's child, which nixpak's bwrapinfo.json names, in M1
@@ -93,11 +95,7 @@ func sameNsAs(a, b int, kind string) bool {
 }
 
 // alive reports whether the sandbox still runs: a pidfd turns readable when its process exits
-func (s *sandbox) alive() bool {
-	fds := []unix.PollFd{{Fd: int32(s.pidfd), Events: unix.POLLIN}}
-	n, _ := unix.Poll(fds, 0)
-	return n == 0
-}
+func (s *sandbox) alive() bool { return proc.Alive(s.pidfd) }
 
 // share makes path a shared mount in the sandbox's mount namespace, through nsenter in the user namespace that owns
 // it: the Go runtime is multithreaded and can't setns into a user namespace. nsenter keeps our ids (becoming uid 0

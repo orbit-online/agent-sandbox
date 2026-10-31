@@ -2,16 +2,17 @@
 buildGoModule {
   pname = "netns-macvlan";
   version = "0.1.0";
+  # The root module's go.mod, the binary's package and what it uses from internal/, so other changes don't rebuild it
   src = lib.fileset.toSource {
-    root = ./.;
+    root = ../../..;
     fileset = lib.fileset.unions [
-      ./go.mod
-      ./go.sum
-      ./main.go
-      ./main_test.go
+      ../../../go.mod
+      ../../../go.sum
+      ../../../cmd/netns-macvlan
     ];
   };
-  vendorHash = "sha256-NGNdHlTTdSY56EcqKk7ce9Pn5ruK5/E5uHYe/wgeGYg=";
+  subPackages = [ "cmd/netns-macvlan" ];
+  vendorHash = "sha256-9xChTn8g6LMOz7R8FLGVh75coc8a4Ipck7/bPvLbSyA=";
   env.CGO_ENABLED = 0;
   meta = {
     description = "Give a user-owned network namespace its own macvlan on the LAN";

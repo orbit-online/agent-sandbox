@@ -7,16 +7,18 @@
 buildGoModule {
   pname = "subid-broker";
   version = "0.1.0";
+  # The root module's go.mod, the binary's package and what it uses from internal/, so other changes don't rebuild it
   src = lib.fileset.toSource {
-    root = ./.;
+    root = ../../..;
     fileset = lib.fileset.unions [
-      ./go.mod
-      ./go.sum
-      ./main.go
-      ./main_test.go
+      ../../../go.mod
+      ../../../go.sum
+      ../../../cmd/subid-broker
+      ../../../internal/proc
     ];
   };
-  vendorHash = "sha256-/AeexGPNJ4t8NKrmqSbxJTvU1B6AtCRr4Op6NHRtwm8=";
+  subPackages = [ "cmd/subid-broker" ];
+  vendorHash = "sha256-6WYYokJ/y3VehAE6U6RdX5+6Tvi+yP/WjHCeabw+1Xg=";
   env.CGO_ENABLED = 0;
   ldflags = [ "-X main.nsenter=${lib.getExe' util-linux "nsenter"}" ];
   # The shims, which the sandbox puts where shadow's would be

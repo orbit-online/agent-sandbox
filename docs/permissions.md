@@ -1,6 +1,6 @@
 # Permissions: granting the sandbox outside access while it runs
 
-Status: written 2026-10-31. Built: the daemon (`nix/packages/permissions-broker/`) with types A and B, consent,
+Status: written 2026-10-31. Built: the daemon (`cmd/permissions-broker/`) with types A and B, consent,
 leases, the grant store, the MCP server with plugin tools and nudges, the Permissions window
 (`nix/packages/permissions-window/`) and type C with the folders plugin (`nix/packages/permissions-folders/`,
 `permissions.folders`), behind a launcher's `permissions.enable`. Not yet: device grants.
@@ -69,7 +69,7 @@ host (user, no capabilities)                       sandbox
 └──────────────────────────────┘                   └──────────────────────────────────────────┘
 ```
 
-- `permissions-broker`, Go, in `nix/packages/permissions-broker/`. One per launcher, as the transient user unit
+- `permissions-broker`, Go, in `cmd/permissions-broker/`. One per launcher, as the transient user unit
   `claude-desktop[-<name>]-permissions.service` with `Restart=on-failure`, which `bwrap-subid.sh` starts with
   `systemd-run --user` before it execs bwrap. It listens on:
   - `request.sock` in the grant directory, for the sandbox.

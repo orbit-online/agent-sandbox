@@ -9,21 +9,18 @@
 buildGoModule {
   pname = "permissions-broker";
   version = "0.1.0";
+  # The root module's go.mod, the binary's package and what it uses from internal/, so other changes don't rebuild it
   src = lib.fileset.toSource {
-    root = ./.;
+    root = ../../..;
     fileset = lib.fileset.unions [
-      ./go.mod
-      ./go.sum
-      ./broker.go
-      ./main.go
-      ./mcp.go
-      ./mounts.go
-      ./plugins.go
-      ./sandbox.go
-      ./main_test.go
+      ../../../go.mod
+      ../../../go.sum
+      ../../../cmd/permissions-broker
+      ../../../internal/proc
     ];
   };
-  vendorHash = "sha256-JFVM75kWu8MwLwRPqMG2pnqiQhiaOMCwYZMiMuoJPfc=";
+  subPackages = [ "cmd/permissions-broker" ];
+  vendorHash = "sha256-tJjl2D5Mv+/ukjWB0EmbYxeQ/v3mU8VFMRQJ742kKk8=";
   env.CGO_ENABLED = 0;
   ldflags = [
     "-X main.nsenter=${lib.getExe' util-linux "nsenter"}"

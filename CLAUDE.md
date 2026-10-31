@@ -24,13 +24,21 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `netns-macvlan` wrapper (`cap_net_admin`, group `users`) when any Home
   Manager user enables the Home Manager module, and asserts they're in
   `users` and have a subuid and subgid range.
-- `nix/packages/netns-macvlan/`: the Go helper that gives the sandbox's netns
+- `go.mod`, `cmd/`, `internal/`: one Go module for the Go helpers below,
+  each in `cmd/<binary>`, with `internal/` for what they share (`proc`: the
+  pid behind a pidfd and whether it still runs). Their packages in
+  `nix/packages/<binary>/` build it with `subPackages`, from a source
+  filtered to `go.mod`, `go.sum`, the binary's directory and the `internal/`
+  packages it uses, each with its own `vendorHash` (Go vendors only what the
+  binary imports). permissions-window has a module of its own, so miqt's cgo
+  and Qt stay out of the others' closures.
+- `cmd/netns-macvlan/`: the Go helper that gives the sandbox's netns
   its macvlan (`netns-macvlan --help`).
-- `nix/packages/subid-broker/`: the Go helper that writes uid and gid maps for
+- `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
   and the FHS env run, maps the user's subuid range in and starts it.
-- `nix/packages/permissions-broker/`: the Go daemon that grants the sandbox
+- `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
   with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a

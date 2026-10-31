@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +15,8 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"golang.org/x/sys/unix"
+
+	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
 const usage = `subid-broker - Write uid and gid maps for user namespaces inside a sandbox
@@ -290,7 +291,7 @@ func writeMap(kind string) error {
 
 // Opens the user namespace of the process behind pidfd after checking it belongs to uid
 func openUserns(pidfd, uid int) (int, int, error) {
-	pid, err := pidfdPid(pidfd)
+	pid, err := proc.PidOf(pidfd)
 	if err != nil {
 		return -1, 0, err
 	}
@@ -311,26 +312,6 @@ func openUserns(pidfd, uid int) (int, int, error) {
 		return -1, 0, fmt.Errorf("Process %d exited: %w", pid, err)
 	}
 	return fd, pid, nil
-}
-
-// The pid behind pidfd, in the broker's pid namespace
-func pidfdPid(pidfd int) (int, error) {
-	f, err := os.Open("/proc/self/fdinfo/" + strconv.Itoa(pidfd))
-	if err != nil {
-		return 0, fmt.Errorf("Read pidfd info: %w", err)
-	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		if v, ok := strings.CutPrefix(s.Text(), "Pid:"); ok {
-			pid, err := strconv.Atoi(strings.TrimSpace(v))
-			if err != nil || pid <= 0 {
-				return 0, fmt.Errorf("Process has exited or is outside the broker's pid namespace")
-			}
-			return pid, nil
-		}
-	}
-	return 0, fmt.Errorf("No pid in pidfd info")
 }
 
 func sameNs(fd int, path string) (bool, error) {

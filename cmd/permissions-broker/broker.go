@@ -28,6 +28,8 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
+
+	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
 const (
@@ -286,7 +288,7 @@ func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, int, r
 			_ = conn.SetReadDeadline(time.Time{})
 			// The checks below read the peer's /proc entries by pid: refuse a peer gone by now, whose pid could be
 			// another process's
-			if !processAlive(pidfd) {
+			if !proc.Alive(pidfd) {
 				return
 			}
 			if req.Op == "watch" {
@@ -315,37 +317,12 @@ func peer(conn *net.UnixConn) (int, int, error) {
 	if sockErr != nil {
 		return 0, -1, sockErr
 	}
-	pid, err := pidfdPid(pidfd)
+	pid, err := proc.PidOf(pidfd)
 	if err != nil {
 		unix.Close(pidfd)
 		return 0, -1, err
 	}
 	return pid, pidfd, nil
-}
-
-// pidfdPid reads a pidfd's pid in our pid namespace from its fdinfo
-func pidfdPid(pidfd int) (int, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", pidfd))
-	if err != nil {
-		return 0, err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if v, ok := strings.CutPrefix(line, "Pid:"); ok {
-			pid, err := strconv.Atoi(strings.TrimSpace(v))
-			if err != nil || pid <= 0 {
-				return 0, fmt.Errorf("Peer gone or in another pid namespace: %q", v)
-			}
-			return pid, nil
-		}
-	}
-	return 0, errors.New("No Pid in the pidfd's fdinfo")
-}
-
-// processAlive reports whether a pidfd's process still runs: a pidfd turns readable when it exits
-func processAlive(pidfd int) bool {
-	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
-	n, _ := unix.Poll(fds, 0)
-	return n == 0
 }
 
 func (b *broker) handleRequest(_ *net.UnixConn, pid int, req request) response {
