@@ -20,6 +20,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks). `default.nix` loads them with its `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
   with `: "${VAR:?}"` at the top.
+  What the host does in the sandbox's home and store, which the sandbox can
+  write and plant links in, goes through `state.sh`, run by `confine.sh`
+  (`claude-desktop[-<name>]-state`) in a bwrap holding only its closure and
+  the directories named: links there resolve within that view.
 - `nix/nixos/claude-desktop.nix`: the NixOS module. Installs the
   `netns-macvlan` wrapper (`cap_net_admin`, group `users`) when any Home
   Manager user enables the Home Manager module, and asserts they're in
@@ -139,7 +143,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   icon (by the colour scheme, also on GNOME), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
-  the `/tmp` tmpfs), and the `files` in the FHS env's bwrap (a directory's
+  the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
+  `HOME_DIRS` and its state script's paths, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
   references in the closure). For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
@@ -211,7 +216,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   (`nix/checks/stub-app.nix`, shaped like the real package so the asar patch
   and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
   serves the color scheme on her session bus. The test covers the setcap
-  wrapper, the launcher refusing a missing bind source that isn't optional,
+  wrapper, links the sandbox planted in its state (a store dir that's a link
+  refused, links in its home replaced, alice's files neither read nor written,
+  the keyfile swapped for a link while it runs), `/nix/store` not renameable
+  inside, the launcher refusing a missing bind source that isn't optional,
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
   set, with no capabilities left), the subid maps (alice's auto range in the sandbox's userns

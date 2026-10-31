@@ -463,6 +463,7 @@ in
             '- `/srv/docs` (ro, MCP)' \
             '- `/home/alice/.claude` (rw, MCP, from `/srv/claude`)' \
             '- `/nix` (rw, from `/home/alice/.local/share/claude-desktop/nix`)' \
+            '- `/nix/store` (rw, from `/home/alice/.local/share/claude-desktop/nix/store`)' \
             '- `/tmp/claude-<uid>` (rw, from `/home/alice/.local/share/claude-desktop/tmp-scratchpad`): Claude Code'"'"'s temp dir with the session scratchpads' \
             '- `/dev/kvm` (dev, if present)' \
             '- `/dev/nvidiactl` (dev, if present)' \
@@ -491,6 +492,9 @@ in
           need --ro-bind-try /srv/docs /srv/docs
           need --ro-bind-try /srv/hidden /srv/hidden
           need --bind-try /home/alice/.local/share/claude-desktop/nix /nix
+          # The store dir on its own, after /nix, so the sandbox can't rename it
+          need --bind-try /home/alice/.local/share/claude-desktop/nix/store /nix/store
+          jq -e 'index("/nix") < index("/nix/store")' "$args" >/dev/null || { echo "bwrap args bind /nix/store before /nix" >&2; exit 1; }
           need --bind-try /srv/claude /home/alice/.claude
           need --dev-bind-try /dev/kvm /dev/kvm
           need --dev-bind-try /dev/nvidiactl /dev/nvidiactl
@@ -516,11 +520,20 @@ in
           wrapper=$(readlink -f $work/bin/claude-desktop-work)
           for line in \
             "readonly APP_ID=com.nixpak.ClaudeDesktop.work" \
-            "readonly DOT_CLAUDE=/home/alice/.local/share/claude-desktop-work/home/.claude" \
-            "readonly CONFIG=/home/alice/.local/share/claude-desktop-work/home/.config/Claude/claude_desktop_config.json" \
+            "HOME_DIRS=(/home/alice/.local/share/claude-desktop-work/home)" \
             "readonly STORE_ROOTS_LINK=store-roots-work"; do
             grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
           done
+          # What the launcher writes in its home, confined to the directories in HOME_DIRS
+          workState=$(grep -- '-claude-desktop-work-state-inner$' "$workClosure/store-paths")/bin/claude-desktop-work-state-inner
+          for line in \
+            "readonly DOT_CLAUDE=/home/alice/.local/share/claude-desktop-work/home/.claude" \
+            "readonly CONFIG=/home/alice/.local/share/claude-desktop-work/home/.config/Claude/claude_desktop_config.json"; do
+            grep -qxF -- "$line" "$workState" || { echo "work's state script lacks: $line" >&2; exit 1; }
+          done
+          # The default launcher's ~/.claude is bound from /srv/claude, its ~/.config/Claude from the host's
+          grep -qxF -- "HOME_DIRS=(/home/alice/.local/share/claude-desktop/home /srv/claude /home/alice/.config/Claude)" \
+            "$(readlink -f ${sandboxed}/bin/claude-desktop)" || { echo "the default launcher's HOME_DIRS are wrong" >&2; exit 1; }
           # The name netns-macvlan salts the MAC with
           name() { grep -h '^readonly NAME=' "$(grep -- '-pasta$' "$1")/bin/pasta"; }
           [[ $(name "$paths") == "readonly NAME='''" && $(name "$workClosure/store-paths") == "readonly NAME=work" ]] ||

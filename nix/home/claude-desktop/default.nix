@@ -534,6 +534,12 @@ let
           src = "${stateDir}/nix";
           rw = true;
         };
+        # On its own, so the sandbox can't rename it: host-side processes that join its mount namespace run binaries
+        # from the closure's binds in it
+        "/nix/store" = sys // {
+          src = "${stateDir}/nix/store";
+          rw = true;
+        };
         "/sys" = sys;
         ${config.home.homeDirectory} = sys // {
           src = "${stateDir}/home";
@@ -567,12 +573,50 @@ let
       sandboxPackages = sandboxPackagesOf lcfg;
       searchPath = searchPathOf lcfg;
       # Where a path under the home directory is on the host: its bind's source, or the sandbox's home
-      hostPath =
+      hostBind =
         rel:
         let
           b = lcfg.binds."${config.home.homeDirectory}/${rel}" or null;
         in
-        if b != null && b.enable then b.src else "${bwrapHome}/${rel}";
+        if b != null && b.enable then b.src else null;
+      hostPath = rel: if hostBind rel != null then hostBind rel else "${bwrapHome}/${rel}";
+      # The directories claude-desktop-state works in for the launcher: the sandbox's home, and the bind sources of
+      # ~/.claude and ~/.config/Claude where they're bound
+      homeDirs = lib.unique (
+        [ bwrapHome ]
+        ++ lib.filter (d: d != null) [
+          (hostBind ".claude")
+          (hostBind ".config/Claude")
+        ]
+      );
+      # What the host does in the sandbox's state dir and home, confined: see confine.sh
+      stateInner = script "state.sh" {
+        name = "claude-desktop${suffix}-state-inner";
+        runtimeInputs = [
+          pkgs.coreutils
+          pkgs.jq
+          pkgs.glib
+          osConfig.nix.package
+        ];
+        vars = {
+          STATE_DIR = stateDir;
+          SANDBOX_HOME = bwrapHome;
+          RESOLV_CONF = resolvConf;
+          DOT_CLAUDE = hostPath ".claude";
+          CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
+          MCP_SERVERS = "${mcpServers}";
+          TRAY = lib.boolToString lcfg.tray;
+          SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
+        };
+      };
+      state = script "confine.sh" {
+        name = "claude-desktop${suffix}-state";
+        vars = {
+          BWRAP = lib.getExe' pkgs.bubblewrap "bwrap";
+          CLOSURE = "${pkgs.closureInfo { rootPaths = [ stateInner ]; }}/store-paths";
+          COMMAND = lib.getExe stateInner;
+        };
+      };
       # /run/current-system links into the system closure: the PATH tools, bash (SHELL) and glibc's fallback
       # locale archive come from this instead
       currentSystemSw = pkgs.buildEnv {
@@ -658,6 +702,7 @@ let
         vars = {
           STATE_DIR = stateDir;
           STORE_ROOTS = "${storeRoots}";
+          STATE = lib.getExe state;
         };
       };
       # Shallowest first, so nested binds override their parents. nixpak mounts all rw binds before the ro ones
@@ -928,8 +973,8 @@ let
         name = "claude-desktop-gtk-theme";
         runtimeInputs = [ pkgs.glib ];
         vars = {
-          SANDBOX_CONFIG = "${bwrapHome}/.config";
-          SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
+          STATE = lib.getExe state;
+          SANDBOX_HOME = bwrapHome;
         };
       };
       gtkThemeWatch = script "gtk-theme-watch.sh" {
@@ -945,7 +990,6 @@ let
       wrapper = script "claude-desktop.sh" {
         name = "claude-desktop${suffix}";
         runtimeInputs = [
-          pkgs.jq
           osConfig.nix.package
           osConfig.systemd.package
         ];
@@ -956,16 +1000,11 @@ let
           PERMISSIONS_BROKER = lib.getExe permissionsBroker;
           PERMISSIONS_WINDOW = lib.getExe permissionsWindow;
           PERMISSIONS_TITLE = permissionsTitle;
-          SANDBOX_HOME = bwrapHome;
           SCRATCHPAD = scratchpad;
-          RESOLV_CONF = resolvConf;
           APP_ID = sandboxed.config.flatpak.appId;
           APP_PID = toString appPid;
           SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
-          DOT_CLAUDE = hostPath ".claude";
-          CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
-          MCP_SERVERS = "${mcpServers}";
-          TRAY = lib.boolToString lcfg.tray;
+          STATE = lib.getExe state;
           STORE_SYNC = lib.getExe storeSync;
           STORE_ROOTS = "${storeRoots}";
           STORE_ROOTS_LINK = "store-roots${suffix}";
@@ -982,7 +1021,8 @@ let
               lib.mapAttrsToList (_: b: b.src) (lib.filterAttrs (_: b: b.enable && !b.optional) lcfg.binds)
             )}
           )
-          readonly VARS REQUIRED_BINDS
+          HOME_DIRS=(${lib.escapeShellArgs homeDirs})
+          readonly VARS REQUIRED_BINDS HOME_DIRS
         '';
       };
       claude-desktop = pkgs.symlinkJoin {

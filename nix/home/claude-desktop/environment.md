@@ -44,6 +44,13 @@ sandbox, `~/.claude` and `~/.config/Claude` are in it too, unless bound.
 `/tmp/claude-<uid>`. That one, with the session scratchpads in it, is bound
 from `tmp-scratchpad/` in the state dir and survives.
 
+Each launch rewrites `~/.config/user-dirs.dirs`, `~/.config/resolv.conf` and
+the app's `claude_desktop_config.json` (merged), replacing links there, and
+the GTK theme in `~/.config/glib-2.0/settings/keyfile` follows the desktop's.
+The launcher does that, and its work on your store, in a bwrap that sees
+nothing of the host but those directories, so links in them never reach the
+host's files.
+
 ## What you can see
 
 The binds listed in `/etc/claude/environment.md`, plus the Nix store described
@@ -85,8 +92,9 @@ remove it.
 ## Nix
 <!-- memo: topic={nix,sandbox} -->
 
-A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`. No
-daemon, substitutes from cache.nixos.org only. The launcher copies the app's
+A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`,
+and its `store/` bound again at `/nix/store`, so it can't be renamed (and a
+link there stops the next launch). No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
 closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,

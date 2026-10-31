@@ -1,17 +1,10 @@
 # shellcheck shell=bash
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
-# $REQUIRED_BINDS: the sources of the binds that aren't optional
-: "${SANDBOX_HOME:?}" "${SCRATCHPAD:?}" "${RESOLV_CONF:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
+# $REQUIRED_BINDS: the sources of the binds that aren't optional. $HOME_DIRS: where the sandbox's home, ~/.claude and
+# ~/.config/Claude are on the host, the directories claude-desktop-state ($STATE) works in
+: "${SCRATCHPAD:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${STATE:?}"
 : "${PERMISSIONS_CONFIG?}" "${PERMISSIONS_DIR?}" "${PERMISSIONS_UNIT?}" "${PERMISSIONS_BROKER:?}" "${PERMISSIONS_WINDOW:?}" "${PERMISSIONS_TITLE:?}"
 : "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
-mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE"
-# Bind source for Claude Code's temp dir, which it wants private. Its parent exists from SANDBOX_HOME's mkdir
-[[ -d $SCRATCHPAD ]] || mkdir -m 700 "$SCRATCHPAD"
-# Target of the sandbox's /etc/resolv.conf, filled in by the DHCP client
-touch "$RESOLV_CONF"
-# Without user-dirs.dirs, Chromium saves downloads to $HOME
-# shellcheck disable=SC2016
-echo 'XDG_DOWNLOAD_DIR="$HOME/Downloads"' >"$SANDBOX_HOME/.config/user-dirs.dirs"
 args=(--password-store=basic "$@")
 
 # The running sandbox's pid 1. The mount ns check stops a stale info file with a recycled pid from pointing at a
@@ -88,12 +81,12 @@ if pid=$(sandbox_pid); then
   exec "${env[@]}" "${nsenter[@]}" -t "$app" "$SETPRIV" --no-new-privs /init "${args[@]}"
 fi
 
-# The app writes to this file too, so merge instead of symlinking a read-only store path
-mkdir -p "$(dirname "$CONFIG")"
-[[ -s $CONFIG ]] || echo '{}' >"$CONFIG"
-jq --slurpfile m "$MCP_SERVERS" --argjson tray "$TRAY" \
-  '.mcpServers = $m[0] | .preferences.menuBarEnabled = $tray' "$CONFIG" >"$CONFIG.tmp"
-mv "$CONFIG.tmp" "$CONFIG"
+# The sandbox can write its home and plant links there, so the files it expects (resolv.conf, user-dirs.dirs, the app's
+# config) are written confined, see confine.sh. The directories themselves are bind sources, on paths it can't write
+mkdir -p "${HOME_DIRS[@]}"
+# Bind source for Claude Code's temp dir, which it wants private. Its parent, the state dir, exists from the home's mkdir
+[[ -d $SCRATCHPAD ]] || mkdir -m 700 "$SCRATCHPAD"
+"$STATE" "${HOME_DIRS[@]}" -- home
 
 "$STORE_SYNC"
 # nixpak binds the closure from the host store, where a GC would empty it under the running sandbox once a rebuild

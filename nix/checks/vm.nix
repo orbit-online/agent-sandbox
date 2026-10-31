@@ -231,6 +231,42 @@ pkgs.testers.runNixOSTest {
           status, out = as_user("nobody", "/run/wrappers/bin/netns-macvlan 1")
           assert status != 0 and "Permission denied" in out, f"nobody ran the wrapper: {status} {out}"
 
+      # alice's own files, which links the sandbox planted in its state point at
+      # c parses as a keyfile, so gsettings would carry its group into the sandbox's
+      victims = {"a": "secret-a", "b": "secret-b", "c": "[secret-c]", "json": '{"secret": 1}'}
+      planted = {
+          "${sandboxHome}/.config/user-dirs.dirs": "a",
+          "${sandboxHome}/.config/resolv.conf": "new",
+          "${sandboxHome}/.config/glib-2.0/settings/keyfile": "c",
+          # The default launcher binds ~/.config/Claude from the host
+          "/home/alice/.config/Claude/claude_desktop_config.json": "json",
+          "/home/alice/.config/Claude/claude_desktop_config.json.tmp": "b",
+      }
+
+      def victims_untouched():
+          for name, content in victims.items():
+              got = workstation.succeed(f"cat /home/alice/victim-{name}").strip()
+              assert got == content, f"victim-{name} holds {got!r}"
+          workstation.fail("test -e /home/alice/victim-new")
+          assert workstation.succeed("ls -A /home/alice/victim-store") == "", "the store sync wrote to the host"
+
+      with subtest("the launcher doesn't follow links the sandbox planted in its state"):
+          # As the sandbox could leave them between launches. Its store dir as a link would have nixpak bind what it
+          # points to on the host
+          for name, content in victims.items():
+              as_alice(f"/run/current-system/sw/bin/sh -c {shlex.quote(f'echo {shlex.quote(content)} >/home/alice/victim-{name}')}")
+          as_alice("/run/current-system/sw/bin/mkdir -p /home/alice/victim-store ${stateDir}/nix ${sandboxHome}/.config/glib-2.0/settings /home/alice/.config/Claude")
+          for link, name in planted.items():
+              as_alice(f"/run/current-system/sw/bin/ln -s /home/alice/victim-{name} {link}")
+          as_alice("/run/current-system/sw/bin/ln -s /home/alice/victim-store ${stateDir}/nix/store")
+          status, out = workstation.execute(
+              "systemd-run --user -M alice@ --wait --pipe --quiet -p RuntimeMaxSec=600"
+              " -- /etc/profiles/per-user/alice/bin/claude-desktop 2>&1"
+          )
+          assert status != 0 and "nix/store is a link" in out, f"{status} {out}"
+          victims_untouched()
+          as_alice("/run/current-system/sw/bin/rm ${stateDir}/nix/store")
+
       with subtest("launch"):
           workstation.succeed("systemd-run --user -M alice@ --unit fake-portal -- ${pkgs.lib.getExe fakePortal}")
           workstation.wait_until_succeeds(alice_cmd(
@@ -262,6 +298,21 @@ pkgs.testers.runNixOSTest {
           # app-pid.sh dropped the FHS env's CAP_CHECKPOINT_RESTORE
           assert app_caps == "0000000000000000", f"the app has capabilities {app_caps}"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
+
+      with subtest("the launch replaced the planted links and left alice's files alone"):
+          victims_untouched()
+          for link in planted:
+              if not link.endswith(".tmp"):
+                  workstation.succeed(f"test -f {link} && test ! -L {link}")
+          config = workstation.succeed("cat /home/alice/.config/Claude/claude_desktop_config.json")
+          assert "secret" not in config and "mcpServers" in config, config
+          theme = workstation.succeed("cat ${sandboxHome}/.config/glib-2.0/settings/keyfile")
+          assert "secret" not in theme and "gtk-theme" in theme, theme
+          workstation.succeed("grep -qx 'XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"' ${sandboxHome}/.config/user-dirs.dirs")
+          # The sandbox can't rename its store dir, where host-side processes that join its mount namespace run
+          # binaries from: it's a mount of its own
+          status, out = workstation.execute(sandbox_cmd("mv /nix/store /nix/store.moved") + " 2>&1")
+          assert status != 0 and "busy" in out, f"{status} {out}"
 
       with subtest("Claude Code's temp dir is bound from the host"):
           in_sandbox("touch /tmp/claude-1000/probe")
@@ -330,11 +381,16 @@ pkgs.testers.runNixOSTest {
       keyfile = "${sandboxHome}/.config/glib-2.0/settings/keyfile"
       with subtest("GTK theme follows the portal's color scheme"):
           workstation.succeed(f"grep -qx \"gtk-theme='Adwaita-dark'\" {keyfile}")
+          # The watcher writes while the sandbox runs, which swaps the keyfile for a link to one of alice's files
+          in_sandbox("ln -sfn /home/alice/victim-c /home/alice/.config/glib-2.0/settings/keyfile")
           as_alice(
               "${pkgs.lib.getExe' pkgs.glib "gdbus"} call --session --dest org.freedesktop.portal.Desktop"
               " --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Settings.SetColorScheme 0"
           )
           workstation.wait_until_succeeds(f"grep -qx \"gtk-theme='Adwaita'\" {keyfile}", timeout=30)
+          workstation.succeed(f"test ! -L {keyfile}")
+          assert "secret" not in workstation.succeed(f"cat {keyfile}")
+          victims_untouched()
 
       with subtest("claude:// re-entry joins the running sandbox"):
           reentry = in_sandbox("readlink /proc/self/ns/net /proc/self/ns/pid").split()
