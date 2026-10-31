@@ -309,7 +309,7 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 | `session` | the session's anchor process exits (pidfd); type C counts holding sessions |
 | `lock`    | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep` |
 | duration  | the time runs out; the window can extend it                                |
-| `always`  | revoked in the window; replayed at every launch                            |
+| `always`  | revoked (or forgotten) in the window, which removes it from the store too; replayed at every launch |
 
 Every grant also ends on revoke in the window, on `release` from inside, on its plugin's `watch` or `serve` exiting,
 and with the sandbox. The daemon watches logind on the system bus from the host, where it has access. It runs in a

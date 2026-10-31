@@ -51,16 +51,17 @@ assert P1sessionLeaseNotWidened {
 check P1sessionLeaseNotWidened for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 1
 
-// Known, consent confusion (P1), by the docs' design: Revoke on an always
-// grant ends the live grant but keeps its store entry (revoke,
-// broker.go:995-1004; only Forget removes it), so the sandbox's next
-// request with the same parameters gets it back without a notification.
+// P1: a revoked always grant stays revoked. Revoke removes its store
+// entry too (revoke, leases.go), so the sandbox's next request with the
+// same parameters asks again. Holds. Revert: revoke keeping the store
+// entry (as before the fix): fromStore grants it back without a
+// notification (counterexample found).
 assert P1revokedStaysRevoked {
   always all r: Req, g: Grant | fromStore[r, g] implies
     not (once some h: Grant, w: Principal | revoke[h, w] and h.gl = g.gl and h.gcap = g.gcap and h.gparams = g.gparams)
 }
 check P1revokedStaysRevoked for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 1
+  1 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
 // P2. always enters the store only from a window answer with lease always
 // (broker.go:588-595: the notification offers session or an hour instead;

@@ -75,3 +75,21 @@ func TestReplayListed(t *testing.T) {
 		t.Errorf("Units started:\n%s", data)
 	}
 }
+
+// Revoking an always grant ends it for good: the next request asks
+func TestRevokeAlways(t *testing.T) {
+	b, f := testBroker(t)
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{}`)}}
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
+	if err != nil || f.count() != 0 {
+		t.Fatalf("The always grant: %v, asked %d times", err, f.count())
+	}
+	if _, err := b.revoke(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil || f.count() != 1 {
+		t.Errorf("A revoked always grant came back: %v, asked %d times", err, f.count())
+	}
+}

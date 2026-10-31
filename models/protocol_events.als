@@ -187,8 +187,14 @@ pred unblock[l: Launcher, c: Capability] {
 // release from inside, any grant by id (broker.go:1025-1034), or its
 // plugin's watch exiting.
 pred release[g: Grant] { g in Live and endOnly[g] }
-// revoke in the window (broker.go:995-1004).
-pred revoke[g: Grant, w: Principal] { hostOnly[w] and g in Live and endOnly[g] }
+// revoke in the window (leases.go): an always grant leaves the store too.
+pred revoke[g: Grant, w: Principal] {
+  hostOnly[w] and g in Live
+  change[none, g]
+  gsess' = gsess
+  keepDaemons and keepGates and keepEnv and keepReqs
+  g.glease = LAlways implies stored' = stored - g.gl -> g.gcap -> g.gparams else stored' = stored
+}
 pred expire[g: Grant] { g in Live and g.glease = LDuration and g.left = 0 and endOnly[g] }
 
 pred tick {

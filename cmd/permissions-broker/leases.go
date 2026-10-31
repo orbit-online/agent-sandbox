@@ -214,13 +214,17 @@ func (b *broker) lockEvent(why string) {
 	}
 }
 
-// revoke ends a grant for the user and returns what still held files on it (type C)
+// revoke ends a grant for the user and returns what still held files on it (type C). An always grant goes from the
+// store too: revoked is revoked, not back on the next request or launch
 func (b *broker) revoke(id string) ([]holder, error) {
 	b.mu.Lock()
 	g, ok := b.grants[id]
 	b.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("No grant %q", id)
+	}
+	if g.Lease == "always" {
+		b.removeAlways(g.Capability, g.Params)
 	}
 	g.end("revoked by the user")
 	return g.Holders, nil

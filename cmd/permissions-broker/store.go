@@ -79,6 +79,17 @@ func (b *broker) forget(capID string, params json.RawMessage) error {
 	if err != nil {
 		return err
 	}
+	b.removeAlways(capID, params)
+	for _, g := range b.liveGrants("") {
+		if g.cap == c && string(g.Params) == string(params) && g.Lease == "always" {
+			g.end("forgotten by the user")
+		}
+	}
+	return nil
+}
+
+// removeAlways removes an always grant from the store
+func (b *broker) removeAlways(capID string, params json.RawMessage) {
 	b.mu.Lock()
 	kept := b.store.Always[:0]
 	for _, a := range b.store.Always {
@@ -89,12 +100,6 @@ func (b *broker) forget(capID string, params json.RawMessage) error {
 	b.store.Always = kept
 	b.mu.Unlock()
 	b.save()
-	for _, g := range b.liveGrants("") {
-		if g.cap == c && string(g.Params) == string(params) && g.Lease == "always" {
-			g.end("forgotten by the user")
-		}
-	}
-	return nil
 }
 
 func (b *broker) logDecision(summary, reason, decision string) {
