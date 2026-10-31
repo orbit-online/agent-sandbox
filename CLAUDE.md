@@ -132,8 +132,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
-  sandbox's names), and the `permissions` MCP server only with
-  `permissions.enable`. The test system imports both modules twice and has a launcher
+  sandbox's names), the `permissions` MCP server only with
+  `permissions.enable`, and the assertion on binds that reach a launcher's
+  state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks

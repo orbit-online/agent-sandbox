@@ -280,7 +280,7 @@ let
         )
       );
       default = { };
-      description = "Host paths mounted in the sandbox, keyed by the path in the sandbox.";
+      description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), or holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `claude-desktop` dir, fails an assertion.";
     };
     files = mkOption {
       type = types.attrsOf (
@@ -1068,6 +1068,40 @@ let
     {
       inherit sandboxed netSetup claude-desktop;
     };
+  # Whether path a is path b or holds it
+  holds = a: b: a == b || lib.hasPrefix "${lib.removeSuffix "/" a}/" b;
+  # A launcher's enabled binds whose source holds or lies in a launcher's state dir, holds $XDG_RUNTIME_DIR (any
+  # /run/user/<uid>) or lies in its .flatpak or claude-desktop dirs: the sandbox would reach another sandbox's state,
+  # the permissions broker's store and sockets, or the nixpak instance info the broker and the launcher read as the
+  # sandbox's identity. Its own home, store and scratchpad aside, which it holds anyway. As the broker's type C
+  # ceiling denies them
+  stateBinds =
+    name: lcfg:
+    let
+      own = stateDirOf name;
+      stateDirs = map stateDirOf ([ null ] ++ lib.attrNames cfg.launchers);
+      ownParts = map (d: "${own}/${d}") [
+        "home"
+        "nix"
+        "tmp-scratchpad"
+      ];
+      runtime =
+        src:
+        lib.elem src [
+          "/"
+          "/run"
+          "/run/user"
+        ]
+        || builtins.match "/run/user/[^/]+(/(\\.flatpak|claude-desktop)(/.*)?)?" src != null;
+      bad =
+        src:
+        runtime src
+        || lib.any (
+          d: holds src d || (holds d src && !(d == own && lib.any (r: holds r src) ownParts))
+        ) stateDirs;
+    in
+    lib.filterAttrs (_: b: b.enable && bad (if b.src == "/" then "/" else lib.removeSuffix "/" b.src)) lcfg.binds;
+
   # Built, the default one under ""
   launchers = {
     "" = launcher null cfg;
@@ -1137,6 +1171,12 @@ in
             if name == "" then "memo.enable" else "launchers.${name}.memo.enable"
           } needs Home Manager's memo: import agent-memos' module and set programs.agent-memos.enable";
         }
+        ++ lib.mapAttrsToList (path: b: {
+          assertion = false;
+          message = "agent-sandbox.claude-desktop: ${
+            lib.optionalString (name != "") "launchers.${name}."
+          }binds.\"${path}\" binds ${b.src}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those";
+        }) (stateBinds (if name == "" then null else name) (if name == "" then cfg else cfg.launchers.${name}))
         ++ lib.optional (name != "") {
           # File names, the app ID and the .desktop file's Name take it as is
           assertion = builtins.match "[a-z][a-z0-9-]*" name != null;

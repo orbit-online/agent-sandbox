@@ -283,6 +283,36 @@ let
         "claude-desktop-work-sandboxed"
       ];
     };
+    # S14: no bind reaches a launcher's state or the runtime dir
+    testStateBinds = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              binds."/srv/local".src = "/home/alice/.local/";
+              binds."/srv/run".src = "/run/user/1000";
+              binds."/srv/sock".src = "/run/user/1000/claude-desktop/permissions-control.sock";
+              # Another socket there is the user's call
+              binds."/srv/agent".src = "/run/user/1000/ssh-agent.sock";
+              # Its own state dir's parts it holds anyway, a scratchpad's subdir included
+              binds."/srv/own".src = "/home/alice/.local/share/claude-desktop/tmp-scratchpad/x";
+              launchers.work.binds."/srv/other".src = "/home/alice/.local/share/claude-desktop/home";
+              launchers.work.binds."/srv/store".src = "/home/alice/.local/share/claude-desktop-work/permissions.json";
+            }
+          )
+        )
+      );
+      expected = map (
+        b:
+        "agent-sandbox.claude-desktop: ${b}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+      ) [
+        ''binds."/srv/local" binds /home/alice/.local/''
+        ''binds."/srv/run" binds /run/user/1000''
+        ''binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
+        ''launchers.work.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
+        ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/permissions.json''
+      ];
+    };
     testLauncherName = {
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
       expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
