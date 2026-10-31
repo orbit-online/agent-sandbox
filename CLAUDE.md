@@ -31,6 +31,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
   and the FHS env run, maps the user's subuid range in and starts it.
 - `nix/checks/`: the flake checks, see Testing.
+- `docs/permissions.md`: design of the permissions broker (granting outside
+  access while the sandbox runs). Not built yet.
 - `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
   checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
