@@ -600,6 +600,23 @@ pkgs.testers.runNixOSTest {
           ]:
               status, out = as_bob(f"sh -c {shlex.quote(f'exec /run/wrappers/bin/netns-macvlan {pid}')}")
               assert status != 0 and error in out, f"netns-macvlan {pid}: {status} {out}"
+          # A network namespace owned by a user namespace of alice's, below one root made and mapped her uid into: the
+          # immediate owner is hers, but she holds no capability there. The kernel's ptrace check on /proc/<pid>/ns/net
+          # already refuses alice the process that made it, so the target is one of hers in the host's user namespace
+          # that root put in that netns
+          setup = ("u=/run/current-system/sw/bin; $u/unshare --user $u/sleep infinity & p=$!; $u/sleep 1;"
+                   " echo '1000 1000 1' >/proc/$p/uid_map; echo '100 100 1' >/proc/$p/gid_map;"
+                   " exec $u/nsenter -t $p -U --setuid 1000 --setgid 100 $u/unshare --user --net --map-root-user \"$@\"")
+          under_root = spawn("alice-under-root", "root", f"/run/current-system/sw/bin/sh -c {shlex.quote(setup)} sh")
+          # spawn's wait also matches nsenter, which has sleep among its arguments: wait for the exec into sleep
+          workstation.wait_until_succeeds(
+              f"[ \"$(head -zn1 /proc/{under_root}/cmdline | tr -d '\\0')\" = /run/current-system/sw/bin/sleep ]",
+              timeout=30,
+          )
+          alice_in_nested = spawn("alice-in-nested", "alice", netns_pid=under_root)
+          status, out = as_user("alice", f"/run/wrappers/bin/netns-macvlan {alice_in_nested}")
+          assert status != 0 and "is owned by uid 0, not 1000" in out, f"netns-macvlan {alice_in_nested}: {status} {out}"
+          workstation.succeed("systemctl stop alice-in-nested alice-under-root")
           status, out = as_bob(f"/run/wrappers/bin/netns-macvlan {bob_ns}")
           assert status == 0, out
           workstation.succeed(f"nsenter -t {bob_ns} -n ip link show eth0")

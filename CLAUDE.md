@@ -157,7 +157,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   handler).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
-  namespace.
+  namespace, and the user namespace chain: a netns two user namespaces down
+  accepted, refused from a sibling user namespace's view and for one owned by
+  the caller's own.
 - `subid-broker`: the package build runs its Go tests (`main_test.go`):
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
@@ -255,7 +257,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   starting the app when it isn't running), the wrapper refusing system
   users, and
   `netns-macvlan` refusing a second user, bob, alice's namespaces, each of
-  its checks on its own. bob's commands go through `runuser`,
+  its checks on its own, and alice a netns of hers below a user namespace
+  root made and mapped her uid into. bob's commands go through `runuser`,
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
   with `nix run .#checks.x86_64-linux.vm.driverInteractive`.
 

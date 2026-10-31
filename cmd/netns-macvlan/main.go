@@ -22,8 +22,10 @@ Usage:
 Creates eth0 in the network namespace of <pid>: a macvlan in private mode on
 the device carrying the default route, with a MAC derived from the machine ID,
 the caller's uid and <name>, which tells one sandbox of the caller from
-another. <pid> must belong to the caller, and its network namespace must be
-owned by a user namespace the caller owns.
+another. <pid> must belong to the caller, and its network namespace must lie
+in a user namespace below the caller's whose topmost one below the caller's
+the caller owns: the caller then holds every capability over it by owning
+that user namespace, cap_net_admin included.
 `
 
 func main() {
@@ -46,7 +48,7 @@ func main() {
 
 func run(pid int, name string) error {
 	uid := unix.Getuid()
-	netnsFd, err := openNetns(pid, uid)
+	netnsFd, err := openNetns(pid, uid, "/proc/self/ns/user")
 	if err != nil {
 		return err
 	}
@@ -75,8 +77,9 @@ func run(pid int, name string) error {
 	return nil
 }
 
-// Opens the network namespace of pid after checking that the caller may hand it a LAN interface
-func openNetns(pid, uid int) (int, error) {
+// Opens the network namespace of pid after checking that the caller, of uid in user namespace ownUserns (a path),
+// may hand it a LAN interface
+func openNetns(pid, uid int, ownUserns string) (int, error) {
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return -1, fmt.Errorf("Open pidfd for %d: %w", pid, err)
@@ -118,15 +121,58 @@ func openNetns(pid, uid int) (int, error) {
 		return -1, fmt.Errorf("Get user namespace owning the network namespace of %d: %w", pid, err)
 	}
 	defer unix.Close(usernsFd)
-	var owner uint32
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(usernsFd), unix.NS_GET_OWNER_UID, uintptr(unsafe.Pointer(&owner))); errno != 0 {
-		return -1, fmt.Errorf("Get owner of user namespace: %w", errno)
-	}
-	if int(owner) != uid {
-		return -1, fmt.Errorf("Network namespace of %d is owned by uid %d, not %d", pid, owner, uid)
+	if err := ownedBelow(usernsFd, ownUserns, uid); err != nil {
+		return -1, fmt.Errorf("Network namespace of %d %w", pid, err)
 	}
 	ok = true
 	return netnsFd, nil
+}
+
+// Checks that the user namespace usernsFd lies below ownUserns, and that the one right below ownUserns on the way
+// there is owned by uid. By the owner rule that uid then holds every capability in it and in everything below, whoever
+// owns those: the immediate owner alone would pass a user namespace of the caller's below one a privileged process
+// made and mapped the caller's uid into
+func ownedBelow(usernsFd int, ownUserns string, uid int) error {
+	var own unix.Stat_t
+	if err := unix.Stat(ownUserns, &own); err != nil {
+		return fmt.Errorf("can't be checked: stat own user namespace: %w", err)
+	}
+	fd, err := unix.Dup(usernsFd)
+	if err != nil {
+		return fmt.Errorf("can't be checked: %w", err)
+	}
+	defer func() { unix.Close(fd) }()
+	if same(fd, own) {
+		return fmt.Errorf("is owned by the caller's own user namespace")
+	}
+	// The kernel nests at most 32 user namespaces
+	for range 33 {
+		parent, err := unix.IoctlRetInt(fd, unix.NS_GET_PARENT)
+		if err != nil {
+			// EPERM: fd is the caller's user namespace or above it, which the walk passed without meeting the caller's
+			return fmt.Errorf("isn't below the caller's user namespace: %w", err)
+		}
+		if same(parent, own) {
+			unix.Close(parent)
+			var owner uint32
+			if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.NS_GET_OWNER_UID, uintptr(unsafe.Pointer(&owner))); errno != 0 {
+				return fmt.Errorf("can't be checked: get owner of user namespace: %w", errno)
+			}
+			if int(owner) != uid {
+				return fmt.Errorf("is owned by uid %d, not %d", owner, uid)
+			}
+			return nil
+		}
+		unix.Close(fd)
+		fd = parent
+	}
+	return fmt.Errorf("is nested deeper than the kernel allows")
+}
+
+// Whether fd is the namespace st describes
+func same(fd int, st unix.Stat_t) bool {
+	var fst unix.Stat_t
+	return unix.Fstat(fd, &fst) == nil && fst.Dev == st.Dev && fst.Ino == st.Ino
 }
 
 // Index of the device carrying the main table's default route with the lowest metric, IPv4 first
