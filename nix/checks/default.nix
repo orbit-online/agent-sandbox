@@ -559,6 +559,7 @@ in
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .store == "/home/alice/.local/share/claude-desktop-work/permissions.json"
+            and .unit == "claude-desktop-work-permissions.service"
             and .sandboxGrantDir == "/run/permissions"
             and .window[1] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .window[2] == "Claude permissions (work)"

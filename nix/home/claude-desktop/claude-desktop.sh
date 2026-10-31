@@ -109,7 +109,10 @@ done
 if [[ -n $PERMISSIONS_CONFIG ]]; then
   mkdir -p "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR"
   systemctl --user -q is-active "$PERMISSIONS_UNIT" ||
-    systemd-run --user --quiet --collect --unit="$PERMISSIONS_UNIT" -p Restart=on-failure -- \
+    # ExecStopPost ends its grants when it stops, a crash included: type A units are bound to it, folder grants
+    # are detached
+    systemd-run --user --quiet --collect --unit="$PERMISSIONS_UNIT" -p Restart=on-failure \
+      -p ExecStopPost="$PERMISSIONS_BROKER cleanup $PERMISSIONS_CONFIG" -- \
       "$PERMISSIONS_BROKER" serve "$PERMISSIONS_CONFIG"
 fi
 

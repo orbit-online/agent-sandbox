@@ -100,9 +100,10 @@ Started again after a crash, it finds the same sandbox the same way and reconcil
 everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and replays only
 the `always` grants. Leases that ran while it was down are gone rather than extended; Claude asks again.
 
-The grants don't die with the daemon's process: type A units run on, folder mounts stay, and issued credentials stay
-valid until they expire. Until it's started again (normally right away), nothing ends them. A daemon that keeps
-failing leaves them in place, beyond the window's reach; the unit's failure shows in `systemctl --user`.
+Grants end with the daemon, a crash included: type A units are bound to its unit (`BindsTo=`), so systemd stops them
+when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd runs after a
+crash too) detaches the folder grants and removes their mountpoints. Issued credentials stay valid until they
+expire: they can't be taken back. A daemon starting runs the same cleanup first, in case it didn't happen.
 
 ### Sharing the grant directory
 
@@ -384,6 +385,8 @@ These were open when the design was written and decided while the user was away.
    plugin authors know.
 5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
 6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
-   a pidfd handed over: after a crash it starts again and ends every grant but the `always` ones (Claude asks
-   again). Between the crash and the restart, the grants live on.
+   a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it replays the
+   `always` ones (Claude asks again for the rest).
 7. Type A plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
+8. Grants die with the daemon (Anders): type A units `BindsTo=` its unit, folder grants detached by its
+   `ExecStopPost=`.

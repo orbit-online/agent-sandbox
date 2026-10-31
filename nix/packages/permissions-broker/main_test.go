@@ -393,6 +393,7 @@ func TestLockLease(t *testing.T) {
 func TestTypeA(t *testing.T) {
 	log := fakeSystemd(t)
 	b, _ := testBroker(t, "allow")
+	b.cfg.Unit = "daemon.service"
 	c := testCap(t, "A")
 	b.caps[c.id()] = c
 	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/a"}`, "PT1H"))
@@ -407,6 +408,11 @@ func TestTypeA(t *testing.T) {
 	}
 	data, _ := os.ReadFile(log)
 	unit := unitName("test", g.ID)
+	for _, bound := range []string{"--property=BindsTo=daemon.service", "--socket-property=BindsTo=daemon.service"} {
+		if !strings.Contains(string(data), bound) {
+			t.Errorf("Not bound to the daemon (%s):\n%s", bound, data)
+		}
+	}
 	if !strings.Contains(string(data), "--unit="+unit+" --socket-property=ListenStream="+filepath.Join(b.cfg.GrantDir, g.ID+".sock")) ||
 		!strings.Contains(string(data), "systemctl --user stop "+unit+".socket "+unit+".service") {
 		t.Errorf("systemd calls:\n%s", data)
@@ -1650,5 +1656,55 @@ func TestNudgeAdds(t *testing.T) {
 	var none *nudger
 	if res, _, _ := none.add(&mcp.CallToolResult{}, nil, nil); res == nil {
 		t.Error("A nil nudger dropped the result")
+	}
+}
+
+// What a daemon leaves when it stops, a crash included, ExecStopPost ends: its units, its locks, its folder grants
+func TestCleanup(t *testing.T) {
+	log := fakeSystemd(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "file"), []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := sandboxC(t, "allow")
+	b.cfg.Launcher = "work"
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := fmt.Sprintf("/proc/%d/root%s/file", b.sb.pid, g.Path)
+	if _, err := os.Stat(inside); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions", "x")
+	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, []byte("work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon is gone (its grants still in its memory): cleanup knows them only from the sandbox and the host
+	cleanup(b.cfg, b.sb)
+	if _, err := os.Stat(inside); err == nil {
+		t.Error("The folder grant is still mounted")
+	}
+	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, g.ID)); err == nil {
+		t.Error("Its mountpoint is left")
+	}
+	if _, err := os.Stat(lock); err == nil {
+		t.Error("The launcher's lock is left")
+	}
+	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "systemctl --user stop perm-work_*") {
+		t.Errorf("Type A units not stopped:\n%s", data)
+	}
+	// Without the sandbox, what's left on the host goes all the same
+	if err := os.Mkdir(filepath.Join(b.cfg.GrantDir, "stale"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cleanup(b.cfg, nil)
+	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, "stale")); err == nil {
+		t.Error("A stale mountpoint is left")
 	}
 }

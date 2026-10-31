@@ -845,6 +845,7 @@ let
       # The permissions broker's, under $XDG_RUNTIME_DIR/claude-desktop: its grant directory, the sandbox's
       # /run/permissions, and its control socket next to it, which isn't bound
       permissionsDir = "permissions${suffix}";
+      permissionsUnit = "claude-desktop${suffix}-permissions";
       permissionsTitle = "Claude permissions${lib.optionalString (name != null) " (${name})"}";
       permissionsConfig = pkgs.writeText "permissions${suffix}.json" (
         builtins.toJSON {
@@ -854,6 +855,7 @@ let
           grantDir = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}";
           controlSocket = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock";
           store = "${stateDir}/permissions.json";
+          unit = "${permissionsUnit}.service";
           sandboxGrantDir = "/run/permissions";
           window = [
             (lib.getExe permissionsWindow)
@@ -950,7 +952,7 @@ let
         vars = {
           PERMISSIONS_CONFIG = lib.optionalString lcfg.permissions.enable "${permissionsConfig}";
           PERMISSIONS_DIR = permissionsDir;
-          PERMISSIONS_UNIT = "claude-desktop${suffix}-permissions";
+          PERMISSIONS_UNIT = permissionsUnit;
           PERMISSIONS_BROKER = lib.getExe permissionsBroker;
           PERMISSIONS_WINDOW = lib.getExe permissionsWindow;
           PERMISSIONS_TITLE = permissionsTitle;

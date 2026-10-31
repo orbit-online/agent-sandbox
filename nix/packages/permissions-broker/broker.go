@@ -201,22 +201,8 @@ func newBroker(cfg config, caps map[string]*capability, sb *sandbox, ask asker) 
 // run reconciles what a previous daemon left, listens on both sockets, replays the always grants, and serves until
 // the sandbox ends
 func (b *broker) run() error {
-	stopAllServes(b.cfg.Launcher)
-	b.removeOwnLocks()
-	// Type C grants an earlier daemon left, if it got as far as sharing the grant directory: detached, their
-	// mountpoints removed. At the first start the sandbox may not even have its mounts set up yet
-	if b.sb.isShared(b.cfg.SandboxGrantDir) {
-		if err := b.sb.detachBelow(b.cfg.SandboxGrantDir); err != nil {
-			slog.Warn("Detach leftover grants", "err", err)
-		}
-	}
-	if entries, err := os.ReadDir(b.cfg.GrantDir); err == nil {
-		for _, e := range entries {
-			if e.Name() != "request.sock" {
-				removeMountpoint(b.cfg.GrantDir, e.Name())
-			}
-		}
-	}
+	// What an earlier daemon left, if its ExecStopPost didn't get to it
+	cleanup(b.cfg, b.sb)
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		return fmt.Errorf("Create the grant directory: %w", err)
 	}
@@ -863,7 +849,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 	}
 	if c.Type == "A" {
 		host := filepath.Join(b.cfg.GrantDir, g.ID+".sock")
-		if err := c.startServe(b.cfg.Launcher, g.ID, host, params); err != nil {
+		if err := c.startServe(b.cfg.Launcher, g.ID, host, b.cfg.Unit, params); err != nil {
 			unlock()
 			return nil, err
 		}
@@ -1145,16 +1131,7 @@ func (b *broker) save() {
 }
 
 // removeOwnLocks removes the exclusive locks a previous daemon of this launcher left
-func (b *broker) removeOwnLocks() {
-	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		path := filepath.Join(dir, e.Name())
-		if data, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(data)) == b.cfg.Launcher {
-			_ = os.Remove(path)
-		}
-	}
-}
+func (b *broker) removeOwnLocks() { removeLocks(b.cfg.Launcher) }
 
 // event tells watch streams (the MCP servers, the window) that something changed; they ask for the state
 func (b *broker) event(kind, id string) {

@@ -735,6 +735,27 @@ func (b *broker) unmountC(g *grant) {
 	}
 }
 
+// cleanup ends the grants a daemon leaves when it stops, a crash included (the unit's ExecStopPost runs it, and a
+// daemon starting runs it too): its type A units stopped, its locks removed, its folder grants detached in the sandbox
+// if it got as far as sharing the grant directory, and their mountpoints removed. sb is nil when the sandbox is gone,
+// and with it their mounts
+func cleanup(cfg config, sb *sandbox) {
+	stopAllServes(cfg.Launcher)
+	removeLocks(cfg.Launcher)
+	// Removing the mountpoints below ends their mounts in every namespace as well; this is in case that fails
+	if sb != nil && sb.isShared(cfg.SandboxGrantDir) {
+		if err := sb.detachBelow(cfg.SandboxGrantDir); err != nil {
+			slog.Warn("Detach leftover grants", "err", err)
+		}
+	}
+	entries, _ := os.ReadDir(cfg.GrantDir)
+	for _, e := range entries {
+		if e.Name() != "request.sock" {
+			removeMountpoint(cfg.GrantDir, e.Name())
+		}
+	}
+}
+
 // isShared reports whether dir is a shared mount in the sandbox's mount namespace: a daemon started again finds the
 // grant directory shared by the one before
 func (s *sandbox) isShared(dir string) bool {

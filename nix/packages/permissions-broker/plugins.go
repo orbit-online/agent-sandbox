@@ -234,13 +234,19 @@ func unitName(launcher, grant string) string { return unitPrefix(launcher) + gra
 
 // startServe runs a type A plugin's serve command as a socket-activated transient user unit listening on socket.
 // systemd hands the socket over the standard way (sd_listen_fds needs LISTEN_PID, which an exec can't set), and
-// stopping the unit kills its cgroup, double-forked children included
-func (c *capability) startServe(launcher, grant, socket string, params json.RawMessage) error {
+// stopping the unit kills its cgroup, double-forked children included. Both units are bound to the daemon's (BindsTo):
+// they stop when it does, a crash included, so no grant outlives it
+func (c *capability) startServe(launcher, grant, socket, daemon string, params json.RawMessage) error {
 	in, _ := json.Marshal(pluginInput{Params: params, Ceiling: c.Ceiling.Raw})
 	args := []string{"--user", "--quiet", "--collect", "--unit=" + unitName(launcher, grant),
 		"--socket-property=ListenStream=" + socket, "--socket-property=SocketMode=0600",
 		"--socket-property=RemoveOnStop=yes",
-		"--setenv=PERMISSIONS_INPUT=" + string(in), "--"}
+		"--setenv=PERMISSIONS_INPUT=" + string(in)}
+	if daemon != "" {
+		args = append(args, "--property=BindsTo="+daemon, "--property=After="+daemon,
+			"--socket-property=BindsTo="+daemon, "--socket-property=After="+daemon)
+	}
+	args = append(args, "--")
 	args = append(args, c.Serve...)
 	if out, err := exec.Command(systemdRun, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("Start %s: %s", c.id(), strings.TrimSpace(string(out)))
@@ -260,6 +266,18 @@ func stopServe(launcher, grant string) error {
 // stopAllServes stops every unit of the launcher's, left from a daemon that ended without cleaning up
 func stopAllServes(launcher string) {
 	_ = exec.Command(systemctl, "--user", "stop", unitPrefix(launcher)+"*").Run()
+}
+
+// removeLocks removes the launcher's exclusive locks
+func removeLocks(launcher string) {
+	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		if data, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(data)) == launcher {
+			_ = os.Remove(path)
+		}
+	}
 }
 
 // startWatch runs a plugin's watch command for a grant; done is closed when it exits

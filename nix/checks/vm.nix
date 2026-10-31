@@ -461,6 +461,23 @@ pkgs.testers.runNixOSTest {
           mcp = (f"(printf '%s\\n' {shlex.quote(rpc.splitlines()[0])} {shlex.quote(rpc.splitlines()[1])}; sleep 3;"
                  f" printf '%s\\n' {shlex.quote(call)}; sleep 3) | ${pkgs.lib.getExe broker} mcp")
           mcp_until(mcp, "echo: from the sandbox")
+
+          # A crash ends the daemon's grants: ExecStopPost detaches the folder, and the type A units are bound to it.
+          # Started again, it replays the always grants under new ids
+          socket_unit = workstation.succeed(
+              "systemctl --user -M alice@ list-units --plain --no-legend 'perm-work_*.socket' | cut -d' ' -f1"
+          ).strip()
+          folder = next(l.split()[4] for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions/" in l)
+          # The restarted daemon cleans up too, so the wiring is checked as such
+          bound = workstation.succeed(f"systemctl --user -M alice@ show -P BindsTo {socket_unit}")
+          assert "claude-desktop-work-permissions.service" in bound, f"{socket_unit} bound to {bound!r}"
+          stop_post = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-work-permissions")
+          assert " cleanup " in stop_post, f"ExecStopPost {stop_post!r}"
+          workstation.succeed("systemctl --user -M alice@ kill --signal=SIGKILL claude-desktop-work-permissions")
+          workstation.wait_until_fails(f"systemctl --user -M alice@ is-active -q {socket_unit}", timeout=30)
+          workstation.wait_until_succeeds(work_cmd(f"sh -c '! grep -q \" {folder} \" /proc/self/mountinfo'"), timeout=30)
+          workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
+          workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)
           # The always folder too: the restarted daemon takes over the shared grant directory, mounts the folder there
           # from the host, and it reaches the app's mount namespace, read-only
           workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)

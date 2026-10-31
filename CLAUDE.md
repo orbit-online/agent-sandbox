@@ -170,7 +170,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   for a plugin answering bare JSON-RPC; a hanging plugin holding up only its
   own grant, which is tried again once it answers; a failed offer tried
   again; two tools of a grant under one name told apart; the nudge after 15
-  minutes, not again right after, and in tool results.
+  minutes, not again right after, and in tool results; type A units bound
+  to the daemon's unit, and the cleanup a stopped daemon's `ExecStopPost`
+  runs (units stopped, locks removed, folder grants detached, mountpoints
+  removed, also without the sandbox).
 - `permissions-window`: the package build runs, offscreen in Plasma's
   style, its Go tests (`window_test.go`: the operations against a fake
   `control.sock`, and the Qt glue, checked in `TestMain` since Qt wants the
@@ -206,7 +209,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   permissions broker: the daemon's unit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, a grant of a test plugin through the MCP server after a restart
-  of the daemon with `always` grants stored, an `always` folder then mounted
+  of the daemon with `always` grants stored, a SIGKILL of the daemon ending
+  its type A unit and its folder grant, both back under new ids after its
+  restart, an `always` folder then mounted
   read-only, nodev and nosuid where the app runs and one with a mount beneath
   it refused, an `always` type A plugin socket-activated by systemd whose tool
   the MCP server inside offers and forwards a call to, the Permissions window

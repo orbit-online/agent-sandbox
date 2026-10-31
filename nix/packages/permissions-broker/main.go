@@ -15,6 +15,7 @@ const usage = `permissions-broker - Grant a sandbox outside access while it runs
 
 Usage:
   permissions-broker serve <config>
+  permissions-broker cleanup <config>
   permissions-broker mcp [<socket>]
   permissions-broker share [<socket>]
   permissions-broker make-shared <path>
@@ -31,6 +32,9 @@ writes: appId, launcher, grantDir, controlSocket, store, sandboxGrantDir,
 window (the command opening the Permissions window) and plugins (each a
 manifest path and a ceiling). Environment variables in the paths and the window
 command are expanded.
+
+cleanup ends the grants of a daemon that stopped, as its unit's ExecStopPost:
+type A units stopped, folder grants detached. A daemon that starts does it too.
 
 mcp is the MCP server inside the sandbox, a client of <socket>
 (/run/permissions/request.sock by default).
@@ -61,6 +65,12 @@ func main() {
 	switch {
 	case opts["serve"] == true:
 		err = serve(opts["<config>"].(string))
+	case opts["cleanup"] == true:
+		var cfg config
+		if cfg, err = readConfig(opts["<config>"].(string)); err == nil {
+			sb, _ := lookupSandbox(os.Getenv("XDG_RUNTIME_DIR"), cfg.AppID)
+			cleanup(cfg, sb)
+		}
 	case opts["mcp"] == true:
 		err = runMCP(socketArg(opts))
 	case opts["share"] == true:
@@ -108,11 +118,13 @@ func share(socket string) error {
 }
 
 type config struct {
-	AppID           string   `json:"appId"`
-	Launcher        string   `json:"launcher"`
-	GrantDir        string   `json:"grantDir"`
-	ControlSocket   string   `json:"controlSocket"`
-	Store           string   `json:"store"`
+	AppID         string `json:"appId"`
+	Launcher      string `json:"launcher"`
+	GrantDir      string `json:"grantDir"`
+	ControlSocket string `json:"controlSocket"`
+	Store         string `json:"store"`
+	// The daemon's systemd unit, which type A units are bound to
+	Unit            string   `json:"unit"`
 	SandboxGrantDir string   `json:"sandboxGrantDir"`
 	Window          []string `json:"window"`
 	// Never granted as a type C source, whatever a ceiling says: every launcher's state directory and runtime
@@ -124,14 +136,14 @@ type config struct {
 	} `json:"plugins"`
 }
 
-func serve(path string) error {
+func readConfig(path string) (config, error) {
+	var cfg config
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("Read config: %w", err)
+		return cfg, fmt.Errorf("Read config: %w", err)
 	}
-	var cfg config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("Parse config %s: %w", path, err)
+		return cfg, fmt.Errorf("Parse config %s: %w", path, err)
 	}
 	for _, p := range []*string{&cfg.GrantDir, &cfg.ControlSocket, &cfg.Store} {
 		*p = os.ExpandEnv(*p)
@@ -143,6 +155,14 @@ func serve(path string) error {
 		cfg.Denied[i] = os.ExpandEnv(cfg.Denied[i])
 	}
 	if cfg.Denied, err = checkDenied(cfg.Denied); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func serve(path string) error {
+	cfg, err := readConfig(path)
+	if err != nil {
 		return err
 	}
 	caps, err := loadPlugins(cfg)
