@@ -102,28 +102,32 @@ run P6answers {
 
 // P7. Consent text is the daemon's: what the broker's notification shows
 // is the summary the daemon built (describe, describeC; reason quoted and
-// escaped, broker.go:1194-1195, plugins.go:175-200).
-// Known, a finding (B4), confirmed against Plasma 6.6's and libnotify's
-// source, not tried live: the sandbox may call Notify with replaces_id set
-// to the broker's notification id (xdg-dbus-proxy lets Notify through
-// whole), and Plasma swaps it for the sandbox's text and buttons
-// (server_p.cpp Notify keeps no owner per id). notify-send takes any
-// ActionInvoked for its id (libnotify notification.c:813-827), so a button
-// labelled Deny whose key is `allow` grants. The 1 s guard doesn't help:
-// the swap can come any time later. Ids are sequential, so the sandbox
-// learns the broker's by posting one of its own right after its request.
-// With forge[] dropped from the traces, the claim holds.
+// escaped, notify.go, plugins.go).
+// Known, a finding (B4), confirmed against Plasma 6.6's source, not tried
+// live: the sandbox may call Notify with replaces_id set to the broker's
+// notification id (xdg-dbus-proxy lets Notify through whole), and Plasma
+// swaps it for the sandbox's text and buttons (server_p.cpp Notify keeps
+// no owner per id). Ids are sequential, so the sandbox learns the
+// broker's by posting one of its own right after its request. What the
+// user then sees isn't the daemon's; with the fix below, all a click on
+// it can do is deny. With forge[] dropped from the traces, the claim
+// holds.
 assert P7consentTextIsDaemons {
   always all r: Pending - Opened | r.shows = r.summary
 }
 check P7consentTextIsDaemons for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 2 Req, 2 Text, 3 Int, 1..4 steps expect 1
-// The same finding as a grant: an Allow on a notification the sandbox drew.
+// P7 as a grant: no Allow on a notification the sandbox drew. Holds: the
+// broker's buttons have random action keys per notification, and only
+// ActionInvoked from the server's connection counts (askOn, notify.go),
+// so a replacement's "Deny" with the key `allow` is a refusal.
+// Revert: notifAllow without `r not in Forged` (fixed keys, as with
+// notify-send before): counterexample found.
 assert P7noAllowOnForged {
   always all r: Req, g: Grant | notifAllow[r, g] implies r not in Forged
 }
 check P7noAllowOnForged for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 2 Text, 3 Int, 1..7 steps expect 1
+  1 Session, 2 Grant, 2 Req, 2 Text, 3 Int, 1..7 steps expect 0
 
 // P14. The sandbox can't keep the user from answering: at most one
 // pending request per capability and launcher (openGate, broker.go:

@@ -51,7 +51,6 @@ tree.go).
 // Set to store paths at build time
 var (
 	nsenter    = "nsenter"
-	notifySend = "notify-send"
 	systemdRun = "systemd-run"
 	systemctl  = "systemctl"
 )

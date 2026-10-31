@@ -1,7 +1,7 @@
 {
   buildGoModule,
   lib,
-  libnotify,
+  dbus,
   systemd,
   util-linux,
   ...
@@ -25,12 +25,14 @@ buildGoModule {
   ldflags = [
     "-X main.nsenter=${lib.getExe' util-linux "nsenter"}"
     "-X main.unshareBin=${lib.getExe' util-linux "unshare"}"
-    "-X main.notifySend=${lib.getExe' libnotify "notify-send"}"
     "-X main.systemdRun=${lib.getExe' systemd "systemd-run"}"
     "-X main.systemctl=${lib.getExe' systemd "systemctl"}"
   ];
-  # TestShare and the type C tests run nsenter and unshare
-  nativeCheckInputs = [ util-linux ];
+  # TestShare and the type C tests run nsenter and unshare, the notification tests a bus of their own
+  nativeCheckInputs = [
+    dbus
+    util-linux
+  ];
   meta = {
     description = "Grant a sandbox outside access while it runs";
     mainProgram = "permissions-broker";

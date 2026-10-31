@@ -91,9 +91,10 @@ pred options[r: Req] {
 // notification: Plasma 6.6 replaces it whoever sends it
 // (libnotificationmanager/server_p.cpp, Notify: no check of the sender;
 // abstractnotificationsmodel.cpp:110-137 swaps it in place), with the
-// sandbox's text and buttons, and libnotify's notify-send takes any
-// ActionInvoked for its id (notification.c:813-827). The id is
-// guessable: Plasma counts them up.
+// sandbox's text and buttons. The id is guessable: Plasma counts them up.
+// The broker's buttons carry random action keys, per notification, and
+// it takes ActionInvoked only from the server's own connection (askOn,
+// notify.go): a click on the replacement's buttons is a refusal.
 pred forge[r: Req] {
   r in Pending - Opened
   Forged' = Forged + r
@@ -109,6 +110,8 @@ pred forge[r: Req] {
 pred notifAllow[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap {
     r in Pending - Opened and actionMature[r]
+    // only the broker's own notification carries its allow key
+    r not in Forged
     l in Up - Gone
     // re-checked only when the answer's lease differs from the request's
     r.rlease != r.asked implies leaseOK[l, r.asked, r.rsess]

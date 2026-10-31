@@ -184,7 +184,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   that isn't a child of ours, the sockets end to end with `watch` events, and what
   the sandbox can't do to it: hold every connection (control.sock still
   answers, idle clients time out), send an oversized request, dress up a
-  parameter or reason in the notification, anchor a session at or above the
+  parameter or reason in the notification, make a click on its replacement of
+  the broker's notification or an `ActionInvoked` of its own allow (a fake
+  notification server on a `dbus-daemon` of the test's), anchor a session at or above the
   sandbox, make one always grant start several units, get a credential after
   its lease ran out; plus a window answer while the notification is up, unit
   names per launcher, and a broken store set aside. Type C against a stand-in
