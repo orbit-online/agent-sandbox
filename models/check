@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Run the Alloy models in this directory and summarise every command.
+#
+# Usage: models/check [-v] [--known] [MODEL...]
+#
+#   MODEL     a model's file name without .als (default: every model with
+#             a command)
+#   -v        print the claim and instance of every command, not only of
+#             the failures
+#   --known   print the claim of every known finding (a check with
+#             `expect 1`) and nothing else
+#
+# A check passes when it holds, or, with `expect 1`, when it has a
+# counterexample: a known finding, shown as `known`. A run passes when it
+# finds an instance, or, with `expect 0`, when it finds none. Anything
+# else is FAIL: the comment above the command says which claim it
+# encodes (with its number from README.md), and the instance Alloy found
+# is printed under it. A known finding that stops failing is a FAIL too,
+# so its `expect 1` can't go stale. Works from any directory.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if ! command -v alloy6 >/dev/null || ! command -v jq >/dev/null; then
+  exec nix shell nixpkgs#alloy6 nixpkgs#jq --command "$here/check" "$@"
+fi
+
+verbose=false known=false models=()
+for arg in "$@"; do
+  case $arg in
+    -v) verbose=true ;;
+    --known) known=true ;;
+    -h|--help) sed -n '2,20p' "$here/check" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) models+=("$here/${arg%.als}.als") ;;
+  esac
+done
+if ! ((${#models[@]})); then
+  for model in "$here"/*.als; do
+    # A library without commands has nothing to run
+    grep -qE '^[[:space:]]*(run|check)[[:space:]]' "$model" && models+=("$model")
+  done
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+red=$'\e[31m' green=$'\e[32m' yellow=$'\e[33m' dim=$'\e[2m' bold=$'\e[1m' off=$'\e[0m'
+[[ -t 1 ]] || red='' green='' yellow='' dim='' bold='' off=''
+
+# The comment block right above `assert NAME` or `pred NAME` (or the
+# `check` or `run` command itself).
+doc() {
+  awk -v name="$2" '
+    /^[[:space:]]*\/\// { buf = buf $0 "\n"; next }
+    $1 ~ /^(assert|pred|check|run)$/ && ($2 == name || $2 == name "[" || index($2, name "{") == 1) { if (buf != "") { printf "%s", buf; exit } }
+    { buf = "" }' "$1" | sed -e 's#^[[:space:]]*// \{0,1\}#    #'
+}
+
+# The instance Alloy wrote for one command, without the integer and
+# builtin noise. `// HIDE: A B` in a model leaves those sigs and their
+# fields out.
+instance() {
+  # shellcheck disable=SC2016 # `$0` is an atom name
+  grep -vE '^(---|univ=|Int=|seq/Int=|String=|none=)' "$1" |
+    sed -E -e 's#this/##g' -e 's#(^|[ {>=,])[a-z_]+/#\1#g' |
+    grep -vE '^[^=]*=\{\}$' |
+    grep -vE "^(${hide:-^})(<:[^=]*)?=" |
+    sed -e 's/^/      /'
+}
+
+fails=0 oks=0 knowns=0
+for model in "${models[@]}"; do
+  stem=$(basename "$model" .als)
+  hide=$(sed -n 's#^// HIDE: ##p' "$model" | tr ' ' '|')
+  $known || printf '%s%s%s\n' "$bold" "$stem" "$off"
+  # alloy6 also fails when a command misses its `expect`; only a missing
+  # receipt means the model didn't run. Models open each other by path
+  # relative to this directory.
+  (cd "$here" && alloy6 exec -q -f -n -t text -o "$tmp/$stem" "$model") >"$tmp/$stem.log" 2>&1 || true
+  if [[ ! -f $tmp/$stem/receipt.json ]]; then
+    printf '  %sERROR%s %s\n' "$red" "$off" "$stem"; sed 's/^/    /' "$tmp/$stem.log"; fails=$((fails + 1)); continue
+  fi
+  results=$(jq -r '.commands | to_entries[] | [.key, .value.type, (.value.expects | tostring), (((.value.solution // []) | map(.instances // [] | length) | add // 0) > 0 | tostring)] | @tsv' "$tmp/$stem/receipt.json")
+  while IFS=$'\t' read -r name type expects found; do
+    if [[ $type == check ]]; then
+      if [[ $found == true ]]; then what="counterexample"; else what="holds"; fi
+      if [[ $expects == 1 ]]; then [[ $found == true ]] && state=known || state=fail
+      else [[ $found == false ]] && state=ok || state=fail; fi
+    else
+      if [[ $found == true ]]; then what="instance"; else what="no instance"; fi
+      if [[ $expects == 0 ]]; then [[ $found == false ]] && state=ok || state=fail
+      else [[ $found == true ]] && state=ok || state=fail; fi
+    fi
+    if $known; then
+      if [[ $state == known ]]; then printf '%s%s %s%s\n' "$bold" "$stem" "$name" "$off"; doc "$model" "$name"; echo; fi
+      continue
+    fi
+    case $state in
+      ok) printf '  %sok%s     %-40s %s%s%s\n' "$green" "$off" "$name" "$dim" "$what" "$off"; oks=$((oks + 1)) ;;
+      known) printf '  %sknown%s  %-40s %s%s%s\n' "$yellow" "$off" "$name" "$dim" "$what" "$off"; knowns=$((knowns + 1)) ;;
+      fail) printf '  %sFAIL%s   %-40s %s\n' "$red" "$off" "$name" "$what"; fails=$((fails + 1)) ;;
+    esac
+    if [[ $state == fail ]] || $verbose; then
+      doc "$model" "$name"
+      if [[ $found == true ]]; then
+        # Temporal commands write one file per solution; the first state is enough here
+        f=$(find "$tmp/$stem" -name "$name-solution-0*.txt" | sort | head -1)
+        [[ -n $f ]] && instance "$f"
+      fi
+      echo
+    fi
+  done <<<"$results"
+done
+
+$known && exit 0
+printf '\n%s%d ok%s, %s%d known%s, %s%d failed%s\n' "$green" "$oks" "$off" "$yellow" "$knowns" "$off" "$red" "$fails" "$off"
+((fails == 0))
