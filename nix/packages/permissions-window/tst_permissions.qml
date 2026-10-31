@@ -22,7 +22,6 @@ TestCase {
                              params: { path: { type: "string" }, ro: { type: "boolean" } } }]
         })
         property string error: ""
-        property string holders: "[]"
         property string command: ""
     }
 
@@ -59,11 +58,15 @@ TestCase {
         mouseClick(findChild(view, "revoke"))
         compare(sent().op, "revoke")
         compare(sent().grant, "g1")
-        mock.holders = '[{"pid": 42, "comm": "cat"}]'
+        const st = JSON.parse(mock.state)
+        st.held = [{ grant: "g1", summary: "the test thing", why: "revoked by the user",
+                     holders: [{ pid: 42, comm: "cat", start: 1 }] }]
+        mock.state = JSON.stringify(st)
         const end = findChild(view, "end")
         tryVerify(() => end.visible)
         mouseClick(end)
         compare(sent().op, "end")
+        compare(sent().grants, ["g1"])
     }
 
     function test_forget() {

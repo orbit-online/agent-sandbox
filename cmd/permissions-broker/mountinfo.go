@@ -87,10 +87,12 @@ func unescapeMountinfo(s string) string {
 	return b.String()
 }
 
-// A process in the sandbox holding files, mappings, its working directory or a mount of its own of a grant
+// A process in the sandbox holding files, mappings, its working directory or a mount of its own of a grant. Start
+// (its start time) tells it from a later process with the same pid
 type holder struct {
-	Pid  int    `json:"pid"`
-	Comm string `json:"comm"`
+	Pid   int    `json:"pid"`
+	Comm  string `json:"comm"`
+	Start uint64 `json:"start"`
 }
 
 // How long the holders' scan may take: the sandbox decides how many processes and files there are
@@ -144,7 +146,9 @@ func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string)
 		}
 		if held {
 			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-			hs = append(hs, holder{Pid: pid, Comm: strings.TrimSpace(string(comm))})
+			if start, ok := startTime(pid); ok {
+				hs = append(hs, holder{Pid: pid, Comm: strings.TrimSpace(string(comm)), Start: start})
+			}
 		}
 	}
 	return hs

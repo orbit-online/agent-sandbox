@@ -143,23 +143,23 @@ assert P5holdersListedInside {
 }
 check P5holdersListedInside for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
 // How the grant ended, and what reaches the user: holdersAfter runs on
-// every end (unmountC, mounts.go:721-736), but only revoke's answer
-// carries the holders (broker.go:1002-1003), and the window shows only
-// those (window.go:90-95). Other ends log them to the journal.
+// every end (unmountC, typec.go), and the daemon keeps them for the
+// window's state however the grant ended (recordHeld, holders.go).
 abstract sig Cause {}
 one sig Revoked, ReleasedInside, LeaseRanOut extends Cause {}
 one sig End { var cause: one Cause }
-fun shownToUser: set Process { End.cause = Revoked implies listed else none }
+fun shownToUser: set Process { listed }
 
-// P5 as the user sees it. Known, a finding: the sandbox releases its own
-// folder grant (or lets the lease run out) while a process of its keeps a
-// cwd or a re-bind in a nested mount namespace on it; the window then
-// shows no grant and no holder, and the folder stays reachable. With
-// the holders shown on every end (shownToUser = listed), the claim holds.
+// P5 as the user sees it: the sandbox releases its own folder grant (or
+// lets the lease run out) while a process of its keeps a cwd or a
+// re-bind in a nested mount namespace on it; the window shows the
+// holders all the same. Holds. Revert: shownToUser only for Revoked (as
+// before the fix, when only revoke's answer carried them): the window
+// shows no holder and the folder stays reachable (counterexample found).
 assert P5holdersShown {
   always (all p: sandboxProcs - Tree.top | p in inside) and no Tree.unscanned implies Tree.holds in shownToUser
 }
-check P5holdersShown for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
+check P5holdersShown for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 0
 
 run P5holders {
   some listed

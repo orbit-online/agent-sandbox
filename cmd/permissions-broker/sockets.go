@@ -160,6 +160,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 		b.mu.Unlock()
 		res.Grants = b.grantViews("")
 		res.Capabilities = b.listCapabilities()
+		res.Held = b.heldViews()
 	case "options":
 		err = b.markOptions(req.Pending)
 	case "answer":
@@ -167,7 +168,11 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 	case "revoke":
 		res.Holders, err = b.revoke(req.Grant)
 	case "end":
-		err = b.endHolders(req.Pids)
+		var errs []error
+		for _, g := range req.Grants {
+			errs = append(errs, b.endHeld(g))
+		}
+		err = errors.Join(errs...)
 	case "forget":
 		err = b.forget(req.Capability, req.Params)
 	default:

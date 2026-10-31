@@ -203,7 +203,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   directory bound in and shared): the source ceiling, a folder mounted
   read-only where the app sees it and not on the host, its holders listed and
   ended (not a process outside the sandbox; a re-entry's too, found by user
-  namespace), detached with its mountpoint
+  namespace; on a release from inside too, and not a process by a stale
+  record), detached with its mountpoint
   gone on revoke, a session lease two sessions hold, a daemon started again
   taking over the shared grant directory and replaying an always folder, and
   the sandbox's attacks: a link out of the ceiling, another folder renamed into the path
@@ -227,7 +228,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   main thread: loading without QML warnings, the state arriving, a click
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
-  fields, deny, revoke then end, forget, a repeated action still a change.
+  fields, deny, revoke then end (the holders of ended grants from the state),
+  forget, a repeated action still a change.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.

@@ -137,10 +137,11 @@ func TestFolder(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, g.ID)); err == nil {
 		t.Error("The mountpoint is left")
 	}
-	if err := b.endHolders([]int{os.Getpid()}); err == nil {
+	start, _ := startTime(os.Getpid())
+	if err := b.endHolders([]holder{{Pid: os.Getpid(), Start: start}}); err == nil {
 		t.Error("Ended a process outside the sandbox")
 	}
-	if err := b.endHolders([]int{holderPid}); err != nil {
+	if err := b.endHeld(g.ID); err != nil {
 		t.Error(err)
 	}
 }

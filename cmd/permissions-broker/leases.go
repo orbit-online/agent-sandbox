@@ -15,8 +15,6 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
-
-	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
 func (b *broker) now() time.Time { return time.Now().Add(time.Duration(b.skew.Load())) }
@@ -109,6 +107,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 				}
 			case "C":
 				b.unmountC(g)
+				b.recordHeld(g, why)
 			}
 			b.mu.Lock()
 			for id, s := range g.sessions {
@@ -231,25 +230,6 @@ func (b *broker) revoke(id string) ([]holder, error) {
 	}
 	g.end("revoked by the user")
 	return g.Holders, nil
-}
-
-// endHolders ends processes the window lists as holding a revoked grant, if they are in the sandbox
-func (b *broker) endHolders(pids []int) error {
-	var errs []error
-	for _, pid := range pids {
-		// Through a pidfd taken before the check, so the pid can't be another process's by the signal
-		fd, err := unix.PidfdOpen(pid, 0)
-		if err != nil {
-			continue // gone already
-		}
-		if !b.sb.contains(pid) || !proc.Alive(fd) {
-			errs = append(errs, fmt.Errorf("%d isn't in the sandbox", pid))
-		} else if err := unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
-			errs = append(errs, fmt.Errorf("End %d: %w", pid, err))
-		}
-		unix.Close(fd)
-	}
-	return errors.Join(errs...)
 }
 
 func (b *broker) release(id, why string) error {

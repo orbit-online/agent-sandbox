@@ -45,16 +45,15 @@ func main() {
 	os.Exit(qt.QGuiApplication_Exec())
 }
 
-// load shows w in the QML at path. The QML reads the property map brokerMap: state (the broker's state as JSON), error
-// and holders (JSON), and writes its actions to command as JSON. Qt has no moc here to make a QObject with properties
+// load shows w in the QML at path. The QML reads the property map brokerMap: state (the broker's state as JSON) and
+// error, and writes its actions to command as JSON. Qt has no moc here to make a QObject with properties
 // and slots, hence the map. QML warnings go to warn. Returns the engine and the map
 func load(w *window, title, path string, warn func(string)) (*qml.QQmlApplicationEngine, *qml.QQmlPropertyMap) {
 	broker := qml.NewQQmlPropertyMap()
 	publish := func() {
-		state, err, holders := w.view()
+		state, err := w.view()
 		broker.Insert("state", qt.NewQVariant14(state))
 		broker.Insert("error", qt.NewQVariant14(err))
-		broker.Insert("holders", qt.NewQVariant14(holders))
 	}
 	// Calls to control.sock off the GUI thread, the map updated on it
 	refresh := func() {

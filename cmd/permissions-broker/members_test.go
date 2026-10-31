@@ -71,7 +71,7 @@ func TestHoldersReentry(t *testing.T) {
 	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
 		t.Fatalf("The re-entry %d isn't among the holders %+v", pid, holders)
 	}
-	if err := b.endHolders([]int{pid}); err != nil {
+	if err := b.endHeld(g.ID); err != nil {
 		t.Fatal(err)
 	}
 	for range 50 {
@@ -94,4 +94,49 @@ func TestShareTooLate(t *testing.T) {
 	if err := b.shareFrom(peerAt(t, cmd.Process.Pid)); err == nil {
 		t.Error("Shared after the sandbox's mount namespace was copied")
 	}
+}
+
+// P5: holders are shown however the grant ended, released from inside too, and ending them signals only the process
+// recorded, not a later one with its pid
+func TestHoldersOnRelease(t *testing.T) {
+	src := t.TempDir()
+	b, hold, out := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(hold, "hold %s\n", g.Path)
+	var pid int
+	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
+		t.Fatal(pid, err)
+	}
+	if err := b.release(g.ID, "released from inside"); err != nil {
+		t.Fatal(err)
+	}
+	res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"})
+	if len(res.Held) != 1 || res.Held[0].Grant != g.ID || len(res.Held[0].Holders) != 1 || res.Held[0].Holders[0].Pid != pid {
+		t.Fatalf("Held after a release: %+v", res.Held)
+	}
+	// Recorded with another start time: a process that reused the pid isn't signalled
+	stale := res.Held[0].Holders[0]
+	stale.Start++
+	if err := b.endHolders([]holder{stale}); err != nil {
+		t.Error(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if _, ok := startTime(pid); !ok {
+		t.Error("Ended a process by a stale record")
+	}
+	if res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "end", Grants: []string{g.ID}}); res.Error != "" {
+		t.Error(res.Error)
+	}
+	for range 50 {
+		if _, ok := startTime(pid); !ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("The holder wasn't ended")
 }

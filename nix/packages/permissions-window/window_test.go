@@ -26,12 +26,13 @@ var state = map[string]any{
 		"granted": "2026-10-31T10:00:00Z"}},
 	"log": []any{map[string]any{"time": "2026-10-31T10:00:00Z", "summary": "the test thing",
 		"decision": "allowed (session)"}},
+	"held": []any{map[string]any{"grant": "g0", "summary": "a folder", "why": "released from inside",
+		"holders": []any{map[string]any{"pid": 42, "comm": "cat", "start": 1}}}},
 	"capabilities": []any{map[string]any{"id": "folders/folder", "type": "C", "description": "a folder",
 		"params": map[string]any{"path": map[string]any{"type": "string"}, "ro": map[string]any{"type": "boolean"}}}},
 }
 
-// fakeBroker serves control.sock: state answers with state, revoke with a holder, and every other request is
-// recorded
+// fakeBroker serves control.sock: state answers with state, and every other request is recorded
 type fakeBroker struct {
 	path     string
 	mu       sync.Mutex
@@ -78,11 +79,7 @@ func (f *fakeBroker) handle(conn net.Conn) {
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
 	f.mu.Unlock()
-	answer := map[string]any{}
-	if req["op"] == "revoke" {
-		answer["holders"] = []any{map[string]any{"pid": 42, "comm": "cat"}}
-	}
-	_ = json.NewEncoder(conn).Encode(answer)
+	_ = json.NewEncoder(conn).Encode(map[string]any{})
 }
 
 func (f *fakeBroker) recorded() []map[string]any {
@@ -158,7 +155,7 @@ func qmlCheck() (errs []string) {
 	}
 	if !pump(func() bool {
 		r := f.recorded()
-		return len(r) > 0 && reflect.DeepEqual(normalize(r[len(r)-1]), normalize(map[string]any{"op": "end", "pids": []any{}}))
+		return len(r) > 0 && reflect.DeepEqual(normalize(r[len(r)-1]), normalize(map[string]any{"op": "end", "grants": []any{"g0"}}))
 	}) {
 		fail("End sent %v", f.recorded())
 	}
@@ -177,19 +174,16 @@ func TestOperations(t *testing.T) {
 	f := newFakeBroker(t)
 	w := &window{socket: f.path}
 	w.refresh()
-	if st, err, _ := w.view(); err != "" || !strings.Contains(st, `"p1"`) {
+	if st, err := w.view(); err != "" || !strings.Contains(st, `"p1"`) {
 		t.Fatalf("State %s, error %s", st, err)
 	}
 	w.do(`{"op": "forget", "capability": "test/thing", "params": {"x": "y"}, "seq": 1}`)
 	w.do(`{"op": "revoke", "grant": "g1"}`)
-	if _, _, holders := w.view(); holders != `[{"pid":42,"comm":"cat"}]` {
-		t.Errorf("Holders %s", holders)
-	}
-	w.do(`{"op": "end"}`)
+	w.do(`{"op": "end", "grants": ["g0"]}`)
 	want := []map[string]any{
 		{"op": "forget", "capability": "test/thing", "params": map[string]any{"x": "y"}},
 		{"op": "revoke", "grant": "g1"},
-		{"op": "end", "pids": []any{42.0}},
+		{"op": "end", "grants": []any{"g0"}},
 	}
 	if got := f.recorded(); !reflect.DeepEqual(normalize(got), normalize(want)) {
 		t.Errorf("Requests %v, want %v", got, want)
@@ -199,7 +193,7 @@ func TestOperations(t *testing.T) {
 func TestNoBroker(t *testing.T) {
 	w := &window{socket: filepath.Join(t.TempDir(), "missing.sock")}
 	w.refresh()
-	if _, err, _ := w.view(); !strings.Contains(err, "isn't running") {
+	if _, err := w.view(); !strings.Contains(err, "isn't running") {
 		t.Errorf("Error %q", err)
 	}
 }

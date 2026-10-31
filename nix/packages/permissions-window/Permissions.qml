@@ -2,9 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// The Permissions window's content. broker.state is the broker's state as JSON, broker.error and broker.holders (JSON)
-// what went wrong and what still holds a revoked grant; actions go to broker.command as JSON. main.go passes a
-// QQmlPropertyMap, tst_permissions.qml a mock
+// The Permissions window's content. broker.state is the broker's state as JSON, broker.error what went wrong; actions
+// go to broker.command as JSON. main.go passes a QQmlPropertyMap, tst_permissions.qml a mock
 Item {
     id: root
     required property var broker
@@ -14,7 +13,8 @@ Item {
     readonly property var grants: st.grants || []
     readonly property var always: st.always || []
     readonly property var log: (st.log || []).slice().reverse().slice(0, 30)
-    readonly property var holders: root.broker.holders ? JSON.parse(root.broker.holders) : []
+    // What still holds folder grants that ended, however they ended
+    readonly property var held: st.held || []
     // Each capability's parameter types, for the fields that narrow a request
     readonly property var types: {
         const t = {}
@@ -159,19 +159,20 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: 12
                 Layout.rightMargin: 12
-                visible: root.holders.length > 0
+                visible: root.held.length > 0
                 Label {
                     Layout.fillWidth: true
-                    // Revoking unmounts a folder, but what's open in it stays readable to whoever holds it
-                    text: "Still open in what you revoked: "
-                          + root.holders.map(h => h.comm + " (" + h.pid + ")").join(", ")
+                    // A folder grant that ended is unmounted, but what's open in it stays readable to whoever holds it
+                    text: "Still open in folders no longer granted: "
+                          + root.held.map(g => g.summary + " (" + g.why + "): "
+                                          + g.holders.map(h => h.comm + " (" + h.pid + ")").join(", ")).join("; ")
                     textFormat: Text.PlainText
                     wrapMode: Text.Wrap
                 }
                 Button {
                     objectName: "end"
                     text: "End them"
-                    onClicked: root.send({ op: "end" })
+                    onClicked: root.send({ op: "end", grants: root.held.map(g => g.grant) })
                 }
             }
 

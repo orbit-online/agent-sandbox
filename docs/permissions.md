@@ -165,11 +165,13 @@ Open files survive a revoke of type C (verified item 3), and so does a copy of t
 made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
 mountpoint end the grant's mounts in every namespace it propagated to, not copies made elsewhere. Neither can be
 taken back short of ending the processes. So the daemon reads the grant's mount ids in each mount namespace in the
-sandbox (of every process of the sandbox's, found by user namespace as above, re-entries included), detaches, and then
-lists the holders, within ten seconds: processes whose working directory, open files
+sandbox (of every process of the sandbox's, found by user namespace as for sessions below, re-entries included),
+detaches, and then lists the holders, within ten seconds: processes whose working directory, open files
 or mappings are on those mounts (by `statx`'s mount id, which an open file keeps), and processes whose mount
-namespace has a mount of the grant's filesystem and root. The window shows them and offers to end them (`SIGTERM`
-through a pidfd, only for processes in the sandbox). The daemon doesn't refuse a revoke because something is in
+namespace has a mount of the grant's filesystem and root. It does so however the grant ended (revoked, released from
+inside, its lease run out) and keeps the last twenty grants' holders for the window, which shows them and offers to
+end them: `SIGTERM` through a pidfd, only for processes in the sandbox, and only to the process recorded (by its start
+time), not to a later one that got its pid. The daemon doesn't refuse a revoke because something is in
 use, and doesn't kill anything without the user saying so.
 
 ### Source ceiling and resolving paths

@@ -41,8 +41,8 @@ type request struct {
 	// control.sock's answer to a pending request
 	Pending string `json:"pending,omitempty"`
 	Allow   bool   `json:"allow,omitempty"`
-	// control.sock's end: processes holding a revoked grant
-	Pids []int `json:"pids,omitempty"`
+	// control.sock's end: the ended grants whose holders to end, as the window shows them
+	Grants []string `json:"grants,omitempty"`
 }
 
 type response struct {
@@ -55,6 +55,7 @@ type response struct {
 	Holders      []holder         `json:"holders,omitempty"`
 	Always       []alwaysGrant    `json:"always,omitempty"`
 	Log          []logEntry       `json:"log,omitempty"`
+	Held         []held           `json:"held,omitempty"`
 }
 
 type capabilityInfo struct {
@@ -160,6 +161,8 @@ type broker struct {
 	shareAsked bool
 	lockOK     bool
 	watches    map[chan []byte]bool
+	// What still held type C grants when they ended
+	heldGrants []held
 	// Added to the time, by tests
 	skew atomic.Int64
 }

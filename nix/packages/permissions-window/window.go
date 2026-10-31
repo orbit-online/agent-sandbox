@@ -16,20 +16,14 @@ import (
 // How long a call to control.sock may take: state runs the plugins' list commands
 const callTimeout = 15 * time.Second
 
-// window is what the QML shows and does, without Qt: the broker's state as JSON, an error, and the holders of the
-// grant revoked last, which the user may end
+// window is what the QML shows and does, without Qt: the broker's state as JSON (what still holds ended folder grants
+// among it, which the user may end) and an error
 type window struct {
 	socket string
 
-	mu      sync.Mutex
-	state   string // control.sock's state answer, as JSON
-	err     string
-	holders []holder
-}
-
-type holder struct {
-	Pid  int    `json:"pid"`
-	Comm string `json:"comm"`
+	mu    sync.Mutex
+	state string // control.sock's state answer, as JSON
+	err   string
 }
 
 // A command from the QML: an operation on control.sock
@@ -41,6 +35,7 @@ type command struct {
 	Params     json.RawMessage `json:"params,omitempty"`
 	Grant      string          `json:"grant,omitempty"`
 	Capability string          `json:"capability,omitempty"`
+	Grants     []string        `json:"grants,omitempty"`
 }
 
 // call sends one request to control.sock and returns the answer, its error as an error
@@ -73,26 +68,8 @@ func (w *window) do(data string) {
 		w.setError(fmt.Sprintf("Not a command: %v", err))
 		return
 	}
-	var request any = c
-	if c.Op == "end" {
-		w.mu.Lock()
-		pids := make([]int, len(w.holders))
-		for i, h := range w.holders {
-			pids[i] = h.Pid
-		}
-		w.holders = nil
-		w.mu.Unlock()
-		request = map[string]any{"op": "end", "pids": pids}
-	}
-	answer, err := call(w.socket, request)
-	if err != nil {
+	if _, err := call(w.socket, c); err != nil {
 		w.setError(describe(err))
-	} else if c.Op == "revoke" {
-		var hs []holder
-		_ = json.Unmarshal(answer["holders"], &hs)
-		w.mu.Lock()
-		w.holders = hs
-		w.mu.Unlock()
 	}
 	w.refresh()
 }
@@ -123,15 +100,11 @@ func describe(err error) string {
 	return err.Error()
 }
 
-// view is what the QML reads: the state, the error and the holders, each as a string
-func (w *window) view() (state, err, holders string) {
+// view is what the QML reads: the state and the error, each as a string
+func (w *window) view() (state, err string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	h, _ := json.Marshal(w.holders)
-	if w.holders == nil {
-		h = []byte("[]")
-	}
-	return w.state, w.err, string(h)
+	return w.state, w.err
 }
 
 // watch follows the broker's watch stream, calling changed on every event, and stopped when it ends
