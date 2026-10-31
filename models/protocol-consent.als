@@ -5,7 +5,7 @@
  * check of protocol.als was dropped to see the claim fail, and that it
  * did (2026-10-31).
  */
-open protocol
+open protocol_system
 
 // HIDE: Id Cap UserNS OwnedNS MountNS NetNS IpcNS UtsNS CgroupNS PidNS Pid Process File MountFlag Mount PeerCheck Socket Domain
 

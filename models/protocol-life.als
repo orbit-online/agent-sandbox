@@ -4,7 +4,7 @@
  * protocol-consent.als, each claim has a `run` for its premise, and
  * "Revert:" names the check dropped to see it fail (tried 2026-10-31).
  */
-open protocol
+open protocol_system
 
 // HIDE: Id Cap UserNS OwnedNS MountNS NetNS IpcNS UtsNS CgroupNS PidNS Pid Process File MountFlag Mount PeerCheck Socket Domain
 
