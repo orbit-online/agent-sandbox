@@ -252,6 +252,8 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan request, 1)}
 	b.mu.Lock()
+	b.pendingSeq++
+	p.seq = b.pendingSeq
 	b.pending[p.ID] = p
 	b.mu.Unlock()
 	b.event("pending", p.ID)

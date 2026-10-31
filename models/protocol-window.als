@@ -1,14 +1,14 @@
 /*
  * The Permissions window's view of pending requests while the user
  * answers one (P1, P6 on the window's side). The window refreshes its
- * state on every event of the broker's watch stream (window.go:139-152,
- * main.go:60-78), and the QML rebuilds the pending list from it
- * (Permissions.qml:79-153): each delegate starts again from the request's
- * own parameters (`edited`) and proposed lease (the ComboBox's
- * onCompleted), and the list comes in Go map order (state, broker.go:394).
- * The sandbox triggers events at will: a request for another capability
- * (`pending`), a release (`ended`), a request an always grant covers
- * (`granted`).
+ * state on every event of the broker's watch stream (window.go,
+ * main.go), which the sandbox triggers at will: a request for another
+ * capability (`pending`), a release (`ended`), a request an always grant
+ * covers (`granted`). The broker sends the pending requests in arrival
+ * order (sockets.go), so a row keeps its place while others come after
+ * it, and the QML keeps what the user set on each row by request id
+ * (Permissions.qml, `edits`), so a rebuilt row starts from that, not
+ * from the request.
  */
 module protocolwindow
 
@@ -62,12 +62,14 @@ pred look[r: Req] {
   chose' = chose and keepView and noSend
 }
 
-// A watch event: state again, the list rebuilt in another order, every
-// row from its request.
+// A watch event: state again. Rows already shown keep their place and
+// what the user set; new requests come in free rows, from their own
+// parameters and lease.
 pred refresh {
   Win.at' in Req lone -> Slot
-  shown in Win.at'.Slot
-  all r: Win.at'.Slot | r.(Win.edited') = r.params and r.(Win.leaseSel') = r.proposed
+  all r: shown | r.(Win.at') = r.(Win.at)
+  all r: shown | r.(Win.edited') = r.(Win.edited) and r.(Win.leaseSel') = r.(Win.leaseSel)
+  all r: Win.at'.Slot - shown | r.(Win.edited') = r.params and r.(Win.leaseSel') = r.proposed
   keepUser and noSend
 }
 
@@ -90,28 +92,27 @@ fact traces {
   always (skip or refresh or click or (some r: Req | look[r]) or (some r: Req, p: Param, ls: Lease | edit[r, p, ls]))
 }
 
-// The window's Allow answers the request the user aimed at. Known, a
-// finding: a watch event between aiming and clicking reorders the list
-// (map order), so the click lands on another request's Allow. There is no
-// 1 s guard in the window as there is for the notification.
-// With refresh dropped from the traces, the claim holds.
+// The window's Allow answers the request the user aimed at. Holds with
+// the rows in arrival order. Revert: refresh placing shown rows anywhere
+// (map order, as before the fix): a watch event between aiming and
+// clicking moves another request's Allow under the pointer
+// (counterexample found).
 assert windowAnswersMeant {
   always (click implies after Win.sent = Win.meant)
 }
-check windowAnswersMeant for 3 but 1..5 steps expect 1
+check windowAnswersMeant for 3 but 1..5 steps expect 0
 
 // The window's Allow carries the parameters and lease the user set.
-// Known, a finding: a watch event after the user narrowed a request
-// (read-only instead of read-write, a shorter lease) rebuilds its row from
-// the request, and Allow sends what the sandbox asked for. The sandbox
-// times the event itself.
-// With refresh dropped from the traces, the claim holds.
+// Holds with the edits kept by request id. Revert: refresh rebuilding
+// shown rows from their requests (as before the fix): a watch event the
+// sandbox times after the user narrowed a request makes Allow send what
+// the sandbox asked for (counterexample found).
 assert windowSendsChosen {
   always all r: Req, p: Param, ls: Lease |
     (click and Win.meant = r and r -> p -> ls in Win.chose and after Win.sent = r)
       implies after (Win.sentParams = p and Win.sentLease = ls)
 }
-check windowSendsChosen for 3 but 1..6 steps expect 1
+check windowSendsChosen for 3 but 1..6 steps expect 0
 
 // Both hold when nothing refreshes the window between look and click,
 // which is what the counterexamples above need: the premise is reachable.

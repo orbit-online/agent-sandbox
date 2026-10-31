@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -163,6 +165,8 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 		for _, p := range b.pending {
 			res.Pending = append(res.Pending, p)
 		}
+		// In arrival order, not map order: a refresh mustn't move the row under the user's pointer
+		slices.SortFunc(res.Pending, func(x, y *pending) int { return cmp.Compare(x.seq, y.seq) })
 		res.Always = append([]alwaysGrant(nil), b.store.Always...)
 		res.Log = append([]logEntry(nil), b.store.Log...)
 		b.mu.Unlock()

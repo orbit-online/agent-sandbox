@@ -197,7 +197,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox or, from a re-entry (`--shell`), at a host session above nsenter, make one always grant start several units or
   mount an always folder twice (replays, a second `share`), get a credential after
   its lease ran out or for a grant revoked while its request waited for a
-  plugin slot; plus a window answer while the notification is up, unit
+  plugin slot; plus a window answer while the notification is up, pending requests
+  in arrival order, unit
   names per launcher, and a broken store set aside. Type C against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, a folder mounted
@@ -230,7 +231,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   main thread: loading without QML warnings, the state arriving, a click
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
-  fields, deny, revoke then end (the holders of ended grants from the state),
+  fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state),
   forget, a repeated action still a change.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.

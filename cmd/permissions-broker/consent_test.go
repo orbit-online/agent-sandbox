@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +230,25 @@ func TestListChangedWhileAsking(t *testing.T) {
 	}
 	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
 		t.Errorf("Granted an instance list no longer prints: %+v", g)
+	}
+}
+
+// The window gets pending requests in the order they came, every time
+func TestPendingOrder(t *testing.T) {
+	b, _ := testBroker(t)
+	var want []string
+	for i := range 8 {
+		id := fmt.Sprintf("p%d", i)
+		b.pending[id] = &pending{ID: id, seq: uint64(i + 1)}
+		want = append(want, id)
+	}
+	for range 20 {
+		var got []string
+		for _, p := range b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}).Pending {
+			got = append(got, p.ID)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("Pending in the order %v", got)
+		}
 	}
 }

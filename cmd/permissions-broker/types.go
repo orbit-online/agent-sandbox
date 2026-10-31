@@ -111,6 +111,8 @@ type pending struct {
 	Options    bool            `json:"options"`
 
 	answer chan request
+	// Its place in the window's list, by arrival: rows don't move as others come and go
+	seq uint64
 }
 
 type alwaysGrant struct {
@@ -152,13 +154,14 @@ type broker struct {
 	sb   *sandbox
 	ask  asker
 
-	mu      sync.Mutex
-	saving  sync.Mutex
-	grants  map[string]*grant
-	pending map[string]*pending
-	gates   map[string]*gate
-	store   storeData
-	shared  bool
+	mu         sync.Mutex
+	saving     sync.Mutex
+	grants     map[string]*grant
+	pending    map[string]*pending
+	gates      map[string]*gate
+	store      storeData
+	shared     bool
+	pendingSeq uint64
 	// share was asked for, or an earlier daemon's found: it's done once per sandbox
 	shareAsked bool
 	lockOK     bool

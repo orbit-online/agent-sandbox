@@ -48,6 +48,29 @@ TestCase {
         compare(c.params, { path: "/srv/notes", ro: false })
     }
 
+    // A refresh, which the sandbox can cause at will, rebuilds the list: the narrowing and lease the user set stay
+    function test_edit_survives_refresh() {
+        const ro = findChild(view, "param-ro")
+        if (!ro.checked)
+            mouseClick(ro)
+        mouseClick(ro)
+        const lease = findChild(view, "lease")
+        lease.currentIndex = 0
+        lease.activated(0)
+        // Another request arrives: it comes after this one, as the broker sorts them
+        const st = JSON.parse(mock.state)
+        const before = JSON.stringify(st)
+        st.pending.push({ id: "p2", capability: "test/thing", params: {}, summary: "the test thing", reason: "more",
+                          lease: "PT1H" })
+        mock.state = JSON.stringify(st)
+        tryVerify(() => findChild(view, "param-ro") !== ro, 1000, "the list wasn't rebuilt")
+        mouseClick(findChild(view, "allow"))
+        const c = sent()
+        compare(c.params, { path: "/srv/notes", ro: false })
+        compare(c.lease, "session")
+        mock.state = before
+    }
+
     function test_deny() {
         mouseClick(findChild(view, "deny"))
         compare(sent().op, "answer")

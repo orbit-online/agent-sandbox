@@ -35,6 +35,15 @@ Item {
         { value: "always", text: "Always" }
     ]
 
+    // What the user set on each pending request, by its id: the list is rebuilt on every broker event, which the
+    // sandbox can cause at will, and a row must keep the user's narrowing and lease through it
+    property var edits: ({})
+    function editsOf(req) {
+        if (!edits[req.id])
+            edits[req.id] = { params: Object.assign({}, req.params), lease: req.lease }
+        return edits[req.id]
+    }
+
     // A counter in each command, so the same action twice is still a change of broker.command
     property int sent: 0
     function send(cmd) {
@@ -81,8 +90,8 @@ Item {
                 delegate: Frame {
                     id: request
                     required property var modelData
-                    // The request's parameters, as the fields below narrow them
-                    property var edited: Object.assign({}, modelData.params)
+                    // The request's parameters, as the fields below narrow them, kept across refreshes
+                    readonly property var edited: root.editsOf(modelData).params
                     readonly property var paramTypes: root.types[modelData.capability] || {}
                     Layout.fillWidth: true
                     Layout.leftMargin: 12
@@ -132,10 +141,12 @@ Item {
                         RowLayout {
                             ComboBox {
                                 id: lease
+                                objectName: "lease"
                                 textRole: "text"
                                 valueRole: "value"
                                 model: root.leases
-                                Component.onCompleted: currentIndex = Math.max(0, indexOfValue(request.modelData.lease))
+                                Component.onCompleted: currentIndex = Math.max(0, indexOfValue(root.editsOf(request.modelData).lease))
+                                onActivated: root.editsOf(request.modelData).lease = currentValue
                             }
                             Item { Layout.fillWidth: true }
                             Button {

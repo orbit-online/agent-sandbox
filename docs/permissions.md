@@ -86,7 +86,9 @@ host (user, no capabilities)                       sandbox
   of `request.sock`.
 - The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
   action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
-  rest. It is a client only: all state lives in the daemon.
+  rest. It is a client only: all state lives in the daemon. It refreshes on every watch event, which the sandbox can
+  cause at will, so pending requests come in the order they arrived (a row doesn't move under the pointer) and what
+  the user set on a row (narrowed parameters, a lease) is kept by request id through the refresh.
 
 ### Handle on the sandbox, and restarts
 
