@@ -45,7 +45,7 @@ to 10 s for <socket> (/run/permissions/request.sock by default) to appear.
 
 make-shared, clone-tree, move-tree and detach are the daemon's
 helpers for type C grants, run through nsenter in the sandbox's namespaces (see
-mounts.go).
+tree.go).
 `
 
 // Set to store paths at build time

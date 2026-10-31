@@ -44,8 +44,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
-  `mounts.go` holds type C: the source ceiling, and the helpers it runs
-  through `nsenter` to clone a host path and mount it in the sandbox.
+  One concern per file: `sockets.go` (listening, peer checks, the request and
+  control handlers), `consent.go`, `leases.go` (and logind), `store.go`
+  (always grants, replay, the log), `notify.go`, `views.go`, `types.go` and
+  `run.go`; `plugins.go` and `plugintools.go` for plugins and their MCP tools,
+  `mcp.go` the MCP server, `sandbox.go` finding the sandbox and sessions.
+  Type C: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
+  (the helpers it runs through `nsenter` to clone a host path and mount it in
+  the sandbox), `mountinfo.go` (mount tables, holders) and `typec.go`
+  (mounting, unmounting, cleanup). Each `*_test.go` follows its file;
+  `main_test.go` has `TestMain` and the shared fakes.
 - `nix/packages/permissions-folders/`: the broker's built-in type C plugin,
   a manifest and two jq scripts. `permissions.folders` lists what it may
   grant.
@@ -95,6 +103,8 @@ twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 - Anything that widens the sandbox (binds, D-Bus rules, sockets, env,
   devices) needs the user's go.
 - Claude doesn't push. Commit locally; a human reviews and pushes.
+- A Go file stays under about 400 lines, tests included, and holds one
+  concern: longer files can't be audited.
 - Commit subjects: `<area>: <Capitalised summary>`
   (`claude-desktop: Add opt-in /dev/kvm bind`).
 
@@ -147,7 +157,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
   client's own and another uid.
-- `permissions-broker`: the package build runs its Go tests (`main_test.go`):
+- `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), a request or window answer naming no instance
   a capability's `list` prints refused without asking (and with a failing
