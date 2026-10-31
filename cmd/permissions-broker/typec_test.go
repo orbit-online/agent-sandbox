@@ -73,8 +73,8 @@ func sandboxC(t *testing.T, answers ...string) (*broker, io.WriteCloser, *bufio.
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.sb = &sandbox{pid: cmd.Process.Pid, pidfd: fd}
-	if err := b.shareFrom(cmd.Process.Pid); err != nil {
+	b.sb = pinned(t, cmd.Process.Pid, fd)
+	if err := b.shareFrom(peerAt(t, cmd.Process.Pid)); err != nil {
 		t.Fatal(err)
 	}
 	return b, stdin, out
@@ -89,7 +89,7 @@ func TestFolder(t *testing.T) {
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
 
-	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestFolderLinkOut(t *testing.T) {
 	b, _, _ := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`/out"}`, "PT1H")); err == nil {
+	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`/out"}`, "PT1H")); err == nil {
 		t.Errorf("Followed a link out of the ceiling: %+v", g)
 	}
 	if entries, _ := os.ReadDir(b.cfg.GrantDir); len(entries) != 0 {
@@ -165,10 +165,10 @@ func TestFolderOutsideCeiling(t *testing.T) {
 	b.shared = true
 	c := folders(t, `{"path": "/srv/notes"}`)
 	b.caps[c.id()] = c
-	if _, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/etc"}`, "PT1H")); err == nil || f.count() != 0 {
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/etc"}`, "PT1H")); err == nil || f.count() != 0 {
 		t.Errorf("Outside the ceiling: %v, asked %d times", err, f.count())
 	}
-	if _, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/srv/notes", "ro": false}`, "PT1H")); err == nil || f.count() != 0 {
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/srv/notes", "ro": false}`, "PT1H")); err == nil || f.count() != 0 {
 		t.Errorf("Read-write where the ceiling says read-only: %v, asked %d times", err, f.count())
 	}
 }
@@ -179,7 +179,7 @@ func TestSessionsShare(t *testing.T) {
 	c := testCap(t, "B")
 	b.caps[c.id()] = c
 	anchor1, child1 := startAnchor(t, "claude")
-	g, _, err := b.request(child1, req(c.id(), `{}`, "session"))
+	g, _, err := b.request(peerAt(t, child1), req(c.id(), `{}`, "session"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestCleanup(t *testing.T) {
 	b.cfg.Launcher = "work"
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}

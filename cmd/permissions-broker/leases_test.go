@@ -27,7 +27,7 @@ func TestDurationLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "B")
 	b.caps[c.id()] = c
-	g, _, err := b.request(os.Getpid(), req(c.id(), `{}`, "PT1S"))
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1S"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +42,11 @@ func TestLockLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "B")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(os.Getpid(), req(c.id(), `{}`, "lock")); err == nil {
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
 		t.Error("Lock lease granted without the screen lock watched")
 	}
 	b.lockOK = true
-	g, _, err := b.request(os.Getpid(), req(c.id(), `{}`, "lock"))
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSession(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "B")
 	b.caps[c.id()] = c
-	g, _, err := b.request(child, req(c.id(), `{}`, "session"))
+	g, _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestSessionNeedsClaude(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "B")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(child, req(c.id(), `{}`, "session")); err == nil {
+	if _, _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session")); err == nil {
 		t.Error("Session lease granted without a session")
 	}
 }
@@ -120,12 +120,12 @@ func TestRanOut(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "B")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(os.Getpid(), req(c.id(), `{}`, "PT1H")); err != nil {
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
 	// The lease is over, its timer not yet fired: no credential without a validity
 	b.skew.Store(int64(2 * time.Hour))
-	if _, cred, err := b.request(os.Getpid(), req(c.id(), `{}`, "PT1H")); err == nil {
+	if _, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
 		t.Errorf("Issued %q after the lease ran out", cred)
 	}
 }

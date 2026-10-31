@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,42 +15,57 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// mountsBelow lists the mount points strictly below dir in a mountinfo file, deepest first
-func mountsBelow(mountinfo, dir string) ([]string, error) {
-	ids, err := mountIDs(mountinfo, func(p string) bool { return strings.HasPrefix(p, dir+"/") })
-	if err != nil {
-		return nil, err
-	}
-	var points []string
-	for _, p := range ids {
-		points = append(points, p)
-	}
-	sort.Slice(points, func(i, j int) bool { return len(points[i]) > len(points[j]) })
-	return points, nil
+// A line of a mountinfo file: the mount's id, device (major:minor), root, mount point and optional fields
+type mountLine struct {
+	id               uint64
+	dev, root, point string
+	optional         []string
 }
 
-// mountIDs maps the ids of the mounts in a mountinfo file whose mount point matches to the mount point
-func mountIDs(mountinfo string, match func(string) bool) (map[int]string, error) {
-	f, err := os.Open(mountinfo)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	ids := map[int]string{}
-	sc := bufio.NewScanner(f)
+// parseMountinfo reads a mountinfo file's lines
+func parseMountinfo(r io.Reader) ([]mountLine, error) {
+	var lines []mountLine
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 5 {
+		f := strings.Fields(sc.Text())
+		if len(f) < 7 {
 			continue
 		}
-		point := unescapeMountinfo(fields[4])
-		if match(point) {
-			id, _ := strconv.Atoi(fields[0])
-			ids[id] = point
+		id, _ := strconv.ParseUint(f[0], 10, 64)
+		l := mountLine{id: id, dev: f[2], root: unescapeMountinfo(f[3]), point: unescapeMountinfo(f[4])}
+		for _, opt := range f[6:] {
+			if opt == "-" {
+				break
+			}
+			l.optional = append(l.optional, opt)
+		}
+		lines = append(lines, l)
+	}
+	return lines, sc.Err()
+}
+
+// readMountinfo parses a mountinfo file by path, nil when it can't be read
+func readMountinfo(path string) []mountLine {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	lines, _ := parseMountinfo(f)
+	return lines
+}
+
+// mountsBelow lists the mount points strictly below dir, deepest first
+func mountsBelow(lines []mountLine, dir string) []string {
+	var points []string
+	for _, l := range lines {
+		if strings.HasPrefix(l.point, dir+"/") && !slices.Contains(points, l.point) {
+			points = append(points, l.point)
 		}
 	}
-	return ids, sc.Err()
+	sort.Slice(points, func(i, j int) bool { return len(points[i]) > len(points[j]) })
+	return points
 }
 
 // mountinfo escapes space, tab, newline and backslash as \ooo
@@ -91,12 +108,11 @@ func (s *sandbox) grantMounts(mountpoint string) map[uint64]map[uint64]bool {
 		if _, seen := byNs[ns]; seen {
 			continue
 		}
-		ids, _ := mountIDs(fmt.Sprintf("/proc/%d/mountinfo", pid), func(p string) bool {
-			return p == mountpoint || strings.HasPrefix(p, mountpoint+"/")
-		})
 		set := map[uint64]bool{}
-		for id := range ids {
-			set[uint64(id)] = true
+		for _, l := range readMountinfo(fmt.Sprintf("/proc/%d/mountinfo", pid)) {
+			if l.point == mountpoint || strings.HasPrefix(l.point, mountpoint+"/") {
+				set[l.id] = true
+			}
 		}
 		byNs[ns] = set
 	}
@@ -122,7 +138,7 @@ func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string)
 		held := holdsMount(pid, ids[ns])
 		if !held && dev != "" {
 			if _, checked := rebinds[ns]; !checked {
-				rebinds[ns] = mountsOf(fmt.Sprintf("/proc/%d/mountinfo", pid), dev, root)
+				rebinds[ns] = mountsOf(readMountinfo(fmt.Sprintf("/proc/%d/mountinfo", pid)), dev, root)
 			}
 			held = rebinds[ns]
 		}
@@ -165,42 +181,21 @@ func holdsMount(pid int, ids map[uint64]bool) bool {
 	return false
 }
 
-// mountsOf reports whether a mountinfo file has a mount of the filesystem dev (major:minor) whose root is root or
-// beneath it
-func mountsOf(mountinfo, dev, root string) bool {
-	f, err := os.Open(mountinfo)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 5 || fields[2] != dev {
-			continue
-		}
-		r := unescapeMountinfo(fields[3])
-		if r == root || strings.HasPrefix(r, strings.TrimSuffix(root, "/")+"/") {
+// mountsOf reports whether there is a mount of the filesystem dev (major:minor) whose root is root or beneath it
+func mountsOf(lines []mountLine, dev, root string) bool {
+	for _, l := range lines {
+		if l.dev == dev && (l.root == root || strings.HasPrefix(l.root, strings.TrimSuffix(root, "/")+"/")) {
 			return true
 		}
 	}
 	return false
 }
 
-// mountOf finds the device and root of the mount at mountpoint in a mountinfo file
-func mountOf(mountinfo, mountpoint string) (dev, root string) {
-	f, err := os.Open(mountinfo)
-	if err != nil {
-		return "", ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) >= 5 && unescapeMountinfo(fields[4]) == mountpoint {
-			dev, root = fields[2], unescapeMountinfo(fields[3])
+// mountOf finds the device and root of the mount at mountpoint, the last one there
+func mountOf(lines []mountLine, mountpoint string) (dev, root string) {
+	for _, l := range lines {
+		if l.point == mountpoint {
+			dev, root = l.dev, l.root
 		}
 	}
 	return dev, root
@@ -245,25 +240,13 @@ func (s *sandbox) isDescendant(pid int) bool {
 // isShared reports whether dir is a shared mount in the sandbox's mount namespace: a daemon started again finds the
 // grant directory shared by the one before
 func (s *sandbox) isShared(dir string) bool {
-	f, err := os.Open(fmt.Sprintf("/proc/%d/mountinfo", s.pid))
+	lines, err := s.mountinfo()
 	if err != nil {
 		return false
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 7 || unescapeMountinfo(fields[4]) != dir {
-			continue
-		}
-		for _, opt := range fields[6:] {
-			if opt == "-" {
-				break
-			}
-			if strings.HasPrefix(opt, "shared:") {
-				return true
-			}
+	for _, l := range lines {
+		if l.point == dir && slices.ContainsFunc(l.optional, func(o string) bool { return strings.HasPrefix(o, "shared:") }) {
+			return true
 		}
 	}
 	return false

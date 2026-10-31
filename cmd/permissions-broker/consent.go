@@ -14,7 +14,7 @@ import (
 )
 
 // request asks the user for a grant, or finds one already there that covers it, and delivers it
-func (b *broker) request(pid int, req request) (*grant, string, error) {
+func (b *broker) request(p peer, req request) (*grant, string, error) {
 	c, ok := b.caps[req.Capability]
 	if !ok {
 		return nil, "", fmt.Errorf("No capability %q: see list", req.Capability)
@@ -39,7 +39,7 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 				"failed when it started: restart the app")
 		}
 	}
-	sess, err := sessionOf(pid, b.sb.pid)
+	sess, err := sessionOf(p.pid, b.sb.pid)
 	if err != nil {
 		return nil, "", err
 	}
@@ -49,6 +49,10 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 			unix.Close(sess.pidfd)
 		}
 	}()
+	// The session was read by pid: it's the caller's only if the caller still runs
+	if p.gone() {
+		return nil, "", errors.New("The caller is gone")
+	}
 	lease := req.Lease
 	if lease == "" {
 		lease = "session"

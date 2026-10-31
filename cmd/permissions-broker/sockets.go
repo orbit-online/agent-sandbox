@@ -27,7 +27,7 @@ func listen(path string) (*net.UnixListener, error) {
 
 // serveOn serves a socket until it's closed. Each socket has its own connection budget, so the sandbox filling
 // request.sock leaves control.sock to the window; accept errors (out of fds) are waited out, not fatal
-func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, int, request) response) {
+func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, peer, request) response) {
 	slots := make(chan struct{}, maxConns)
 	backoff := 10 * time.Millisecond
 	for {
@@ -51,11 +51,11 @@ func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, int, r
 		go func() {
 			defer func() { <-slots }()
 			defer conn.Close()
-			pid, pidfd, err := peer(conn)
+			p, err := peerOf(conn)
 			if err != nil {
 				return
 			}
-			defer unix.Close(pidfd)
+			defer unix.Close(p.pidfd)
 			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 			var req request
 			if err := json.NewDecoder(io.LimitReader(conn, maxRequest)).Decode(&req); err != nil {
@@ -63,46 +63,50 @@ func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, int, r
 				return
 			}
 			_ = conn.SetReadDeadline(time.Time{})
-			// The checks below read the peer's /proc entries by pid: refuse a peer gone by now, whose pid could be
-			// another process's
-			if !proc.Alive(pidfd) {
+			// A peer gone by now gets nothing. The checks below read its /proc entries by pid and check again after
+			// each read, since the pid could be another process's by then
+			if p.gone() {
 				return
 			}
 			if req.Op == "watch" {
 				b.streamEvents(conn)
 				return
 			}
-			_ = json.NewEncoder(conn).Encode(handle(conn, pid, req))
+			_ = json.NewEncoder(conn).Encode(handle(conn, p, req))
 		}()
 	}
 }
 
-// peer returns the peer's pid in our pid namespace and a pidfd for it (SO_PEERPIDFD), which tells whether the pid
-// still names that process
-func peer(conn *net.UnixConn) (int, int, error) {
+// A client: its pid in our pid namespace and a pidfd for it (SO_PEERPIDFD), which tells whether the pid still names
+// that process. What is read from /proc/<pid> counts only if the process is still alive after the read
+type peer struct{ pid, pidfd int }
+
+func (p peer) gone() bool { return !proc.Alive(p.pidfd) }
+
+func peerOf(conn *net.UnixConn) (peer, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return 0, -1, err
+		return peer{}, err
 	}
 	pidfd := -1
 	var sockErr error
 	if err := raw.Control(func(fd uintptr) {
 		pidfd, sockErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PEERPIDFD)
 	}); err != nil {
-		return 0, -1, err
+		return peer{}, err
 	}
 	if sockErr != nil {
-		return 0, -1, sockErr
+		return peer{}, sockErr
 	}
 	pid, err := proc.PidOf(pidfd)
 	if err != nil {
 		unix.Close(pidfd)
-		return 0, -1, err
+		return peer{}, err
 	}
-	return pid, pidfd, nil
+	return peer{pid: pid, pidfd: pidfd}, nil
 }
 
-func (b *broker) handleRequest(_ *net.UnixConn, pid int, req request) response {
+func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 	var res response
 	var err error
 	switch req.Op {
@@ -111,20 +115,23 @@ func (b *broker) handleRequest(_ *net.UnixConn, pid int, req request) response {
 		res.Grants = b.grantViews("")
 	case "request":
 		var g *grant
-		g, res.Credential, err = b.request(pid, req)
+		g, res.Credential, err = b.request(p, req)
 		res.Grant = b.view(g)
 	case "release":
 		err = b.release(req.Grant, "released from inside")
 	case "status":
-		sess, _ := sessionOf(pid, b.sb.pid)
+		sess, _ := sessionOf(p.pid, b.sb.pid)
 		id := ""
 		if sess != nil {
 			id = sess.id
 			unix.Close(sess.pidfd)
 		}
+		if p.gone() {
+			return response{Error: "Gone"}
+		}
 		res.Grants = b.grantViews(id)
 	case "share":
-		err = b.shareFrom(pid)
+		err = b.shareFrom(p)
 	default:
 		err = fmt.Errorf("Unknown operation %q", req.Op)
 	}
@@ -136,8 +143,8 @@ func (b *broker) handleRequest(_ *net.UnixConn, pid int, req request) response {
 
 // handleControl serves the Permissions window and the launcher, which run on the host: a peer in another user
 // namespace (anything in the sandbox, whatever path it reaches the socket by) gets nothing
-func (b *broker) handleControl(_ *net.UnixConn, pid int, req request) response {
-	if !sameNs(pid, "user") {
+func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
+	if !sameNs(p.pid, "user") || p.gone() {
 		return response{Error: "Only from the host"}
 	}
 	var res response
@@ -174,8 +181,8 @@ func (b *broker) handleControl(_ *net.UnixConn, pid int, req request) response {
 
 // shareFrom makes the sandbox's grant directory shared in M1, asked by the FHS env's launcher script in M1 before the
 // FHS env's bwrap copies it
-func (b *broker) shareFrom(pid int) error {
-	if !sameNsAs(pid, b.sb.pid, "mnt") {
+func (b *broker) shareFrom(p peer) error {
+	if b.sb.mnt == nil || !sameFile(b.sb.mnt, fmt.Sprintf("/proc/%d/ns/mnt", p.pid)) || p.gone() {
 		return errors.New("Only from the sandbox's outer mount namespace")
 	}
 	if err := b.sb.share(b.cfg.SandboxGrantDir); err != nil {

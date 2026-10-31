@@ -75,7 +75,7 @@ func TestAttackRootSwap(t *testing.T) {
 	if err := os.Symlink(secret, root); err != nil {
 		t.Fatal(err)
 	}
-	if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+root+`"}`, "PT1H")); err == nil {
+	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+root+`"}`, "PT1H")); err == nil {
 		t.Errorf("Mounted %s through a link in place of the ceiling root", g.Source)
 	}
 }
@@ -96,7 +96,7 @@ func TestAttackDeniedLink(t *testing.T) {
 	b.cfg.Denied = []string{state}
 	c := folders(t, `{"path": "`+root+`", "rw": true}`)
 	b.caps[c.id()] = c
-	if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+root+`/ws/x", "ro": false}`, "PT1H")); err == nil {
+	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+root+`/ws/x", "ro": false}`, "PT1H")); err == nil {
 		t.Errorf("Mounted %s, a denied directory, through a link", g.Source)
 	}
 }
@@ -117,7 +117,7 @@ func TestDeniedByIdentity(t *testing.T) {
 	c := folders(t, `{"path": "`+root+`"}`)
 	b.caps[c.id()] = c
 	for _, p := range []string{state + "/inner", root} {
-		if g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "`+p+`"}`, "PT1H")); err == nil {
+		if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+p+`"}`, "PT1H")); err == nil {
 			t.Errorf("Mounted %s, which is or holds a denied directory", g.Source)
 		}
 	}

@@ -92,9 +92,14 @@ host (user, no capabilities)                       sandbox
 
 The daemon finds the sandbox the way `claude-desktop.sh`'s `sandbox_pid` does: nixpak's `bwrapinfo.json` for the
 launcher's app ID gives the outer bwrap's `child-pid`, valid once its mount namespace differs from the host's. The
-daemon takes a pidfd for it, checks the file still names that pid, and from then on uses the pidfd: M1 and its owner
-userns come from it, and the pidfd turning readable means the sandbox ended, upon which the daemon stops its plugin
-units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
+daemon takes a pidfd for it and accepts it only while the pid is in the mount and pid namespaces `bwrapinfo.json`
+reports, its parent is a process in the daemon's user namespace, and its user namespace, which owns its mount
+namespace, is a child of the daemon's: a stale instance directory's pid, held by now by a process in another sandbox
+or a nested namespace, doesn't pass. It then pins the sandbox's user, mount and uts namespaces as open files, and every
+helper joins those. Code running as bwrap's init could move the pid into namespaces of its own (`unshare -Um`); the
+daemon refuses to act once the pid shows other namespaces than the pinned ones, and reads M1's mount table only while
+the pid is checked to be in it. The pidfd turning readable means the sandbox ended, upon which the daemon stops its
+plugin units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
 
 Started again after a crash, it finds the same sandbox the same way and reconciles before serving: it detaches
 everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and replays only

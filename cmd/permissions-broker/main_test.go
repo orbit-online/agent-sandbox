@@ -271,3 +271,25 @@ func ownNs(t *testing.T, mountAt string) *exec.Cmd {
 	}
 	return cmd
 }
+
+// peerAt is a client at pid, as serveOn finds it: with a pidfd
+func peerAt(t *testing.T, pid int) peer {
+	t.Helper()
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { unix.Close(fd) })
+	return peer{pid: pid, pidfd: fd}
+}
+
+// pinned is the sandbox at pid, its namespaces pinned as findSandbox does
+func pinned(t *testing.T, pid, pidfd int) *sandbox {
+	t.Helper()
+	sb, err := pinSandbox(pid, pidfd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sb.close)
+	return sb
+}

@@ -177,7 +177,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   at another name), type A's systemd units (faked), exclusive instances across
   launchers, `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace), `control.sock` refusing a peer in
-  another user namespace, the sockets end to end with `watch` events, and what
+  another user namespace, a peer gone after its `/proc` entries were read
+  refused by `control.sock`, `share` and `request` (S13), the sandbox's
+  namespaces pinned (helpers refused once its pid moves to namespaces of its
+  own) and not found from a stale instance directory or in a user namespace
+  that isn't a child of ours, the sockets end to end with `watch` events, and what
   the sandbox can't do to it: hold every connection (control.sock still
   answers, idle clients time out), send an oversized request, dress up a
   parameter or reason in the notification, anchor a session at or above the

@@ -14,12 +14,9 @@ import (
 
 // attach clones root/rel and mounts it at mountpoint in the sandbox's mount namespace. Returns the source as resolved
 func (s *sandbox) attach(root, rel string, ro bool, denied []string, mountpoint string) (string, error) {
-	mnt, owner, err := s.namespaces()
-	if err != nil {
+	if err := s.check(); err != nil {
 		return "", err
 	}
-	defer mnt.Close()
-	defer owner.Close()
 	self, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("Find own executable: %w", err)
@@ -36,14 +33,9 @@ func (s *sandbox) attach(root, rel string, ro bool, denied []string, mountpoint 
 	}
 	// The sandbox's uts namespace too, though the helper has no use for it: with --user alone, nsenter (util-linux
 	// 2.42.3) enters the user namespace in its first pass, which then leaves --keep-caps without effect
-	uts, err := os.Open(fmt.Sprintf("/proc/%d/ns/uts", s.pid))
-	if err != nil {
-		return "", fmt.Errorf("Open the sandbox's uts namespace: %w", err)
-	}
-	defer uts.Close()
 	clone := exec.Command(nsenter, append([]string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5",
 		"--preserve-credentials", "--keep-caps", "--", self, "clone-tree", root, rel, mode}, denied...)...)
-	clone.ExtraFiles = []*os.File{owner, theirs, uts}
+	clone.ExtraFiles = []*os.File{s.userns, theirs, s.uts}
 	out, err := clone.CombinedOutput()
 	theirs.Close()
 	if err != nil {
@@ -56,7 +48,7 @@ func (s *sandbox) attach(root, rel string, ro bool, denied []string, mountpoint 
 	defer tree.Close()
 	move := exec.Command(nsenter, "--user=/proc/self/fd/3", "--mount=/proc/self/fd/4", "--preserve-credentials",
 		"--keep-caps", "--", self, "move-tree", mountpoint)
-	move.ExtraFiles = []*os.File{owner, mnt, tree}
+	move.ExtraFiles = []*os.File{s.userns, s.mnt, tree}
 	if out, err := move.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("Mount %s: %s", mountpoint, strings.TrimSpace(string(out)))
 	}
@@ -69,19 +61,16 @@ func (s *sandbox) detach(points ...string) error {
 	if len(points) == 0 {
 		return nil
 	}
-	mnt, owner, err := s.namespaces()
-	if err != nil {
+	if err := s.check(); err != nil {
 		return err
 	}
-	defer mnt.Close()
-	defer owner.Close()
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("Find own executable: %w", err)
 	}
 	cmd := exec.Command(nsenter, append([]string{"--user=/proc/self/fd/3", "--mount=/proc/self/fd/4",
 		"--preserve-credentials", "--keep-caps", "--", self, "detach"}, points...)...)
-	cmd.ExtraFiles = []*os.File{owner, mnt}
+	cmd.ExtraFiles = []*os.File{s.userns, s.mnt}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("Unmount %s: %s", strings.Join(points, ", "), strings.TrimSpace(string(out)))
 	}
@@ -91,29 +80,11 @@ func (s *sandbox) detach(points ...string) error {
 // detachBelow unmounts every mount below dir in the sandbox's mount namespace, deepest first: what an earlier
 // daemon left
 func (s *sandbox) detachBelow(dir string) error {
-	points, err := mountsBelow(fmt.Sprintf("/proc/%d/mountinfo", s.pid), dir)
+	lines, err := s.mountinfo()
 	if err != nil {
 		return err
 	}
-	return s.detach(points...)
-}
-
-// namespaces opens the sandbox's mount namespace and the user namespace that owns it
-func (s *sandbox) namespaces() (*os.File, *os.File, error) {
-	mnt, err := os.Open(fmt.Sprintf("/proc/%d/ns/mnt", s.pid))
-	if err != nil {
-		return nil, nil, fmt.Errorf("Open the sandbox's mount namespace: %w", err)
-	}
-	if !s.alive() {
-		mnt.Close()
-		return nil, nil, errors.New("The sandbox ended")
-	}
-	ownerFd, err := unix.IoctlRetInt(int(mnt.Fd()), unix.NS_GET_USERNS)
-	if err != nil {
-		mnt.Close()
-		return nil, nil, fmt.Errorf("Find the owner of the sandbox's mount namespace: %w", err)
-	}
-	return mnt, os.NewFile(uintptr(ownerFd), "userns"), nil
+	return s.detach(mountsBelow(lines, dir)...)
 }
 
 func recvTree(sock int) (*os.File, string, error) {

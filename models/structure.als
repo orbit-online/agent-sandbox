@@ -354,16 +354,18 @@ assert S12anyHelperFromClosure {
 }
 check S12anyHelperFromClosure for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 1
 
-// S12 under the README's attacker, which counts bwrap's init in: once
-// the sandbox's pid sits in a user and mount namespace of the
-// attacker's (unshare -Um as that process), the broker's helpers join
-// those (sandbox.go:106-118, mounts.go:188-202) and exec `self` where
-// the attacker has mounted its own binary over the closure's. That runs
-// as a child of the daemon in the host's pid namespace, as the user:
-// kill(-1, SIGKILL) ends every process of the user's session, and it
-// gets the tree fd of the grant being attached. Needs code execution as
-// bwrap's init (see sbPinned). Known.
+// S12 under the README's attacker, which counts bwrap's init in: it may
+// move the sandbox's pid into a user and mount namespace of its own
+// (unshare -Um as that process, `reach` without sbPinned). The daemon
+// pins U1 and M1 when it finds the sandbox (pinSandbox, sandbox.go: the
+// mount namespace bwrapinfo.json names, owned by the pid's own user
+// namespace, a child of the daemon's) and refuses once the pid shows
+// other namespaces, so its helpers join M1 whatever bwrap's init does.
+// Holds. Revert: helpers joining wherever the sandbox's pid is
+// (BrokerHelper.inNs = sb.mnt, as before the fix): the helper execs the
+// attacker's binary mounted over the closure's, a child of the daemon
+// in the host's pid namespace (counterexample found).
 assert S12helpersUnderHijack {
-  (world and BrokerHelper.inNs = sb.mnt) implies not replaceable[BrokerHelper]
+  (world and BrokerHelper.inNs = M1) implies not replaceable[BrokerHelper]
 }
-check S12helpersUnderHijack for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 1
+check S12helpersUnderHijack for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 0

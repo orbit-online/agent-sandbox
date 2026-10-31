@@ -130,7 +130,10 @@ func (b *broker) mountC(g *grant) error {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err
 	}
-	g.dev, g.root = mountOf(fmt.Sprintf("/proc/%d/mountinfo", b.sb.pid), g.Path)
+	// Without them, a copy of the mount in a nested namespace isn't found as a holder; the grant stands
+	if lines, err := b.sb.mountinfo(); err == nil {
+		g.dev, g.root = mountOf(lines, g.Path)
+	}
 	return nil
 }
 

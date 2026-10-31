@@ -49,9 +49,9 @@ pred spawn[p: Process] {
 //
 // The orders in the code:
 // - control.sock's user namespace check and share's mount namespace
-//   check: processAlive (broker.go:289) before handleControl's sameNs
-//   (broker.go:386) and shareFrom's sameNsAs (broker.go:486), with no
-//   check after;
+//   check: handleControl's sameNs and shareFrom's sameNsAs, then
+//   peer.gone() on the pidfd (sockets.go); serveOn's check before them
+//   only turns away peers gone early;
 // - subid-broker's client and target: openUserns reads, then signals the
 //   pidfd (subid-broker/main.go:292-313);
 // - netns-macvlan: pidfd, reads, signal (netns-macvlan/main.go:79-105).
@@ -76,8 +76,7 @@ abstract sig Chk {
 }
 one sig CtlChk, ShareChk, SubidChk, MacvlanChk extends Chk {}
 fact orders {
-  (CtlChk + ShareChk).order = AliveThenRead
-  (SubidChk + MacvlanChk).order = ReadThenAlive
+  (CtlChk + ShareChk + SubidChk + MacvlanChk).order = ReadThenAlive
 }
 
 fact chkInit { all c: Chk | c.stage = Idle and no c.peer + c.gone + c.npid + c.peerNs + c.seen + c.actual }
@@ -208,18 +207,15 @@ assert S13readThenAlive {
 check S13readThenAlive for 3 but 5 UserNS, 11 OwnedNS, 3 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 0
 
 // S13 for the broker: control.sock's and share's checks read the peer's
-// /proc/<pid>/ns after the liveness check, with none after. A peer that
-// exits between the two, its pid gone to a process in the init user
-// namespace (a host process; the attacker can't pick which, but it
-// can drive the pid counter by forking and retry with 64 connections at
-// a time), passes control.sock's check. Only matters where something
-// exposes control.sock to the sandbox (S6 holds by its not being bound);
-// for share it gives nothing (S9). Fix: processAlive again after the
-// read (broker.go:289-295). Known.
+// /proc/<pid>/ns, then check the pidfd's process is still alive
+// (peer.gone, sockets.go), as request's session walk does. Holds.
+// Revert: with their order AliveThenRead, as before the fix, a peer that
+// exits between the two, its pid gone to a host process, passes
+// control.sock's check (counterexample found).
 assert S13brokerAliveThenRead {
   always all c: CtlChk + ShareChk | c.stage = Done implies c.seen = c.actual
 }
-check S13brokerAliveThenRead for 3 but 5 UserNS, 11 OwnedNS, 3 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 1
+check S13brokerAliveThenRead for 3 but 5 UserNS, 11 OwnedNS, 3 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 0
 
 run S13checksFinish {
   (eventually CtlChk.stage = Done) and (eventually SubidChk.stage = Done)
@@ -250,8 +246,10 @@ run S7targetMovesFirst {
     and t = Req.tgt)
 } for 4 but 6 UserNS, 11 OwnedNS, 4 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 1
 
-// S13's broker race as the attacker wants it: a sandbox peer's request
-// to control.sock passes the check on a host process's namespaces.
-run S13sandboxPeerPassesControl {
-  eventually (CtlChk.stage = Done and CtlChk.seen = InitUserNS and CtlChk.peerNs != InitUserNS)
-} for 3 but 5 UserNS, 11 OwnedNS, 3 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 1
+// S13's broker race as the attacker wants it, a sandbox peer's request
+// to control.sock passing the check on a host process's namespaces, is
+// gone with the check after the read (an instance before the fix).
+assert S13sandboxPeerPassesControl {
+  not eventually (CtlChk.stage = Done and CtlChk.seen = InitUserNS and CtlChk.peerNs != InitUserNS)
+}
+check S13sandboxPeerPassesControl for 3 but 5 UserNS, 11 OwnedNS, 3 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 0

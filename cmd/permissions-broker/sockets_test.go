@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,13 +24,13 @@ func TestShare(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := testBroker(t)
-	b.sb = &sandbox{pid: pid, pidfd: fd}
+	b.sb = pinned(t, pid, fd)
 	b.cfg.SandboxGrantDir = dir
 
-	if err := b.shareFrom(os.Getpid()); err == nil {
+	if err := b.shareFrom(peerAt(t, os.Getpid())); err == nil {
 		t.Error("Shared for a client outside the sandbox's mount namespace")
 	}
-	if err := b.shareFrom(pid); err != nil {
+	if err := b.shareFrom(peerAt(t, pid)); err != nil {
 		t.Fatal(err)
 	}
 	info, _ := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
@@ -48,10 +49,10 @@ func TestShare(t *testing.T) {
 func TestControlFromHostOnly(t *testing.T) {
 	b, _ := testBroker(t)
 	cmd := ownNs(t, t.TempDir())
-	if res := b.handleControl(nil, cmd.Process.Pid, request{Op: "state"}); res.Error == "" {
+	if res := b.handleControl(nil, peerAt(t, cmd.Process.Pid), request{Op: "state"}); res.Error == "" {
 		t.Error("control.sock answered a peer in another user namespace")
 	}
-	if res := b.handleControl(nil, os.Getpid(), request{Op: "state"}); res.Error != "" {
+	if res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}); res.Error != "" {
 		t.Errorf("control.sock refused the host: %s", res.Error)
 	}
 }
@@ -154,5 +155,42 @@ func TestServeLimits(t *testing.T) {
 	var res response
 	if err := json.NewDecoder(c).Decode(&res); err != nil || res.Error == "" {
 		t.Errorf("Oversized request answered %+v, %v", res, err)
+	}
+}
+
+// S13: a peer that exits after connecting, its pid then another process's, gets nothing for what that process's /proc
+// entries say. Stood in for by a pidfd of an exited process with the pid of a process that passes the checks
+func TestPeerGoneAfterRead(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	_ = cmd.Wait()
+	b, _ := testBroker(t, "allow")
+	recycled := peer{pid: os.Getpid(), pidfd: fd}
+	if res := b.handleControl(nil, recycled, request{Op: "state"}); res.Error == "" {
+		t.Error("control.sock answered a peer that's gone, for the process its pid went to")
+	}
+	c := testCap(t, "B")
+	b.caps[c.id()] = c
+	if _, _, err := b.request(recycled, req(c.id(), `{}`, "PT1H")); err == nil {
+		t.Error("request served a peer that's gone")
+	}
+	// share, with the pid gone to a process in the sandbox's outer mount namespace
+	dir := t.TempDir()
+	sb := ownNs(t, dir)
+	sbfd, err := unix.PidfdOpen(sb.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.sb = pinned(t, sb.Process.Pid, sbfd)
+	b.cfg.SandboxGrantDir = dir
+	if err := b.shareFrom(peer{pid: sb.Process.Pid, pidfd: fd}); err == nil {
+		t.Error("share served a peer that's gone")
 	}
 }

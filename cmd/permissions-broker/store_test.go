@@ -19,7 +19,7 @@ func TestAlwaysConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = b.request(os.Getpid(), req(c.id(), `{}`, "PT1H"))
+			_, _, _ = b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
 		}()
 	}
 	wg.Wait()

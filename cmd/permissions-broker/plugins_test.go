@@ -30,7 +30,7 @@ func TestTypeA(t *testing.T) {
 	b.cfg.Unit = "daemon.service"
 	c := testCap(t, "A")
 	b.caps[c.id()] = c
-	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/a"}`, "PT1H"))
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,16 +61,16 @@ func TestExclusive(t *testing.T) {
 	c := testCap(t, "A")
 	c.Exclusive = true
 	b.caps[c.id()], other.caps[c.id()] = c, c
-	g, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/vm"}`, "PT1H"))
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := other.request(os.Getpid(), req(c.id(), `{"path": "/vm"}`, "PT1H")); err == nil ||
+	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err == nil ||
 		!strings.Contains(err.Error(), "launcher test") {
 		t.Errorf("Another launcher got an exclusive instance: %v", err)
 	}
 	_ = b.release(g.ID, "test")
-	if _, _, err := other.request(os.Getpid(), req(c.id(), `{"path": "/vm"}`, "PT1H")); err != nil {
+	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err != nil {
 		t.Errorf("Not granted once released: %v", err)
 	}
 }
