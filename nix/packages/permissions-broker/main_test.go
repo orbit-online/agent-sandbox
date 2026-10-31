@@ -284,6 +284,66 @@ func TestConsent(t *testing.T) {
 	}
 }
 
+// With a list, a request matching none of its instances is refused without asking; one matches when it has each of
+// the instance's keys at the same value
+func TestListed(t *testing.T) {
+	b, f := testBroker(t, "allow")
+	c := testCap(t, "B")
+	list := filepath.Join(t.TempDir(), "list")
+	if err := os.WriteFile(list, []byte("#!/bin/sh\necho '[{\"path\": \"/a\"}, {\"path\": \"/b\", \"ro\": true}]'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.List = []string{list}
+	b.caps[c.id()] = c
+	for _, params := range []string{`{"path": "/c"}`, `{"path": "/b"}`, `{"ro": true}`} {
+		if _, _, err := b.request(os.Getpid(), req(c.id(), params, "PT1H")); err == nil {
+			t.Errorf("Granted %s, which list doesn't name", params)
+		}
+	}
+	if f.count() != 0 {
+		t.Errorf("Asked about an instance list doesn't name: %+v", f.asked)
+	}
+	if _, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/a", "ro": true}`, "PT1H")); err != nil {
+		t.Errorf("Refused an instance list names: %v", err)
+	}
+	// The window's answer can't name another instance either
+	b, _ = testBroker(t, "options")
+	b.caps[c.id()] = c
+	go func() {
+		for {
+			b.mu.Lock()
+			var id string
+			for _, p := range b.pending {
+				if p.Options {
+					id = p.ID
+				}
+			}
+			b.mu.Unlock()
+			if id != "" {
+				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT1H", Params: json.RawMessage(`{"path": "/c"}`)})
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	if _, _, err := b.request(os.Getpid(), req(c.id(), `{"path": "/b", "ro": true}`, "PT1H")); err == nil {
+		t.Error("Granted the window's answer of an instance list doesn't name")
+	}
+
+	// A list that fails refuses, and type C's sources decide instead of its list
+	if err := os.WriteFile(list, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.listedAt = time.Time{}
+	if err := c.inList(context.Background(), json.RawMessage(`{"path":"/a"}`)); err == nil {
+		t.Error("A failed list let a request through")
+	}
+	c.Type, c.listedAt = "C", time.Time{}
+	if err := c.inList(context.Background(), json.RawMessage(`{"path":"/c"}`)); err != nil {
+		t.Errorf("Type C checked against its list: %v", err)
+	}
+}
+
 func TestRefusalLimit(t *testing.T) {
 	b, f := testBroker(t)
 	c := testCap(t, "B")

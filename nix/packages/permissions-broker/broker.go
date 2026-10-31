@@ -558,6 +558,8 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 			return nil, "", err
 		}
 		summary = describeC(summary, src)
+	} else if err := c.inList(context.Background(), params); err != nil {
+		return nil, "", err
 	}
 
 	// Already granted: always grants and, for type B, a live grant decide whether to ask again. One request per
@@ -617,6 +619,8 @@ func (b *broker) request(pid int, req request) (*grant, string, error) {
 				return nil, "", err
 			}
 			summary = describeC(summary, src)
+		} else if err := c.inList(context.Background(), params); err != nil {
+			return nil, "", err
 		}
 	}
 	g, err = b.grant(c, params, summary, lease, sess)

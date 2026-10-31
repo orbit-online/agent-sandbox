@@ -141,7 +141,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   client's own and another uid.
 - `permissions-broker`: the package build runs its Go tests (`main_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
-  covering the same request only), the refusal limit, `always` only from the
+  covering the same request only), a request or window answer naming no instance
+  a capability's `list` prints refused without asking (and with a failing
+  `list`; not for type C), the refusal limit, `always` only from the
   window and with exact parameters, the store, duration, lock and session
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name), type A's systemd units (faked), exclusive instances across

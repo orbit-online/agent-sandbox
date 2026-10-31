@@ -215,7 +215,10 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
 ```
 
 - `params` is a JSON Schema properties object; the daemon validates requests against it.
-- `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`.
+- `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`, as
+  a JSON array of objects. Outside type C, a request must match one of them, or it is refused without asking the
+  user: an instance matches when each of its keys has the same value in the request's params. A `list` that fails
+  refuses every request. Type C requests may name a folder below a listed root, so `sources` decide there.
 - `exclusive` (optional): an instance may be granted to one launcher at a time (a VM's QMP connection takes one
   client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`; a request for an instance
   another launcher holds is refused, naming it.

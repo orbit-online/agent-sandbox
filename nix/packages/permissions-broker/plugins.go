@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -326,6 +327,41 @@ func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error)
 	}
 	c.listedAt = time.Now()
 	return c.listed, c.listErr
+}
+
+// inList refuses params that match none of the instances list prints: an instance matches when each of its keys
+// has the same value in params. Type C requests may name a folder below a listed root, so its sources decide instead
+func (c *capability) inList(ctx context.Context, params json.RawMessage) error {
+	if len(c.List) == 0 || c.Type == "C" {
+		return nil
+	}
+	listed, err := c.listInstances(ctx)
+	if err != nil {
+		return err
+	}
+	var instances []map[string]any
+	dec := json.NewDecoder(bytes.NewReader(listed))
+	dec.UseNumber()
+	if err := dec.Decode(&instances); err != nil {
+		return fmt.Errorf("List %s: not an array of objects: %w", c.id(), err)
+	}
+	var p map[string]any
+	dec = json.NewDecoder(bytes.NewReader(params))
+	dec.UseNumber()
+	_ = dec.Decode(&p)
+	for _, inst := range instances {
+		match := true
+		for k, v := range inst {
+			if pv, ok := p[k]; !ok || !reflect.DeepEqual(pv, v) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s has no such instance: see list", c.id())
 }
 
 // exclusiveLock takes the host-wide lock on an instance of an exclusive capability, so two launchers' daemons don't
