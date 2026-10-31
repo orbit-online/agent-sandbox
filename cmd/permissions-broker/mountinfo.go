@@ -100,7 +100,7 @@ var holdersTimeout = 10 * time.Second
 // below its mount point. Read once per namespace, before detaching, while the mount points still resolve
 func (s *sandbox) grantMounts(mountpoint string) map[uint64]map[uint64]bool {
 	byNs := map[uint64]map[uint64]bool{}
-	for _, pid := range append([]int{s.pid}, descendants(s.pid)...) {
+	for _, pid := range s.members() {
 		ns, ok := mntNs(pid)
 		if !ok {
 			continue
@@ -126,7 +126,7 @@ func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string)
 	deadline := time.Now().Add(holdersTimeout)
 	var hs []holder
 	rebinds := map[uint64]bool{}
-	for _, pid := range descendants(s.pid) {
+	for _, pid := range s.members() {
 		if time.Now().After(deadline) {
 			slog.Warn("Holders' scan cut short", "after", holdersTimeout)
 			break
@@ -199,42 +199,6 @@ func mountOf(lines []mountLine, mountpoint string) (dev, root string) {
 		}
 	}
 	return dev, root
-}
-
-// descendants lists pid's descendants, through every thread's children
-func descendants(pid int) []int {
-	var out []int
-	queue := []int{pid}
-	for len(queue) > 0 {
-		p := queue[0]
-		queue = queue[1:]
-		tasks, _ := os.ReadDir(fmt.Sprintf("/proc/%d/task", p))
-		for _, t := range tasks {
-			data, _ := os.ReadFile(fmt.Sprintf("/proc/%d/task/%s/children", p, t.Name()))
-			for _, c := range strings.Fields(string(data)) {
-				if n, err := strconv.Atoi(c); err == nil {
-					out = append(out, n)
-					queue = append(queue, n)
-				}
-			}
-		}
-	}
-	return out
-}
-
-// isDescendant reports whether pid is below the sandbox's pid
-func (s *sandbox) isDescendant(pid int) bool {
-	for p := pid; p > 1; {
-		ppid, _, err := parent(p)
-		if err != nil {
-			return false
-		}
-		if ppid == s.pid {
-			return true
-		}
-		p = ppid
-	}
-	return false
 }
 
 // isShared reports whether dir is a shared mount in the sandbox's mount namespace: a daemon started again finds the

@@ -62,7 +62,7 @@ func TestLockLease(t *testing.T) {
 
 func TestSession(t *testing.T) {
 	anchor, child := startAnchor(t, "claude")
-	s, err := sessionOf(child, os.Getpid())
+	s, err := ownSandbox(t, os.Getpid()).sessionOf(child)
 	if err != nil || s == nil {
 		t.Fatalf("sessionOf = %v, %v", s, err)
 	}
@@ -92,7 +92,7 @@ func TestSession(t *testing.T) {
 
 func TestSessionNeedsClaude(t *testing.T) {
 	_, child := startAnchor(t, "not-claude")
-	if s, err := sessionOf(child, os.Getpid()); err != nil || s != nil {
+	if s, err := ownSandbox(t, os.Getpid()).sessionOf(child); err != nil || s != nil {
 		t.Errorf("Anchored at a process that isn't Claude Code: %v, %v", s, err)
 	}
 	b, _ := testBroker(t, "allow")
@@ -106,14 +106,14 @@ func TestSessionNeedsClaude(t *testing.T) {
 func TestSessionStopsAtSandbox(t *testing.T) {
 	anchor, child := startAnchor(t, "claude")
 	// With the anchor as the sandbox's pid, the walk stops below it: nothing above the sandbox anchors a session
-	if s, err := sessionOf(child, anchor.Process.Pid); err != nil || s != nil {
+	if s, err := ownSandbox(t, anchor.Process.Pid).sessionOf(child); err != nil || s != nil {
 		t.Errorf("Anchored at the sandbox: %v, %v", s, err)
 	}
 	// A carrier of the variable above the sandbox (the launcher started from a host Claude Code shell) doesn't
 	// count for a caller in the sandbox without one
 	_, pids := startAnchorMode(t, "claude", "anchor-deep", 2)
 	sandboxInit, caller := pids[0], pids[1]
-	if s, err := sessionOf(caller, sandboxInit); err != nil || s != nil {
+	if s, err := ownSandbox(t, sandboxInit).sessionOf(caller); err != nil || s != nil {
 		t.Errorf("Anchored above the sandbox: %v, %v", s, err)
 	}
 }

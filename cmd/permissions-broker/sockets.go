@@ -120,7 +120,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 	case "release":
 		err = b.release(req.Grant, "released from inside")
 	case "status":
-		sess, _ := sessionOf(p.pid, b.sb.pid)
+		sess, _ := b.sb.sessionOf(p.pid)
 		id := ""
 		if sess != nil {
 			id = sess.id
@@ -193,6 +193,10 @@ func (b *broker) shareFrom(p peer) error {
 	}
 	b.shareAsked = true
 	b.mu.Unlock()
+	// Too late once a process of the sandbox is in a copy of M1: what's mounted would never reach it
+	if copied, err := b.sb.copied(); err != nil || copied {
+		return errors.New("Too late to share: the sandbox's mount namespace was copied already")
+	}
 	if err := b.sb.share(b.cfg.SandboxGrantDir); err != nil {
 		return err
 	}

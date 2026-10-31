@@ -165,7 +165,8 @@ Open files survive a revoke of type C (verified item 3), and so does a copy of t
 made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
 mountpoint end the grant's mounts in every namespace it propagated to, not copies made elsewhere. Neither can be
 taken back short of ending the processes. So the daemon reads the grant's mount ids in each mount namespace in the
-sandbox, detaches, and then lists the holders, within ten seconds: processes whose working directory, open files
+sandbox (of every process of the sandbox's, found by user namespace as above, re-entries included), detaches, and then
+lists the holders, within ten seconds: processes whose working directory, open files
 or mappings are on those mounts (by `statx`'s mount id, which an open file keeps), and processes whose mount
 namespace has a mount of the grant's filesystem and root. The window shows them and offers to end them (`SIGTERM`
 through a pidfd, only for processes in the sandbox). The daemon doesn't refuse a revoke because something is in
@@ -270,7 +271,10 @@ caller's proposal: `session`, `lock`, `PT<n>H` or `always`.
 
 The caller's session comes from its pidfd (`SO_PEERPIDFD`): the daemon walks its ancestors to the first with
 `CLAUDE_CODE_SESSION_ID` in its environment, and takes that process's parent as the session's anchor if it is the
-Claude Code binary (by `/proc/<pid>/exe`) and not a pid namespace's init. A caller without such an anchor gets no
+Claude Code binary (by `/proc/<pid>/exe`), in the sandbox and not a pid namespace's init. The walk never leaves the
+sandbox: a process is the sandbox's when its user namespace (or the one owning its mount namespace) is the sandbox's
+or below it. That counts re-entries (`claude-desktop --shell`), which nsenter starts from the host, and stops their
+walk at nsenter rather than at a host shell that may carry a host Claude Code session's variable. A caller without such an anchor gets no
 session leases. Anything in the sandbox can set that variable, so session ties serve leases and the window's
 bookkeeping. They don't authenticate a caller, and no grant relies on them for that: a grant is usable from the
 whole sandbox. The window says "this session" as "until this Claude session ends, at most until the app quits".

@@ -50,6 +50,18 @@ func TestMain(m *testing.M) {
 		stdin.Close()
 		cmd.Wait()
 		os.Exit(0)
+	case "reenter":
+		// A host shell carrying a session, below a claude, running $REENTER: a re-entry into the sandbox
+		cmd := exec.Command("sh", "-c", os.Getenv("REENTER"))
+		cmd.Env = append(os.Environ(), "CLAUDE_CODE_SESSION_ID=session-1")
+		cmd.Stdout = os.Stdout
+		if err := cmd.Start(); err != nil {
+			os.Exit(1)
+		}
+		io.Copy(io.Discard, os.Stdin)
+		cmd.Process.Kill()
+		cmd.Wait()
+		os.Exit(0)
 	case "middle":
 		// Below a session's carrier, a process without the variable: the sandbox's init, started from a host
 		// Claude Code shell, and something in the sandbox
@@ -202,7 +214,7 @@ func testBroker(t *testing.T, answers ...string) (*broker, *fakeAsker) {
 	f := &fakeAsker{answers: answers}
 	cfg := config{Launcher: "test", GrantDir: filepath.Join(dir, "grants"), ControlSocket: filepath.Join(dir, "control.sock"),
 		Store: filepath.Join(dir, "permissions.json"), SandboxGrantDir: "/run/permissions"}
-	b, err := newBroker(cfg, map[string]*capability{}, &sandbox{pid: os.Getpid(), pidfd: -1}, f.ask)
+	b, err := newBroker(cfg, map[string]*capability{}, ownSandbox(t, os.Getpid()), f.ask)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,4 +304,15 @@ func pinned(t *testing.T, pid, pidfd int) *sandbox {
 	}
 	t.Cleanup(sb.close)
 	return sb
+}
+
+// ownSandbox stands in for a sandbox at pid in our own user namespace: every process of the test's is in it
+func ownSandbox(t *testing.T, pid int) *sandbox {
+	t.Helper()
+	userns, err := os.Open("/proc/self/ns/user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { userns.Close() })
+	return &sandbox{pid: pid, pidfd: -1, userns: userns}
 }

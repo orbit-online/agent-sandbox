@@ -15,6 +15,8 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
+
+	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
 func (b *broker) now() time.Time { return time.Now().Add(time.Duration(b.skew.Load())) }
@@ -240,7 +242,7 @@ func (b *broker) endHolders(pids []int) error {
 		if err != nil {
 			continue // gone already
 		}
-		if !b.sb.isDescendant(pid) {
+		if !b.sb.contains(pid) || !proc.Alive(fd) {
 			errs = append(errs, fmt.Errorf("%d isn't in the sandbox", pid))
 		} else if err := unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 			errs = append(errs, fmt.Errorf("End %d: %w", pid, err))

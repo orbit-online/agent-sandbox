@@ -186,7 +186,7 @@ func TestSessionsShare(t *testing.T) {
 	}
 	// The second session's id differs: its anchor sets the same variable, so give it another
 	anchor2, child2 := startAnchor(t, "claude")
-	s2, err := sessionOf(child2, os.Getpid())
+	s2, err := ownSandbox(t, os.Getpid()).sessionOf(child2)
 	if err != nil || s2 == nil {
 		t.Fatal(s2, err)
 	}

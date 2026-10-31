@@ -39,7 +39,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 				"failed when it started: restart the app")
 		}
 	}
-	sess, err := sessionOf(p.pid, b.sb.pid)
+	sess, err := b.sb.sessionOf(p.pid)
 	if err != nil {
 		return nil, "", err
 	}

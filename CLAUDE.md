@@ -53,7 +53,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (always grants, replay, the log), `notify.go`, `views.go`, `types.go` and
   `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
   locks) and `plugintools.go` for plugins and their MCP tools,
-  `mcp.go` the MCP server, `sandbox.go` finding the sandbox and sessions.
+  `mcp.go` the MCP server, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
+  user namespace, `session.go` sessions.
   Type C: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
   (the helpers it runs through `nsenter` to clone a host path and mount it in
   the sandbox), `mountinfo.go` (mount tables, holders) and `typec.go`
@@ -181,7 +182,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   at another name), type A's systemd units (faked), exclusive instances across
   launchers (locked by the instance `list` prints, whatever other parameters
   a request carries), `share` through nsenter into a child's user and mount namespace
-  (refused from another mount namespace), `control.sock` refusing a peer in
+  (refused from another mount namespace, a second time, and once a process of
+  the sandbox is in a copy of its mount namespace), `control.sock` refusing a peer in
   another user namespace, a peer gone after its `/proc` entries were read
   refused by `control.sock`, `share` and `request` (S13), the sandbox's
   namespaces pinned (helpers refused once its pid moves to namespaces of its
@@ -192,7 +194,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   parameter or reason in the notification, make a click on its replacement of
   the broker's notification or an `ActionInvoked` of its own allow (a fake
   notification server on a `dbus-daemon` of the test's), anchor a session at or above the
-  sandbox, make one always grant start several units or
+  sandbox or, from a re-entry (`--shell`), at a host session above nsenter, make one always grant start several units or
   mount an always folder twice (replays, a second `share`), get a credential after
   its lease ran out or for a grant revoked while its request waited for a
   plugin slot; plus a window answer while the notification is up, unit
@@ -200,7 +202,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, a folder mounted
   read-only where the app sees it and not on the host, its holders listed and
-  ended (not a process outside the sandbox), detached with its mountpoint
+  ended (not a process outside the sandbox; a re-entry's too, found by user
+  namespace), detached with its mountpoint
   gone on revoke, a session lease two sessions hold, a daemon started again
   taking over the shared grant directory and replaying an always folder, and
   the sandbox's attacks: a link out of the ceiling, another folder renamed into the path

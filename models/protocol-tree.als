@@ -4,10 +4,10 @@
  * (sandbox.als's `frozen`): the walks read /proc once, and pid reuse
  * during them is S13's.
  *
- * Sources: sandbox.go:148-178 (sessionOf), mounts.go:457-616 (grantMounts,
- * holdersAfter, descendants, isDescendant), broker.go:1006-1023
- * (endHolders), claude-desktop.sh:48-88 (re-entries through nsenter after
- * `env -i`).
+ * Sources: session.go (sessionOf), members.go (contains, members: the
+ * sandbox's processes by user namespace), mountinfo.go (grantMounts,
+ * holdersAfter), leases.go (endHolders), claude-desktop.sh:48-88
+ * (re-entries through nsenter after `env -i`).
  */
 open sandbox
 
@@ -31,7 +31,10 @@ one sig Tree {
 }
 
 fun sandboxProcs: set Process { principal.domain.Sandbox }
-fun inside: set Process { Tree.top.^~ppid }
+// The sandbox's processes as the broker finds them (members.go): those
+// whose user namespace is the sandbox pid's or below it, re-entries
+// included, whoever their parent is.
+fun inside: set Process { userns.(Tree.top.userns.*~parent) }
 
 fact shape {
   frozen
@@ -52,6 +55,11 @@ fact shape {
     // (claude-desktop.sh:48, 75, 88, 123)
     no Tree.hasVar & (principal.LauncherP + ppid.(principal.LauncherP))
     no Tree.claudeExe & principal.LauncherP
+    // the sandbox's processes are in U1 or below (a re-entry joins U2),
+    // the host's in none of them
+    t.userns != InitUserNS
+    sandboxProcs in inside
+    no principal.domain.Host & inside
   }
   Tree.holds + Tree.unscanned in sandboxProcs
   // bwrap's init only reaps: no cwd, file or mount of a grant
@@ -59,9 +67,10 @@ fact shape {
 }
 
 // sessionOf's walk from p: q is read when every process from p up to q,
-// q excluded, lacked the variable and wasn't the sandbox's pid or pid 1,
-// and q is neither (the loop condition, sandbox.go:149).
-pred stopsAt[q: Process] { q = Tree.top or q = Tree.hostInit }
+// q excluded, lacked the variable and wasn't the sandbox's pid, pid 1 or
+// outside the sandbox, and q is none of them (the loop condition,
+// session.go).
+pred stopsAt[q: Process] { q = Tree.top or q = Tree.hostInit or q not in inside }
 pred reads[p, q: Process] {
   q in p.*ppid and not stopsAt[q]
   all r: p.*ppid - q | q in r.^ppid implies (r not in Tree.hasVar and not stopsAt[r])
@@ -73,25 +82,23 @@ fun anchorOf[p: Process]: set Process {
   { a: Process | some q: Process | reads[p, q] and q in Tree.hasVar and a = q.ppid and anchorOK[a] }
 }
 pred anchorOK[a: Process] {
-  a not in Tree.nsInit and a != Tree.top and a != Tree.hostInit and a in Tree.claudeExe
+  a not in Tree.nsInit and a != Tree.top and a != Tree.hostInit and a in Tree.claudeExe and a in inside
 }
 
-// P8. A session lease's anchor is a process inside the sandbox (below its
-// pid), named `claude`, not a pid namespace's init and not the sandbox's
-// pid, whatever variables the sandbox sets. Known, lead 2 confirmed:
-// `claude-desktop --shell` joins the app's namespaces from the host
-// (claude-desktop.sh:75), so the shell's parent is nsenter, a host
-// process. The walk passes nsenter (`env -i`, no variable) and reads the
-// host shell that ran claude-desktop; started from a host Claude Code
-// session's Bash tool, that shell has CLAUDE_CODE_SESSION_ID, and its
-// parent is the host's `claude`. A permissions request from the --shell
-// (or anything it starts that unsets the variable) gets a session lease
-// anchored at the host process. The stop at the sandbox's pid never
-// comes: a re-entry's ancestry doesn't pass it. Bounded by P11.
+// P8. A session lease's anchor is a process inside the sandbox, named
+// `claude`, not a pid namespace's init and not the sandbox's pid,
+// whatever variables the sandbox sets. `claude-desktop --shell` joins the
+// app's namespaces from the host (claude-desktop.sh:75), so the shell's
+// parent is nsenter, a host process, and above it may be a host Claude
+// Code session's shell with CLAUDE_CODE_SESSION_ID. The walk stops at the
+// first process outside the sandbox's user namespaces and the anchor must
+// be inside (session.go). Holds. Revert: stopsAt and anchorOK without
+// their `inside` (as before the fix): the walk reads the host shell and
+// anchors at the host's claude (counterexample found).
 assert P8anchorInside {
   always all p: sandboxProcs, a: anchorOf[p] | a in inside and a.principal.domain = Sandbox
 }
-check P8anchorInside for 7 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 4 OwnedNS, 1 steps expect 1
+check P8anchorInside for 7 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 4 OwnedNS, 1 steps expect 0
 
 // P8 without re-entries: for a process below the sandbox's pid the walk
 // never leaves the sandbox, whatever the sandbox sets.
@@ -108,21 +115,22 @@ run P8forgedInside {
   some p: sandboxProcs | some anchorOf[p] & inside
 } for 7 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 4 OwnedNS, 1 steps expect 1
 
-// What holdersAfter lists (mounts.go:482-508): the sandbox pid's
-// descendants it reached that hold the grant. endHolders ends only
-// descendants too (isDescendant, mounts.go:604-616).
+// What holdersAfter lists (mountinfo.go): the sandbox's processes it
+// reached that hold the grant. endHolders ends only the sandbox's too
+// (contains, members.go).
 fun listed: set Process { (inside - Tree.unscanned) & Tree.holds }
 
 // P5. After a type C grant ends, every sandbox process that still holds
-// it is listed. Known, lead 1 confirmed: a --shell process (and what it
-// starts) has nsenter as parent, so descendants() never reaches it: a cwd
-// on the grant or a re-bind in a mount namespace of its own isn't listed
-// (grantMounts doesn't read its namespace either), and the window can't
-// end it (isDescendant refuses).
+// it is listed. The broker finds the sandbox's processes by user
+// namespace (members.go), so a --shell process (and what it starts),
+// whose parent is nsenter on the host, is among them. Holds. Revert:
+// `inside` as the sandbox pid's descendants (as before the fix): a cwd on
+// the grant or a re-bind in a re-entry's own mount namespace isn't
+// listed (counterexample found).
 assert P5holdersListed {
   always no Tree.unscanned implies Tree.holds in listed
 }
-check P5holdersListed for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
+check P5holdersListed for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 0
 
 // P5 for processes below the sandbox's pid. Known, a finding: the scan
 // stops after 10 s (holdersTimeout, mounts.go:483-490) and the sandbox
