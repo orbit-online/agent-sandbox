@@ -84,10 +84,9 @@ host (user, no capabilities)                       sandbox
   or is a link.
 - `permissions-mcp`, the same binary as an MCP server, run inside the sandbox from the module's MCP servers. A client
   of `request.sock`.
-- The Permissions window, a Qt 6 QML app (PySide6) talking to `control.sock`, opened by the desktop action
-  "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; PySide6 because it's
-  Qt's official binding, and Go has no Qt binding that is both maintained and standard. It is a client only: all
-  state lives in the daemon.
+- The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
+  action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
+  rest. It is a client only: all state lives in the daemon.
 
 ### Handle on the sandbox, and restarts
 
@@ -377,7 +376,9 @@ These were open when the design was written and decided while the user was away.
    env's bwrap starts. The alternative, injecting into M2 directly, would need the daemon to find the app's mount
    namespace and wouldn't reach namespaces nested in it.
 2. Revoking a type C grant detaches and reports the holders; ending them is the user's choice in the window.
-3. The window is PySide6 with QML.
+3. The window is Qt with QML: first PySide6, then ported to Go with miqt at Anders' word (one language, and the
+   PySide6 closure came to 2.4 GB). miqt is young (v0.15, since 2024-08); the window uses only the QML engine
+   and a property map.
 4. Plugins are executables with a JSON manifest, run per grant or per request, rather than long-running services
    with an RPC API: nothing to supervise when no grant is live, and socket activation for type A is a convention
    plugin authors know.

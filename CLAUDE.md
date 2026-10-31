@@ -41,8 +41,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `nix/packages/permissions-folders/`: the broker's built-in type C plugin,
   a manifest and two jq scripts. `permissions.folders` lists what it may
   grant.
-- `nix/packages/permissions-window/`: the Permissions window (PySide6 and
-  QML), a client of the broker's `control.sock`. The launcher opens it with
+- `nix/packages/permissions-window/`: the Permissions window (Go with miqt's
+  Qt 6 bindings, and QML), a client of the broker's `control.sock`. miqt has
+  no moc, so the QML talks to Go through a `QQmlPropertyMap`: state as JSON
+  in, actions as JSON out (`window.go` holds the logic, `main.go` the Qt
+  glue). The launcher opens it with
   `--permissions` and the `.desktop` file's "Permissions" action; the broker
   opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
   paths to its own Qt's, Plasma's style and platform theme included: the
@@ -168,11 +171,15 @@ modules and a user alice (the `home-manager` input exists only for it).
   own grant, which is tried again once it answers; a failed offer tried
   again; two tools of a grant under one name told apart; the nudge after 15
   minutes, not again right after, and in tool results.
-- `permissions-window`: the package's install check runs `test_window.py`
-  offscreen in Plasma's style: the model against a fake `control.sock`
-  (state, answer, revoke, forget, no broker), and the window loading without
-  QML warnings, an answer narrowed in its fields, a revoke and ending what
-  still held it by clicking.
+- `permissions-window`: the package build runs, offscreen in Plasma's
+  style, its Go tests (`window_test.go`: the operations against a fake
+  `control.sock`, and the Qt glue, checked in `TestMain` since Qt wants the
+  main thread: loading without QML warnings, the state arriving, a click
+  reaching the broker through the property map) and `tst_permissions.qml`
+  through `qmltestrunner` against a mock broker: an answer narrowed in its
+  fields, deny, revoke then end, forget, a repeated action still a change.
+  Repeater delegates aren't QObject children, so the Go side can't find
+  them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
