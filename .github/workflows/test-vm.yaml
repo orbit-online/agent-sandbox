@@ -1,4 +1,6 @@
-# The NixOS VM test, the slowest by far: on anything that can change what runs in it
+# The NixOS VM test, the slowest by far: on anything that can change what runs in it. One job builds its parts in
+# parallel (install-nix-action sets max-jobs = auto, 4 here): they share the VM system's build and the store's
+# downloads, which a matrix job each would repeat
 name: Test VM
 
 on:
@@ -48,4 +50,5 @@ jobs:
         with:
           # The VM test needs kvm; listing it replaces the defaults, so they're repeated
           extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      # vm: vm-launch, vm-store, vm-work and vm-live
       - run: nix build -L .#checks.x86_64-linux.vm

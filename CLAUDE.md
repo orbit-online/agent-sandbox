@@ -265,7 +265,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
-- `vm`: NixOS VM test (`nix/checks/vm.nix`, needs KVM). A router VM runs
+- `vm-launch`, `vm-store`, `vm-work`, `vm-live`: the NixOS VM test
+  (`nix/checks/vm/`, needs KVM), in four parts that Nix runs in parallel;
+  `vm` builds them all. Each boots the same two machines (built once) and
+  runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
+  part's script, `vm/<part>.nix`: `launch` the default launcher and the
+  network, `store` its store dir swapped or without a record and `--shell`
+  starting the app, `work` the launcher `work` next to the default one with
+  its permissions broker, `live` the broker's state machine tests. A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself, which listens on 443. On the
   workstation VM, alice launches the sandbox with a stub app
@@ -321,7 +328,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   its checks on its own, and alice a netns of hers below a user namespace
   root made and mapped her uid into. bob's commands go through `runuser`,
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
-  with `nix run .#checks.x86_64-linux.vm.driverInteractive`.
+  with `nix run .#checks.x86_64-linux.vm-<part>.driverInteractive`.
   The broker's state machine tests also run live there (`TestLiveMachine`,
   `live*_test.go`, skipped elsewhere): the test binary, built with `go test
   -c`, drives the work launcher's daemon under systemd from the host as
@@ -338,7 +345,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   the app runs match the reference model. 15 sequences with seed 1 (about a
   minute); by hand, `LIVE_RAPID` replaces the flags, for example
   `LIVE_RAPID='-rapid.seed=0 -rapid.checks=100' LIVE_TIMEOUT=3600 nix run
-  .#checks.x86_64-linux.vm.driverInteractive`, then `test_script()`.
+  .#checks.x86_64-linux.vm-live.driverInteractive`, then `test_script()`.
   A failure shrinks slowly here (each attempt replays its sequence live):
   `-rapid.seed` of the failing sequence with `-rapid.checks=1` and a long
   `-rapid.shrinktime` gets further.
@@ -346,7 +353,8 @@ modules and a user alice (the `home-manager` input exists only for it).
 CI runs on pushes to `main` and on pull requests, split by what changed
 (`.github/workflows/test-*.yaml`, each with its own `paths:`): `test-go`
 builds the Go packages with their tests, `test-module` the eval tests, the
-app's closure and shellcheck, `test-vm` the VM test, and `test-models`
+app's closure and shellcheck, `test-vm` the VM test's parts (one job,
+in parallel), and `test-models`
 runs `models/check`. A change to docs alone runs none.
 
 Every new test gets the revert check: break the implementation, see the test

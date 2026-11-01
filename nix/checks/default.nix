@@ -459,11 +459,19 @@ let
           ];
     };
   };
+  # The VM test's parts as vm-<part>, and vm, which builds them all
+  vmParts = import ./vm {
+    inherit pkgs aliceModule;
+    broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
+  };
+  vmChecks = lib.mapAttrs' (part: lib.nameValuePair "vm-${part}") vmParts // {
+    vm = pkgs.linkFarm "vm-tests" vmParts;
+  };
 in
 {
   tests = evalTests;
 
-  checks = {
+  checks = vmChecks // {
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
       netns-macvlan
       subid-broker
@@ -664,11 +672,6 @@ in
           ! grep -q -e '^MimeType=' -e '^Exec=claude-desktop ' "$d" || { echo "$d keeps the claude:// handler or the default Exec" >&2; exit 1; }
           touch $out
         '';
-
-    vm = import ./vm.nix {
-      inherit pkgs aliceModule;
-      broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
-    };
 
     scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
       shellcheck ${../../scripts}/*.sh ${../home/claude-desktop}/*.sh
