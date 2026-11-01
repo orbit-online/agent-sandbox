@@ -209,8 +209,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   in arrival order, unit
   names per launcher, and a broken store set aside. Attach grants against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
-  directory bound in and shared): the source ceiling, a folder mounted
-  read-only where the app sees it and not on the host, its holders listed and
+  directory bound in and shared): the source ceiling, the cloned tree
+  received close-on-exec, a folder mounted read-only where the app sees it and
+  not on the host, its holders listed and
   ended (one ignoring SIGTERM too; one holding it on a thread alone, by that thread's cwd, fd, root,
   mount namespace or an `open_tree` clone in no mount table; a clone of a file of it as a possible
   holder; a shared mapping with its fd closed, a possible holder once the file is deleted; not a process

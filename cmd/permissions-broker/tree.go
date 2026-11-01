@@ -57,7 +57,8 @@ func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDi
 func recvTree(sock int) (*os.File, string, error) {
 	buf := make([]byte, 4096)
 	oob := make([]byte, unix.CmsgSpace(4))
-	n, oobn, _, _, err := unix.Recvmsg(sock, buf, oob, 0)
+	// Close-on-exec from the start: a command the daemon starts meanwhile mustn't inherit the tree
+	n, oobn, _, _, err := unix.Recvmsg(sock, buf, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
 		return nil, "", fmt.Errorf("Receive the cloned tree: %w", err)
 	}
