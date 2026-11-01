@@ -255,13 +255,18 @@ Item {
                         text: modelData.title
                         font.italic: true
                     }
-                    Label {
+                    // Selectable, so its paths and rules can be copied
+                    TextArea {
                         objectName: "overview-" + modelData.key
                         Layout.fillWidth: true
                         Layout.leftMargin: 12
                         text: modelData.text
                         textFormat: Text.PlainText
                         wrapMode: Text.Wrap
+                        readOnly: true
+                        selectByMouse: true
+                        background: null
+                        padding: 0
                     }
                 }
             }

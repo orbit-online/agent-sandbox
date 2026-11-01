@@ -129,6 +129,10 @@ TestCase {
         compare(findChild(view, "overview-standing").text,
                 "the echo: granted\nthe test thing: ended until the broker starts again")
         compare(findChild(view, "overview-implicit").text, "Sockets: Wayland")
+        const devices = findChild(view, "overview-devices")
+        verify(devices.readOnly && devices.selectByMouse)
+        devices.selectAll()
+        compare(devices.selectedText, "/dev/kvm")
     }
 
     // The same action twice is still a change: each command carries its own number
