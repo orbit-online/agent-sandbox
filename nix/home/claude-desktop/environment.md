@@ -99,7 +99,11 @@ remove it.
 
 A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`,
 and its `store/` bound again at `/nix/store`. The next launch refuses a
-`store/` other than the one it made, a link included. No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
+`store/` other than the one it made, a link included. With no record of the
+one it made (an install from before it kept one), it sets `nix/` aside as
+`nix.quarantine-<time>` in the state dir, out of the sandbox's reach, and
+copies the closure into a fresh one: what was installed in `/nix` before is
+gone from here then. No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
 closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,

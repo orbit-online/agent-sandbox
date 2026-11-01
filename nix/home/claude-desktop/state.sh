@@ -7,6 +7,8 @@
 #   store-missing ROOTS: reads the closure of ROOTS, one path a line; prints "current" if the store's GC root names
 #     ROOTS already, else "stale" and the paths the store lacks
 #   store-import ROOTS [none]: imports a nix-store --export stream from stdin (none: nothing to import) and roots ROOTS
+#   store-quarantine: moves a non-empty nix/ aside to nix.quarantine-<UTC time> in the state dir, and prints where.
+#     Runs with the state dir bound, as the rename is in it
 #   theme SCHEME: the GTK theme for the portal's color-scheme (1 = dark)
 : "${STATE_DIR:?}" "${SANDBOX_HOME:?}" "${RESOLV_CONF:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
 : "${SCHEMA_DIR:?}"
@@ -49,6 +51,15 @@ store-import)
   # The old closure is garbage now; store-gc.sh collects it from inside the sandbox
   rm -f "$STATE_DIR/nix/var/claude-desktop/gc-pending"
   : >"$STATE_DIR/nix/var/claude-desktop/gc-pending"
+  ;;
+store-quarantine)
+  nix=$STATE_DIR/nix
+  [[ -n $(ls -A "$nix" 2>/dev/null) ]] || exit 0
+  aside=$STATE_DIR/nix.quarantine-$(date -u +%Y%m%dT%H%M%SZ)
+  [[ ! -e $aside ]] || aside+=.$$
+  # A rename needs only the state dir writable, whoever owns what the sandbox left inside
+  mv -T "$nix" "$aside"
+  echo "$aside"
   ;;
 theme)
   GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME=$SANDBOX_HOME/.config GSETTINGS_SCHEMA_DIR=$SCHEMA_DIR \
