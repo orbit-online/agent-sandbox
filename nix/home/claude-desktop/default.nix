@@ -612,6 +612,8 @@ let
     name: lcfg:
     let
       suffix = suffixOf name;
+      # A named launcher's .desktop file, whose name its windows' app ID matches. The default launcher keeps upstream's
+      desktopFile = "claude-desktop${suffix}.desktop";
       stateDir = stateDirOf name;
       appPid = appPidOf name;
       bwrapHome = "${stateDir}/home";
@@ -788,6 +790,7 @@ let
           pkgs.jq
         ];
         ASAR = asar;
+        DESKTOP_NAME = lib.optionalString (name != null) desktopFile;
       } "source ${./patch-asar.sh}";
       # The sandbox gets its own netns with a macvlan on the LAN (netns-macvlan --help), so host
       # services, routes and abstract sockets stay out of reach. Its DHCP lease brings the DNS servers
@@ -1160,7 +1163,7 @@ let
           # The package's only .desktop file, whose name changed upstream
           set -- ${sandboxed.config.env}/share/applications/*.desktop
           [[ $# == 1 ]]
-          d=$out/share/applications/${if name == null then "\${1##*/}" else "claude-desktop-${name}.desktop"}
+          d=$out/share/applications/${if name == null then "\${1##*/}" else desktopFile}
           mkdir -p "$out/share/applications"
           rm -f "$d"
           sed -e 's/^Actions=.*/&;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}/' ${
@@ -1172,12 +1175,15 @@ let
                 "s/^Exec=claude-desktop /Exec=claude-desktop-${name} /"
                 "-e"
                 "/^MimeType=/d"
+                "-e"
+                "s/^StartupWMClass=.*/StartupWMClass=${lib.removeSuffix ".desktop" desktopFile}/"
               ]
             )
           } "$(readlink -f "$1")" >"$d"
           grep -q '^Actions=.*;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}$' "$d"
           ${lib.optionalString (name != null) ''
             grep -qxF 'Name=Claude (${name})' "$d"
+            grep -qxF 'StartupWMClass=${lib.removeSuffix ".desktop" desktopFile}' "$d"
             ! grep -q '^Exec=claude-desktop ' "$d" || exit 1
             ! grep -q '^MimeType=' "$d" || exit 1
           ''}

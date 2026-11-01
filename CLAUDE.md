@@ -163,7 +163,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   read-only `/run/permissions` bind, the config with its standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; none
   of it for the default launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
-  handler).
+  handler, `StartupWMClass` matching the `desktopName` its asar gets, which
+  the default launcher's keeps from upstream).
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace, and the user namespace chain: a netns two user namespaces down

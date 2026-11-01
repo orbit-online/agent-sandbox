@@ -126,11 +126,11 @@ let
           asar pack "$1" "$1.asar" --unpack '*.node'
         }
         app one "$pick"
-        ASAR=$PWD/one.asar out=$PWD/patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
+        ASAR=$PWD/one.asar DESKTOP_NAME= out=$PWD/patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
         grep -qaF '(!1&&Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),' patched.asar ||
           { echo "the native notification backend can still be picked" >&2; exit 1; }
         app two "$pick;$pick"
-        if ASAR=$PWD/two.asar out=$PWD/patched-two.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}; then
+        if ASAR=$PWD/two.asar DESKTOP_NAME= out=$PWD/patched-two.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}; then
           echo "patch-asar.sh took an app with two places picking the notification backend" >&2
           exit 1
         fi
@@ -720,10 +720,15 @@ in
           ! grep -q '^Name=Permissions$' ${sandboxed}/share/applications/*.desktop ||
             { echo "the default launcher has the Permissions action" >&2; exit 1; }
           d=$work/share/applications/claude-desktop-work.desktop
-          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Name=New shell' 'Name=Permissions'; do
+          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'StartupWMClass=claude-desktop-work' 'Name=New shell' 'Name=Permissions'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
           done
           ! grep -q -e '^MimeType=' -e '^Exec=claude-desktop ' "$d" || { echo "$d keeps the claude:// handler or the default Exec" >&2; exit 1; }
+          # Its windows' app ID, which Electron takes from desktopName (an asar stores its files as they are); the
+          # default launcher keeps upstream's
+          workAsar=$(grep -- '-claude-desktop-app\.asar$' "$workClosure/store-paths")
+          grep -qaF '"desktopName": "claude-desktop-work.desktop"' "$workAsar" || { echo "work's asar lacks its desktopName" >&2; exit 1; }
+          ! grep -qaF '"desktopName": "claude-desktop' "$asar" || { echo "the default launcher's asar has a launcher's desktopName" >&2; exit 1; }
           touch $out
         '';
 

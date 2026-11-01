@@ -6,9 +6,16 @@
 # The app's own notification backend (a native module, behind a gate that's on by default) talks to
 # org.freedesktop.Notifications on the session bus, which the proxy doesn't let through: there the sandbox could replace
 # or close any notification, the permissions broker's included. With its gate-and-probe condition false, the app keeps
-# Electron's, libnotify, which NOTIFY_FORCE_PORTAL sends through the portal
-: "${ASAR:?}" "${out:?}"
+# Electron's, libnotify, which NOTIFY_FORCE_PORTAL sends through the portal.
+# Electron takes the windows' Wayland app ID and X11 WM_CLASS from package.json's desktopName alone (it sets
+# CHROME_DESKTOP from it at startup), so a named launcher's DESKTOP_NAME gives its windows the taskbar entry of its own
+# .desktop file
+: "${ASAR:?}" "${out:?}" "${DESKTOP_NAME?}"
 asar extract "$ASAR" app
+if [[ -n $DESKTOP_NAME ]]; then
+  jq --arg d "$DESKTOP_NAME" '.desktopName = $d' app/package.json >package.json
+  mv package.json app/package.json
+fi
 main=app/$(jq -er .main app/package.json)
 sed -i '1s/^"use strict";/&require("electron").safeStorage.setUsePlainTextEncryption(true);/' "$main"
 grep -q setUsePlainTextEncryption "$main"
