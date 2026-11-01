@@ -408,6 +408,7 @@ let
         iproute2
         which
         file
+        libnotify
       ];
       description = "Packages on PATH for the app, its Code tab shells and the local MCP servers.";
     };
