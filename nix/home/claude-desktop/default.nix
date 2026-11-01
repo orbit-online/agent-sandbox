@@ -55,6 +55,8 @@ let
     };
 
   xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
+  # The app keeps Claude Code under a versioned path, off PATH
+  claudeCode = script "claude.sh" { runtimeInputs = [ pkgs.coreutils ]; };
 
   subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
@@ -95,7 +97,13 @@ let
   appPidOf = name: 100 + lib.lists.findFirstIndex (n: n == name) null ([ null ] ++ lib.attrNames cfg.launchers);
   # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
   # .out: the man output is a symlink, see storeRoots
-  sandboxPackagesOf = lcfg: lcfg.path ++ [ osConfig.nix.package.out ];
+  sandboxPackagesOf =
+    lcfg:
+    lcfg.path
+    ++ [
+      claudeCode
+      osConfig.nix.package.out
+    ];
   # PATH for the app (so the Code tab's shells) and the claude-code MCP server
   searchPathOf =
     lcfg:

@@ -92,6 +92,8 @@ remove it.
   directories and packages under PATH in `/etc/claude/environment.md`, then
   the FHS env's `/usr/bin`. `SHELL` is bash from the sandbox's
   `/run/current-system/sw`; no shell rc files come from the host `/etc`.
+- `claude` runs the Claude Code the app keeps under
+  `~/.config/Claude/claude-code/`, its newest version.
 - A tool is missing: work around it for now (`nix run`, `nix shell`), and in
   the same go add it to the module's `path` in the user's config and tell the
   user to rebuild.
