@@ -406,8 +406,10 @@ pkgs.testers.runNixOSTest {
           assert status != 0 and "Operation not permitted" in out, f"{status} {out}"
           # The broker only serves clients in a sandbox
           sock = workstation.succeed("ls /run/user/1000/claude-desktop/subid-broker-*.sock").strip()
+          # The sleep's output elsewhere and killed after: execute waits for whatever holds the pipe
           status, out = as_user("alice", "sh -c " + shlex.quote(
-              f"unshare --user sleep 30 & sleep 1; SUBID_BROKER_SOCKET={sock} {shim.removesuffix('subid-broker')}newuidmap $! 0 1000 1"
+              f"unshare --user sleep 30 >/dev/null 2>&1 & sleep 1; SUBID_BROKER_SOCKET={sock}"
+              f" {shim.removesuffix('subid-broker')}newuidmap $! 0 1000 1; s=$?; kill $!; exit $s"
           ))
           assert status != 0 and "Client isn't in a sandbox" in out, f"{status} {out}"
 
@@ -493,8 +495,10 @@ pkgs.testers.runNixOSTest {
           # pid is set from inside that ns, by a child: the unshare's own shell is still in the FHS env's
           nest = ("unshare -Urpm sh -c 'sleep infinity & mount -t proc proc /proc;"
                   " sh -c \"echo 99 >/proc/sys/kernel/ns_last_pid\"; sleep infinity &'; exec sleep infinity")
+          # SIGKILL: the nested pid ns's init, a sleep, ignores SIGTERM, which would hold the stop for its 90 s timeout
           workstation.succeed(
-              "systemd-run --user -M alice@ --unit nest -- /etc/profiles/per-user/alice/bin/claude-desktop --exec sh -c "
+              "systemd-run --user -M alice@ --unit nest -p KillSignal=SIGKILL"
+              " -- /etc/profiles/per-user/alice/bin/claude-desktop --exec sh -c "
               + shlex.quote(nest)
           )
           workstation.wait_until_succeeds(
