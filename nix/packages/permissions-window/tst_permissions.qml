@@ -15,7 +15,8 @@ TestCase {
         property string state: JSON.stringify({
             pending: [{ id: "p1", capability: "folders/folder", params: { path: "/srv/notes", ro: true },
                         summary: 'a folder (path="/srv/notes", ro=true)', reason: "read the notes", lease: "PT1H" }],
-            grants: [{ id: "g1", capability: "test/thing", params: {}, summary: "the test thing", lease: "session" }],
+            grants: [{ id: "g1", capability: "test/thing", params: {}, summary: "the test thing", lease: "session" },
+                     { id: "g2", capability: "test/echo", params: {}, summary: "the echo", lease: "standing" }],
             log: [],
             capabilities: [{ id: "folders/folder", type: "attach",
                              params: { path: { type: "string" }, ro: { type: "boolean" } } }]
@@ -97,6 +98,11 @@ TestCase {
         mouseClick(end)
         compare(sent().op, "end")
         compare(sent().grants, ["g1"])
+    }
+
+    // A standing grant shows as from the config
+    function test_standing_grant() {
+        compare(findChild(view, "grant-g2").text, "the echo, from config")
     }
 
     // The same action twice is still a change: each command carries its own number

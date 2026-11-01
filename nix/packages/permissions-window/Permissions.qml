@@ -71,6 +71,8 @@ Item {
     }
 
     function leaseText(lease) {
+        if (lease === "standing")
+            return "From config"
         for (const l of leases)
             if (l.value === lease)
                 return l.text
@@ -228,6 +230,7 @@ Item {
                     Layout.leftMargin: 12
                     Layout.rightMargin: 12
                     Label {
+                        objectName: "grant-" + modelData.id
                         Layout.fillWidth: true
                         text: modelData.summary + ", " + root.leaseText(modelData.lease).toLowerCase()
                               + (modelData.expires ? ", until " + Qt.formatDateTime(new Date(modelData.expires), "HH:mm") : "")
