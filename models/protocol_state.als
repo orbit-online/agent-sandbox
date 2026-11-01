@@ -57,7 +57,9 @@ sig Text {}
 
 sig Grant {
   gl: one Launcher, gcap: one Capability, gparams: one Param, glease: one Lease,
-  var gsess: set Session,
+  // the sessions it was given to, which hold it until they release it or
+  // end, whatever the lease (holders, leases.go)
+  var holders: set Session,
   // a duration lease's remaining time
   var left: lone Int,
   // attach: the directory mounted
@@ -67,6 +69,9 @@ sig Grant {
 // everywhere it propagated. ToRun: a command grant waiting for a plugin
 // slot to run its `run` command.
 var sig Live, Ended, UnitUp, Mounted, ToRun in Grant {}
+// Given to a caller without a session (anon, leases.go): held, but for a
+// session lease, until it ends.
+var sig Anon in Grant {}
 
 // One request on request.sock: what the sandbox sends and the daemon
 // derives from it. asked: the lease the notification offers. summary: the
@@ -192,11 +197,13 @@ pred keepReqs {
 }
 pred keepGrants {
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
-  gsess' = gsess and left' = left and mdir' = mdir and lockFile' = lockFile
+  keepHolds and left' = left and mdir' = mdir and lockFile' = lockFile
 }
+pred keepHolds { holders' = holders and Anon' = Anon }
 
 // N are made live and E end in this step; the locks of E are released.
-// grant() (broker.go:840-913) and g.end (880-905). gsess is the caller's.
+// grant() (broker.go:840-913) and g.end (880-905). hold records who was
+// given them.
 pred change[N, E: set Grant] {
   no N & (Live + Ended)
   E in Live
@@ -218,7 +225,7 @@ pred change[N, E: set Grant] {
 // Ends E, nothing else changes.
 pred endOnly[E: set Grant] {
   change[none, E]
-  gsess' = gsess
+  keepHolds
   keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
 }
 
@@ -229,10 +236,23 @@ pred settle[r: Req, w: lone Principal] {
   by' = by - r -> Principal + r -> w
 }
 
+// hold (leases.go): a caller of s (none: no session found) was given g.
+// A session holds it; the hold of a session whose anchor is gone is
+// dropped at once by its watch, so it is never added here. A live session
+// lease nobody holds is ending: it takes no new hold.
+pred hold[g: Grant, s: lone Session] {
+  no s implies (Anon' = Anon + g and holders' = holders)
+  else {
+    Anon' = Anon
+    (s in Alive and not (g in Live and g.glease = LSession and no g.holders))
+      implies holders' = holders + g -> s else holders' = holders
+  }
+}
+
 pred init {
   no Up + Dirty + Gone
   no Live + Ended + UnitUp + Mounted + ToRun
   no Pending + Mature + Opened + Asked + Forged
   no asking and no refused and no blocked and no lockFile
-  no gsess and no left and no mdir and no shownDir and no shows
+  no holders and no Anon and no left and no mdir and no shownDir and no shows
 }

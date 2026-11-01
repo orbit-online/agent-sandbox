@@ -47,7 +47,7 @@ run P1grants {
 // parent's session anyway. Sessions run as one user in one set of
 // namespaces, so no isolation between them could be enforced.
 assert P1sessionLeaseNotWidened {
-  always all g: Grant | g in Live implies g.gsess' in g.gsess
+  always all g: Grant | (g in Live and g.glease = LSession) implies g.holders' in g.holders
 }
 check P1sessionLeaseNotWidened for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 1

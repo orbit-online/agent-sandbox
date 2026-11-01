@@ -37,7 +37,7 @@ pred share[l: Launcher, w: Principal] {
   Up' = Up and Dirty' = Dirty and Watched' = Watched and Gone' = Gone
   replays[l, Attach, Live' - Live]
   change[Live' - Live, none]
-  gsess' = gsess
+  keepHolds
   keepGates and keepEnv and keepReqs and stored' = stored
 }
 
@@ -53,7 +53,7 @@ pred crash[l: Launcher] {
     Mounted' = Mounted and lockFile' = lockFile
     ToRun' = ToRun - gl.l
   }
-  gsess' = gsess and left' = left and mdir' = mdir
+  keepHolds and left' = left and mdir' = mdir
   Pending' = Pending - rl.l and Mature' = Mature - rl.l and Opened' = Opened - rl.l
   Asked' = Asked and Forged' = Forged and shownDir' = shownDir and shows' = shows and by' = by
   asking' = asking - l -> Capability and refused' = refused - l -> Capability -> Int
@@ -67,7 +67,7 @@ pred stopPost[l: Launcher] {
   Dirty' = Dirty - l and Up' = Up and SharedDir' = SharedDir and Watched' = Watched and Gone' = Gone
   cleanup[l]
   Live' = Live and Ended' = Ended and ToRun' = ToRun
-  gsess' = gsess and left' = left and mdir' = mdir
+  keepHolds and left' = left and mdir' = mdir
   keepGates and keepEnv and keepReqs and stored' = stored
 }
 
@@ -92,7 +92,7 @@ pred start[l: Launcher] {
     all g: N & typed[Attach] | g.mdir' = g.gparams.resolves
     all g: Grant - (N & typed[Attach]) | g.mdir' = g.mdir
   }
-  gsess' = gsess and left' = left
+  keepHolds and left' = left
   keepGates and keepEnv and keepReqs and stored' = stored
 }
 
@@ -106,7 +106,7 @@ pred sandboxEnd[l: Launcher] {
     UnitUp' = UnitUp - gl.l and Mounted' = Mounted - gl.l and ToRun' = ToRun - gl.l
     lockFile' = lockFile - (Capability -> Instance -> l)
   }
-  gsess' = gsess and left' = left and mdir' = mdir
+  keepHolds and left' = left and mdir' = mdir
   Pending' = Pending - rl.l and Mature' = Mature - rl.l and Opened' = Opened - rl.l
   Asked' = Asked and Forged' = Forged and shownDir' = shownDir and shows' = shows and by' = by
   asking' = asking - l -> Capability and refused' = refused and blocked' = blocked
@@ -123,7 +123,7 @@ pred runCommand[g: Grant] {
   g in ToRun and g in Live
   ToRun' = ToRun - g
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted
-  gsess' = gsess and left' = left and mdir' = mdir and lockFile' = lockFile
+  keepHolds and left' = left and mdir' = mdir and lockFile' = lockFile
   keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
 }
 pred credential[g: Grant] { runCommand[g] and validity[g] > 0 }
@@ -135,7 +135,7 @@ pred born[g: Grant] { g not in Live and g not in Ended and after g in Live }
 pred env {
   Alive in Alive'
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
-  gsess' = gsess and left' = left and mdir' = mdir and lockFile' = lockFile
+  keepHolds and left' = left and mdir' = mdir and lockFile' = lockFile
   keepDaemons and keepGates and keepReqs and stored' = stored
 }
 
@@ -155,7 +155,8 @@ fact traces {
     or (some r: Req | ask[r] or mature[r] or options[r] or forge[r] or refuse[r] or drop[r])
     or (some r: Req, g: Grant | matchLive[r, g] or fromStore[r, g] or notifAllow[r, g])
     or (some r: Req, w: Clients, ls: Lease, p: Param, g: Grant | windowAllow[r, w, ls, p, g])
-    or (some g: Grant | release[g] or expire[g] or runCommand[g])
+    or (some g: Grant | release[g, none] or watchEnd[g] or expire[g] or runCommand[g])
+    or (some g: Grant, s: Session | release[g, s])
     or (some g: Grant, w: Clients | revoke[g, w])
     or (some s: Session | sessionEnd[s])
     or (some l: Launcher | lockEv[l] or lockLost[l] or lockGained[l] or crash[l] or stopPost[l]

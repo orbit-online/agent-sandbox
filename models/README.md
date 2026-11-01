@@ -308,6 +308,12 @@ process whose principal is in the Sandbox domain, at any time.
 - P14. The sandbox can't keep the user from answering: one pending request
   per capability, three refusals in a row block it for 2 minutes, and a
   full `request.sock` leaves `control.sock` its own budget.
+- P15. A release drops only the caller's hold: a grant ends on release
+  once no live session holds it and, but for a session lease, no caller
+  without a session was given it; a caller without a session ends it
+  outright. Every session a grant is delivered to holds it, whatever the
+  lease, until it releases it or ends; a session lease ends exactly when
+  its last holder ends.
 
 ### Launch (`launch.als`)
 
@@ -365,7 +371,7 @@ exhaustion of the host other than the broker's budgets.
 |---|---|---|
 | `sandbox.als` | 1 | shared base: signatures and kernel facts, no sandbox claims |
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
-| `protocol.als` | 3 | P1-P14 |
+| `protocol.als` | 3 | P1-P15 |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 
 `sandbox.als` has principals, processes (`var`: namespaces, ids,

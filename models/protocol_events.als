@@ -44,8 +44,7 @@ pred matchLive[r: Req, g: Grant] {
     Asked' = Asked + r
     Pending' = Pending and Mature' = Mature and Opened' = Opened and Forged' = Forged
     shownDir' = shownDir and shows' = shows and by' = by
-    (g.glease = LSession and some r.rsess and r.rsess in Alive and some g.gsess)
-      implies gsess' = gsess + g -> r.rsess else gsess' = gsess
+    hold[g, r.rsess]
     ToRun' = ToRun + (g & typed[Command])
     Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted
     left' = left and mdir' = mdir and lockFile' = lockFile
@@ -62,7 +61,7 @@ pred fromStore[r: Req, g: Grant] {
     p in l.stored[c]
     g.gl = l and g.gcap = c and g.gparams = p and g.glease = LAlways
     change[g, none]
-    gsess' = gsess
+    hold[g, r.rsess]
     Asked' = Asked + r
     Pending' = Pending and Mature' = Mature and Opened' = Opened and Forged' = Forged
     shownDir' = shownDir and shows' = shows and by' = by
@@ -127,7 +126,7 @@ pred notifAllow[r: Req, g: Grant] {
     no h: Live | h.gl = l and h.gcap = c and h.gparams = r.rparams
     g.gl = l and g.gcap = c and g.gparams = r.rparams and g.glease = r.asked
     change[g, none]
-    r.asked = LSession implies gsess' = gsess + g -> r.rsess else gsess' = gsess
+    hold[g, r.rsess]
     // addAlways for the answer's lease (broker.go:632-634)
     r.asked = LAlways implies stored' = stored + l -> c -> r.rparams else stored' = stored
     settle[r, NotifierP]
@@ -149,7 +148,7 @@ pred windowAllow[r: Req, w: Principal, ls: Lease, p: Param, g: Grant] {
     no h: Live | h.gl = l and h.gcap = c and h.gparams = p
     g.gl = l and g.gcap = c and g.gparams = p and g.glease = ls
     change[g, none]
-    ls = LSession implies gsess' = gsess + g -> r.rsess else gsess' = gsess
+    hold[g, r.rsess]
     ls = LAlways implies stored' = stored + l -> c -> p else stored' = stored
     settle[r, w]
     asking' = asking - l -> c and refused' = refused - l -> c -> Int and blocked' = blocked
@@ -187,16 +186,27 @@ pred unblock[l: Launcher, c: Capability] {
 // ---------------------------------------------------------------------
 // Ends of grants.
 
-// release from inside, any grant by id, or its plugin's watch exiting.
-// A release from a session ends the grant only once no session it was
-// given to holds it (leases.go); always ending it here over-approximates
-// the ends, which no claim here depends on being fewer.
-pred release[g: Grant] { g in Live and endOnly[g] }
+// release from inside (release, leases.go): the caller's session s drops
+// its hold, s none when no session is found for the caller. The grant
+// ends unless another session holds it or, but for a session lease, a
+// caller without a session was given it; a caller without a session ends
+// it outright (that only takes access away).
+pred heldBesides[g: Grant, s: lone Session] {
+  some s and (some g.holders - s or (g in Anon and g.glease != LSession))
+}
+pred release[g: Grant, s: lone Session] {
+  g in Live
+  holders' = holders - g -> s and Anon' = Anon
+  heldBesides[g, s] implies change[none, none] else change[none, g]
+  keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
+}
+// The plugin's watch or serve exits: the grant ends for everyone.
+pred watchEnd[g: Grant] { g in Live and endOnly[g] }
 // revoke in the window (leases.go): an always grant leaves the store too.
 pred revoke[g: Grant, w: Principal] {
   hostOnly[w] and g in Live
   change[none, g]
-  gsess' = gsess
+  keepHolds
   keepDaemons and keepGates and keepEnv and keepReqs
   g.glease = LAlways implies stored' = stored - g.gl -> g.gcap -> g.gparams else stored' = stored
 }
@@ -206,24 +216,24 @@ pred tick {
   all g: Grant | (g in Live and g.glease = LDuration and g.left > 0)
     implies g.left' = minus[g.left, 1] else g.left' = g.left
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
-  gsess' = gsess and mdir' = mdir and lockFile' = lockFile
+  keepHolds and mdir' = mdir and lockFile' = lockFile
   keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
 }
 
-// An anchor exits (watchSession, broker.go:955-983): a session lease ends
-// with its last session.
+// An anchor exits (watchSession, leases.go): the session drops its holds
+// on every grant, and a session lease ends with its last holder.
 pred sessionEnd[s: Session] {
   s in Alive
   Alive' = Alive - s and Listed' = Listed and resolves' = resolves
-  gsess' = gsess - Grant -> s
-  change[none, { g: Live | g.glease = LSession and g.gsess in s }]
+  holders' = holders - Grant -> s and Anon' = Anon
+  change[none, { g: Live | g.glease = LSession and g.holders in s }]
   keepDaemons and keepGates and keepReqs and stored' = stored
 }
 
 // Lock, LockedHint or PrepareForSleep (lockEvent, broker.go:986-992).
 pred lockEv[l: Launcher] {
   change[none, Live & gl.l & glease.LLock]
-  gsess' = gsess
+  keepHolds
   keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
 }
 
@@ -233,7 +243,7 @@ pred lockLost[l: Launcher] {
   Watched' = Watched - l
   Up' = Up and Dirty' = Dirty and SharedDir' = SharedDir and Gone' = Gone
   change[none, Live & gl.l & glease.LLock]
-  gsess' = gsess and keepGates and keepEnv and keepReqs and stored' = stored
+  keepHolds and keepGates and keepEnv and keepReqs and stored' = stored
 }
 
 pred lockGained[l: Launcher] {
@@ -249,6 +259,6 @@ pred forget[l: Launcher, c: Capability, p: Param, w: Principal] {
   hostOnly[w] and l in Up and p in c.wellFormed
   stored' = stored - l -> c -> p
   change[none, { h: Live | h.gl = l and h.gcap = c and h.gparams = p and h.glease = LAlways }]
-  gsess' = gsess
+  keepHolds
   keepDaemons and keepGates and keepEnv and keepReqs
 }

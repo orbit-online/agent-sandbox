@@ -1,6 +1,7 @@
 /*
- * The grants' lifecycle: P3, P4, P9-P13 over the system in protocol.als,
- * with the findings about replay, forget and exclusive instances. As in
+ * The grants' lifecycle: P3, P4, P9-P13 and P15 over the system in
+ * protocol.als, with the findings about replay, forget and exclusive
+ * instances, and the holds that releases and session ends drop. As in
  * protocol-consent.als, each claim has a `run` for its premise, and
  * "Revert:" names the check dropped to see it fail (tried 2026-10-31).
  */
@@ -194,3 +195,60 @@ assert P13exclusiveByInstance {
 }
 check P13exclusiveByInstance for 3 but 0 Process, 2 Launcher, 1 Capability, 2 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 0
+
+// P15. A release by one session never ends a grant another live session
+// holds: it drops the caller's hold only (release, leases.go). A caller
+// without a session ends it all the same, so s is a session here.
+// Revert: release ending the grant always (as this model had it before
+// ec044cd): counterexample (tried 2026-11-01).
+assert P15releaseKeepsOthersHold {
+  always all g: Grant, s: Session | (release[g, s] and some (g.holders & Alive) - s) implies after g in Live
+}
+check P15releaseKeepsOthersHold for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 0
+run P15holderReleases {
+  eventually some g: Grant, s: Session | s in g.holders and some g.holders - s and release[g, s]
+} for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 1
+
+// P15. Every hold is a live session's: a session that ends drops its
+// holds on every grant (watchSession, leases.go), so a grant nobody holds
+// any more, but for a session lease, given to no caller without a session,
+// ends on the next release from any session, and on any release without
+// one. Revert: sessionEnd dropping the holds on session leases only (as
+// before 48dcd7b): the ended session's hold keeps a duration grant live
+// after the other holder releases it (counterexample, tried 2026-11-01).
+assert P15releaseEndsUnheld {
+  always all g: Live | g.holders in Alive
+  always all g: Grant, s: Session | (release[g, s] and g.glease != LSession and g not in Anon
+    and no (g.holders & Alive) - s) implies after g not in Live
+  always all g: Grant | release[g, none] implies after g not in Live
+}
+check P15releaseEndsUnheld for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 0
+run P15lastHolderReleases {
+  eventually some g: Grant, s, t: Session | g.glease != LSession and s + t in g.holders and s != t
+    and sessionEnd[t] and after eventually release[g, s]
+} for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 1
+
+// P15 and P8. A session lease ends exactly when its last holder ends: a
+// live one always has a live holder, and a session's end ends it if and
+// only if that session was its last holder. A caller without a session
+// doesn't hold a session lease (release, leases.go). Revert: release
+// counting that caller for a session lease too (as before 48dcd7b): a
+// caller without a session matches the grant, its only session releases
+// it, and it stays live with no session holding it (counterexample,
+// tried 2026-11-01).
+assert P15sessionLeaseEndsWithLastHolder {
+  always all g: Live & glease.LSession | some g.holders & Alive
+  always all g: Grant, s: Session | (sessionEnd[s] and g in Live and g.glease = LSession)
+    implies (after g in Live iff some g.holders - s)
+}
+check P15sessionLeaseEndsWithLastHolder for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 0
+run P15sessionLeaseOutlivesFirstHolder {
+  eventually some g: Grant, s: Session | g.glease = LSession and g in Live and some g.holders - s
+    and sessionEnd[s] and after eventually (some t: Session | sessionEnd[t] and g in Live)
+} for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 1

@@ -1,10 +1,10 @@
 /*
- * Step 3: the permissions broker's protocol over time (README.md, P1-P14).
+ * Step 3: the permissions broker's protocol over time (README.md, P1-P15).
  * This file holds the system: requests, consent, grants per delivery type,
  * leases, the store, the daemon's crashes and restarts, several launchers,
  * and the attacker's moves interleaved; its own commands only test the
  * encoding. protocol-consent.als checks consent (P1, P2, P6, P7, P14),
- * protocol-life.als the grants' lifecycle (P3, P4, P9-P13),
+ * protocol-life.als the grants' lifecycle (P3, P4, P9-P13, P15),
  * protocol-tree.als the process tree (P5, P8), protocol-window.als the
  * window's view. The system is in protocol_state.als, protocol_events.als
  * and protocol_system.als, which the checks `open` (Alloy module names
