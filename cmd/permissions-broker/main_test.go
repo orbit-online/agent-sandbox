@@ -265,13 +265,13 @@ func startAnchorMode(t *testing.T, name, mode string, n int) (*exec.Cmd, []int) 
 	return cmd, pids
 }
 
-// ownNs starts the test binary as a mount process in a user and mount namespace of its own, root there
+// ownNs starts the test binary as a mount process in a user, mount and uts namespace of its own, root there
 func ownNs(t *testing.T, mountAt string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command("/proc/self/exe")
 	cmd.Env = append(os.Environ(), "BROKER_TEST=mount", "MOUNT_AT="+mountAt)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
+		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
 		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}},
 	}

@@ -108,19 +108,39 @@ func (s *sandbox) members() []int {
 	return pids
 }
 
-// copied reports whether a process of the sandbox is in a mount namespace other than M1: the FHS env's bwrap (or
-// anything else) has made a copy of M1, which a share now wouldn't reach
+// copied reports whether a process of the sandbox is in a copy of M1: a mount namespace owned by a user namespace
+// below the sandbox's. The FHS env's bwrap (or anything else in the sandbox) made it, and a share now wouldn't reach
+// it. Not one owned by the sandbox's user namespace itself: only the host has the capabilities to make those (udhcpc's,
+// the clone helper's), from the host's mounts, as it has for joining U1 on the host's mounts (net-setup's ip)
 func (s *sandbox) copied() (bool, error) {
-	if s.mnt == nil {
+	if s.mnt == nil || s.userns == nil {
 		return false, errors.New("The sandbox's namespaces aren't known")
 	}
 	m1, err := keyOf(int(s.mnt.Fd()))
 	if err != nil {
 		return false, err
 	}
+	top, err := keyOf(int(s.userns.Fd()))
+	if err != nil {
+		return false, err
+	}
+	seen := map[nsKey]bool{}
 	for _, pid := range s.members() {
-		var st unix.Stat_t
-		if unix.Stat(fmt.Sprintf("/proc/%d/ns/mnt", pid), &st) == nil && (nsKey{st.Dev, st.Ino}) != m1 {
+		mnt, err := unix.Open(fmt.Sprintf("/proc/%d/ns/mnt", pid), unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			continue
+		}
+		key, kerr := keyOf(mnt)
+		owner, oerr := unix.IoctlRetInt(mnt, unix.NS_GET_USERNS)
+		unix.Close(mnt)
+		if kerr != nil || oerr != nil {
+			continue
+		}
+		if k, err := keyOf(owner); err != nil || k == top || key == m1 {
+			unix.Close(owner)
+			continue
+		}
+		if s.below(owner, seen) {
 			return true, nil
 		}
 	}
