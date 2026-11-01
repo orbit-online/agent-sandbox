@@ -298,6 +298,43 @@ pkgs.testers.runNixOSTest {
           assert app_caps == "0000000000000000", f"the app has capabilities {app_caps}"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
 
+      with subtest("D-Bus reaches only the notification and tray calls on Plasma's connections"):
+          gdbus = "${pkgs.lib.getExe' pkgs.glib "gdbus"}"
+
+          def bus_call(dest, path, method, *args):
+              q = " ".join(shlex.quote(a) for a in args)
+              return workstation.execute(sandbox_cmd(
+                  f"{gdbus} call --session --dest {dest} --object-path {path} --method {method} {q}"
+              ) + " 2>&1")
+
+          status, out = bus_call("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                                 "org.freedesktop.Notifications.Notify", "test", "uint32 0", "", "summary", "body",
+                                 "@as []", "@a{sv} {}", "int32 -1")
+          assert status == 0 and "uint32 7" in out, f"Notify: {status} {out}"
+          shell = in_sandbox(f"{gdbus} call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus"
+                             " --method org.freedesktop.DBus.GetNameOwner org.freedesktop.Notifications").split("'")[1]
+          status, out = bus_call("org.kde.klipper", "/klipper", "org.kde.klipper.klipper.getClipboardContents")
+          assert status != 0 and "secret" not in out, f"the clipboard by its name: {status} {out}"
+          # The notification server's own connection, by its unique name: the rules of the names it holds apply
+          status, out = bus_call(shell, "/klipper", "org.kde.klipper.klipper.getClipboardContents")
+          assert status != 0 and "secret" not in out, f"the clipboard through {shell}: {status} {out}"
+          status, out = bus_call("org.freedesktop.Notifications", "/klipper", "org.kde.klipper.klipper.getClipboardContents")
+          assert status != 0 and "secret" not in out, f"the clipboard through the notification name: {status} {out}"
+          status, out = bus_call("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
+                                 "org.freedesktop.DBus.Properties.Get", "org.kde.StatusNotifierWatcher",
+                                 "IsStatusNotifierHostRegistered")
+          assert status == 0 and "true" in out, f"IsStatusNotifierHostRegistered: {status} {out}"
+          status, out = bus_call("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
+                                 "org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem",
+                                 f"org.freedesktop.StatusNotifierItem-{app_pid}-1")
+          assert status == 0, f"RegisterStatusNotifierItem: {status} {out}"
+          items = as_alice(f"{gdbus} call --session --dest org.kde.StatusNotifierWatcher --object-path"
+                           " /StatusNotifierWatcher --method org.freedesktop.DBus.Properties.Get"
+                           " org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems")
+          assert f"StatusNotifierItem-{app_pid}-1" in items, items
+          status, out = bus_call("org.kde.StatusNotifierWatcher", "/kded", "org.kde.kded6.unloadModule", "x")
+          assert status != 0 and "true" not in out, f"kded's other object: {status} {out}"
+
       with subtest("the launch replaced the planted links and left alice's files alone"):
           victims_untouched()
           for link in planted:

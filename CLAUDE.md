@@ -256,7 +256,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   inside directly, the launcher refusing a missing bind source that isn't optional,
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
-  set, with no capabilities left), the subid maps (alice's auto range in the sandbox's userns
+  set, with no capabilities left), D-Bus through the proxy (a fake Plasma on
+  the fake portal's process: Notify and the tray's registration reach it, its
+  clipboard and another kded object don't, by name or by unique name), the subid maps (alice's auto range in the sandbox's userns
   from the host's view, the FHS env's identity map, `/etc/subuid` and
   `/etc/subgid` inside, `unshare --map-auto` and a root-mapping map through
   the shims and the broker, the shim in `/usr/bin`, a file written inside

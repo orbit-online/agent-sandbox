@@ -55,9 +55,14 @@ in the init namespaces unless noted.
    broker posts over D-Bus (godbus) and signals the action. The sandbox
    talks to it too.
 5. **xdg-dbus-proxy**: nixpak's, in a plain bwrap; filters the session bus
-   for the sandbox (Notifications talk, StatusNotifierWatcher talk and one
-   StatusNotifierItem name with the tray, OpenURI and Settings calls on the
-   portal). Its rules are fixed at start.
+   for the sandbox, by call rules only (no `talk`, which reaches every
+   object the name's owner exports): the `org.freedesktop.Notifications`
+   interface on `/org/freedesktop/Notifications`, with the tray
+   `RegisterStatusNotifierItem` and `Properties.Get` on
+   `/StatusNotifierWatcher` and one StatusNotifierItem name to own,
+   OpenURI and Settings on the portal. A call to an owner's unique name
+   is checked against the rules of every name it holds. Its rules are
+   fixed at start.
 6. **Launcher**: `claude-desktop.sh`, nixpak's launcher, `bwrap-subid.sh`
    (`SUBID_MAP=subid` on the host), `net-setup.sh` in nixpak's pasta slot,
    the GTK theme scripts, `store-sync.sh`. What they do in the sandbox's
@@ -153,7 +158,9 @@ joining needs CAP_SYS_ADMIN in init).
   runtime dir on the host.
 - B4: consent: what the user sees and clicks | what the sandbox can draw.
   The broker's notification and the window against look-alike
-  notifications.
+  notifications. The sandbox reaches the notification server's
+  Notifications interface only, not the rest of what its process exports
+  (plasmashell's on-screen display, clipboard, scripting, quit).
 
 ## Attacker
 

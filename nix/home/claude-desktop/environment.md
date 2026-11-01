@@ -64,8 +64,12 @@ the user answers on the host, and grants show up under `/run/permissions`.
   Portals see the app as Flatpak `com.nixpak.ClaudeDesktop`, or
   `com.nixpak.ClaudeDesktop.<name>` for a named launcher (nixpak's
   `/.flatpak-info`, which the FHS env's inner bwrap doesn't bind).
-- Session D-Bus goes through nixpak's `xdg-dbus-proxy`: OpenURI and Settings
-  portals and Notifications only. Links open in the host browser via OpenURI.
+- Session D-Bus goes through nixpak's `xdg-dbus-proxy`, which lets through
+  calls only: OpenURI and Settings on the portal, the Notifications interface
+  on `/org/freedesktop/Notifications`, and with the tray the
+  StatusNotifierWatcher's registration. Nothing else the desktop's processes
+  export (the clipboard, Plasma's scripting). Links open in the host browser
+  via OpenURI.
 - Own network namespace with a macvlan on the LAN (DHCP), so host-only
   services (VPN mesh, auth proxies, the host's `127.0.0.1`) are out of reach.
 - No SSH agent and no `~/.ssh`.

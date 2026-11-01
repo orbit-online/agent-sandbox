@@ -842,21 +842,37 @@ let
             # The wrapper finds its running sandbox by it
             flatpak.appId = lib.mkIf (name != null) "com.nixpak.ClaudeDesktop.${name}";
             app.package = package;
-            dbus.policies = {
-              "org.freedesktop.Notifications" = "talk";
-            }
-            // lib.optionalAttrs lcfg.tray {
+            dbus.policies = lib.optionalAttrs lcfg.tray {
               # Chromium names it StatusNotifierItem-<pid>-<n>
-              "org.kde.StatusNotifierWatcher" = "talk";
               "org.freedesktop.StatusNotifierItem-${toString appPid}-1" = "own";
             };
-            dbus.rules.call."org.freedesktop.portal.Desktop" = [
-              "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
-              "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
-            ];
-            dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
-              "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
-            ];
+            # Calls only, never "talk": xdg-dbus-proxy filters by name, and talk reaches every object the name's owner
+            # exports (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see
+            # the name and get replies and the owner's signals. The proxy checks a call to the owner's unique name
+            # against the rules of every name it holds, so no other name may get talk where one of these owners holds it
+            dbus.rules.call = {
+              "org.freedesktop.portal.Desktop" = [
+                "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
+                "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
+              ];
+              # What libnotify calls (Notify, CloseNotification, GetCapabilities, GetServerInformation)
+              "org.freedesktop.Notifications" = [ "org.freedesktop.Notifications.*@/org/freedesktop/Notifications" ];
+            }
+            // lib.optionalAttrs lcfg.tray {
+              # What Chromium's StatusIconLinuxDbus calls
+              "org.kde.StatusNotifierWatcher" = [
+                "org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem@/StatusNotifierWatcher"
+                "org.freedesktop.DBus.Properties.Get@/StatusNotifierWatcher"
+              ];
+            };
+            # xdg-dbus-proxy 0.1.7 passes a name's broadcasts once it has any rule; these say what's meant, for a
+            # proxy that filters them
+            dbus.rules.broadcast = {
+              "org.freedesktop.portal.Desktop" = [
+                "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
+              ];
+              "org.freedesktop.Notifications" = [ "org.freedesktop.Notifications.*@/org/freedesktop/Notifications" ];
+            };
             gpu = {
               enable = true;
               # Not "nixos": /run/opengl-driver links into the system closure
