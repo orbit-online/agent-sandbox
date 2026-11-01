@@ -114,6 +114,8 @@ let
   # mountpoints in it, so the wrapper copies the closure in and roots it before every launch
   nixConf = pkgs.writeTextDir "nix.conf" ''
     experimental-features = nix-command flakes
+    # Nix's default is one build at a time
+    max-jobs = auto
     substituters = https://cache.nixos.org/
     trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
   '';
