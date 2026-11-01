@@ -93,8 +93,8 @@ remove it.
 <!-- memo: topic={nix,sandbox} -->
 
 A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`,
-and its `store/` bound again at `/nix/store`, so it can't be renamed (and a
-link there stops the next launch). No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
+and its `store/` bound again at `/nix/store`. The next launch refuses a
+`store/` other than the one it made, a link included. No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
 closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,

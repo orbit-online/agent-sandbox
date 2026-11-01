@@ -26,8 +26,8 @@ pred fhsShare {
   keepMaps and keepWaits and Eth0In' = Eth0In
 }
 
-// The same request from udhcpc, also in M1, at any time:
-// broker.go:485 shareFrom only checks the client's mount namespace
+// The same request from udhcpc at any time, if it ran in M1:
+// shareFrom only checks the client's mount namespace. It runs in MU
 pred lateShare {
   some principal.UdhcpcP & mnt.M1
   On' = On + M1Shared + BrokerShared
@@ -105,7 +105,8 @@ pred fhsInit {
     c.principal = BwrapInitP and c.ppid = l and no c.caps
     u.principal = UdhcpcP and u.ppid = c and u.caps = NetAdmin + NetRaw
     f.principal = BwrapInitP and f.ppid = c and no f.caps
-    all p: c + u + f | p.uid = HostUser and p.userns = U1 and p.mnt = M1 and p.net = N and p.pidns = P
+    all p: c + u + f | p.uid = HostUser and p.userns = U1 and p.net = N and p.pidns = P
+    (c + f).mnt = M1 and u.mnt = MU
     Root = c and Fhs = f
   }
 }
@@ -123,58 +124,56 @@ pred fhs[g: set Guard, m: set Move] {
 
 // L1, fhs stage: U2's maps through the shims and subid-broker.
 assert L1fhs { fhs[Guard, Move] implies l1 }
-check L1fhs for 7 but 8 OwnedNS, 1..9 steps expect 0
+check L1fhs for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L1, fhs stage, revert: the same without KillOnMapFail.
 assert L1fhsRevert { fhs[Guard - KillOnMapFail, Move] implies l1 }
-check L1fhsRevert for 7 but 8 OwnedNS, 1..9 steps expect 1
+check L1fhsRevert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // Vacuity: the fhs stage reaches the app with the grant directory shared
 // into M2.
 run fhsRuns {
   fhs[Guard, none]
   eventually (some principal.AppP and M2Slave in On)
-} for 7 but 8 OwnedNS, 1..9 steps expect 1
+} for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L4: the app and everything it starts hold no capability in U2, whether
 // or not app-pid.sh's write to ns_last_pid succeeds. Holds.
 pred l4 { always all p: principal.(AppP + SessionP) | no p.caps }
 assert L4 { fhs[Guard, Move] implies l4 }
-check L4 for 7 but 8 OwnedNS, 1..9 steps expect 0
+check L4 for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L4, revert: without DropCapsOnFail, as before the fix, a failed write
 // left the ambient CAP_CHECKPOINT_RESTORE bwrap raised (default.nix:
 // --cap-add) with the app and all it starts.
 assert L4failRevert { fhs[Guard - DropCapsOnFail, Move] implies l4 }
-check L4failRevert for 7 but 8 OwnedNS, 1..9 steps expect 1
+check L4failRevert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L4 when the write succeeds: setpriv drops the capability before the fork.
 assert L4writeOk { (fhs[Guard, Move] and always LastPidFail not in On) implies l4 }
-check L4writeOk for 7 but 8 OwnedNS, 1..9 steps expect 0
+check L4writeOk for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L4, revert: without DropCapsBeforeFork the app keeps it either way.
 assert L4revert { (fhs[Guard - DropCapsBeforeFork, Move] and always LastPidFail not in On) implies l4 }
-check L4revert for 7 but 8 OwnedNS, 1..9 steps expect 1
+check L4revert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L9: once the broker takes attach requests (b.shared), M2's
 // /run/permissions receives what it mounts in M1.
 //
-// Known: when the FHS env's own `share` failed (the launch goes on,
-// bwrap-subid.sh:80-81), udhcpc can send `share` after the copy:
-// shareFrom (broker.go:485) checks only that the client is in M1, and
-// adoptShared (broker.go:500) would take the same state over after a
-// restart. The broker then grants attach into M1, where nothing but bwrap's
-// init and udhcpc sees it. Consent is still asked; the grant just never
-// reaches the app. Low: the user sees a grant that does nothing.
+// Holds with udhcpc's late `share` among the moves: when the FHS env's
+// own `share` failed (the launch goes on, bwrap-subid.sh:80-81), shareFrom
+// takes one only from a client in M1, and udhcpc runs in MU (L3). It was
+// a known finding while udhcpc ran in M1: the broker then granted attach
+// into M1, where nothing but bwrap's init and udhcpc saw it.
 pred l9 { always ((BrokerShared + M2Copied) in On implies M2Slave in On) }
 assert L9 { fhs[Guard, Move] implies l9 }
-check L9 for 7 but 8 OwnedNS, 1..9 steps expect 1
+check L9 for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L9 when only the FHS env's script sends `share`.
 assert L9noLateShare { fhs[Guard, none] implies l9 }
-check L9noLateShare for 7 but 8 OwnedNS, 1..9 steps expect 0
+check L9noLateShare for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L9, revert: without ShareBeforeCopy the script's own `share` can come
 // after the copy.
 assert L9revert { fhs[Guard - ShareBeforeCopy, none] implies l9 }
-check L9revert for 7 but 8 OwnedNS, 1..9 steps expect 1
+check L9revert for 7 but 9 OwnedNS, 1..9 steps expect 1

@@ -451,6 +451,16 @@ pkgs.testers.runNixOSTest {
           assert "macvlan" in in_sandbox("ip -d link show eth0")
           assert "inet 192.168.1.1" in in_sandbox("ip -4 -o addr show dev eth0")
           assert "default via ${routerIP} dev eth0" in in_sandbox("ip route")
+          # udhcpc runs in a mount namespace of its own, holding only its closure, not the sandbox's: there the sandbox
+          # could swap the store directory for one of its own and have udhcpc run it
+          udhcpc = workstation.succeed("pgrep -u alice -x udhcpc").split()[0]
+          sb_mnt = workstation.succeed(f"readlink /proc/{bwrap_info()['child-pid']}/ns/mnt").strip()
+          assert workstation.succeed(f"readlink /proc/{udhcpc}/ns/mnt").strip() != sb_mnt, "udhcpc runs in M1"
+          store = workstation.succeed(f"ls /proc/{udhcpc}/root/nix/store").split()
+          assert any(p.endswith("-claude-desktop-udhcpc") for p in store), store
+          assert not any("stub" in p or "claude-desktop-store-roots" in p for p in store), store
+          workstation.succeed(f"test -f /proc/{udhcpc}/root/home/alice/.config/resolv.conf")
+          workstation.fail(f"test -e /proc/{udhcpc}/root/home/alice/victim-a")
 
       with subtest("A named launcher runs a sandbox of its own next to the default one"):
           work_home = "${workStateDir}/home"
@@ -652,8 +662,19 @@ pkgs.testers.runNixOSTest {
           workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
           workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")
 
-      with subtest("--shell starts the app when it isn't running"):
+      with subtest("the launcher refuses a store dir the sandbox swapped for its own"):
           workstation.wait_until_fails(f"test -e /proc/{sandbox_pid}", timeout=30)
+          # As the sandbox can from a nested namespace (models/README.md, S12): the store dir renamed, a directory in its
+          # place
+          as_alice("/run/current-system/sw/bin/sh -c 'cd ${stateDir}/nix && mv store store.orig && mkdir store'")
+          status, out = workstation.execute(
+              "systemd-run --user -M alice@ --wait --pipe --quiet -p RuntimeMaxSec=600"
+              " -- /etc/profiles/per-user/alice/bin/claude-desktop 2>&1"
+          )
+          assert status != 0 and "isn't the store directory this launcher made" in out, f"{status} {out}"
+          as_alice("/run/current-system/sw/bin/sh -c 'cd ${stateDir}/nix && rmdir store && mv store.orig store'")
+
+      with subtest("--shell starts the app when it isn't running"):
           out = sandbox_shell("readlink /proc/self/ns/net")
           # --shell enters as soon as bwrap forks the app, which may not have logged yet
           workstation.wait_until_succeeds("test $(wc -l <${sandboxHome}/stub-app.log) -ge 2", timeout=30)

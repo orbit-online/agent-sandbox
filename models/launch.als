@@ -15,7 +15,9 @@
  *   nixpak runs net-setup.sh in its pasta slot while the child waits on
  *   nixpak's --block-fd (launcher/main.go: StartPasta runs to completion
  *   before NotifySandboxFinished). net-setup waits for /.flatpak-info in
- *   the child's root, adds eth0 and starts udhcpc in N, M1 and P.
+ *   the child's root, adds eth0 and starts udhcpc in N and P, in MU: a
+ *   mount namespace of its own made from the host's (dhcp-root.sh), not
+ *   M1, where the sandbox can swap /nix/store (S12).
  * - fhs: the FHS env's script in U1 asks the broker to `share`, its bwrap
  *   (bwrap-subid.sh, SUBID_MAP=parent) copies M1 into M2 and waits for
  *   U2's maps, app-pid.sh sets ns_last_pid with CAP_CHECKPOINT_RESTORE
@@ -36,7 +38,8 @@ open sandbox
 // the start; nothing runs in them before the fhs stage.
 
 one sig U1, U2 extends UserNS {}
-one sig HostMnt, M1, M2 extends MountNS {}
+// MU: udhcpc's, made by unshare --mount in U1 from the host's mounts
+one sig HostMnt, M1, M2, MU extends MountNS {}
 one sig HostNet, N extends NetNS {}
 one sig P, P2 extends PidNS {}
 // The user's /etc/subuid and /etc/subgid range, as one atom
@@ -44,7 +47,7 @@ one sig SubIds extends Id {}
 
 fact launchShape {
   UserNS = InitUserNS + U1 + U2
-  MountNS = HostMnt + M1 + M2
+  MountNS = HostMnt + M1 + M2 + MU
   NetNS = HostNet + N
   PidNS = InitPidNS + P + P2
   no IpcNS + UtsNS + CgroupNS
@@ -52,7 +55,7 @@ fact launchShape {
   Id = HostUser + HostRoot + Overflow + SubIds
   U1.parent = InitUserNS and U1.owner = HostUser
   (HostMnt + HostNet).ownedBy = InitUserNS
-  (M1 + N + P).ownedBy = U1
+  (M1 + MU + N + P).ownedBy = U1
   P.pparent = InitPidNS
   U2.parent = U1 and U2.owner = HostUser
   M2.ownedBy = U2 and P2.ownedBy = U2 and P2.pparent = P
@@ -89,7 +92,8 @@ abstract sig Guard {}
 one sig
   KillOnMapFail,      // bwrap-subid.sh:103-106 kill -KILL "$pid" $$, and fd 21 written only after
   WaitRootFinal,      // net-setup.sh:8-15 waits for /proc/$pid/root/.flatpak-info
-  NetCapsOnly,        // net-setup.sh:26-27 setpriv's inheritable, ambient and bounding sets
+  NetCapsOnly,        // dhcp-root.sh:31-33 setpriv's inheritable, ambient and bounding sets
+  OwnMountNs,         // net-setup.sh:26 unshare --mount from the host's mounts, not nsenter -m
   DropCapsBeforeFork, // app-pid.sh:9-10 setpriv --inh-caps=-all --ambient-caps=-all, then setsid
   DropCapsOnFail,     // app-pid.sh:12 the same setpriv when the ns_last_pid write fails
   ShareBeforeCopy     // bwrap-subid.sh:78-82 share before line 112's exec of bwrap
@@ -211,13 +215,14 @@ pred pivot {
 
 // net-setup.sh, given the child-pid once the helper forwarded the info
 // (bwrap-subid.sh:107, after the maps): netns-macvlan into the child's
-// netns, then nsenter -U -n -m -r -p --keep-caps and setpriv to udhcpc. It
+// netns, then nsenter -U -n -p --keep-caps, unshare --mount and
+// dhcp-root.sh's pivot into udhcpc's closure, and setpriv to udhcpc. It
 // daemonizes (-b), so its parent becomes P's init, the child
 pred netSetup[g: set Guard] {
   some c: Root & Held | some U1.mapped and NetDone not in On and
     (WaitRootFinal in g implies RootFinal in On) and
     some u: Process' - Process {
-      born[u, UdhcpcP, c, c.userns, c.mnt, c.net, c.pidns, HostUser,
+      born[u, UdhcpcP, c, c.userns, (OwnMountNs in g implies MU else c.mnt), c.net, c.pidns, HostUser,
         (NetCapsOnly in g implies NetAdmin + NetRaw else Cap)]
       only[u, none]
       Eth0In' = c.net
@@ -283,18 +288,18 @@ pred l1 {
 
 // L1, outer stage: U1's maps.
 assert L1outer { outer[Guard] implies l1 }
-check L1outer for 4 but 8 OwnedNS, 1..8 steps expect 0
+check L1outer for 4 but 9 OwnedNS, 1..8 steps expect 0
 
 // L1, outer stage, revert: without KillOnMapFail the child is unblocked
 // with no maps and bwrap's init runs as the overflow id.
 assert L1outerRevert { outer[Guard - KillOnMapFail] implies l1 }
-check L1outerRevert for 4 but 8 OwnedNS, 1..8 steps expect 1
+check L1outerRevert for 4 but 9 OwnedNS, 1..8 steps expect 1
 
 // Vacuity: the outer stage reaches udhcpc and the release of bwrap's child.
 run outerRuns {
   outer[Guard]
   eventually (some principal.UdhcpcP and no Held and some Root)
-} for 4 but 8 OwnedNS, 1..8 steps expect 1
+} for 4 but 9 OwnedNS, 1..8 steps expect 1
 
 // L2: netns-macvlan puts eth0 only in N, and net-setup enters the child
 // only once its root is final (net-setup.sh:8-15). Before bwrap's last
@@ -302,28 +307,37 @@ run outerRuns {
 // would give udhcpc.
 pred l2 { always (Eth0In in N and UdhcpcHostRoot not in On) }
 assert L2 { outer[Guard] implies l2 }
-check L2 for 4 but 8 OwnedNS, 1..8 steps expect 0
+check L2 for 4 but 9 OwnedNS, 1..8 steps expect 0
 
 // L2, revert: without WaitRootFinal udhcpc starts on the host's tree.
 assert L2revert { outer[Guard - WaitRootFinal] implies l2 }
-check L2revert for 4 but 8 OwnedNS, 1..8 steps expect 1
+check L2revert for 4 but 9 OwnedNS, 1..8 steps expect 1
 
-// L3: udhcpc and everything it starts run in U1, N, M1 and P with
-// net_admin and net_raw alone (net-setup.sh:26-27), on the sandbox's root,
-// so they hold nothing over M1 or P and nothing in init.
+// L3: udhcpc and everything it starts run in U1, N, MU and P with
+// net_admin and net_raw alone (dhcp-root.sh:31-33), so they hold nothing
+// over M1 or P and nothing in init. MU, not M1: udhcpc execs its script
+// by path on every lease, and in M1 the sandbox can swap the store
+// directory under the closure's binds (S12) for its own code, which would
+// then run with net_admin over N, the macvlan's MAC and addresses
+// included.
 pred l3 {
   always all u: principal.UdhcpcP {
     u.caps in NetAdmin + NetRaw
-    u.userns = U1 and u.net = N and u.mnt = M1 and u.pidns = P
+    u.userns = U1 and u.net = N and u.mnt = MU and u.pidns = P
     not hasCapOver[u, M1, SysAdmin] and not hasCapOver[u, P, SysAdmin]
     no c: Cap | hasCap[u, InitUserNS, c]
   }
   always UdhcpcHostRoot not in On
 }
 assert L3 { outer[Guard] implies l3 }
-check L3 for 4 but 8 OwnedNS, 1..8 steps expect 0
+check L3 for 4 but 9 OwnedNS, 1..8 steps expect 0
 
 // L3, revert: without NetCapsOnly, nsenter --keep-caps hands udhcpc every
 // capability in U1, SysAdmin over M1 included.
 assert L3revert { outer[Guard - NetCapsOnly] implies l3 }
-check L3revert for 4 but 8 OwnedNS, 1..8 steps expect 1
+check L3revert for 4 but 9 OwnedNS, 1..8 steps expect 1
+
+// L3, revert: without OwnMountNs (nsenter -m -r, as before), udhcpc runs
+// in M1, where it execs whatever the sandbox put at its script's path.
+assert L3mountRevert { outer[Guard - OwnMountNs] implies l3 }
+check L3mountRevert for 4 but 9 OwnedNS, 1..8 steps expect 1

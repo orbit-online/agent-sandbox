@@ -18,10 +18,10 @@ Usage:
   permissions-broker cleanup <config>
   permissions-broker mcp [<socket>]
   permissions-broker share [<socket>]
-  permissions-broker make-shared <path>
+  permissions-broker make-shared <dir> <dirid>
   permissions-broker clone-tree [--expect=<id>] <root> <rel> <mode> [<denied>...]
-  permissions-broker move-tree <mountpoint>
-  permissions-broker detach <point>...
+  permissions-broker move-tree <dir> <dirid> <name>
+  permissions-broker detach <dir> <dirid> <entry>...
 
 serve runs the daemon for one launcher, as described in docs/permissions.md:
 it finds the launcher's running sandbox by app ID, listens on request.sock in
@@ -45,7 +45,8 @@ to 10 s for <socket> (/run/permissions/request.sock by default) to appear.
 
 make-shared, clone-tree, move-tree and detach are the daemon's
 helpers for attach grants, run through nsenter in the sandbox's namespaces (see
-tree.go).
+tree.go and helpers.go). <dir> is the grant directory where the sandbox sees it,
+<dirid> the device and inode it must have there.
 `
 
 // Set to store paths at build time
@@ -75,10 +76,9 @@ func main() {
 	case opts["share"] == true:
 		err = share(socketArg(opts))
 	case opts["make-shared"] == true:
-		path, _ := opts.String("<path>")
-		if err = unix.Mount("", path, "", unix.MS_SHARED, ""); err != nil {
-			err = fmt.Errorf("Make %s shared: %w", path, err)
-		}
+		dir, _ := opts.String("<dir>")
+		id, _ := opts.String("<dirid>")
+		err = makeShared(dir, id)
 	case opts["clone-tree"] == true:
 		root, _ := opts.String("<root>")
 		rel, _ := opts.String("<rel>")
@@ -87,11 +87,15 @@ func main() {
 		expect, _ := opts.String("--expect")
 		err = cloneTree(root, rel, mode, expect, denied)
 	case opts["move-tree"] == true:
-		mp, _ := opts.String("<mountpoint>")
-		err = moveTree(mp)
+		dir, _ := opts.String("<dir>")
+		id, _ := opts.String("<dirid>")
+		name, _ := opts.String("<name>")
+		err = moveTree(dir, id, name)
 	case opts["detach"] == true:
-		points, _ := opts["<point>"].([]string)
-		err = detachHelper(points)
+		dir, _ := opts.String("<dir>")
+		id, _ := opts.String("<dirid>")
+		names, _ := opts["<entry>"].([]string)
+		err = detachHelper(dir, id, names)
 	}
 	if err != nil {
 		slog.Error(err.Error())

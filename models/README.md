@@ -47,7 +47,8 @@ in the init namespaces unless noted.
    and `control.sock`, runs plugin commands, holds the grant store. Its
    helpers (`make-shared`, `clone-tree`, `move-tree`, `detach`) run through
    `nsenter` in the user namespace that owns M1, with every capability
-   there, and for all but `clone-tree` in M1 itself.
+   there, exec'd on the host's mounts; all but `clone-tree` then join M1
+   on a thread of their own and resolve only the grant directory there.
 3. **Permissions window**: Qt app, a client of `control.sock`. Answers
    pending requests, revokes, forgets `always` grants, ends holders.
 4. **Notification daemon** (Plasma's): draws the consent notification the
@@ -81,9 +82,12 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 11. **bwrap's init and the FHS env script**: in U1, N, M1, P, without
     capabilities. The script runs `bwrap-subid.sh` with `SUBID_MAP=parent`
     and sends `share`.
-12. **udhcpc** and its event script: in U1, N, M1, P with `net_admin` and
-    `net_raw` only (inheritable, ambient and bounding sets). Parses DHCP
-    packets from the LAN, so counts as the attacker's.
+12. **udhcpc** and its event script: in U1, N, P with `net_admin` and
+    `net_raw` only (inheritable, ambient and bounding sets), in MU: a
+    mount namespace made from the host's and pivoted to a tmpfs with its
+    closure read-only, P's `/proc` and the sandbox's home
+    (`dhcp-root.sh`). Parses DHCP packets from the LAN, so counts as the
+    attacker's.
 13. **The app** (Claude Desktop): in U2, N, M2, P2 at pid `APP_PID`.
 14. **Claude Code sessions** and what they spawn: shells, the local MCP
     servers, `permissions-mcp` (a client of `request.sock`), anything Claude
@@ -103,6 +107,7 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 | U1 | user | init, owner uid 1000 | nixpak's bwrap (`--unshare-user`, maps by subid) | every host process of uid 1000 (owner rule); bwrap's setup before it drops them; udhcpc (net_admin, net_raw); the broker's helpers after `nsenter --user` |
 | N | net | U1 | nixpak's bwrap | as U1; netns-macvlan adds `eth0` from init with `cap_net_admin` there |
 | M1 | mnt | U1 | nixpak's bwrap | as U1 |
+| MU | mnt | U1 | net-setup's `unshare --mount`, from the host's mounts | as U1 |
 | P | pid | U1 | nixpak's bwrap | as U1; bwrap's init is pid 1 here, the broker's `sandbox.pid` |
 | ipc, uts, cgroup | | U1 | nixpak's bwrap | as U1 |
 | U2 | user | U1, owner uid 1000 | the FHS env's bwrap (identity map of U1's ids) | every process of uid 1000 in U1 or init (owner rule); app-pid.sh with CAP_CHECKPOINT_RESTORE until it drops it |
@@ -127,13 +132,13 @@ joining needs CAP_SYS_ADMIN in init).
 | `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
 | notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox can still post look-alikes and replace the broker's notification by its id |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
-| grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory |
+| grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory; in M1 the helpers open it with `RESOLVE_NO_SYMLINKS`, check it's the host's directory (device and inode) and a mount root, and act on single entries beneath it |
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling (lexical, then `openat2` without links or mount crossings beneath the root), denied directories by identity, no submounts, ro/nodev/nosuid |
 | the grant store `$stateDir/permissions.json` | broker | host only (stateDir's `home/`, `nix/`, `tmp-scratchpad/` are bound, not stateDir) | written only by the daemon |
-| helper binaries | nsenter execs them after joining M1 or M2 | resolved in that mount namespace | must be read-only binds of the closure (S12) |
+| helper binaries | nsenter, setpriv, the launcher's scripts | resolved on the host's mounts, or in MU's closure binds | never in M1 or M2, where the sandbox can swap a directory (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
-| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds | can't be renamed (a mountpoint), so host-side execs in M1 resolve to the binds |
+| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; the launch refuses a store dir other than the one it made (`store-sync.sh`, by device and inode) |
 
 ## Trust boundaries
 
@@ -168,7 +173,12 @@ The models give the attacker these moves:
 5. Pass fds over Unix sockets: a connection made by one process used by
    another, so the peer the listener sees is the connecting process.
 6. Plant symlinks, rename and swap directories in its rw binds, which may
-   lie under a ceiling root; race these against the broker's checks.
+   lie under a ceiling root; race these against the broker's checks. That
+   includes a directory that is a mountpoint in M1 (`/nix/store`,
+   `/run/permissions`, a file bind's parent) on a filesystem it can
+   write: from a nested user and mount namespace, after `pivot_root` and
+   a lazy unmount of the old root, the kernel doesn't refuse the rename,
+   as it checks only for mounts in the caller's own namespace.
 7. Re-bind a granted mount in a nested mount namespace, keep files and
    cwds open on it, map it.
 8. Connect to every socket it can reach, as often as it likes; hold
@@ -224,13 +234,13 @@ process whose principal is in the Sandbox domain, at any time.
   mount crossings, and is not a denied directory, beneath one, or above
   one, by identity; it carries no submounts; a read-only grant is mounted
   read-only, a directory nodev and nosuid.
-- S12. Every binary a host-side process execs after joining a sandbox
-  mount namespace with capabilities (the broker's helpers, net-setup's
-  `setpriv` and udhcpc) resolves to a read-only bind of the host's store
-  path, which no sandbox process can replace. `/nix/store` is a mount of
-  its own for this: as a plain directory of the rw `/nix`, the sandbox
-  could rename it and put a link to its own directory in its place
-  (tried with a nested namespace, which renames it in M1 too).
+- S12. No binary a host-side process execs with capabilities in a sandbox
+  namespace (the broker's helpers, `setpriv`, udhcpc and its script) is
+  resolved in a mount tree the sandbox can swap a directory in (M1, M2
+  and their copies): the broker's helpers are exec'd on the host's mounts
+  and join M1 after, udhcpc runs in MU, built from the host's. A mount of
+  its own at `/nix/store` didn't do it: the sandbox renames it from a
+  nested namespace (Attacker 6).
 - S13. Every peer check that reads `/proc/<pid>` is about the process the
   pidfd names: no answer is based on a recycled pid.
 - S14. Nothing a sandbox process can write is read by a host process as
@@ -285,8 +295,9 @@ process whose principal is in the Sandbox domain, at any time.
   exactly U1's.
 - L2. net-setup acts on the sandbox's pid only once its root is final, and
   netns-macvlan only on N (S8).
-- L3. udhcpc and its script run in N, M1, P with `net_admin` and
-  `net_raw` alone, so a compromise of it gains nothing beyond S2's.
+- L3. udhcpc and its script run in N, MU, P with `net_admin` and
+  `net_raw` alone, so a compromise of it gains nothing beyond S2's, and
+  nothing in the sandbox can swap what they exec.
 - L4. The app and everything it starts hold no capability in U2:
   CAP_CHECKPOINT_RESTORE is dropped before the app runs, whether or not
   the pid could be set.
@@ -368,9 +379,8 @@ a model as a counterexample (`expect 1` until triaged in step 5).
    (`broker.go:292`), on both sockets. Harmless today (the events carry
    only kinds and ids, which `request.sock`'s `watch` gives too), but S6
    holds only because of that.
-4. `share` is accepted from any process in M1, udhcpc included. Harmless
-   (idempotent), noted for S9.
-5. S12 holds because the daemon's binary, `setpriv` and udhcpc are in
-   `storeRoots`' closure. Nothing asserts that; a helper added outside the
-   closure would exec from the sandbox's writable store with full
-   capabilities in U1.
+4. `share` is accepted from any process in M1. Harmless (idempotent),
+   noted for S9. udhcpc no longer runs there (L3).
+5. S12 holds because each host-side exec resolves its binary on the
+   host's mounts. Nothing asserts that; a helper added later that execs
+   after joining M1 runs the sandbox's code with full capabilities in U1.

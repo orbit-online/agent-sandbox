@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -210,23 +208,3 @@ func sameNs(pid int, kind string) bool {
 
 // alive reports whether the sandbox still runs: a pidfd turns readable when its process exits
 func (s *sandbox) alive() bool { return proc.Alive(s.pidfd) }
-
-// share makes path a shared mount in the sandbox's mount namespace, through nsenter in the user namespace that owns
-// it: the Go runtime is multithreaded and can't setns into a user namespace. nsenter keeps our ids (becoming uid 0
-// would need setgroups, which a user namespace may deny) and passes the capabilities setns granted through the exec
-func (s *sandbox) share(path string) error {
-	if err := s.check(); err != nil {
-		return err
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("Find own executable: %w", err)
-	}
-	cmd := exec.Command(nsenter, "--user=/proc/self/fd/3", "--mount=/proc/self/fd/4", "--preserve-credentials",
-		"--keep-caps", "--", self, "make-shared", path)
-	cmd.ExtraFiles = []*os.File{s.userns, s.mnt}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("Make %s shared: %s", path, strings.TrimSpace(string(out)))
-	}
-	return nil
-}

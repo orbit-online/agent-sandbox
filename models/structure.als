@@ -85,14 +85,17 @@ pred hostAt[p: Process] {
 
 // The host's nsenters with capabilities:
 // - the broker's make-shared, move-tree and detach: the user namespace
-//   owning the sandbox's mount namespace and that mount namespace,
-//   --keep-caps (sandbox.go:124, mounts.go:143, mounts.go:168);
-//   clone-tree: that user namespace, the host's mount namespace
-//   (mounts.go:130);
+//   owning the sandbox's mount namespace, --keep-caps, exec'd on the
+//   host's mounts; they join that mount namespace after the exec
+//   (helpers.go); clone-tree: that user namespace, the host's mount
+//   namespace (tree.go);
 // - subid-broker's write-map: the target's parent user namespace only
 //   (subid-broker/main.go:223);
-// - net-setup's setpriv, before it execs udhcpc: U1, N, M1, P with
-//   every capability (hm/net-setup.sh:17-28).
+// - net-setup's unshare and dhcp-root.sh, before setpriv execs udhcpc:
+//   U1, N, P with every capability, in MU, made from the host's mounts
+//   and pivoted to the closure's binds (hm/net-setup.sh,
+//   hm/dhcp-root.sh). MU is as the host's here: no sandbox process
+//   reaches it.
 // All stay in the init pid namespace but the last.
 pred helperAt[p: Process] {
   p.uid = HostUser and p.caps = Cap
@@ -104,7 +107,7 @@ pred helperAt[p: Process] {
     p.userns in U1.*~parent and p.mnt = HostMnt and p.net = HostNet and p.pidns = InitPidNS
   }
   p.principal = LauncherP implies {
-    p.userns = U1 and p.mnt = M1 and p.net = N and p.pidns = P
+    p.userns = U1 and p.mnt = HostMnt and p.net = N and p.pidns = P
   }
   p.principal in BrokerP + SubidBrokerP + LauncherP
 }
@@ -115,7 +118,9 @@ pred hostPlaced {
 
 // Where the sandbox's processes start (hm/default.nix's diagram):
 // bwrap's init and the FHS env script in U1 without capabilities,
-// udhcpc there with net_admin and net_raw (hm/net-setup.sh:26-28), the
+// udhcpc there with net_admin and net_raw (hm/dhcp-root.sh). udhcpc runs
+// in MU, which shows it a part of what M1 does (the closure, the home,
+// P's /proc): it stays in M1 here, which gives the attacker more. The
 // app, sessions and re-entries in U2 without any (hm/app-pid.sh:9,
 // hm/claude-desktop.sh:50).
 pred sandboxStart {
@@ -284,11 +289,17 @@ assert S8ownerChainRevert {
 check S8ownerChainRevert for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
 
 // ---------------------------------------------------------------------
-// Store paths the host execs after joining a sandbox mount namespace.
+// Store paths the host execs with capabilities in a sandbox namespace.
 // The sandbox's /nix is its own, rw (hm/default.nix:533-536); nixpak
-// binds storeRoots' closure read-only over it (hm/default.nix:108-111,
-// 629-656, 806-807). A path outside the closure is the sandbox's to
-// write.
+// binds storeRoots' closure read-only over it and /nix/store on its own.
+// A path outside the closure is the sandbox's to write. A path inside it
+// is too, wherever the sandbox's processes see the mount tree: from a
+// nested user and mount namespace, after pivot_root and a lazy unmount of
+// the old root, the kernel lets it rename a directory that is a
+// mountpoint in M1 (the EBUSY check only looks at the caller's own
+// namespace), so /nix/store in M1 turns into a directory of its own,
+// and the binds go with the old name. Each Exec says where its binary's
+// path is resolved (resolvesIn) and where it then acts (inNs).
 
 sig StorePath { refs: set StorePath }
 one sig FhsEnv, BwrapFhs, BrokerBin, NetSetup, UtilLinux, Busybox, Iproute2,
@@ -297,13 +308,14 @@ one sig FhsEnv, BwrapFhs, BrokerBin, NetSetup, UtilLinux, Busybox, Iproute2,
 sig Root in StorePath {}
 fun closure: set StorePath { Root.*refs }
 
-abstract sig Exec { bin: one StorePath, inNs: one MountNS, keeps: set Cap }
-// The broker's make-shared, move-tree, detach: `self` (os.Executable)
-// in sb's mount namespace, every capability in its owner
+abstract sig Exec { bin: one StorePath, resolvesIn: one MountNS, inNs: one MountNS, keeps: set Cap }
+// The broker's make-shared, move-tree, detach: `self` (os.Executable),
+// every capability in the owner of sb's mount namespace, which the
+// helper joins after the exec (permissions-broker/helpers.go)
 one sig BrokerHelper extends Exec {}
-// net-setup's setpriv with every capability in U1, and udhcpc and its
-// script's ip with net_admin and net_raw (hm/net-setup.sh:26-28,
-// hm/udhcpc.sh)
+// dhcp-root.sh's setpriv with every capability in U1, and udhcpc and its
+// script's ip with net_admin and net_raw (hm/net-setup.sh,
+// hm/dhcp-root.sh, hm/udhcpc.sh)
 one sig NetSetupSetpriv, Udhcpc, UdhcpcIp extends Exec {}
 // Today's helpers; a later one would be another Exec
 sig LaterExec extends Exec {}
@@ -314,7 +326,7 @@ fact store {
   // the broker for share (hm/default.nix:80-85)
   BwrapFhs in FhsEnv.refs
   BrokerBin in BwrapFhs.refs
-  // net-setup's vars and runtimeInputs (hm/default.nix:699-712)
+  // net-setup's vars and runtimeInputs
   UtilLinux + Busybox + DhcpScript + Iproute2 in NetSetup.refs
   // udhcpc.sh's runtimeInputs (hm/default.nix:165-169)
   Iproute2 in DhcpScript.refs
@@ -322,37 +334,58 @@ fact store {
   NetSetupSetpriv.bin = UtilLinux and NetSetupSetpriv.keeps = Cap
   Udhcpc.bin = Busybox and Udhcpc.keeps = NetAdmin + NetRaw
   UdhcpcIp.bin = Iproute2 and UdhcpcIp.keeps = NetAdmin + NetRaw
-  (NetSetupSetpriv + Udhcpc + UdhcpcIp).inNs = M1
+  BrokerHelper.inNs = sb.mnt
 }
 
-// The sandbox can replace what e execs: its path isn't bound from the
-// host, or the mount namespace e resolves it in is one the sandbox has
-// CAP_SYS_ADMIN over, where it can mount over the bind.
+// Where today's code resolves them: the broker's nsenter joins only the
+// user (and uts) namespace and execs on the host's mounts; udhcpc's
+// mount namespace is made from the host's, pivoted to a tmpfs of its own
+// holding the closure's binds of the host's store (hm/dhcp-root.sh),
+// which no sandbox process reaches: as the host's here.
+pred resolvedOnHost {
+  (BrokerHelper + NetSetupSetpriv + Udhcpc + UdhcpcIp).resolvesIn = HostMnt
+  (NetSetupSetpriv + Udhcpc + UdhcpcIp).inNs = HostMnt
+}
+
+// Mount trees the sandbox can swap a directory in: M1 and every mount
+// namespace owned by a user namespace below U1, which are its copies
+// (M2, nested ones). Not the host's.
+pred swappable[m: MountNS] { m = M1 or m.ownedBy in U1.^~parent }
+
+// The sandbox can replace what e execs: the path resolves in a tree it
+// can swap a directory in, or in one it has CAP_SYS_ADMIN over, or
+// outside the closure's binds.
 pred replaceable[e: Exec] {
-  e.bin not in closure
-  or some p: sandboxProcs | hasCapOver[p, e.inNs, SysAdmin]
+  swappable[e.resolvesIn]
+  or some p: sandboxProcs | hasCapOver[p, e.resolvesIn, SysAdmin]
+  or (e.resolvesIn != HostMnt and e.bin not in closure)
 }
 
-// S12 for today's helpers: each resolves to a read-only bind of the
-// closure that no sandbox process can cover. Holds. Revert: without
-// BrokerBin in BwrapFhs.refs (the broker only reachable through that
-// incidental reference), the broker's helpers exec from the sandbox's
-// writable store (counterexample found).
-assert S12helpersFromClosure {
-  (world and sbPinned and BrokerHelper.inNs = sb.mnt) implies
+// S12 for today's helpers: none execs a binary the sandbox can replace.
+// Holds. Revert: S12resolvedInM1.
+assert S12helpersFromHost {
+  (world and sbPinned and resolvedOnHost) implies
     all e: Exec - LaterExec | some e.keeps implies not replaceable[e]
 }
-check S12helpersFromClosure for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 0
+check S12helpersFromHost for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 0
+
+// S12, revert: the helpers exec'd in M1 as before the fix (nsenter
+// --mount, nsenter -m -r for udhcpc), every binary in the closure: the
+// swap of /nix/store replaces them all the same (counterexample found).
+assert S12resolvedInM1 {
+  (world and sbPinned and (Exec - LaterExec).resolvesIn = M1) implies
+    all e: Exec - LaterExec | some e.keeps implies not replaceable[e]
+}
+check S12resolvedInM1 for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 1
 
 // S12 as a design property (README lead 5): nothing in the build
-// checks that a helper's binary is in storeRoots' closure; today's are
-// there through net-setup's vars and the FHS env's bwrap. A later
-// helper exec'd in M1 with capabilities from a path outside it runs the
+// checks that a host-side exec with capabilities resolves its binary on
+// the host's mounts. A later helper exec'd after joining M1 runs the
 // sandbox's code with every capability in U1. Known.
-assert S12anyHelperFromClosure {
-  (world and sbPinned) implies all e: Exec | some e.keeps implies not replaceable[e]
+assert S12anyHelperFromHost {
+  (world and sbPinned and resolvedOnHost) implies all e: Exec | some e.keeps implies not replaceable[e]
 }
-check S12anyHelperFromClosure for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 1
+check S12anyHelperFromHost for 4 but 11 OwnedNS, 12 StorePath, 5 Exec, 1 steps expect 1
 
 // S12 under the README's attacker, which counts bwrap's init in: it may
 // move the sandbox's pid into a user and mount namespace of its own
@@ -360,12 +393,19 @@ check S12anyHelperFromClosure for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect
 // pins U1 and M1 when it finds the sandbox (pinSandbox, sandbox.go: the
 // mount namespace bwrapinfo.json names, owned by the pid's own user
 // namespace, a child of the daemon's) and refuses once the pid shows
-// other namespaces, so its helpers join M1 whatever bwrap's init does.
-// Holds. Revert: helpers joining wherever the sandbox's pid is
-// (BrokerHelper.inNs = sb.mnt, as before the fix): the helper execs the
-// attacker's binary mounted over the closure's, a child of the daemon
-// in the host's pid namespace (counterexample found).
+// other namespaces, so its helpers join M1 whatever bwrap's init does,
+// and never one the sandbox has CAP_SYS_ADMIN over. Holds. Revert:
+// helpers joining wherever the sandbox's pid is (BrokerHelper.inNs =
+// sb.mnt without the pin): a mount namespace of the attacker's, where it
+// can mount over anything the helper then touches (counterexample found).
 assert S12helpersUnderHijack {
-  (world and BrokerHelper.inNs = M1) implies not replaceable[BrokerHelper]
+  (world and BrokerHelper.inNs = M1) implies
+    no p: sandboxProcs | hasCapOver[p, BrokerHelper.inNs, SysAdmin]
 }
 check S12helpersUnderHijack for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 0
+
+// The revert of S12helpersUnderHijack.
+assert S12helpersUnderHijackRevert {
+  world implies no p: sandboxProcs | hasCapOver[p, BrokerHelper.inNs, SysAdmin]
+}
+check S12helpersUnderHijackRevert for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 1

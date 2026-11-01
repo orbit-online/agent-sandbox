@@ -18,12 +18,12 @@ import (
 // The attach type: binding host paths into the running sandbox and detaching them, as scripts/ns-inject-spike.py
 // verified. The daemon checks the source against the ceiling, creates the mountpoint in the grant directory on the
 // host, and runs helpers of its own binary through nsenter for what a multithreaded Go process can't do (enter a user
-// namespace):
+// namespace), each exec'd on the host's mounts (see helpers.go):
 //   clone-tree, in the owner of the sandbox's mount namespace, unshares a mount namespace of its own, opens the
 //     source beneath its ceiling root without following any link, checks it against the denied directories by
 //     identity, clones it (open_tree, without its submounts) and passes the tree's fd back;
-//   move-tree, in the sandbox's mount namespace, attaches that tree at the mountpoint (move_mount);
-//   detach unmounts mount points there.
+//   move-tree joins the sandbox's mount namespace and attaches that tree at the mountpoint (move_mount);
+//   detach joins it and unmounts mountpoints there.
 // The sandbox can't write the grant directory, but it can plant links and rename directories in its rw binds, which
 // may lie under a ceiling root: hence no links followed at all, and identities rather than paths for what's denied.
 
@@ -125,8 +125,13 @@ func (b *broker) attachGrant(g *grant) error {
 	if err := makeMountpoint(b.cfg.GrantDir, g.ID, isDir(src.path())); err != nil {
 		return fmt.Errorf("Create the mountpoint: %w", err)
 	}
+	dir, err := grantDirOf(b.cfg)
+	if err != nil {
+		removeMountpoint(b.cfg.GrantDir, g.ID)
+		return err
+	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
-	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, g.shown, b.cfg.Denied, g.Path); err != nil {
+	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, g.shown, b.cfg.Denied, dir, g.ID); err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err
 	}
@@ -146,7 +151,11 @@ func (b *broker) detachGrant(g *grant) {
 		return
 	}
 	ids := b.sb.grantMounts(g.Path)
-	if err := b.sb.detach(g.Path); err != nil {
+	dir, err := grantDirOf(b.cfg)
+	if err == nil {
+		err = b.sb.detach(dir, g.ID)
+	}
+	if err != nil {
 		slog.Warn("Detach", "grant", g.ID, "err", err)
 	}
 	removeMountpoint(b.cfg.GrantDir, g.ID)
@@ -164,8 +173,8 @@ func cleanup(cfg config, sb *sandbox) {
 	stopAllServes(cfg.Launcher)
 	removeLocks(cfg.Launcher)
 	// Removing the mountpoints below ends their mounts in every namespace as well; this is in case that fails
-	if sb != nil && sb.isShared(cfg.SandboxGrantDir) {
-		if err := sb.detachBelow(cfg.SandboxGrantDir); err != nil {
+	if dir, err := grantDirOf(cfg); err == nil && sb != nil && sb.isShared(cfg.SandboxGrantDir) {
+		if err := sb.detachBelow(dir); err != nil {
 			slog.Warn("Detach leftover grants", "err", err)
 		}
 	}

@@ -16,16 +16,9 @@ import (
 )
 
 func TestShare(t *testing.T) {
-	dir := t.TempDir()
-	cmd := ownNs(t, dir)
-	pid := cmd.Process.Pid
-	fd, err := unix.PidfdOpen(pid, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
 	b, _ := testBroker(t)
-	b.sb = pinned(t, pid, fd)
-	b.cfg.SandboxGrantDir = dir
+	standIn(t, b)
+	pid, dir := b.sb.pid, b.cfg.SandboxGrantDir
 
 	if err := b.shareFrom(peerAt(t, os.Getpid())); err == nil {
 		t.Error("Shared for a client outside the sandbox's mount namespace")

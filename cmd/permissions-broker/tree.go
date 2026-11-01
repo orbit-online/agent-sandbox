@@ -12,13 +12,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// attach clones root/rel, the file expect names if set, and mounts it at mountpoint in the sandbox's mount namespace.
+// attach clones root/rel, the file expect names if set, and mounts it at name in the grant directory in M1.
 // Returns the source as resolved
-func (s *sandbox) attach(root, rel string, ro bool, expect string, denied []string, mountpoint string) (string, error) {
+func (s *sandbox) attach(root, rel string, ro bool, expect string, denied []string, dir grantDir, name string) (string, error) {
 	if err := s.check(); err != nil {
 		return "", err
 	}
-	self, err := os.Executable()
+	self, err := executable()
 	if err != nil {
 		return "", fmt.Errorf("Find own executable: %w", err)
 	}
@@ -51,45 +51,10 @@ func (s *sandbox) attach(root, rel string, ro bool, expect string, denied []stri
 		return "", err
 	}
 	defer tree.Close()
-	move := exec.Command(nsenter, "--user=/proc/self/fd/3", "--mount=/proc/self/fd/4", "--preserve-credentials",
-		"--keep-caps", "--", self, "move-tree", mountpoint)
-	move.ExtraFiles = []*os.File{s.userns, s.mnt, tree}
-	if out, err := move.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("Mount %s: %s", mountpoint, strings.TrimSpace(string(out)))
+	if err := s.inM1(dir, []*os.File{tree}, "move-tree", name); err != nil {
+		return "", fmt.Errorf("Mount %s/%s: %w", dir.path, name, err)
 	}
 	return resolvedPath, nil
-}
-
-// detach unmounts mount points in the sandbox's mount namespace. The daemon reads which from the host: in there
-// /proc is the sandbox's, where the helper isn't
-func (s *sandbox) detach(points ...string) error {
-	if len(points) == 0 {
-		return nil
-	}
-	if err := s.check(); err != nil {
-		return err
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("Find own executable: %w", err)
-	}
-	cmd := exec.Command(nsenter, append([]string{"--user=/proc/self/fd/3", "--mount=/proc/self/fd/4",
-		"--preserve-credentials", "--keep-caps", "--", self, "detach"}, points...)...)
-	cmd.ExtraFiles = []*os.File{s.userns, s.mnt}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("Unmount %s: %s", strings.Join(points, ", "), strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// detachBelow unmounts every mount below dir in the sandbox's mount namespace, deepest first: what an earlier
-// daemon left
-func (s *sandbox) detachBelow(dir string) error {
-	lines, err := s.mountinfo()
-	if err != nil {
-		return err
-	}
-	return s.detach(mountsBelow(lines, dir)...)
 }
 
 func recvTree(sock int) (*os.File, string, error) {
@@ -166,24 +131,6 @@ func cloneTree(root, rel, mode, expect string, denied []string) error {
 	}
 	if err := unix.Sendmsg(4, []byte(path), unix.UnixRights(tree), nil, 0); err != nil {
 		return fmt.Errorf("Send the tree: %w", err)
-	}
-	return nil
-}
-
-// moveTree is the move-tree helper: in the sandbox's mount namespace, it attaches the tree on fd 5 at mountpoint
-func moveTree(mountpoint string) error {
-	if err := unix.MoveMount(5, "", unix.AT_FDCWD, mountpoint, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
-		return fmt.Errorf("Attach at %s: %w", mountpoint, err)
-	}
-	return nil
-}
-
-// detachHelper unmounts mount points, lazily: what's open on them stays open
-func detachHelper(points []string) error {
-	for _, p := range points {
-		if err := unix.Unmount(p, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {
-			return fmt.Errorf("Unmount %s: %w", p, err)
-		}
 	}
 	return nil
 }

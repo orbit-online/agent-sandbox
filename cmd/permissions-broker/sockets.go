@@ -214,7 +214,11 @@ func (b *broker) shareFrom(p peer) error {
 	if copied, err := b.sb.copied(); err != nil || copied {
 		return errors.New("Too late to share: the sandbox's mount namespace was copied already")
 	}
-	if err := b.sb.share(b.cfg.SandboxGrantDir); err != nil {
+	dir, err := grantDirOf(b.cfg)
+	if err != nil {
+		return err
+	}
+	if err := b.sb.share(dir); err != nil {
 		return err
 	}
 	b.mu.Lock()

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Runs in nixpak's pasta slot: the launcher calls it with `-- <pid>` once the sandbox exists and before the app starts.
 # $NAME: the launcher's name, empty for the default one
-: "${NETNS_MACVLAN:?}" "${SETPRIV:?}" "${UDHCPC:?}" "${UDHCPC_SCRIPT:?}"
+: "${NETNS_MACVLAN:?}" "${DHCP_ROOT:?}"
 pid=${!#}
 # bwrap's parent reports the pid while the child is still building the mount tree; nixpak binds
 # /.flatpak-info last, so once it shows up the sandbox's root is final
@@ -20,9 +20,6 @@ ns() {
 }
 ns ip link set lo up
 ns ip link set eth0 up
-# In the sandbox's pid ns so it dies with it, and its mount ns: it parses packets from the LAN, so it gets
-# no more of the host than the app does. -r: the sandbox process's root, as for the claude:// re-entry.
-# Forks to the background once it has a lease or gives up (~10s)
-ns -m -r -p "$SETPRIV" --inh-caps=-all,+net_admin,+net_raw --ambient-caps=-all,+net_admin,+net_raw \
-  --bounding-set=-all,+net_admin,+net_raw \
-  "$UDHCPC" -i eth0 -s "$UDHCPC_SCRIPT" -b -t 5 -T 2
+# udhcpc in a mount namespace of its own, made from the host's (see dhcp-root.sh), in the sandbox's pid ns so it dies
+# with it
+ns -p unshare --mount --propagation private "$DHCP_ROOT"

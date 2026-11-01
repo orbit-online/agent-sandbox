@@ -17,7 +17,7 @@ import (
 // its stdout
 func movingSandbox(t *testing.T) (*exec.Cmd, io.WriteCloser, *bufio.Reader) {
 	t.Helper()
-	cmd := exec.Command("unshare", "--user", "--mount", "--map-current-user", "sh", "-c",
+	cmd := exec.Command("unshare", "--user", "--mount", "--uts", "--map-current-user", "sh", "-c",
 		`echo ready; read x; exec unshare --user --mount --map-current-user sh -c 'echo moved; read y'`)
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
@@ -49,14 +49,18 @@ func TestPinned(t *testing.T) {
 	}
 	t.Cleanup(func() { unix.Close(fd) })
 	sb := pinned(t, cmd.Process.Pid, fd)
-	if err := sb.share("/"); err != nil {
+	root, err := grantDirOf(config{GrantDir: "/", SandboxGrantDir: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sb.share(root); err != nil {
 		t.Fatal(err)
 	}
 	move(t, stdin, out)
 	if err := sb.check(); err == nil {
 		t.Error("The sandbox's pid moved to other namespaces unnoticed")
 	}
-	if err := sb.share("/"); err == nil {
+	if err := sb.share(root); err == nil {
 		t.Error("share went on after the sandbox's pid moved")
 	}
 	if _, err := sb.mountinfo(); err == nil {

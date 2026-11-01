@@ -56,8 +56,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `mcp.go` the MCP server, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
   user namespace, `session.go` sessions.
   The attach type: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
-  (the helpers it runs through `nsenter` to clone a host path and mount it in
-  the sandbox), `mountinfo.go` (mount tables, holders) and `attach.go`
+  (the clone helper it runs through `nsenter` to clone a host path),
+  `helpers.go` (the helpers that join the sandbox's mount namespace only after
+  their exec on the host's mounts, to share the grant directory and mount and
+  unmount grants there), `mountinfo.go` (mount tables, holders) and `attach.go`
   (mounting, unmounting, cleanup). Each `*_test.go` follows its file;
   `main_test.go` has `TestMain` and the shared fakes.
 - `nix/packages/permissions-folders/`: the broker's built-in attach plugin,
@@ -214,7 +216,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   while the user is asked (refused), a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
   (found by identity, as the source or beneath it), and a re-bind in a nested
-  mount namespace (reported as a holder). The MCP server: a service plugin's
+  mount namespace (reported as a holder), and the swap of a directory that is a
+  mountpoint in the stand-in's mount namespace from a nested one (pivot_root,
+  the old root detached, then a rename): the store directory holding the
+  helpers' binary (they still run the daemon's) and the grant directory for a
+  link to another mount (not unmounted by a revoke). The MCP server: a service plugin's
   tools (a fake plugin speaking MCP on a socket) offered while its grant
   lives, a call forwarded, a second grant's under names of their own, each
   withdrawn with its grant and every change sent as `list_changed`, also
@@ -245,8 +251,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   serves the color scheme on her session bus. The test covers the setcap
   wrapper, links the sandbox planted in its state (a store dir that's a link
   refused, links in its home replaced, alice's files neither read nor written,
-  the keyfile swapped for a link while it runs), `/nix/store` not renameable
-  inside, the launcher refusing a missing bind source that isn't optional,
+  the keyfile swapped for a link while it runs, the store dir swapped for a
+  directory of its own between launches refused), `/nix/store` not renameable
+  inside directly, the launcher refusing a missing bind source that isn't optional,
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
   set, with no capabilities left), the subid maps (alice's auto range in the sandbox's userns
@@ -258,7 +265,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
   launch, live, and the watcher ending with the app), the macvlan's DHCP
-  lease, route and DNS, the launcher `work` running next to the default
+  lease, route and DNS (udhcpc in a mount namespace of its own with its
+  closure and the sandbox's home, none of alice's files), the launcher `work` running next to the default
   sandbox (its own namespaces, MAC and lease, its own tray item at another
   pid, its re-entry found by app ID, its state dir and GC root, and its
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared

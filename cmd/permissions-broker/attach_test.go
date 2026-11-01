@@ -39,22 +39,36 @@ exec sed -n 's/.*"params":{"path":"\([^"]*\)"\(,"ro":false\)\{0,1\}}.*/{"source"
 	return c
 }
 
-// sandboxC is a broker on a sandbox stand-in: a child in a user and mount namespace of its own, with the grant
-// directory bound in from outside and shared, as the launcher has it. Returns the child's stdin and stdout for hold
+// sandboxC is a broker on a sandbox stand-in, with the grant directory shared. Returns the stand-in's stdin and stdout
+// for hold, run and bind
 func sandboxC(t *testing.T, answers ...string) (*broker, io.WriteCloser, *bufio.Reader) {
 	t.Helper()
 	b, _ := testBroker(t, answers...)
+	stdin, out := standIn(t, b)
+	if err := b.shareFrom(peerAt(t, b.sb.pid)); err != nil {
+		t.Fatal(err)
+	}
+	return b, stdin, out
+}
+
+// standIn puts b on a sandbox stand-in: a child in a user and mount namespace of its own, with the grant directory
+// bound in from outside, as the launcher has it
+func standIn(t *testing.T, b *broker) (io.WriteCloser, *bufio.Reader) {
+	t.Helper()
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	inside := t.TempDir() // stands in for /run/permissions
+	inside := filepath.Join(t.TempDir(), "permissions") // stands in for /run/permissions
+	if err := os.Mkdir(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	b.cfg.SandboxGrantDir = inside
 	cmd := exec.Command("/proc/self/exe")
 	cmd.Env = append(os.Environ(), "BROKER_TEST=bind", "MOUNT_FROM="+b.cfg.GrantDir, "MOUNT_AT="+inside)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		// The user's ids as themselves, as the sandbox maps them, so the helpers keep their capabilities through
 		// nsenter's exec only as ambient ones (--keep-caps). A uts namespace of its own, as the sandbox has, which
-		// the clone helper joins for that. The child itself keeps CAP_SYS_ADMIN for its bind mount the same way
+		// the helpers join for that. The child itself keeps CAP_SYS_ADMIN for its bind mount the same way
 		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
 		UidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getuid(), HostID: os.Getuid(), Size: 1}},
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getgid(), HostID: os.Getgid(), Size: 1}},
@@ -75,10 +89,7 @@ func sandboxC(t *testing.T, answers ...string) (*broker, io.WriteCloser, *bufio.
 		t.Fatal(err)
 	}
 	b.sb = pinned(t, cmd.Process.Pid, fd)
-	if err := b.shareFrom(peerAt(t, cmd.Process.Pid)); err != nil {
-		t.Fatal(err)
-	}
-	return b, stdin, out
+	return stdin, out
 }
 
 func TestFolder(t *testing.T) {

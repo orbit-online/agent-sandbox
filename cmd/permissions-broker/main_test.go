@@ -18,11 +18,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Re-executed as the processes the broker inspects. wait: blocks until stdin closes. anchor: starts a wait child with
+// Re-executed as the processes the broker inspects. wait: blocks until stdin closes. swap: see swap_test.go. anchor: starts a wait child with
 // CLAUDE_CODE_SESSION_ID set, prints its pid and waits. mount: in a user and mount namespace of its own, mounts a
 // tmpfs on $MOUNT_AT, prints "ready" and waits
 func TestMain(m *testing.M) {
-	if len(os.Args) > 2 && slices.Contains([]string{"make-shared", "clone-tree", "move-tree", "detach", "detach-all"}, os.Args[1]) {
+	if len(os.Args) > 2 && slices.Contains([]string{"make-shared", "clone-tree", "move-tree", "detach"}, os.Args[1]) {
 		main()
 		return
 	}
@@ -109,6 +109,16 @@ func TestMain(m *testing.M) {
 				fmt.Println(cmd.Process.Pid)
 				continue
 			}
+			// bind <from> <to>: a bind mount in the sandbox's outer mount namespace, as bwrap makes them
+			if args, ok := strings.CutPrefix(sc.Text(), "bind "); ok {
+				from, to, _ := strings.Cut(args, " ")
+				if err := unix.Mount(from, to, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+					fmt.Println(err)
+				} else {
+					fmt.Println("ok")
+				}
+				continue
+			}
 			if path, ok := strings.CutPrefix(sc.Text(), "hold "); ok {
 				cmd := exec.Command("/proc/self/exe")
 				cmd.Env = append(os.Environ(), "BROKER_TEST=wait")
@@ -128,6 +138,8 @@ func TestMain(m *testing.M) {
 			c.Wait()
 		}
 		os.Exit(0)
+	case "swap":
+		swapMain()
 	case "mount":
 		if err := unix.Mount("tmpfs", os.Getenv("MOUNT_AT"), "tmpfs", 0, ""); err != nil {
 			fmt.Println(err)

@@ -119,7 +119,7 @@ sends `share` on `request.sock` and waits for the answer (up to 10 s, for the da
 checks that the client is in M1 and makes
 `/run/permissions` shared there. In M1 that mount is a bind of the host directory, so it stays a slave of the host
 too; files the daemon creates on the host side (sockets) show up as before. The daemon serves `share` once per sandbox: a
-second one, from anything else in M1 such as udhcpc's script, would come after the FHS env's bwrap copied M1, where
+second one, from anything else in M1, would come after the FHS env's bwrap copied M1, where
 grants no longer reach the app. Replaying makes no grant of what's live already. If `share` fails, the launcher goes
 on without attach grants rather than not starting; the daemon then refuses attach requests and skips them when
 replaying, and the window says why.
@@ -128,9 +128,19 @@ replaying, and the window says why.
 
 Go processes are multithreaded from the start, and the kernel refuses to move a multithreaded process into another
 user namespace (`setns` and `unshare` both fail with EINVAL). As subid-broker does, the daemon runs these steps as helpers of
-its own binary through util-linux: `nsenter --user=<owner> -- unshare --mount --propagation unchanged --
-permissions-broker clone-tree <src> [ro]` sends the detached tree's fd back over a socket pair, and `nsenter
---user=<owner> --mount=<m1> -- permissions-broker move-tree <dst>` attaches it.
+its own binary through util-linux: `nsenter --user=<owner> -- permissions-broker clone-tree <src> [ro]` unshares
+a mount namespace of its own, and sends the detached tree's fd back over a socket pair, and `nsenter --user=<owner>
+-- permissions-broker move-tree <dir> <dirid> <name>` attaches it.
+
+None of them is exec'd in M1, where a path shows what the sandbox wants: from a nested user and mount namespace,
+after `pivot_root` and a lazy unmount of the old root, it can rename a directory that is a mountpoint in M1
+(`/nix/store`, `/run/permissions`), as the kernel refuses that only for mounts in the caller's own namespace, and
+put one of its own in its place. nsenter joins only the user namespace (and the uts namespace, without which its
+`--keep-caps` has no effect), so it execs the daemon's binary on the host's mounts. `make-shared`, `move-tree` and
+`detach` then join M1 themselves, on a thread with a filesystem context of its own (`unshare(CLONE_FS)`, then
+`setns`), and resolve nothing there but the grant directory: opened with `RESOLVE_NO_SYMLINKS`, and refused unless
+it's a mount root with the device and inode of the host's directory. They act on single entries beneath it, which
+only the daemon creates.
 
 ## Delivery types
 

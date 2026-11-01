@@ -86,35 +86,28 @@ func TestHoldersReentry(t *testing.T) {
 // L9: share after a process of the sandbox is in a copy of M1 (the FHS env's bwrap ran) would reach nothing: refused
 func TestShareTooLate(t *testing.T) {
 	b, _ := testBroker(t)
-	dir := t.TempDir()
-	cmd := ownNs(t, dir)
-	b.sb = pinned(t, cmd.Process.Pid, peerAt(t, cmd.Process.Pid).pidfd)
-	b.cfg.SandboxGrantDir = dir
+	standIn(t, b)
 	reenter(t, b.sb, true, os.Environ(), "exec unshare --user --mount --map-current-user sh -c 'echo $$; exec sleep 60'")
-	if err := b.shareFrom(peerAt(t, cmd.Process.Pid)); err == nil {
+	if err := b.shareFrom(peerAt(t, b.sb.pid)); err == nil {
 		t.Error("Shared after the sandbox's mount namespace was copied")
 	}
 }
 
 // The host's processes in the sandbox's user namespace are no copy of M1: net-setup's ip on the host's mounts, and
-// a mount namespace of its own made from them (the clone helper's)
+// udhcpc in a mount namespace of its own made from them
 func TestShareHostHelpers(t *testing.T) {
 	b, _ := testBroker(t)
-	dir := t.TempDir()
-	cmd := ownNs(t, dir)
-	pid := cmd.Process.Pid
-	b.sb = pinned(t, pid, peerAt(t, pid).pidfd)
-	b.cfg.SandboxGrantDir = dir
+	standIn(t, b)
 	for _, script := range []string{"exec sleep 60", "exec unshare --mount sleep 60"} {
-		cmd := exec.Command("nsenter", fmt.Sprintf("--user=/proc/%d/ns/user", pid),
-			fmt.Sprintf("--uts=/proc/%d/ns/uts", pid), "--preserve-credentials", "--keep-caps", "sh", "-c", script)
+		cmd := exec.Command("nsenter", fmt.Sprintf("--user=/proc/%d/ns/user", b.sb.pid),
+			fmt.Sprintf("--uts=/proc/%d/ns/uts", b.sb.pid), "--preserve-credentials", "--keep-caps", "sh", "-c", script)
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 	}
 	time.Sleep(200 * time.Millisecond)
-	if err := b.shareFrom(peerAt(t, pid)); err != nil {
+	if err := b.shareFrom(peerAt(t, b.sb.pid)); err != nil {
 		t.Fatal(err)
 	}
 }
