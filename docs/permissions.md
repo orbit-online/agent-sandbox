@@ -210,12 +210,11 @@ allowed). Then the clone helper, after its `unshare`:
   so a source with mounts beneath it fails instead of bringing them along unchecked;
 - mounts it read-only if asked, and a directory always `nodev` and `nosuid`.
 
-The path shown to the user is the one resolved, read back from the fd. What's mounted is the folder the user was
-asked about: the daemon opens the source the way the clone helper does before asking (or when the window narrows the
-request, as the user answers) and records its device and inode, and the helper refuses a source that isn't that file
-any more. So the sandbox renaming another directory under the ceiling into the path between the question and the
-mount gets an error, not the other directory. An `always` grant is of the path: replayed at a later launch, or matched
-by a later request, it mounts whatever is at the path then, within the ceiling and outside the denied list.
+The path shown to the user is the one resolved, read back from the fd. A grant is of the path: what's mounted is
+whatever is at the path at mount time, within the ceiling and outside the denied list, for a fresh grant and an
+`always` one (replayed at a later launch, or matched by a later request) alike. Between the question and the mount
+the sandbox can only rename within its own rw binds, so a directory it swaps into the path is one it could read and
+write already: that gains it nothing.
 
 Never grantable, whatever a ceiling says: every launcher's state directory (the grant store) and
 `$XDG_RUNTIME_DIR` (the control sockets and every launcher's grant directory). A grant there would let the sandbox

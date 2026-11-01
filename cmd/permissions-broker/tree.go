@@ -12,9 +12,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// attach clones root/rel, the file expect names if set, and mounts it at name in the grant directory in M1.
+// attach clones root/rel and mounts it at name in the grant directory in M1.
 // Returns the source as resolved
-func (s *sandbox) attach(root, rel string, ro bool, expect string, denied []string, dir grantDir, name string) (string, error) {
+func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDir, name string) (string, error) {
 	if err := s.check(); err != nil {
 		return "", err
 	}
@@ -36,9 +36,6 @@ func (s *sandbox) attach(root, rel string, ro bool, expect string, denied []stri
 	// 2.42.3) enters the user namespace in its first pass, which then leaves --keep-caps without effect
 	args := []string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5", "--preserve-credentials", "--keep-caps", "--",
 		self, "clone-tree"}
-	if expect != "" {
-		args = append(args, "--expect="+expect)
-	}
 	clone := exec.Command(nsenter, append(append(args, root, rel, mode), denied...)...)
 	clone.ExtraFiles = []*os.File{s.userns, theirs, s.uts}
 	out, err := clone.CombinedOutput()
@@ -79,9 +76,9 @@ func recvTree(sock int) (*os.File, string, error) {
 // namespace of its own, copied from ours (open_tree only clones from the caller's own), it opens root without
 // following links, rel beneath it without following links or crossing mounts, refuses what is a denied directory,
 // lies beneath one or holds one, and clones that one mount, read-only if asked and without devices or setuid for a
-// directory. With expect (device:inode), the source must be that file. It sends the tree's fd and the path it resolved
-// to on fd 4
-func cloneTree(root, rel, mode, expect string, denied []string) error {
+// directory. Whatever is at the path then: a grant is of the path. It sends the tree's fd and the path it resolved to
+// on fd 4
+func cloneTree(root, rel, mode string, denied []string) error {
 	// The new mount namespace is this thread's, so everything below stays on it; the process ends after
 	runtime.LockOSThread()
 	if err := unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err != nil {
@@ -93,12 +90,6 @@ func cloneTree(root, rel, mode, expect string, denied []string) error {
 	}
 	defer unix.Close(fd)
 	defer unix.Close(rootFd)
-	// What the user was asked about, if they were: another directory renamed into its path since isn't granted
-	if expect != "" {
-		if id, err := idOf(fd); err != nil || id.String() != expect {
-			return fmt.Errorf("%s isn't the folder you were asked about any more: it was renamed or replaced", rel)
-		}
-	}
 	if err := checkIdentity(fd, rootFd, denied); err != nil {
 		return err
 	}

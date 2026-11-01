@@ -88,8 +88,6 @@ type grant struct {
 	Holders []holder `json:"holders,omitempty"`
 	// Attach: the device and root of its mount, by which copies of it are found
 	dev, root string
-	// Attach: the identity (device:inode) of the folder the user was asked about, which the mount must be
-	shown string
 
 	cap      *capability
 	sessions map[string]*session // under broker.mu

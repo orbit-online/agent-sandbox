@@ -38,18 +38,6 @@ assert P3listedAtGrant {
 check P3listedAtGrant for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
-// The folder the user is asked about is the one mounted. The daemon
-// records the source's device and inode before asking and the clone
-// helper refuses another (consent.go, tree.go), so a directory the
-// sandbox renames into the path after the question isn't mounted. Holds.
-// Revert: notifAllow without its check against shownDir (as before the
-// fix): counterexample found. An always grant is of the path, by design.
-assert P3mountedIsShown {
-  always all r: Req, g: Grant | (notifAllow[r, g] and g.gcap.dtype = Attach) implies g.gparams.resolves = r.shownDir
-}
-check P3mountedIsShown for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 2 Dir,
-  1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 0
-
 // P4. A grant that ended is dead: its service unit and socket are gone
 // (stopServe, BindsTo= on a crash) and its folder detached (detachGrant), the
 // latter only once ExecStopPost or the next start has run after a crash.

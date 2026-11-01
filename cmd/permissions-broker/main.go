@@ -19,7 +19,7 @@ Usage:
   permissions-broker mcp [<socket>]
   permissions-broker share [<socket>]
   permissions-broker make-shared <dir> <dirid>
-  permissions-broker clone-tree [--expect=<id>] <root> <rel> <mode> [<denied>...]
+  permissions-broker clone-tree <root> <rel> <mode> [<denied>...]
   permissions-broker move-tree <dir> <dirid> <name>
   permissions-broker detach <dir> <dirid> <entry>...
 
@@ -84,8 +84,7 @@ func main() {
 		rel, _ := opts.String("<rel>")
 		mode, _ := opts.String("<mode>")
 		denied, _ := opts["<denied>"].([]string)
-		expect, _ := opts.String("--expect")
-		err = cloneTree(root, rel, mode, expect, denied)
+		err = cloneTree(root, rel, mode, denied)
 	case opts["move-tree"] == true:
 		dir, _ := opts.String("<dir>")
 		id, _ := opts.String("<dirid>")

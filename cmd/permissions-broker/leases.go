@@ -52,16 +52,15 @@ func (b *broker) validity(c *capability, g *grant) time.Duration {
 	return v
 }
 
-// grant makes a grant live: starts a service's unit and ties it to its lease. shown is the identity of the folder the
-// user was asked about (attach grants), "" for a grant nobody was asked about now (always)
-func (b *broker) grant(c *capability, params json.RawMessage, summary, lease string, sess *session, shown string) (*grant, error) {
+// grant makes a grant live: starts a service's unit and ties it to its lease
+func (b *broker) grant(c *capability, params json.RawMessage, summary, lease string, sess *session) (*grant, error) {
 	unlock, err := c.exclusiveLock(context.Background(), b.cfg.Launcher, params)
 	if err != nil {
 		return nil, err
 	}
 	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Lease: lease,
 		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock, sessions: map[string]*session{},
-		sessGone: make(chan struct{}), shown: shown}
+		sessGone: make(chan struct{})}
 	if lease == "session" {
 		g.sessions[sess.id], g.Sessions = sess, []string{sess.id}
 	}

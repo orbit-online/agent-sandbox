@@ -71,8 +71,6 @@ func checkDenied(denied []string) ([]string, error) {
 
 type fileID struct{ dev, ino uint64 }
 
-func (id fileID) String() string { return fmt.Sprintf("%d:%d", id.dev, id.ino) }
-
 // openSource opens rel beneath root as a grant's source: root without following any link, rel beneath it without
 // following links or crossing mounts. Returns the source's fd and the root's
 func openSource(root, rel string) (int, int, error) {
@@ -89,22 +87,6 @@ func openSource(root, rel string) (int, int, error) {
 		return -1, -1, fmt.Errorf("Open %s beneath %s without links or crossing mounts: %w", rel, root, err)
 	}
 	return fd, rootFd, nil
-}
-
-// identify is the identity of what a source names now, opened as the clone helper will open it: what the user is
-// asked about, which the helper then requires
-func identify(root, rel string) (string, error) {
-	fd, rootFd, err := openSource(root, rel)
-	if err != nil {
-		return "", err
-	}
-	defer unix.Close(fd)
-	defer unix.Close(rootFd)
-	id, err := idOf(fd)
-	if err != nil {
-		return "", err
-	}
-	return id.String(), nil
 }
 
 func idOf(fd int) (fileID, error) {

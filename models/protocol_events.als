@@ -114,9 +114,8 @@ pred notifAllow[r: Req, g: Grant] {
     // only the broker's own notification carries its allow key
     r not in Forged
     // `list` runs again after the answer (inList, consent.go); a folder
-    // is mounted only if it is the one shown (clone-tree --expect)
+    // is whatever its path resolves to at mount time (mountChecks)
     c.dtype != Attach implies some r.rparams.(c.matches) & Listed
-    c.dtype = Attach implies r.rparams.resolves = r.shownDir
     l in Up - Gone
     // checked again at grant time (checkLease after the answer, and lockOK
     // under the lock in grant(), leases.go)

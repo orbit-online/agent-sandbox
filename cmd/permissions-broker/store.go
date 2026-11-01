@@ -54,7 +54,7 @@ func (b *broker) replay(typ string) {
 		// another replay doesn't make a second grant (a second mount nothing ends)
 		c.covered.Lock()
 		if b.matching(c, params) == nil {
-			if _, err := b.grant(c, params, summary, "always", nil, ""); err != nil {
+			if _, err := b.grant(c, params, summary, "always", nil); err != nil {
 				slog.Warn("Replay", "capability", a.Capability, "err", err)
 			}
 		}

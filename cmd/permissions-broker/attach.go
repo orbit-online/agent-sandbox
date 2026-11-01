@@ -131,7 +131,7 @@ func (b *broker) attachGrant(g *grant) error {
 		return err
 	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
-	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, g.shown, b.cfg.Denied, dir, g.ID); err != nil {
+	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, b.cfg.Denied, dir, g.ID); err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err
 	}
