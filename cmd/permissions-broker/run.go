@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,13 @@ func newBroker(cfg config, caps map[string]*capability, sb *sandbox, ask asker) 
 			slog.Warn("Broken grant store, set aside", "store", cfg.Store, "err", err)
 			b.store = storeData{}
 			_ = os.Rename(cfg.Store, cfg.Store+".broken")
+		}
+		// Saved indented: compacted again to the validated form, which isAlways, forget and revoke compare exactly
+		for i, a := range b.store.Always {
+			var p bytes.Buffer
+			if json.Compact(&p, a.Params) == nil {
+				b.store.Always[i].Params = p.Bytes()
+			}
 		}
 	}
 	return b, nil

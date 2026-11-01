@@ -93,3 +93,31 @@ func TestRevokeAlways(t *testing.T) {
 		t.Errorf("A revoked always grant came back: %v, asked %d times", err, f.count())
 	}
 }
+
+// An always grant from the store a daemon started with (saved indented) counts as granted, and revoke and forget remove
+// it: neither asks again nor comes back at the next start
+func TestAlwaysAfterRestart(t *testing.T) {
+	b, f := testBroker(t)
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	b.addAlways(c, json.RawMessage(`{"path":"/a"}`))
+	b.addAlways(c, json.RawMessage(`{"path":"/b"}`))
+	again, err := newBroker(b.cfg, b.caps, b.sb, f.ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { again.endAll("test over") })
+	g, _, err := again.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
+	if err != nil || f.count() != 0 {
+		t.Fatalf("The stored always grant: %v, asked %d times", err, f.count())
+	}
+	if _, err := again.revoke(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := again.forget(c.id(), json.RawMessage(`{"path":"/b"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if third, err := newBroker(b.cfg, b.caps, b.sb, nil); err != nil || len(third.store.Always) != 0 {
+		t.Errorf("Revoked and forgotten, still stored: %+v, %v", third.store.Always, err)
+	}
+}

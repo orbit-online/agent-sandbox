@@ -181,7 +181,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `list`; not for attach capabilities), and an Allow refused when the instance went away
   while the user was asked, a replay of an always grant `list` no longer
   prints, the refusal limit, `always` only from the
-  window and with exact parameters, and gone from the store when revoked, the store, duration, lock (none granted when the lock stops being
+  window and with exact parameters, and gone from the store when revoked
+  (also as read by a daemon started again, and forgotten), the store, duration, lock (none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name), service units in systemd (faked), exclusive instances across
