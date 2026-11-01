@@ -87,7 +87,7 @@ func (b *broker) resolveAttach(c *capability, params json.RawMessage) (attachSou
 	cmd.Stdin = bytes.NewReader(in)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
-	if err := runPlugin(cmd); err != nil {
+	if err := c.runPlugin(cmd); err != nil {
 		return attachSource{}, fmt.Errorf("%s couldn't resolve: %s", c.id(), strings.TrimSpace(errOut.String()))
 	}
 	var r resolved

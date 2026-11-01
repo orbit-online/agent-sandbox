@@ -197,9 +197,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   the broker's notification or an `ActionInvoked` of its own allow (a fake
   notification server on a `dbus-daemon` of the test's), anchor a session at or above the
   sandbox or, from a re-entry (`--shell`), at a host session above nsenter, make one always grant start several units or
-  mount an always folder twice (replays, a second `share`), get a credential after
+  mount an always folder twice (replays, a second `share`), get a command's output after
   its lease ran out or for a grant revoked while its request waited for a
-  plugin slot; plus a window answer while the notification is up, pending requests
+  plugin slot, or hold every plugin slot with one capability whose commands hang (another's run, and its own
+  `list` for the window); plus a window answer while the notification is up, pending requests
   in arrival order, unit
   names per launcher, and a broken store set aside. Attach grants against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant

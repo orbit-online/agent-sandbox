@@ -285,8 +285,10 @@ most 200 characters without control characters, so neither can pass itself off a
 
 What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch
 streams included), so a full `request.sock` leaves `control.sock` to the window; a client has 10 seconds to send a
-request of at most 64 KiB; accept errors are waited out rather than ending the socket; at most four plugin commands
-run at once; `list` output is kept for five seconds; and requests a grant already covers are answered one at a time
+request of at most 64 KiB; accept errors are waited out rather than ending the socket; at most four `run` and
+`resolve` commands run at once, one per capability, so a capability whose commands hang holds up only its own
+requests; `list` runs one per capability, outside those four, so the window's state isn't held up by them, and its
+output is kept for five seconds; and requests a grant already covers are answered one at a time
 per capability, without logging them. `lease` is the
 caller's proposal: `session`, `lock`, `PT<n>H` or `always`.
 

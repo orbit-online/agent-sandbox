@@ -35,7 +35,7 @@ func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	c.listed, c.listErr = nil, nil
-	if err := runPlugin(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		c.listErr = fmt.Errorf("List %s: %w", c.id(), err)
 	} else if !json.Valid(out.Bytes()) {
 		c.listErr = fmt.Errorf("List %s: not JSON", c.id())

@@ -32,20 +32,29 @@ type capability struct {
 
 	// Held while a request looks for a grant covering it, or makes one from an always grant
 	covered sync.Mutex
-	// list's output for a few seconds, so the sandbox asking again and again doesn't fork a process each time
+	// One run or resolve command of this capability's at a time, so a capability whose commands hang (each request a
+	// live command grant covers reruns run, a minute at most) holds one of pluginSlots, not all of them
+	slotOnce sync.Once
+	slot     chan struct{}
+	// list's output for a few seconds, so the sandbox asking again and again doesn't fork a process each time. Also
+	// what keeps list to one process per capability, without a plugin slot: the window's state runs it, which a busy
+	// capability mustn't hold up
 	listMu   sync.Mutex
 	listed   json.RawMessage
 	listErr  error
 	listedAt time.Time
 }
 
-// At most this many plugin commands run at once, whatever the sandbox sends
+// At most this many run and resolve commands run at once, whatever the sandbox sends
 var pluginSlots = make(chan struct{}, 4)
 
-func runPlugin(cmd *exec.Cmd) error { return runPluginIf(cmd, nil) }
+func (c *capability) runPlugin(cmd *exec.Cmd) error { return c.runPluginIf(cmd, nil) }
 
-// runPluginIf runs cmd once a slot is free, if ready, run then, doesn't refuse
-func runPluginIf(cmd *exec.Cmd, ready func() error) error {
+// runPluginIf runs one of c's commands once c's slot and a plugin slot are free, if ready, run then, doesn't refuse
+func (c *capability) runPluginIf(cmd *exec.Cmd, ready func() error) error {
+	c.slotOnce.Do(func() { c.slot = make(chan struct{}, 1) })
+	c.slot <- struct{}{}
+	defer func() { <-c.slot }()
 	pluginSlots <- struct{}{}
 	defer func() { <-pluginSlots }()
 	if ready != nil {
@@ -220,7 +229,7 @@ func (c *capability) runCommand(ctx context.Context, params json.RawMessage, val
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	var refused error
-	err := runPluginIf(cmd, func() error {
+	err := c.runPluginIf(cmd, func() error {
 		v, err := validity()
 		if err != nil {
 			refused = err

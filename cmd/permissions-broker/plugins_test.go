@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestValidate(t *testing.T) {
@@ -107,5 +111,42 @@ func TestExclusiveInstance(t *testing.T) {
 	}
 	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": false}`, "PT1H")); err == nil {
 		t.Error("Another launcher got the instance with another value of a parameter list doesn't print")
+	}
+}
+
+// P14: one capability whose commands hang holds one plugin slot: another's commands run, and the window's list of
+// the hanging one isn't held up
+func TestPluginSlotsPerCapability(t *testing.T) {
+	hang, other := testCap(t, "command"), testCap(t, "command")
+	hang.Name, other.Name = "hang", "other"
+	listed := filepath.Join(t.TempDir(), "list")
+	if err := os.WriteFile(listed, []byte("#!/bin/sh\necho '[]'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hang.List = []string{listed}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range cap(pluginSlots) + 2 {
+		wg.Go(func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { <-stop; cancel() }()
+			hang.runPlugin(exec.CommandContext(ctx, "sleep", "60"))
+		})
+	}
+	t.Cleanup(func() { close(stop); wg.Wait() })
+	time.Sleep(200 * time.Millisecond)
+	done := make(chan error, 2)
+	go func() { done <- other.runPlugin(exec.Command("true")) }()
+	go func() { _, err := hang.listInstances(context.Background()); done <- err }()
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("A hanging capability held up another's command or its own list")
+		}
 	}
 }
