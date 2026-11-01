@@ -182,11 +182,12 @@ holder, and the detach still goes through: the helper refuses the directory in i
 mountpoint on the host unmounts the grant in every namespace. `/run` in M1 stays writable to the sandbox: it's a
 directory on bwrap's root tmpfs, nixpak passes bwrap no `--remount-ro`, and a read-only root would need checking
 against everything that runs there, for a rename that no longer hides anything.
-So the daemon reads the ids of that mount and those propagated from it (its peer group, by `shared:` and `master:`) in
-each mount namespace in the sandbox (of every process of the sandbox's, found by user namespace as for sessions below,
-re-entries included), detaches, and then lists the holders, within ten seconds: processes with a thread whose
-working directory, root or open files are on those mounts, or with mappings there (by `statx`'s mount id, which an
-open file keeps); processes with a thread whose working directory, root or an open file is on a detached mount of the
+The daemon detaches first: how many processes, namespaces and mounts the scan below reads is the sandbox's choice, so
+nothing of it comes before the detach. Then it lists the holders, within ten seconds, reading the mountinfo of each
+mount namespace in the sandbox once (of every process of the sandbox's, found by user namespace as for sessions below,
+re-entries included): processes with a thread whose working directory, root or open files are on the grant's mount or
+one propagated from it (its peer group, by `shared:` and `master:`), or with mappings there (by `statx`'s mount id,
+which an open file keeps), should the detach have left one; processes with a thread whose working directory, root or an open file is on a detached mount of the
 grant's filesystem, one in no mountinfo the daemon reads (a lazy unmount's, an `open_tree` clone's, one in a namespace
 no process is in); and processes with a thread whose mount namespace has a mount of the grant's filesystem and root.
 A file on a detached mount is the grant's when the path `/proc` gives for it, relative to that mount's root, names

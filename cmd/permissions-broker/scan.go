@@ -26,6 +26,9 @@ type holder struct {
 // How long the holders' scan may take: the sandbox decides how many processes and files there are
 var holdersTimeout = 10 * time.Second
 
+// Called as the scan starts, for the tests
+var scanStarts = func() {}
+
 // tasks lists the /proc directories of pid's threads. Each may have a working directory, root, file table and mount
 // namespace of its own (unshare with CLONE_FS, CLONE_FILES or CLONE_NEWNS on one thread), which the thread group
 // leader's entries don't show
@@ -61,15 +64,10 @@ type mountView struct {
 	tried map[string]bool
 }
 
-// viewMounts reads the mountinfo of each mount namespace of the processes' threads once. ids: the grant's mounts
-func viewMounts(pids []int, m *grantMount, ids map[uint64]map[uint64]bool, deadline time.Time) *mountView {
-	v := &mountView{m: m, deadline: deadline, visible: map[uint64]bool{}, copies: map[uint64]bool{},
+// viewMounts reads the mountinfo of each mount namespace of the processes' threads once
+func viewMounts(pids []int, m *grantMount, deadline time.Time) *mountView {
+	v := &mountView{m: m, deadline: deadline, visible: map[uint64]bool{}, copies: map[uint64]bool{m.id: true},
 		rebinds: map[uint64]bool{}, tried: map[string]bool{}}
-	for _, set := range ids {
-		for id := range set {
-			v.copies[id] = true
-		}
-	}
 	for _, l := range readMountinfo("/proc/self/mountinfo") {
 		v.visible[l.id] = true
 	}
@@ -86,7 +84,7 @@ func viewMounts(pids []int, m *grantMount, ids map[uint64]map[uint64]bool, deadl
 			seen[ns] = true
 			for _, l := range readMountinfo(task + "/mountinfo") {
 				v.visible[l.id] = true
-				if mountsOf([]mountLine{l}, m.dev, m.root) {
+				if m.copyOf(l) || mountsOf([]mountLine{l}, m.dev, m.root) {
 					v.copies[l.id] = true
 					v.rebinds[ns] = true
 				}
@@ -101,10 +99,11 @@ func viewMounts(pids []int, m *grantMount, ids map[uint64]map[uint64]bool, deadl
 // mount of their own of the same filesystem and root, which a process can make in a mount namespace of its own and the
 // detach doesn't reach. Every thread counts. Best effort: an fd in flight in an SCM_RIGHTS message or registered with
 // io_uring shows nowhere in /proc, and keeps the grant readable until it's closed or the sandbox ends
-func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, m *grantMount) []holder {
+func (s *sandbox) holdersAfter(m *grantMount) []holder {
+	scanStarts()
 	deadline := time.Now().Add(holdersTimeout)
 	pids := s.members()
-	v := viewMounts(pids, m, ids, deadline)
+	v := viewMounts(pids, m, deadline)
 	var hs []holder
 	for _, pid := range pids {
 		if time.Now().After(deadline) {
@@ -113,7 +112,7 @@ func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, m *grantMount) []
 		}
 		held, possible := v.holds(pid)
 		if !held {
-			held = holdsMapping(pid, ids)
+			held = holdsMapping(pid, v.copies)
 		}
 		if held || possible {
 			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
@@ -207,13 +206,7 @@ func (v *mountView) inTree(rel string) (unix.Stat_t, bool) {
 
 // holdsMapping reports whether pid maps a file on one of the grant's mounts, in any namespace: its threads share
 // their mappings
-func holdsMapping(pid int, ids map[uint64]map[uint64]bool) bool {
-	all := map[uint64]bool{}
-	for _, set := range ids {
-		for id := range set {
-			all[id] = true
-		}
-	}
+func holdsMapping(pid int, all map[uint64]bool) bool {
 	entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/map_files", pid))
 	for _, e := range entries {
 		var stx unix.Statx_t

@@ -135,31 +135,6 @@ func (m *grantMount) copyOf(l mountLine) bool {
 	})
 }
 
-// grantMounts maps each mount namespace in the sandbox (by inode) to the ids of the grant's mounts there: the mount
-// itself and those propagated from it, whatever their paths. Read once per namespace, any thread's, before detaching
-func (s *sandbox) grantMounts(m *grantMount) map[uint64]map[uint64]bool {
-	byNs := map[uint64]map[uint64]bool{}
-	for _, pid := range s.members() {
-		for _, task := range tasks(pid) {
-			ns, ok := mntNs(task)
-			if !ok {
-				continue
-			}
-			if _, seen := byNs[ns]; seen {
-				continue
-			}
-			set := map[uint64]bool{}
-			for _, l := range readMountinfo(task + "/mountinfo") {
-				if m.copyOf(l) {
-					set[l.id] = true
-				}
-			}
-			byNs[ns] = set
-		}
-	}
-	return byNs
-}
-
 // mountsOf reports whether there is a mount of the filesystem dev (major:minor) whose root is root or beneath it
 func mountsOf(lines []mountLine, dev, root string) bool {
 	for _, l := range lines {

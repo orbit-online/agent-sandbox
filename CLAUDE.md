@@ -212,7 +212,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   mount namespace or an `open_tree` clone in no mount table; a clone of a file of it as a possible
   holder; not a process outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
-  record), detached with its mountpoint
+  record), detached before the holders' scan starts, with its mountpoint
   gone on revoke, a session lease two sessions hold, a release dropping only the releasing
   session's hold (the grant ends with the last, or at once for a caller
   without a session), a daemon started again

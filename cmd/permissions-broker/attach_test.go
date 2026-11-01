@@ -321,3 +321,34 @@ func TestReplayOnce(t *testing.T) {
 		t.Errorf("Forget left %d grants", len(gs))
 	}
 }
+
+// The detach comes before the holders' scan, whose cost the sandbox chooses: when the scan starts, the grant is
+// unmounted where the app sees it
+func TestDetachFirst(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "file"), []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := fmt.Sprintf("/proc/%d/root%s/file", b.sb.pid, g.Path)
+	scanned := false
+	scanStarts = func() {
+		scanned = true
+		if _, err := os.Stat(inside); err == nil {
+			t.Error("Still mounted when the holders' scan started")
+		}
+	}
+	t.Cleanup(func() { scanStarts = func() {} })
+	if _, err := b.revoke(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !scanned {
+		t.Error("No holders' scan")
+	}
+}

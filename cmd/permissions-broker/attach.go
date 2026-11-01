@@ -150,7 +150,8 @@ func (b *broker) attachGrant(g *grant) error {
 }
 
 // detachGrant detaches an attach grant and removes its mountpoint, which ends its mounts in every namespace it
-// propagated to, then lists what still holds it. Its mount ids are taken first, while its mount points resolve
+// propagated to, then lists what still holds it. Nothing comes before the detach: the scan's cost is the sandbox's to
+// choose (its processes, namespaces and mounts), so it mustn't hold the detach up
 func (b *broker) detachGrant(g *grant) {
 	if g.mnt == nil {
 		// Never attached
@@ -162,7 +163,6 @@ func (b *broker) detachGrant(g *grant) {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return
 	}
-	ids := b.sb.grantMounts(g.mnt)
 	dir, err := grantDirOf(b.cfg)
 	if err == nil {
 		err = b.sb.detach(dir, g.ID)
@@ -171,7 +171,7 @@ func (b *broker) detachGrant(g *grant) {
 		slog.Warn("Detach", "grant", g.ID, "err", err)
 	}
 	removeMountpoint(b.cfg.GrantDir, g.ID)
-	g.Holders = b.sb.holdersAfter(ids, g.mnt)
+	g.Holders = b.sb.holdersAfter(g.mnt)
 	if len(g.Holders) > 0 {
 		slog.Info("Still held", "grant", g.ID, "holders", g.Holders)
 	}
