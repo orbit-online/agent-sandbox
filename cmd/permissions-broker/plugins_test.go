@@ -150,3 +150,35 @@ func TestPluginSlotsPerCapability(t *testing.T) {
 		}
 	}
 }
+
+// P13: the default launcher's cleanup removes its own locks, and not one another daemon is making: a lock is never
+// visible without its launcher's name
+func TestRemoveLocksDefault(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	c := testCap(t, "service")
+	c.Exclusive = true
+	release, err := c.exclusiveLock(context.Background(), "", json.RawMessage(`{"path":"/vm"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("Locks: %v", entries)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, entries[0].Name())); string(data) != "\n" {
+		t.Errorf("The default launcher's lock holds %q", data)
+	}
+	making := filepath.Join(dir, "test_thing-other")
+	if err := os.WriteFile(making, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removeLocks("")
+	if _, err := os.Stat(making); err != nil {
+		t.Error("Removed a lock without content, another daemon's in the making")
+	}
+	if _, err := os.Stat(filepath.Join(dir, entries[0].Name())); err == nil {
+		t.Error("Left the default launcher's own lock")
+	}
+}

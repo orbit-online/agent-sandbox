@@ -123,7 +123,7 @@ func (c *capability) exclusiveLock(ctx context.Context, launcher string, params 
 	}
 	for _, key := range keys {
 		name := filepath.Join(dir, strings.ReplaceAll(c.id(), "/", "_")+"-"+hashOf(key))
-		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		err := createWith(name, launcher+"\n")
 		if errors.Is(err, os.ErrExist) {
 			release()
 			holder, _ := os.ReadFile(name)
@@ -136,20 +136,41 @@ func (c *capability) exclusiveLock(ctx context.Context, launcher string, params 
 			release()
 			return nil, err
 		}
-		_, _ = f.WriteString(launcher + "\n")
-		f.Close()
 		taken = append(taken, name)
 	}
 	return release, nil
 }
 
-// removeLocks removes the launcher's exclusive locks
+// createWith creates name holding data, failing when it exists, and never visible without it: written to a file of its
+// own first, then linked into place. Created empty and written after, the default launcher's lock ("\n") would look
+// like any other daemon's lock in the making, which removeLocks("") would remove
+func createWith(name, data string) error {
+	f, err := os.CreateTemp(filepath.Dir(name), ".new-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.WriteString(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Link(f.Name(), name)
+}
+
+// removeLocks removes the launcher's exclusive locks. Never one without content, which is no lock of this launcher's
+// (see createWith)
 func removeLocks(launcher string) {
 	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
-		if data, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(data)) == launcher {
+		if strings.HasPrefix(e.Name(), ".new-") {
+			continue
+		}
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 && strings.TrimSpace(string(data)) == launcher {
 			_ = os.Remove(path)
 		}
 	}

@@ -183,7 +183,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name), service units in systemd (faked), exclusive instances across
   launchers (locked by the instance `list` prints, whatever other parameters
-  a request carries), `share` through nsenter into a child's user and mount namespace
+  a request carries; the default launcher's cleanup leaving a lock without content alone), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace, a second time, and once a process of
   the sandbox is in a copy of its mount namespace), `control.sock` refusing a peer in
   another user namespace, a peer gone after its `/proc` entries were read
