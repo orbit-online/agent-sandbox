@@ -289,7 +289,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   script each under `/etc` and `~/.config` running what it references, the
   `claude://` re-entry (in the app's netns and pid ns), both re-entries
   past a process at the app's pid in a pid ns of the sandbox's own, `XDG_CURRENT_DESKTOP`
-  with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces,
+  with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces, with no_new_privs as `claude://` has it,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
   starting the app when it isn't running), the wrapper refusing system
   users, and

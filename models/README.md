@@ -100,9 +100,10 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 15. **Nested**: anything the above start in user, mount, pid or network
     namespaces of their own (`unshare -Urm`, bwrap, rootless containers),
     with maps from subid-broker.
-16. **Re-entries**: `claude://` (`/init` under `setpriv --no-new-privs`)
-    and `--shell`, joined into the app's namespaces by `nsenter` from the
-    host. Inside once joined, but their parent is a host process.
+16. **Re-entries**: `claude://` (`/init`) and `--shell`, both under
+    `setpriv --no-new-privs` set on the host, joined into the app's
+    namespaces by `nsenter` from the host. Inside once joined, but their
+    parent is a host process.
 
 ## Namespaces
 
@@ -312,8 +313,8 @@ process whose principal is in the Sandbox domain, at any time.
   CAP_CHECKPOINT_RESTORE is dropped before the app runs, whether or not
   the pid could be set.
 - L5. A re-entry joins U2, M2, P2, N, ipc, uts and cgroup of the app's pid,
-  never U1 or M1, and holds no capability after its exec; `claude://`
-  runs with no_new_privs. The app's pid is the only process at `APP_PID`
+  never U1 or M1, and holds no capability after its exec; both run with
+  no_new_privs, set on the host before nsenter. The app's pid is the only process at `APP_PID`
   in a pid ns one below the sandbox's.
 - L6. `--permissions` never enters the sandbox.
 - L7. The broker's and the launcher's handle on the sandbox names the

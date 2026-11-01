@@ -60,7 +60,7 @@ one sig Cfg {
 abstract sig Guard {}
 one sig
   AppLevel,         // claude-desktop.sh app_pid: the match's pid ns is one below the sandbox's, and it's the only one
-  NnpOnUrl,         // claude-desktop.sh:88: setpriv --no-new-privs
+  NnpOnEntry,       // claude-desktop.sh:52: setpriv --no-new-privs on the host, ahead of nsenter, for both modes
   PermissionsFirst, // claude-desktop.sh:54-57, ahead of sandbox_pid
   MntCheck          // sandbox.go:47 and :55, claude-desktop.sh:24: not in our mount ns
   extends Guard {}
@@ -221,7 +221,7 @@ pred enter[g: set Guard] {
     born[e, ReentryP, launcher, t.userns, t.mnt, t.net, t.pidns, e.caps']
     t.userns != U3 implies no e.caps'
     only[e, none]
-    tags[none, e, (Cfg.mode = Url and NnpOnUrl in g) implies e else none, none]
+    tags[none, e, (NnpOnEntry in g) implies e else none, none]
   }
   quiet
 }
@@ -279,11 +279,15 @@ pred system[g: set Guard, m: set Move] {
 
 // ---------------------------------------------------------------------
 // L5: a re-entry joins the app's U2, M2, P2 and N, holds no capability
-// after its exec, and claude:// runs with no_new_privs.
+// after its exec, and runs with no_new_privs, claude:// and --shell alike:
+// it execs paths in M2, where the sandbox can put a binary with file
+// capabilities whose root id is U2's root (a user namespace it maps root
+// to U2's 0 through subid-broker), and nsenter holds every capability in
+// U2 until that exec.
 pred l5 {
   always all e: Reentry {
     e.userns = U2 and e.mnt = M2 and e.pidns = P2 and e.net = N and no e.caps
-    Cfg.mode = Url implies e in NoNewPrivs
+    e in NoNewPrivs
   }
 }
 
@@ -323,9 +327,15 @@ check L5stable for 8 but 13 OwnedNS, 1..6 steps expect 0
 assert L5stableRevert { system[Guard - AppLevel, SpawnInP] implies l5 }
 check L5stableRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 
-// L5, revert: without NnpOnUrl a claude:// re-entry runs without
-// no_new_privs.
-assert L5nnpRevert { system[Guard - NnpOnUrl, SpawnInP] implies l5 }
+// L5, revert: without NnpOnEntry a re-entry runs without no_new_privs.
+assert L5nnpRevert { system[Guard - NnpOnEntry, SpawnInP] implies l5 }
+
+// L5, revert for --shell, which ran without no_new_privs before: a
+// --shell re-entry without NnpOnEntry.
+assert L5nnpShellRevert {
+  (system[Guard - NnpOnEntry, SpawnInP] and Cfg.mode = Shell) implies l5
+}
+check L5nnpShellRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 check L5nnpRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // Vacuity: a claude:// re-entry happens.

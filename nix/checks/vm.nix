@@ -450,6 +450,10 @@ pkgs.testers.runNixOSTest {
       with subtest("--shell joins the app's namespaces"):
           out = sandbox_shell("readlink /proc/self/ns/net /proc/self/ns/mnt")
           assert out.split() == [app_netns, app_mntns], f"shell in {out.split()}, app in {[app_netns, app_mntns]}"
+          # no_new_privs, as everything bwrap starts: file capabilities on what it execs count for nothing
+          out = sandbox_shell("grep NoNewPrivs /proc/self/status")
+          assert out.split() == ["NoNewPrivs:", "1"], out
+          assert in_sandbox("grep NoNewPrivs /proc/self/status").split() == ["NoNewPrivs:", "1"]
 
       with subtest("--shell keeps the terminal's TERM, unless its TERMINFO isn't in the sandbox"):
           for env, want in [

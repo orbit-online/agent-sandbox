@@ -45,8 +45,10 @@ app_pid() {
 }
 
 env=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/nixpak-bus")
-# Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns
-nsenter=(nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
+# Not -a: that also joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns. no_new_privs
+# first, on the host, as bwrap sets it for everything inside: nsenter holds every capability in U2 until it execs a
+# path the sandbox controls, whose file capabilities would otherwise count
+nsenter=("$SETPRIV" --no-new-privs nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
 
 # --permissions (the .desktop file's action with the broker): the Permissions window, on the host. Ahead of the
 # running sandbox's lookup, which would hand the flag to the app
@@ -83,7 +85,7 @@ fi
 
 # Further launches (claude:// URLs) join the running app's namespaces, its pid ns included, so Electron's
 # single-instance lock finds the first instance and checks its pid where it lives. /init is the FHS env's, which the
-# FHS env's bwrap would otherwise run, with no_new_privs as bwrap sets it
+# FHS env's bwrap would otherwise run
 if pid=$(sandbox_pid); then
   for ((i = 0; i < 30; i++)); do
     app=$(app_pid "$pid") && break
@@ -91,7 +93,7 @@ if pid=$(sandbox_pid); then
     sleep 1
   done
   [[ -n ${app:-} ]] || { echo "claude-desktop: The running sandbox has no app" >&2; exit 1; }
-  exec "${env[@]}" "${nsenter[@]}" -t "$app" "$SETPRIV" --no-new-privs /init "${args[@]}"
+  exec "${env[@]}" "${nsenter[@]}" -t "$app" /init "${args[@]}"
 fi
 
 # The sandbox can write its home and plant links there, so the files it expects (resolv.conf, user-dirs.dirs, the app's
