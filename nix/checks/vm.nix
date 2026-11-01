@@ -79,6 +79,8 @@ let
       install -Dm755 permissions-broker-live $out/bin/permissions-broker-live
       runHook postInstall
     '';
+    # The broker's wraps bin/permissions-broker, which this lacks. Unwrapped: the test runs copies named claude and node
+    postInstall = "";
   };
   stateDir = "/home/alice/.local/share/claude-desktop";
   sandboxHome = "${stateDir}/home";
