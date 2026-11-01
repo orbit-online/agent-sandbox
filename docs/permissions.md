@@ -220,6 +220,15 @@ sandbox likes, and the window lists nobody to end. Detached mounts and mappings 
   directory the user can't search (the sandbox's subordinate ids own it).
 - Past ten seconds the scan stops, and the processes it didn't get to aren't listed.
 
+That limit comes from Linux itself. An open file description keeps its file and the mount it was opened on alive,
+whatever happens to the mount after: unmounting it, even lazily, only takes it out of the tree. Linux has no general
+`revoke()` that cuts off descriptors already open. So an fd queued in an `SCM_RIGHTS` message, an io_uring fixed
+file, a detached `open_tree` clone, or a grant's mount propagated into a nested mount namespace that then made it
+private, so the unmount doesn't reach it, all keep their access until the processes holding them end. Ending those
+processes, at worst the whole sandbox, is the only way to take it back. Only mediating every access, a FUSE layer in
+front of each grant that the daemon controls, could cut access off at revoke, at a cost in speed and machinery this
+design doesn't pay.
+
 Only ending the sandbox ends every access to a grant for sure.
 
 ### Source ceiling and resolving paths
