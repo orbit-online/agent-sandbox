@@ -68,11 +68,12 @@ func standIn(t *testing.T, b *broker) (io.WriteCloser, *bufio.Reader) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		// The user's ids as themselves, as the sandbox maps them, so the helpers keep their capabilities through
 		// nsenter's exec only as ambient ones (--keep-caps). A uts namespace of its own, as the sandbox has, which
-		// the helpers join for that. The child itself keeps CAP_SYS_ADMIN for its bind mount the same way
+		// the helpers join for that. The child itself keeps CAP_SYS_ADMIN for its bind mount the same way, and its
+		// children CAP_SYS_CHROOT too, for a holder by its root
 		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS,
 		UidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getuid(), HostID: os.Getuid(), Size: 1}},
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getgid(), HostID: os.Getgid(), Size: 1}},
-		AmbientCaps: []uintptr{unix.CAP_SYS_ADMIN},
+		AmbientCaps: []uintptr{unix.CAP_SYS_ADMIN, unix.CAP_SYS_CHROOT},
 	}
 	stdin, _ := cmd.StdinPipe()
 	stdoutPipe, _ := cmd.StdoutPipe()

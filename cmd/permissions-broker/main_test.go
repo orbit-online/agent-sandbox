@@ -18,9 +18,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Re-executed as the processes the broker inspects. wait: blocks until stdin closes. swap: see swap_test.go. anchor: starts a wait child with
+// Re-executed as the processes the broker inspects. wait: blocks until stdin closes. anchor: starts a wait child with
 // CLAUDE_CODE_SESSION_ID set, prints its pid and waits. mount: in a user and mount namespace of its own, mounts a
-// tmpfs on $MOUNT_AT, prints "ready" and waits
+// tmpfs on $MOUNT_AT, prints "ready" and waits. swap: see swap_test.go. threadhold: see holders_test.go
 func TestMain(m *testing.M) {
 	if len(os.Args) > 2 && slices.Contains([]string{"make-shared", "clone-tree", "move-tree", "detach"}, os.Args[1]) {
 		main()
@@ -140,6 +140,8 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	case "swap":
 		swapMain()
+	case "threadhold":
+		threadHoldMain()
 	case "mount":
 		if err := unix.Mount("tmpfs", os.Getenv("MOUNT_AT"), "tmpfs", 0, ""); err != nil {
 			fmt.Println(err)

@@ -98,32 +98,48 @@ type holder struct {
 // How long the holders' scan may take: the sandbox decides how many processes and files there are
 var holdersTimeout = 10 * time.Second
 
+// tasks lists the /proc directories of pid's threads. Each may have a working directory, root, file table and mount
+// namespace of its own (unshare with CLONE_FS, CLONE_FILES or CLONE_NEWNS on one thread), which the thread group
+// leader's entries don't show
+func tasks(pid int) []string {
+	entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	dirs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		dirs = append(dirs, fmt.Sprintf("/proc/%d/task/%s", pid, e.Name()))
+	}
+	return dirs
+}
+
 // grantMounts maps each mount namespace in the sandbox (by inode) to the ids of the grant's mounts there: those at or
-// below its mount point. Read once per namespace, before detaching, while the mount points still resolve
+// below its mount point. Read once per namespace, any thread's, before detaching, while the mount points still resolve
 func (s *sandbox) grantMounts(mountpoint string) map[uint64]map[uint64]bool {
 	byNs := map[uint64]map[uint64]bool{}
 	for _, pid := range s.members() {
-		ns, ok := mntNs(pid)
-		if !ok {
-			continue
-		}
-		if _, seen := byNs[ns]; seen {
-			continue
-		}
-		set := map[uint64]bool{}
-		for _, l := range readMountinfo(fmt.Sprintf("/proc/%d/mountinfo", pid)) {
-			if l.point == mountpoint || strings.HasPrefix(l.point, mountpoint+"/") {
-				set[l.id] = true
+		for _, task := range tasks(pid) {
+			ns, ok := mntNs(task)
+			if !ok {
+				continue
 			}
+			if _, seen := byNs[ns]; seen {
+				continue
+			}
+			set := map[uint64]bool{}
+			for _, l := range readMountinfo(task + "/mountinfo") {
+				if l.point == mountpoint || strings.HasPrefix(l.point, mountpoint+"/") {
+					set[l.id] = true
+				}
+			}
+			byNs[ns] = set
 		}
-		byNs[ns] = set
 	}
 	return byNs
 }
 
-// holdersAfter lists, after the detach, the processes in the sandbox still holding the grant: files, mappings or a
-// working directory on its mounts (by mount id, which an open file keeps), or a mount of their own of the same
-// filesystem and root, which a process can make in a mount namespace of its own and the detach doesn't reach
+// holdersAfter lists, after the detach, the processes in the sandbox still holding the grant: files, mappings, a
+// working directory or root on its mounts (by mount id, which an open file keeps), or a mount of their own of the same
+// filesystem and root, which a process can make in a mount namespace of its own and the detach doesn't reach. Every
+// thread counts. Best effort: an fd in flight in an SCM_RIGHTS message or registered with io_uring shows nowhere in
+// /proc, and keeps the grant readable until it's closed or the sandbox ends
 func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string) []holder {
 	deadline := time.Now().Add(holdersTimeout)
 	var hs []holder
@@ -133,16 +149,25 @@ func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string)
 			slog.Warn("Holders' scan cut short", "after", holdersTimeout)
 			break
 		}
-		ns, ok := mntNs(pid)
-		if !ok {
-			continue
-		}
-		held := holdsMount(pid, ids[ns])
-		if !held && dev != "" {
-			if _, checked := rebinds[ns]; !checked {
-				rebinds[ns] = mountsOf(readMountinfo(fmt.Sprintf("/proc/%d/mountinfo", pid)), dev, root)
+		held := false
+		for _, task := range tasks(pid) {
+			ns, ok := mntNs(task)
+			if !ok {
+				continue
 			}
-			held = rebinds[ns]
+			held = holdsMount(task, ids[ns])
+			if !held && dev != "" {
+				if _, checked := rebinds[ns]; !checked {
+					rebinds[ns] = mountsOf(readMountinfo(task+"/mountinfo"), dev, root)
+				}
+				held = rebinds[ns]
+			}
+			if held {
+				break
+			}
+		}
+		if !held {
+			held = holdsMapping(pid, ids)
 		}
 		if held {
 			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
@@ -154,32 +179,52 @@ func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string)
 	return hs
 }
 
-func mntNs(pid int) (uint64, bool) {
+// mntNs is the mount namespace of the task or process at dir in /proc, by inode
+func mntNs(dir string) (uint64, bool) {
 	var st unix.Stat_t
-	if unix.Stat(fmt.Sprintf("/proc/%d/ns/mnt", pid), &st) != nil {
+	if unix.Stat(dir+"/ns/mnt", &st) != nil {
 		return 0, false
 	}
 	return st.Ino, true
 }
 
-// holdsMount reports whether pid's working directory, an open file or a mapping is on one of the mounts
-func holdsMount(pid int, ids map[uint64]bool) bool {
+// onMount reports whether path (a magic link in /proc) leads to one of the mounts
+func onMount(path string, ids map[uint64]bool) bool {
+	var stx unix.Statx_t
+	return unix.Statx(unix.AT_FDCWD, path, 0, unix.STATX_MNT_ID, &stx) == nil && ids[stx.Mnt_id]
+}
+
+// holdsMount reports whether the thread at task (its /proc directory) has its working directory, root or an open
+// file on one of the mounts
+func holdsMount(task string, ids map[uint64]bool) bool {
 	if len(ids) == 0 {
 		return false
 	}
-	on := func(path string) bool {
-		var stx unix.Statx_t
-		return unix.Statx(unix.AT_FDCWD, path, 0, unix.STATX_MNT_ID, &stx) == nil && ids[stx.Mnt_id]
-	}
-	if on(fmt.Sprintf("/proc/%d/cwd", pid)) {
+	if onMount(task+"/cwd", ids) || onMount(task+"/root", ids) {
 		return true
 	}
-	for _, dir := range []string{"fd", "map_files"} {
-		entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/%s", pid, dir))
-		for _, e := range entries {
-			if on(fmt.Sprintf("/proc/%d/%s/%s", pid, dir, e.Name())) {
-				return true
-			}
+	entries, _ := os.ReadDir(task + "/fd")
+	for _, e := range entries {
+		if onMount(task+"/fd/"+e.Name(), ids) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdsMapping reports whether pid maps a file on one of the grant's mounts, in any namespace: its threads share
+// their mappings
+func holdsMapping(pid int, ids map[uint64]map[uint64]bool) bool {
+	all := map[uint64]bool{}
+	for _, set := range ids {
+		for id := range set {
+			all[id] = true
+		}
+	}
+	entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/map_files", pid))
+	for _, e := range entries {
+		if onMount(fmt.Sprintf("/proc/%d/map_files/%s", pid, e.Name()), all) {
+			return true
 		}
 	}
 	return false

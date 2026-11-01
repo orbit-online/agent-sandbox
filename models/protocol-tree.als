@@ -123,7 +123,12 @@ fun listed: set Process { (inside - Tree.unscanned) & Tree.holds }
 // P5. After an attach grant ends, every sandbox process that still holds
 // it is listed. The broker finds the sandbox's processes by user
 // namespace (members.go), so a --shell process (and what it starts),
-// whose parent is nsenter on the host, is among them. Holds. Revert:
+// whose parent is nsenter on the host, is among them. Tree.holds is
+// holding as /proc shows it, on any thread (cwd, root, fds and mount
+// namespace per task, mountinfo.go): an fd queued in an SCM_RIGHTS
+// message or registered with io_uring holds the grant too and shows
+// nowhere, so P5 is best effort, outside this model; only the sandbox's
+// end ends those (docs/permissions.md). Holds. Revert:
 // `inside` as the sandbox pid's descendants (as before the fix): a cwd on
 // the grant or a re-bind in a re-entry's own mount namespace isn't
 // listed (counterexample found).

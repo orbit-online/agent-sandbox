@@ -269,8 +269,11 @@ process whose principal is in the Sandbox domain, at any time.
   and unit stopped, attach detached in M1 and everywhere it propagated,
   command never run again).
 - P5. After an attach grant ends, every sandbox process that still holds it
-  (cwd, open file, mapping, or a mount of the same filesystem and root in
-  its mount namespace) is listed as a holder.
+  where `/proc` shows it (a thread's cwd, root, open file or mount
+  namespace with a mount of the same filesystem and root, or a mapping)
+  is listed as a holder. Best effort: an fd queued in an `SCM_RIGHTS`
+  message or registered with io_uring holds it unseen, until the sandbox
+  ends.
 - P6. Only host principals answer: a pending request is decided by the
   notification's own action (not within 1 s of it appearing) or by a
   `control.sock` client.
