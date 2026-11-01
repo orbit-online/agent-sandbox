@@ -1,0 +1,24 @@
+# The Alloy models, on their own: they read no code
+name: Test models
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - models/**
+      - .github/workflows/test-models.yaml
+  pull_request:
+    paths:
+      - models/**
+      - .github/workflows/test-models.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: models/check

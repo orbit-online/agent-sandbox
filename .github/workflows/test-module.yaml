@@ -1,0 +1,41 @@
+# The Home Manager and NixOS modules: eval tests, the sandboxed app's closure, shellcheck
+name: Test module
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - nix/home/**
+      - nix/nixos/**
+      - nix/checks/default.nix
+      - scripts/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/test-module.yaml
+  pull_request:
+    paths:
+      - nix/home/**
+      - nix/nixos/**
+      - nix/checks/default.nix
+      - scripts/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/test-module.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Room for the store: the closure includes the real claude-desktop, mesa and the VM test
+      - run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+      - uses: cachix/install-nix-action@v31
+      - run: nix build -L .#checks.x86_64-linux.{claude-desktop-eval,claude-desktop,scripts}

@@ -1,0 +1,51 @@
+# The NixOS VM test, the slowest by far: on anything that can change what runs in it
+name: Test VM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - cmd/**
+      - internal/**
+      - go.mod
+      - go.sum
+      - nix/**
+      - scripts/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/test-vm.yaml
+  pull_request:
+    paths:
+      - cmd/**
+      - internal/**
+      - go.mod
+      - go.sum
+      - nix/**
+      - scripts/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/test-vm.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Room for the store: the closure includes the real claude-desktop, mesa and the VM test
+      - run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+      # subid-broker's and the permissions broker's tests nest user namespaces inside the build. Ubuntu's AppArmor gives
+      # a process in an unprivileged userns no capabilities, so the inner maps can't be written
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - uses: cachix/install-nix-action@v31
+        with:
+          # The VM test needs kvm; listing it replaces the defaults, so they're repeated
+          extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      - run: nix build -L .#checks.x86_64-linux.vm

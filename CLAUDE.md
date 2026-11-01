@@ -323,8 +323,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
   with `nix run .#checks.x86_64-linux.vm.driverInteractive`.
 
-CI (`.github/workflows/check.yaml`) runs `nix flake check` on pushes to
-`main` and on pull requests.
+CI runs on pushes to `main` and on pull requests, split by what changed
+(`.github/workflows/test-*.yaml`, each with its own `paths:`): `test-go`
+builds the Go packages with their tests, `test-module` the eval tests, the
+app's closure and shellcheck, `test-vm` the VM test, and `test-models`
+runs `models/check`. A change to docs alone runs none.
 
 Every new test gets the revert check: break the implementation, see the test
 fail, restore it.

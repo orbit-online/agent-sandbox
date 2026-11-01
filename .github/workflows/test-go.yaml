@@ -1,0 +1,40 @@
+# The Go helpers and the Permissions window, built with their tests
+name: Test Go
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - cmd/**
+      - internal/**
+      - go.mod
+      - go.sum
+      - nix/packages/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/test-go.yaml
+  pull_request:
+    paths:
+      - cmd/**
+      - internal/**
+      - go.mod
+      - go.sum
+      - nix/packages/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/test-go.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # subid-broker's and the permissions broker's tests nest user namespaces inside the build. Ubuntu's AppArmor gives
+      # a process in an unprivileged userns no capabilities, so the inner maps can't be written
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - uses: cachix/install-nix-action@v31
+      # Their package builds run the Go tests
+      - run: nix build -L .#checks.x86_64-linux.{netns-macvlan,subid-broker,permissions-broker,permissions-window}
