@@ -120,7 +120,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 			b.event("ended", g.ID)
 		})
 	}
-	// A lock lease only while the lock is watched: checked under b.mu, so watchLogind losing the bus either finds the
+	// A lock lease only while the lock is watched: checked under b.mu, so lockSignals losing the bus either finds the
 	// grant to end or makes this refuse it
 	b.mu.Lock()
 	if lease == "lock" && !b.lockOK {
@@ -301,19 +301,29 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("PT%dS", int(d.Round(time.Second)/time.Second))
 }
 
-// watchLogind ends lock leases when the graphical session locks or the machine sleeps. The daemon runs in a user
-// unit, outside any login session, so it finds the user's graphical session through user/self's Display property;
-// logind sends no signals on the self aliases. Lock leases are refused until this is set up
-func watchLogind(b *broker) {
-	if err := watchLogindErr(b); err != nil {
+// watchLogind ends lock leases when the graphical session locks or the machine sleeps. The watch is set up before it
+// returns, and serve calls it before b.run, so no request finds lock leases refused because the watch is still being
+// set up; the signals are then read in a goroutine. Lock leases are refused if setup fails
+func watchLogind(b *broker, setup func() (<-chan *dbus.Signal, string, error)) {
+	signals, session, err := setup()
+	if err != nil {
 		slog.Warn("No lock leases", "err", err)
+		return
 	}
+	b.mu.Lock()
+	b.lockOK = true
+	b.mu.Unlock()
+	slog.Info("Watching the screen lock", "session", session)
+	go b.lockSignals(signals)
 }
 
-func watchLogindErr(b *broker) error {
+// logindSignals subscribes to the lock and sleep signals and returns them with the graphical session's ID. The daemon
+// runs in a user unit, outside any login session, so it finds the user's graphical session through user/self's Display
+// property; logind sends no signals on the self aliases
+func logindSignals() (<-chan *dbus.Signal, string, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
-		return fmt.Errorf("Connect to the system bus: %w", err)
+		return nil, "", fmt.Errorf("Connect to the system bus: %w", err)
 	}
 	user := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1/user/self")
 	var display struct {
@@ -321,29 +331,32 @@ func watchLogindErr(b *broker) error {
 		Path dbus.ObjectPath
 	}
 	if err := user.StoreProperty("org.freedesktop.login1.User.Display", &display); err != nil {
-		return fmt.Errorf("Find the graphical session: %w", err)
+		conn.Close()
+		return nil, "", fmt.Errorf("Find the graphical session: %w", err)
 	}
 	if display.Path == "/" || display.Path == "" {
-		return errors.New("No graphical session")
+		conn.Close()
+		return nil, "", errors.New("No graphical session")
 	}
 	matches := []dbus.MatchOption{dbus.WithMatchObjectPath(display.Path)}
-	if err := conn.AddMatchSignal(append(matches, dbus.WithMatchInterface("org.freedesktop.DBus.Properties"))...); err != nil {
-		return err
-	}
-	if err := conn.AddMatchSignal(append(matches, dbus.WithMatchInterface("org.freedesktop.login1.Session"),
-		dbus.WithMatchMember("Lock"))...); err != nil {
-		return err
-	}
-	if err := conn.AddMatchSignal(dbus.WithMatchObjectPath("/org/freedesktop/login1"),
-		dbus.WithMatchInterface("org.freedesktop.login1.Manager"), dbus.WithMatchMember("PrepareForSleep")); err != nil {
-		return err
+	for _, m := range [][]dbus.MatchOption{
+		append(matches, dbus.WithMatchInterface("org.freedesktop.DBus.Properties")),
+		append(matches, dbus.WithMatchInterface("org.freedesktop.login1.Session"), dbus.WithMatchMember("Lock")),
+		{dbus.WithMatchObjectPath("/org/freedesktop/login1"), dbus.WithMatchInterface("org.freedesktop.login1.Manager"),
+			dbus.WithMatchMember("PrepareForSleep")},
+	} {
+		if err := conn.AddMatchSignal(m...); err != nil {
+			conn.Close()
+			return nil, "", err
+		}
 	}
 	signals := make(chan *dbus.Signal, 16)
 	conn.Signal(signals)
-	b.mu.Lock()
-	b.lockOK = true
-	b.mu.Unlock()
-	slog.Info("Watching the screen lock", "session", display.ID)
+	return signals, display.ID, nil
+}
+
+// lockSignals ends lock leases on the signals until the bus goes, then refuses lock leases and ends those there
+func (b *broker) lockSignals(signals <-chan *dbus.Signal) {
 	for s := range signals {
 		switch s.Name {
 		case "org.freedesktop.login1.Session.Lock":
@@ -366,5 +379,5 @@ func watchLogindErr(b *broker) error {
 	b.lockOK = false
 	b.mu.Unlock()
 	b.lockEvent("the screen lock isn't watched any more")
-	return errors.New("Lost the system bus")
+	slog.Warn("No lock leases", "err", "Lost the system bus")
 }

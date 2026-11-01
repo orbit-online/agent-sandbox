@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
 )
 
@@ -165,6 +166,34 @@ func TestNoOutputAfterEnd(t *testing.T) {
 	}
 	if r := <-done; r.err == nil || r.cred != "" {
 		t.Errorf("Issued %q for a grant revoked while waiting for a plugin slot", r.cred)
+	}
+}
+
+// A lock lease asked for right after the daemon starts: watchLogind returns only once the watch is set up, however
+// slowly the bus answers, and the signals' end refuses lock leases again
+func TestLockWatchedOnReturn(t *testing.T) {
+	b, _ := testBroker(t, "allow")
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	signals := make(chan *dbus.Signal)
+	watchLogind(b, func() (<-chan *dbus.Signal, string, error) {
+		time.Sleep(100 * time.Millisecond)
+		return signals, "1", nil
+	})
+	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err != nil {
+		t.Fatalf("Lock lease refused right after watchLogind: %v", err)
+	}
+	close(signals)
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		b.mu.Lock()
+		ok := b.lockOK
+		b.mu.Unlock()
+		if !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Lock still watched after the signals ended")
+		}
 	}
 }
 

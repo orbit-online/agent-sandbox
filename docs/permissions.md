@@ -392,7 +392,8 @@ session (nothing found above it) ends the grant on release: that only takes acce
 lock, the session lease's last anchor), revoke and the plugin's triggers end it for everyone. The daemon watches logind on the system bus from the host, where it has access. It runs in a
 user unit, outside any login session, so `session/self` doesn't resolve for it, and logind sends no signals on that
 alias anyway: it reads the `Display` property of `user/self` for the graphical session's object path and watches that
-one. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
+one. It sets that watch up before it serves requests, so a lock lease asked for right after it starts isn't refused
+for a watch still being set up. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
 a request to lock, also ends `lock` leases.
 
 Releasing voluntarily: once a session has held grants for 15 minutes, the core MCP server appends a line to its

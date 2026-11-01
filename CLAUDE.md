@@ -184,7 +184,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   capability, attach, parameters it doesn't take, one twice; granted at start
   when `list` prints them, once however many ask at once; a command's run
   without asking for `maxValidity`; revoked or released, asked for until the
-  daemon starts again), duration, lock (none granted when the lock stops being
+  daemon starts again), duration, lock (granted right after the watch is set up, which
+  happens before the daemon serves; none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name; one allowed after its anchor exited ends, closing no file of

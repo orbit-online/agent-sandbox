@@ -186,6 +186,6 @@ func serve(path string) error {
 	if err != nil {
 		return err
 	}
-	go watchLogind(b)
+	watchLogind(b, logindSignals)
 	return b.run()
 }

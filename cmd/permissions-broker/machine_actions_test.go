@@ -82,7 +82,7 @@ func (mc *machine) Lock(t *rapid.T) {
 	mc.waitEnded(t, mc.m.endWhere(func(g *refGrant) bool { return g.lease == "lock" })...)
 }
 
-// LockLost: the system bus is gone, as at watchLogind's end: no lock leases any more, and those there end (P9)
+// LockLost: the system bus is gone, as at lockSignals' end: no lock leases any more, and those there end (P9)
 func (mc *machine) LockLost(t *rapid.T) {
 	mc.b.mu.Lock()
 	mc.b.lockOK = false
