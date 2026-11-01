@@ -2,7 +2,7 @@
   buildGoModule,
   lib,
   dbus,
-  systemd,
+  makeBinaryWrapper,
   util-linux,
   ...
 }:
@@ -22,12 +22,14 @@ buildGoModule {
   subPackages = [ "cmd/permissions-broker" ];
   vendorHash = "sha256-4Of8zQcd0WJzGnwkK/GWhawzSDpKSHcjyx8mcLJaadE=";
   env.CGO_ENABLED = 0;
-  ldflags = [
-    "-X main.nsenter=${lib.getExe' util-linux "nsenter"}"
-    "-X main.unshareBin=${lib.getExe' util-linux "unshare"}"
-    "-X main.systemdRun=${lib.getExe' systemd "systemd-run"}"
-    "-X main.systemctl=${lib.getExe' systemd "systemctl"}"
-  ];
+  nativeBuildInputs = [ makeBinaryWrapper ];
+  # nsenter from the util-linux it's tested against (helpers.go relies on its --keep-caps behaviour); systemd-run and
+  # systemctl from the host system, to match the running user manager
+  postInstall = ''
+    wrapProgram $out/bin/permissions-broker \
+      --prefix PATH : ${lib.makeBinPath [ util-linux ]} \
+      --suffix PATH : /run/current-system/sw/bin
+  '';
   # TestShare and the attach tests run nsenter and unshare, the notification tests a bus of their own
   nativeCheckInputs = [
     dbus

@@ -49,7 +49,8 @@ tree.go and helpers.go). <dir> is the grant directory where the sandbox sees it,
 <dirid> the device and inode it must have there.
 `
 
-// Set to store paths at build time
+// From PATH: the package's wrapper puts util-linux first and the host system's profile, with its systemd, last.
+// Variables so tests can put fakes in their place
 var (
 	nsenter    = "nsenter"
 	systemdRun = "systemd-run"

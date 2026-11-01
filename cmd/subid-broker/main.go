@@ -39,8 +39,8 @@ $SUBID_BROKER_SOCKET, by default /run/subid-broker.sock.
 
 const defaultSocket = "/run/subid-broker.sock"
 
-// Set to a store path at build time
-var nsenter = "nsenter"
+// From PATH, which the package's wrapper starts with util-linux
+const nsenter = "nsenter"
 
 func main() {
 	switch filepath.Base(os.Args[0]) {

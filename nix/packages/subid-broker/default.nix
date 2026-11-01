@@ -1,6 +1,7 @@
 {
   buildGoModule,
   lib,
+  makeBinaryWrapper,
   util-linux,
   ...
 }:
@@ -20,9 +21,10 @@ buildGoModule {
   subPackages = [ "cmd/subid-broker" ];
   vendorHash = "sha256-9UzyyyNvGaCiJ2bqgMenRS3pq0k/O3cjqxI0+WcWUYE=";
   env.CGO_ENABLED = 0;
-  ldflags = [ "-X main.nsenter=${lib.getExe' util-linux "nsenter"}" ];
-  # The shims, which the sandbox puts where shadow's would be
+  nativeBuildInputs = [ makeBinaryWrapper ];
+  # The shims, which the sandbox puts where shadow's would be. The wrapper passes argv[0] on, which picks the mode
   postInstall = ''
+    wrapProgram $out/bin/subid-broker --prefix PATH : ${lib.makeBinPath [ util-linux ]}
     ln -s subid-broker $out/bin/newuidmap
     ln -s subid-broker $out/bin/newgidmap
   '';
