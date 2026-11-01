@@ -13,6 +13,7 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/test-go.yaml
+      - .github/actions/nix-cache-*/**
   pull_request:
     paths:
       - cmd/**
@@ -23,6 +24,7 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/test-go.yaml
+      - .github/actions/nix-cache-*/**
 
 permissions:
   contents: read
@@ -36,5 +38,9 @@ jobs:
       # a process in an unprivileged userns no capabilities, so the inner maps can't be written
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: cachix/install-nix-action@v31
+      # What earlier runs built themselves, cache.nixos.org has the rest
+      - uses: ./.github/actions/nix-cache-restore
       # Their package builds run the Go tests
       - run: nix build -L .#checks.x86_64-linux.{netns-macvlan,subid-broker,permissions-broker,permissions-window}
+      - uses: ./.github/actions/nix-cache-save
+        if: ${{ !cancelled() }}

@@ -12,6 +12,7 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/test-module.yaml
+      - .github/actions/nix-cache-*/**
   pull_request:
     paths:
       - nix/home/**
@@ -21,6 +22,7 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/test-module.yaml
+      - .github/actions/nix-cache-*/**
 
 permissions:
   contents: read
@@ -38,4 +40,8 @@ jobs:
             /opt/ghc \
             /opt/hostedtoolcache/CodeQL
       - uses: cachix/install-nix-action@v31
+      # What earlier runs built themselves, cache.nixos.org has the rest
+      - uses: ./.github/actions/nix-cache-restore
       - run: nix build -L .#checks.x86_64-linux.{claude-desktop-eval,claude-desktop,scripts}
+      - uses: ./.github/actions/nix-cache-save
+        if: ${{ !cancelled() }}

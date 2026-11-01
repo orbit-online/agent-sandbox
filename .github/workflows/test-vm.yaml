@@ -16,6 +16,7 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/test-vm.yaml
+      - .github/actions/nix-cache-*/**
   pull_request:
     paths:
       - cmd/**
@@ -27,6 +28,7 @@ on:
       - flake.nix
       - flake.lock
       - .github/workflows/test-vm.yaml
+      - .github/actions/nix-cache-*/**
 
 permissions:
   contents: read
@@ -50,5 +52,9 @@ jobs:
         with:
           # The VM test needs kvm; listing it replaces the defaults, so they're repeated
           extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      # What earlier runs built themselves, cache.nixos.org has the rest
+      - uses: ./.github/actions/nix-cache-restore
       # vm: vm-launch, vm-store, vm-work and vm-live
       - run: nix build -L .#checks.x86_64-linux.vm
+      - uses: ./.github/actions/nix-cache-save
+        if: ${{ !cancelled() }}

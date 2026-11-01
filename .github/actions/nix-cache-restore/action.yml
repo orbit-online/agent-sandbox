@@ -1,0 +1,27 @@
+name: Restore the store paths CI built
+description: >-
+  Restores the binary cache of the store paths this job built itself in earlier runs and adds it as a substituter for
+  the steps after. cache.nixos.org has the rest. Goes after the Nix install; nix-cache-save saves it again
+inputs:
+  key:
+    description: Cache key prefix. Jobs that build different sets need different ones; a matrix job adds its values
+    default: nix-${{ github.workflow }}-${{ github.job }}-
+runs:
+  using: composite
+  steps:
+    # The prefix alone: the newest cache with it, on this ref or the base branch
+    - id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/nix-cache
+        key: ${{ inputs.key }}
+    # Made here so it's the runner's to add to, not the daemon's on a miss. The paths in it are unsigned; trusted=true
+    # takes them anyway, and only this job's ref and the base branch can have written them
+    - shell: bash
+      env:
+        DIR: ${{ runner.temp }}/nix-cache
+        RESTORED: ${{ steps.restore.outputs.cache-matched-key }}
+      run: |
+        mkdir -p "$DIR"
+        echo "NIX_CONFIG=extra-substituters = file://$DIR?trusted=true&priority=10" >>"$GITHUB_ENV"
+        echo "NIX_CACHE_RESTORED=$RESTORED" >>"$GITHUB_ENV"

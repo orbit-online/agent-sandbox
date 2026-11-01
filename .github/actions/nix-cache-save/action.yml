@@ -1,0 +1,21 @@
+name: Save the store paths CI built
+description: >-
+  Adds what this job built to the binary cache nix-cache-restore restored, drops what no check needs any more, and
+  saves it under a new key when that changed it. Run it with if: '!cancelled()', so a failed check keeps what it built
+inputs:
+  key:
+    description: The cache key prefix nix-cache-restore was given
+    default: nix-${{ github.workflow }}-${{ github.job }}-
+runs:
+  using: composite
+  steps:
+    - id: collect
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.key }}
+      run: ${{ github.action_path }}/collect.sh "$RUNNER_TEMP/nix-cache" "$PREFIX"
+    - if: steps.collect.outputs.key != ''
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/nix-cache
+        key: ${{ steps.collect.outputs.key }}
