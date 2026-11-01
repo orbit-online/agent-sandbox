@@ -20,13 +20,14 @@ import (
 // host, and runs helpers of its own binary through nsenter for what a multithreaded Go process can't do (enter a user
 // namespace), each exec'd on the host's mounts (see helpers.go):
 //   clone-tree, in the owner of the sandbox's mount namespace, unshares a mount namespace of its own, opens the
-//     source beneath its ceiling root without following any link, checks it against the denied directories by
-//     identity, clones it (open_tree, without its submounts) and passes the tree's fd back;
+//     source beneath its ceiling root without following any link or crossing a mount, clones it (open_tree,
+//     without its submounts) and passes the tree's fd back;
 //   move-tree joins the sandbox's mount namespace and attaches that tree at the mountpoint (move_mount);
 //   detach joins it and unmounts mountpoints there.
-// The sandbox can't write the grant directory, but it can plant links in its rw binds, which may lie under a ceiling
-// root, and a link can point anywhere: hence no links followed at all. The host has other paths to a directory too
-// (bind mounts, its own links): hence identities rather than paths for what's denied.
+// The daemon acts with the host user's rights, the sandbox doesn't: a link it plants in its rw binds, which may lie
+// under a ceiling root, can point at what only the daemon can read. Hence no links followed at all. The denied
+// directories are a check on the path (checkSource), which then holds for what's opened; a ceiling root on a host
+// mount that aliases a denied directory is the user's own configuration.
 
 // resolved is what an attach plugin's resolve command prints
 type resolved struct {
@@ -132,7 +133,7 @@ func (b *broker) attachGrant(g *grant) error {
 		return err
 	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
-	tree, source, err := b.sb.attach(src.root, src.rel, src.ro, b.cfg.Denied, dir, g.ID)
+	tree, source, err := b.sb.attach(src.root, src.rel, src.ro, dir, g.ID)
 	if err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err

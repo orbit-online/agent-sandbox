@@ -128,8 +128,8 @@ replaying, and the window says why.
 
 Go processes are multithreaded from the start, and the kernel refuses to move a multithreaded process into another
 user namespace (`setns` and `unshare` both fail with EINVAL). As subid-broker does, the daemon runs these steps as helpers of
-its own binary through util-linux: `nsenter --user=<owner> -- permissions-broker clone-tree <src> [ro]` unshares
-a mount namespace of its own, and sends the detached tree's fd back over a socket pair, and `nsenter --user=<owner>
+its own binary through util-linux: `nsenter --user=<owner> -- permissions-broker clone-tree <root> <rel> <mode>`
+unshares a mount namespace of its own, and sends the detached tree's fd back over a socket pair, and `nsenter --user=<owner>
 -- permissions-broker move-tree <dir> <dirid> <name>` attaches it.
 
 None of them is exec'd in M1, where a path shows what the sandbox wants: from a nested user and mount namespace,
@@ -225,20 +225,23 @@ Only ending the sandbox ends every access to a grant for sure.
 ### Source ceiling and resolving paths
 
 The sandbox has rw binds of its own, which may lie under a ceiling root, and there it can plant links that point
-anywhere on the host. So a path check followed by a mount of the path isn't enough. The daemon checks the path
-lexically first, refusing early what no ceiling source covers (the longest matching source decides whether rw is
-allowed). Then the clone helper, after its `unshare`:
+anywhere on the host, including at what only the daemon, with the host user's rights, can read. So a path check
+followed by a mount of the path isn't enough. The daemon checks the path lexically first: it refuses a path at,
+beneath or above a denied directory, and what no ceiling source covers (the longest matching source decides whether
+rw is allowed). Then the clone helper, after its `unshare`:
 
 - opens the ceiling root without following any link (`openat2(RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)`): a root
   swapped for a link to elsewhere fails;
 - opens the requested path beneath it without following links or crossing mounts
   (`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`);
-- refuses the source if it, or a directory between it and the root, is a denied directory, or if a denied directory
-  lies beneath it, by device and inode, so no other path to a denied directory (a link, a bind mount, the host's
-  own links) gets around the list;
 - clones that one mount without its submounts (no `AT_RECURSIVE`): in the helper's namespace every mount is locked,
   so a source with mounts beneath it fails instead of bringing them along unchecked;
 - mounts it read-only if asked, and a directory always `nodev` and `nosuid`.
+
+With no link followed and no mount crossed beneath the root, the path checked is the path cloned, so the denied
+list holds on the path alone. A ceiling root on a host mount that aliases a denied directory (a ceiling on
+`/mnt/home` where that is a bind of `/home`) gets around it: that's the user's own mount and ceiling, and their
+responsibility.
 
 The path shown to the user is the one resolved, read back from the fd. A grant is of the path: what's mounted is
 whatever is at the path at mount time, within the ceiling and outside the denied list, for a fresh grant and an

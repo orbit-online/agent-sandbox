@@ -163,13 +163,15 @@ pred defaultBinds {
 fact { BindsAsserted in Guards.on implies defaultBinds }
 
 // ---------------------------------------------------------------------
-// Attach grants (permissions-broker/mounts.go). The daemon checks the
-// source lexically against the ceiling and the denied list
-// (mounts.go:54-83), clone-tree opens the root and the source without
-// links and the source without crossing mounts (mounts.go:234-245),
-// checks identities (mounts.go:295-370), clones without submounts and
-// sets ro, nodev and nosuid (mounts.go:248-275); move-tree attaches it in
-// sb's mount namespace (mounts.go:143, 372-377).
+// Attach grants (permissions-broker). The daemon checks the source
+// lexically against the ceiling and the denied list (ceiling.go
+// checkSource), clone-tree opens the root and the source without links
+// and the source beneath the root without crossing mounts (ceiling.go
+// openSource), clones without submounts and sets ro, nodev and nosuid
+// (tree.go cloneTree); move-tree attaches it in sb's mount namespace.
+// The model's paths are its files: beneath the root, RESOLVE_NO_XDEV
+// keeps it so. A ceiling root on a host mount that aliases a denied
+// directory isn't modelled (README, Not modelled).
 
 // The denied list: every launcher's state dir and $XDG_RUNTIME_DIR
 // (hm/default.nix:866).
@@ -189,7 +191,7 @@ sig Grant {
 // Guards, so the revert checks can drop each.
 one sig Guards { on: set Guard }
 abstract sig Guard {}
-one sig NoLinks, WalkUp, DeniedIds, NoSubmounts, BindsAsserted extends Guard {}
+one sig NoLinks, Beneath, NoSubmounts, BindsAsserted extends Guard {}
 
 fact grants {
   all g: Grant {
@@ -198,14 +200,11 @@ fact grants {
     // RESOLVE_NO_SYMLINKS
     g.source in g.asked + (NoLinks in Guards.on => none else g.asked.^(target + ~up))
     g.asked in g.ceiling.*~up
+    // the denied list on the path: at, beneath or above a denied
+    // directory (above the root too, as the path holds it)
     no (g.asked.*up + g.asked.*~up) & Denied.dirs
-    // identity walk from the opened source up to the root (mounts.go:
-    // 311-339): refuses one not beneath it
-    WalkUp in Guards.on implies g.source in g.ceiling.*~up
-    // denied as, beneath or above the source, by identity, and above the
-    // root lexically (mounts.go:59-63)
-    DeniedIds in Guards.on implies no (g.source.*up + g.source.*~up) & Denied.dirs
-    no g.ceiling.*up & Denied.dirs
+    // RESOLVE_BENEATH: refuses a resolution that leaves the root
+    Beneath in Guards.on implies g.source in g.ceiling.*~up
     // open_tree without AT_RECURSIVE in a locked copy: no mount below
     NoSubmounts in Guards.on implies no m: SMount - g.mnt |
       m.ns = HostMnt and m.how = Fresh and m.root in g.source.^~up
@@ -294,14 +293,13 @@ assert S14anyBindsRevert {
 check S14anyBindsRevert for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 1
 
 // S11: a granted source is beneath its ceiling root, is no denied
-// directory, beneath or above one, and brings no submount. Holds.
-// Revert: dropping NoLinks alone or WalkUp alone still holds (each
-// stops a planted link out of the root); dropping both lets one lead
-// out of the ceiling (counterexample found). Dropping DeniedIds alone
-// holds too, as the lexical check sees the same path when no link is
-// followed; with NoLinks dropped as well, a link reaches a state dir
-// (found). Host bind mounts that make a path and its identity differ
-// aren't modelled.
+// directory, beneath or above one, and brings no submount. Holds: with
+// no link followed and no mount crossed, the source is the path the
+// lexical check saw. Revert: dropping Beneath alone still holds;
+// dropping NoLinks alone lets a link beneath the root reach a state dir
+// there (counterexample found), and dropping both lets one lead out of
+// the ceiling. A ceiling root on a host mount that aliases a denied
+// directory isn't modelled: that's the user's configuration.
 assert S11sourceInCeiling {
   (world and guarded) implies all g: Grant {
     g.source in g.ceiling.*~up

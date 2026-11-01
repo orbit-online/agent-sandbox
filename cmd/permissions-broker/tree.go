@@ -14,7 +14,7 @@ import (
 
 // attach clones root/rel and mounts it at name in the grant directory in M1.
 // Returns the tree, which is the mount in M1 now, and the source as resolved
-func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDir, name string) (*os.File, string, error) {
+func (s *sandbox) attach(root, rel string, ro bool, dir grantDir, name string) (*os.File, string, error) {
 	if err := s.check(); err != nil {
 		return nil, "", err
 	}
@@ -36,7 +36,7 @@ func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDi
 	// 2.42.3) enters the user namespace in its first pass, which then leaves --keep-caps without effect
 	args := []string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5", "--preserve-credentials", "--keep-caps", "--",
 		self, "clone-tree"}
-	clone := exec.Command(nsenter, append(append(args, root, rel, mode), denied...)...)
+	clone := exec.Command(nsenter, append(args, root, rel, mode)...)
 	clone.ExtraFiles = []*os.File{s.userns, theirs, s.uts}
 	out, err := clone.CombinedOutput()
 	theirs.Close()
@@ -75,25 +75,20 @@ func recvTree(sock int) (*os.File, string, error) {
 
 // cloneTree is the clone-tree helper, run in the user namespace owning the sandbox's mount namespace. In a mount
 // namespace of its own, copied from ours (open_tree only clones from the caller's own), it opens root without
-// following links, rel beneath it without following links or crossing mounts, refuses what is a denied directory,
-// lies beneath one or holds one, and clones that one mount, read-only if asked and without devices or setuid for a
-// directory. Whatever is at the path then: a grant is of the path. It sends the tree's fd and the path it resolved to
-// on fd 4
-func cloneTree(root, rel, mode string, denied []string) error {
+// following links, rel beneath it without following links or crossing mounts, and clones that one mount, read-only
+// if asked and without devices or setuid for a directory. Whatever is at the path then: a grant is of the path. It
+// sends the tree's fd and the path it resolved to on fd 4
+func cloneTree(root, rel, mode string) error {
 	// The new mount namespace is this thread's, so everything below stays on it; the process ends after
 	runtime.LockOSThread()
 	if err := unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err != nil {
 		return fmt.Errorf("Unshare a mount namespace: %w (%s)", err, credentials())
 	}
-	fd, rootFd, err := openSource(root, rel)
+	fd, err := openSource(root, rel)
 	if err != nil {
 		return err
 	}
 	defer unix.Close(fd)
-	defer unix.Close(rootFd)
-	if err := checkIdentity(fd, rootFd, denied); err != nil {
-		return err
-	}
 	// Not AT_RECURSIVE: a mount beneath it would come along unchecked. In this namespace, copied into a less
 	// privileged one, every mount is locked, so a source with mounts beneath fails here
 	tree, err := unix.OpenTree(fd, "", unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC|unix.AT_EMPTY_PATH)

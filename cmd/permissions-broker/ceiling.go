@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -21,7 +20,8 @@ type attachCeiling struct {
 }
 
 // checkSource finds the ceiling root src lies beneath, the longest that matches, and whether it may be read-write.
-// Lexical, so it refuses early what the ceiling doesn't cover; clone-tree checks what the path is when it opens it
+// Lexical, as are the denied directories it refuses: clone-tree then opens the path without following links or
+// crossing mounts, so the path checked is the one cloned
 func checkSource(ceil attachCeiling, denied []string, src string, ro bool) (root, rel string, err error) {
 	if !filepath.IsAbs(src) {
 		return "", "", fmt.Errorf("Not an absolute path: %q", src)
@@ -54,7 +54,8 @@ func checkSource(ceil attachCeiling, denied []string, src string, ro bool) (root
 }
 
 // checkDenied validates the denied directories from the config: absolute, non-empty after the environment's
-// expansion, and as the system resolves them, so they compare by identity whatever path leads there
+// expansion, and as the system resolves them: a source is opened without following links, so only a path without
+// any compares against them
 func checkDenied(denied []string) ([]string, error) {
 	out := make([]string, 0, len(denied))
 	for _, d := range denied {
@@ -69,108 +70,20 @@ func checkDenied(denied []string) ([]string, error) {
 	return out, nil
 }
 
-type fileID struct{ dev, ino uint64 }
-
 // openSource opens rel beneath root as a grant's source: root without following any link, rel beneath it without
-// following links or crossing mounts. Returns the source's fd and the root's
-func openSource(root, rel string) (int, int, error) {
+// following links or crossing mounts
+func openSource(root, rel string) (int, error) {
 	noLinks := uint64(unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS)
 	rootFd, err := unix.Openat2(unix.AT_FDCWD, root, &unix.OpenHow{
 		Flags: unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC, Resolve: noLinks})
 	if err != nil {
-		return -1, -1, fmt.Errorf("Open %s, which must be reached without links: %w", root, err)
+		return -1, fmt.Errorf("Open %s, which must be reached without links: %w", root, err)
 	}
+	defer unix.Close(rootFd)
 	fd, err := unix.Openat2(rootFd, rel, &unix.OpenHow{
 		Flags: unix.O_PATH | unix.O_CLOEXEC, Resolve: noLinks | unix.RESOLVE_BENEATH | unix.RESOLVE_NO_XDEV})
 	if err != nil {
-		unix.Close(rootFd)
-		return -1, -1, fmt.Errorf("Open %s beneath %s without links or crossing mounts: %w", rel, root, err)
+		return -1, fmt.Errorf("Open %s beneath %s without links or crossing mounts: %w", rel, root, err)
 	}
-	return fd, rootFd, nil
-}
-
-func idOf(fd int) (fileID, error) {
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
-		return fileID{}, err
-	}
-	return fileID{st.Dev, st.Ino}, nil
-}
-
-// checkIdentity refuses fd if it, or a directory between it and root, is a denied directory, or if a denied
-// directory lies beneath it. By device and inode: no path to a denied directory, link or bind mount, gets around it
-func checkIdentity(fd, rootFd int, denied []string) error {
-	deniedIDs := map[fileID]string{}
-	for _, d := range denied {
-		var st unix.Stat_t
-		if err := unix.Stat(d, &st); err == nil {
-			deniedIDs[fileID{st.Dev, st.Ino}] = d
-		}
-	}
-	rootID, err := idOf(rootFd)
-	if err != nil {
-		return err
-	}
-	src, err := idOf(fd)
-	if err != nil {
-		return err
-	}
-	// Up from the source to the root
-	cur, err := unix.Dup(fd)
-	if err != nil {
-		return err
-	}
-	for {
-		id, err := idOf(cur)
-		if err != nil {
-			unix.Close(cur)
-			return err
-		}
-		if d, ok := deniedIDs[id]; ok {
-			unix.Close(cur)
-			return fmt.Errorf("Never granted: it's %s or beneath it", d)
-		}
-		if id == rootID {
-			unix.Close(cur)
-			break
-		}
-		up, err := unix.Openat(cur, "..", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-		unix.Close(cur)
-		if err != nil {
-			return err
-		}
-		if upID, _ := idOf(up); upID == id {
-			unix.Close(up)
-			return errors.New("The source isn't beneath its root")
-		}
-		cur = up
-	}
-	// Up from each denied directory to /: the source mustn't be on the way
-	for _, d := range denied {
-		cur, err := unix.Open(d, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-		if err != nil {
-			continue
-		}
-		for {
-			id, err := idOf(cur)
-			if err != nil || id == src {
-				unix.Close(cur)
-				if err == nil {
-					return fmt.Errorf("Never granted: %s lies beneath it", d)
-				}
-				return err
-			}
-			up, err := unix.Openat(cur, "..", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-			unix.Close(cur)
-			if err != nil {
-				return err
-			}
-			if upID, _ := idOf(up); upID == id {
-				unix.Close(up)
-				break
-			}
-			cur = up
-		}
-	}
-	return nil
+	return fd, nil
 }

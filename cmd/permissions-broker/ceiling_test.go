@@ -101,9 +101,9 @@ func TestAttackDeniedLink(t *testing.T) {
 	}
 }
 
-// A denied directory under another name than the config's (a link the config's path goes through): found by
-// identity, whether the source is it or holds it
-func TestDeniedByIdentity(t *testing.T) {
+// A denied directory configured through a link: checkDenied resolves it, so the path check catches the source
+// whether it is the denied directory or holds it
+func TestDeniedThroughLink(t *testing.T) {
 	root, elsewhere := t.TempDir(), t.TempDir()
 	state := filepath.Join(root, "state")
 	if err := os.MkdirAll(filepath.Join(state, "inner"), 0o700); err != nil {
@@ -113,7 +113,11 @@ func TestDeniedByIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _, _ := sandboxC(t, "allow", "allow")
-	b.cfg.Denied = []string{filepath.Join(elsewhere, "state")} // lexically unrelated to root
+	denied, err := checkDenied([]string{filepath.Join(elsewhere, "state")}) // lexically unrelated to root
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.cfg.Denied = denied
 	c := folders(t, `{"path": "`+root+`"}`)
 	b.caps[c.id()] = c
 	for _, p := range []string{state + "/inner", root} {
