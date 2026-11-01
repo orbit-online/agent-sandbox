@@ -11,7 +11,6 @@ Item {
     readonly property var st: root.broker.state ? JSON.parse(root.broker.state) : ({})
     readonly property var pending: st.pending || []
     readonly property var grants: st.grants || []
-    readonly property var always: st.always || []
     readonly property var log: (st.log || []).slice().reverse().slice(0, 30)
     // What still holds folder grants that ended, however they ended
     readonly property var held: st.held || []
@@ -26,13 +25,12 @@ Item {
         return t
     }
 
-    // Leases the user can pick, always only here
+    // Leases the user can pick
     readonly property var leases: [
         { value: "session", text: "Until this Claude session ends" },
         { value: "lock", text: "Until the screen locks" },
         { value: "PT1H", text: "For an hour" },
-        { value: "PT8H", text: "For eight hours" },
-        { value: "always", text: "Always" }
+        { value: "PT8H", text: "For eight hours" }
     ]
 
     // What the user set on each pending request, by its id: the list is rebuilt on every broker event, which the
@@ -240,33 +238,6 @@ Item {
                         objectName: "revoke"
                         text: "Revoke"
                         onClicked: root.send({ op: "revoke", grant: modelData.id })
-                    }
-                }
-            }
-
-            Label {
-                Layout.leftMargin: 12
-                text: "Always granted"
-                font.bold: true
-                visible: root.always.length > 0
-            }
-            Repeater {
-                model: root.always
-                delegate: RowLayout {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
-                    Label {
-                        Layout.fillWidth: true
-                        text: modelData.capability + " " + JSON.stringify(modelData.params || {})
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                    }
-                    Button {
-                        objectName: "forget"
-                        text: "Forget"
-                        onClicked: root.send({ op: "forget", capability: modelData.capability, params: modelData.params || {} })
                     }
                 }
             }

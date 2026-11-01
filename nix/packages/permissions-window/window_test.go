@@ -22,8 +22,6 @@ var state = map[string]any{
 		"reason": "read the notes", "lease": "PT1H", "options": true}},
 	"grants": []any{map[string]any{"id": "g1", "capability": "test/thing", "params": map[string]any{},
 		"summary": "the test thing", "lease": "session", "granted": "2026-10-31T10:00:00Z"}},
-	"always": []any{map[string]any{"capability": "test/thing", "params": map[string]any{"x": "y"},
-		"granted": "2026-10-31T10:00:00Z"}},
 	"log": []any{map[string]any{"time": "2026-10-31T10:00:00Z", "summary": "the test thing",
 		"decision": "allowed (session)"}},
 	"held": []any{map[string]any{"grant": "g0", "summary": "a folder", "why": "released from inside",
@@ -177,11 +175,11 @@ func TestOperations(t *testing.T) {
 	if st, err := w.view(); err != "" || !strings.Contains(st, `"p1"`) {
 		t.Fatalf("State %s, error %s", st, err)
 	}
-	w.do(`{"op": "forget", "capability": "test/thing", "params": {"x": "y"}, "seq": 1}`)
+	w.do(`{"op": "answer", "pending": "p1", "allow": true, "lease": "PT8H", "params": {"path": "/srv/notes"}, "seq": 1}`)
 	w.do(`{"op": "revoke", "grant": "g1"}`)
 	w.do(`{"op": "end", "grants": ["g0"]}`)
 	want := []map[string]any{
-		{"op": "forget", "capability": "test/thing", "params": map[string]any{"x": "y"}},
+		{"op": "answer", "pending": "p1", "allow": true, "lease": "PT8H", "params": map[string]any{"path": "/srv/notes"}},
 		{"op": "revoke", "grant": "g1"},
 		{"op": "end", "grants": []any{"g0"}},
 	}

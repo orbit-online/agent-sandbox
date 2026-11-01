@@ -28,14 +28,13 @@ type window struct {
 
 // A command from the QML: an operation on control.sock
 type command struct {
-	Op         string          `json:"op"`
-	Pending    string          `json:"pending,omitempty"`
-	Allow      bool            `json:"allow,omitempty"`
-	Lease      string          `json:"lease,omitempty"`
-	Params     json.RawMessage `json:"params,omitempty"`
-	Grant      string          `json:"grant,omitempty"`
-	Capability string          `json:"capability,omitempty"`
-	Grants     []string        `json:"grants,omitempty"`
+	Op      string          `json:"op"`
+	Pending string          `json:"pending,omitempty"`
+	Allow   bool            `json:"allow,omitempty"`
+	Lease   string          `json:"lease,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Grant   string          `json:"grant,omitempty"`
+	Grants  []string        `json:"grants,omitempty"`
 }
 
 // call sends one request to control.sock and returns the answer, its error as an error

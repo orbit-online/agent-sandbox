@@ -16,7 +16,6 @@ TestCase {
             pending: [{ id: "p1", capability: "folders/folder", params: { path: "/srv/notes", ro: true },
                         summary: 'a folder (path="/srv/notes", ro=true)', reason: "read the notes", lease: "PT1H" }],
             grants: [{ id: "g1", capability: "test/thing", params: {}, summary: "the test thing", lease: "session" }],
-            always: [{ capability: "test/thing", params: { x: "y" } }],
             log: [],
             capabilities: [{ id: "folders/folder", type: "attach",
                              params: { path: { type: "string" }, ro: { type: "boolean" } } }]
@@ -98,12 +97,6 @@ TestCase {
         mouseClick(end)
         compare(sent().op, "end")
         compare(sent().grants, ["g1"])
-    }
-
-    function test_forget() {
-        mouseClick(findChild(view, "forget"))
-        compare(sent().op, "forget")
-        compare(sent().params, { x: "y" })
     }
 
     // The same action twice is still a change: each command carries its own number
