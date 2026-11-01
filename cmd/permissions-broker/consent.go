@@ -73,19 +73,12 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		return nil, "", err
 	}
 
-	// Already granted: always grants and, for a command, a live grant decide whether to ask again. One request per
-	// capability at a time here, so concurrent requests find the grant the first made instead of each making one
+	// Already granted: a live grant serves without asking again. One request per capability at a time here, so
+	// concurrent requests find the grant the first made instead of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
 	if g != nil {
 		// Another session wants it too: it holds it now, and a session lease lasts until the last of them ends
-		keepSess = b.hold(g, sess)
-	}
-	if g == nil && b.isAlways(c, params) {
-		if g, err = b.grant(c, params, summary, "always", nil); err != nil {
-			c.covered.Unlock()
-			return nil, "", err
-		}
 		keepSess = b.hold(g, sess)
 	}
 	c.covered.Unlock()
@@ -97,15 +90,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	// always is picked in the window only: the notification offers the session, or an hour without one
-	asked := lease
-	if lease == "always" {
-		asked = "PT1H"
-		if sess != nil {
-			asked = "session"
-		}
-	}
-	answer, err := b.consent(c, params, summary, reason, asked)
+	answer, err := b.consent(c, params, summary, reason, lease)
 	unlockGate(answer.Allow)
 	if err != nil {
 		return nil, "", fmt.Errorf("Asking the user: %w", err)
@@ -138,8 +123,8 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	if err := c.inList(context.Background(), params); err != nil {
 		return nil, "", err
 	}
-	// A grant of the same may have appeared while the user was asked (a replay, the window narrowing to what's
-	// granted): that one serves, rather than a second of the same
+	// A grant of the same may have appeared while the user was asked (the window narrowing to what's granted): that
+	// one serves, rather than a second of the same
 	c.covered.Lock()
 	if g = b.matching(c, params); g != nil {
 		keepSess = b.hold(g, sess)
@@ -153,10 +138,17 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	}
 	c.covered.Unlock()
 	b.logDecision(summary, reason, "allowed ("+lease+")")
-	if lease == "always" {
-		b.addAlways(c, params)
-	}
 	return b.deliver(c, g)
+}
+
+// logDecision records the user's answer for the window, the last maxLog of them
+func (b *broker) logDecision(summary, reason, decision string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.log = append(b.log, logEntry{Time: b.now(), Summary: summary, Reason: reason, Decision: decision})
+	if n := len(b.log); n > maxLog {
+		b.log = b.log[n-maxLog:]
+	}
 }
 
 // deliver returns a grant's delivery: for a command what its run command prints, run for the grant's validity. The

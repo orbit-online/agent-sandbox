@@ -104,7 +104,7 @@ func newWorld(t *rapid.T, f *fixture) *world {
 		w.unitsFrom = fi.Size()
 	}
 	w.cfg = config{Launcher: "test", GrantDir: dir + "/grants", ControlSocket: dir + "/control.sock",
-		Store: dir + "/permissions.json", SandboxGrantDir: dir + "/inside", Window: []string{"window"}}
+		SandboxGrantDir: dir + "/inside", Window: []string{"window"}}
 	w.startStandIn()
 	fd, err := unix.PidfdOpen(os.Getpid(), 0)
 	if err != nil {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"maps"
 	"os"
 	"slices"
@@ -11,7 +9,7 @@ import (
 	"pgregory.net/rapid"
 )
 
-// Check: after every action, the broker's state, its store file and the window's view against the reference, and
+// Check: after every action, the broker's state and the window's view against the reference, and
 // the properties of models/README.md as invariants
 func (mc *machine) Check(t *rapid.T) {
 	m, b := mc.m, mc.b
@@ -49,9 +47,9 @@ func (mc *machine) Check(t *rapid.T) {
 			mc.fatalf(t, "Grant %s held by %v (anonymous %v, anchors %v), want %v (%v)", id, s.g.Sessions, s.anon,
 				s.anchors, r.holders, r.anon)
 		}
-		// P1: an always grant only while stored, any other only after an Allow
-		if r.lease == "always" && !m.isAlways(r.cap, r.params) || r.lease != "always" && !m.consented[storeKey{r.cap, r.params}] {
-			mc.fatalf(t, "Grant %s (%s %s %s) without consent or a stored always grant", id, r.cap, r.params, r.lease)
+		// P1: only after an Allow
+		if !m.consented[storeKey{r.cap, r.params}] {
+			mc.fatalf(t, "Grant %s (%s %s %s) without consent", id, r.cap, r.params, r.lease)
 		}
 		// P3: a folder beneath its ceiling
 		if r.cap == capFolder && !strings.HasPrefix(s.g.Source, mc.w.root+"/") {
@@ -66,7 +64,6 @@ func (mc *machine) Check(t *rapid.T) {
 		mc.fatalf(t, "Lock watched: %v, want %v", lockOK, m.lockOK)
 	}
 	mc.checkDelivery(t)
-	mc.checkStore(t)
 	mc.checkWindow(t)
 	// P14: one question per capability, and the refusal block
 	for _, c := range caps {
@@ -129,19 +126,6 @@ func (mc *machine) checkDelivery(t *rapid.T) {
 	}
 }
 
-// checkStore: P2, P12 and revoke. The store file holds exactly the always grants, in order
-func (mc *machine) checkStore(t *rapid.T) {
-	var s storeData
-	if data, err := os.ReadFile(mc.w.cfg.Store); err == nil {
-		if err := json.Unmarshal(data, &s); err != nil {
-			mc.fatalf(t, "Store: %v", err)
-		}
-	}
-	if got := storeKeys(s.Always); !slices.Equal(got, mc.m.store) {
-		mc.fatalf(t, "Store %v, want %v", got, mc.m.store)
-	}
-}
-
 // checkWindow: what control.sock's state shows the window, pending requests in arrival order
 func (mc *machine) checkWindow(t *rapid.T) {
 	res := mc.b.handleControl(nil, mc.w.host, request{Op: "state"})
@@ -155,9 +139,6 @@ func (mc *machine) checkWindow(t *rapid.T) {
 	if slices.Sort(ids); !slices.Equal(ids, slices.Sorted(maps.Keys(mc.m.grants))) {
 		mc.fatalf(t, "The window shows grants %v, want %v", ids, slices.Sorted(maps.Keys(mc.m.grants)))
 	}
-	if got := storeKeys(res.Always); !slices.Equal(got, mc.m.store) {
-		mc.fatalf(t, "The window shows always grants %v, want %v", got, mc.m.store)
-	}
 	if len(res.Pending) != len(mc.m.pending) {
 		mc.fatalf(t, "The window shows %d pending requests, want %d", len(res.Pending), len(mc.m.pending))
 	}
@@ -168,16 +149,6 @@ func (mc *machine) checkWindow(t *rapid.T) {
 				p.Lease, p.Options, r.id, r.cap, r.params, r.lease, r.options)
 		}
 	}
-}
-
-func storeKeys(as []alwaysGrant) []storeKey {
-	var ks []storeKey
-	for _, a := range as {
-		var p bytes.Buffer
-		_ = json.Compact(&p, a.Params)
-		ks = append(ks, storeKey{a.Capability, p.String()})
-	}
-	return ks
 }
 
 func describeGrants[V any](gs map[string]V, g func(V) grant) []string {

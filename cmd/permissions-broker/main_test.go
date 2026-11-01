@@ -233,7 +233,7 @@ func testBroker(t *testing.T, answers ...string) (*broker, *fakeAsker) {
 	dir := t.TempDir()
 	f := &fakeAsker{answers: answers}
 	cfg := config{Launcher: "test", GrantDir: filepath.Join(dir, "grants"), ControlSocket: filepath.Join(dir, "control.sock"),
-		Store: filepath.Join(dir, "permissions.json"), SandboxGrantDir: "/run/permissions"}
+		SandboxGrantDir: "/run/permissions"}
 	b, err := newBroker(cfg, map[string]*capability{}, ownSandbox(t, os.Getpid()), f.ask)
 	if err != nil {
 		t.Fatal(err)

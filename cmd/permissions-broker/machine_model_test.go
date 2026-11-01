@@ -9,8 +9,8 @@ import (
 	"unicode"
 )
 
-// The reference the state machine tests check the broker against: a small model of its grants, holders, leases, store,
-// gates and pending requests, following models/protocol_state.als and protocol_events.als
+// The reference the state machine tests check the broker against: a small model of its grants, holders, leases, gates
+// and pending requests, following models/protocol_state.als and protocol_events.als
 
 type refGrant struct {
 	id, cap, params, lease string
@@ -46,7 +46,6 @@ type storeKey struct{ cap, params string }
 type model struct {
 	now     time.Time
 	grants  map[string]*refGrant
-	store   []storeKey
 	gates   map[string]*refGate
 	pending []*refPending
 	// The grant directory shared in the sandbox; share asked once
@@ -103,7 +102,7 @@ func (m *model) passes(cap, p, root string) bool {
 }
 
 func validLease(lease string) bool {
-	if lease == "always" || lease == "session" || lease == "lock" {
+	if lease == "session" || lease == "lock" {
 		return true
 	}
 	_, err := parseDuration(lease)
@@ -136,8 +135,6 @@ func (m *model) ordered() []*refGrant {
 	slices.SortFunc(gs, func(a, b *refGrant) int { return a.seq - b.seq })
 	return gs
 }
-
-func (m *model) isAlways(cap, p string) bool { return slices.Contains(m.store, storeKey{cap, p}) }
 
 // lockFree is the exclusive lock (P13): no grant of the instance here or at the other launcher
 func (m *model) lockFree(cap, p string) bool {
@@ -221,10 +218,6 @@ func (m *model) endWhere(f func(*refGrant) bool) []string {
 		}
 	}
 	return ended
-}
-
-func (m *model) removeAlways(k storeKey) {
-	m.store = slices.DeleteFunc(m.store, func(s storeKey) bool { return s == k })
 }
 
 // closeGate is the gate's unlock with the user's decision (P14)

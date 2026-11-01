@@ -945,7 +945,6 @@ let
           launcher = if name == null then "" else name;
           grantDir = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}";
           controlSocket = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock";
-          store = "${stateDir}/permissions.json";
           unit = "${permissionsUnit}.service";
           sandboxGrantDir = "/run/permissions";
           window = [
@@ -1118,7 +1117,7 @@ let
   holds = a: b: a == b || lib.hasPrefix "${lib.removeSuffix "/" a}/" b;
   # A launcher's enabled binds whose source holds or lies in a launcher's state dir, holds $XDG_RUNTIME_DIR (any
   # /run/user/<uid>) or lies in its .flatpak or claude-desktop dirs: the sandbox would reach another sandbox's state,
-  # the permissions broker's store and sockets, or the nixpak instance info the broker and the launcher read as the
+  # the permissions broker's sockets, or the nixpak instance info the broker and the launcher read as the
   # sandbox's identity. Its own home, store and scratchpad aside, which it holds anyway. As the broker's attach
   # ceiling denies them
   stateBinds =

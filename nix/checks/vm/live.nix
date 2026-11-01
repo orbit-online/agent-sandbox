@@ -16,8 +16,8 @@
   with subtest("the broker's state machine tests, live"):
       # The state machine tests live (TestLiveMachine): rapid's sequences of requests from processes in the sandbox
       # (sessions anchored at a copy of the test binary named claude, a forged one below a copy named node, a caller
-      # without one), answers, revoke and forget through control.sock, releases, sessions ending, restarts with
-      # replay and lock events, the live state checked against the reference model after every step. A fixed seed;
+      # without one), answers and revoke through control.sock, releases, sessions ending, restarts and lock events,
+      # the live state checked against the reference model after every step. A fixed seed;
       # LIVE_RAPID replaces the rapid flags in the interactive driver, -rapid.seed=0 for a random one, and LIVE_TIMEOUT its
       # 15 minutes
       workstation.succeed("mkdir -p /srv/notes/sub /srv/outside && chown alice /srv/notes/sub /srv/outside")

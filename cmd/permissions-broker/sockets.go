@@ -167,8 +167,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 		}
 		// In arrival order, not map order: a refresh mustn't move the row under the user's pointer
 		slices.SortFunc(res.Pending, func(x, y *pending) int { return cmp.Compare(x.seq, y.seq) })
-		res.Always = append([]alwaysGrant(nil), b.store.Always...)
-		res.Log = append([]logEntry(nil), b.store.Log...)
+		res.Log = slices.Clone(b.log)
 		b.mu.Unlock()
 		res.Grants = b.grantViews("")
 		res.Capabilities = b.listCapabilities()
@@ -185,8 +184,6 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 			errs = append(errs, b.endHeld(g))
 		}
 		err = errors.Join(errs...)
-	case "forget":
-		err = b.forget(req.Capability, req.Params)
 	default:
 		err = fmt.Errorf("Unknown operation %q", req.Op)
 	}
@@ -224,11 +221,10 @@ func (b *broker) shareFrom(p peer) error {
 	b.mu.Lock()
 	b.shared = true
 	b.mu.Unlock()
-	go b.replay("attach")
 	return nil
 }
 
-// adoptShared takes over a grant directory an earlier daemon shared, and replays the attach always grants into it
+// adoptShared takes over a grant directory an earlier daemon shared
 func (b *broker) adoptShared() {
 	if !b.sb.isShared(b.cfg.SandboxGrantDir) {
 		return
@@ -236,7 +232,6 @@ func (b *broker) adoptShared() {
 	b.mu.Lock()
 	b.shared, b.shareAsked = true, true
 	b.mu.Unlock()
-	go b.replay("attach")
 }
 
 // event tells watch streams (the MCP servers, the window) that something changed; they ask for the state

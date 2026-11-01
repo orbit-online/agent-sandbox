@@ -1,12 +1,12 @@
 # Permissions: granting the sandbox outside access while it runs
 
 Status: written 2026-10-31. Built: the daemon (`cmd/permissions-broker/`) with the service and command types, consent,
-leases, the grant store, the MCP server with plugin tools and nudges, the Permissions window
+leases, the MCP server with plugin tools and nudges, the Permissions window
 (`nix/packages/permissions-window/`) and the attach type with the folders plugin (`nix/packages/permissions-folders/`,
 `permissions.folders`), behind a launcher's `permissions.enable`. Not yet: device grants.
 
 A daemon started again while the sandbox runs finds the grant directory shared by the one before (its mountinfo
-says so) and replays the `always` folders into it.
+says so) and takes it over.
 
 ## Why
 
@@ -24,8 +24,8 @@ code.
 - A host-side daemon per launcher, outside bwrap, owned by this repository.
 - A notification for every request (reason, Allow, Deny, Options), and a Permissions window from the launcher's
   desktop actions, next to "New shell", listing what's granted and what can be.
-- Leases: this session, until the screen locks, for a duration, always. Grants end on their lease, on revoke, on
-  release from inside, and on plugin triggers.
+- Leases: this session, until the screen locks, for a duration. Grants end on their lease, on revoke, on release
+  from inside, and on plugin triggers.
 - One plugin API with three delivery types, `service`, `command` and `attach` (below). Folder mounts are the first
   plugin and live here; others, such as the Windows VM, live in secoya/agent-sandbox-plugins.
 - One MCP server inside the sandbox for every plugin.
@@ -61,7 +61,7 @@ On kernel 6.18, bubblewrap 0.12.0, Claude Code 2.1.309 (`scripts/ns-inject-spike
 host (user, no capabilities)                       sandbox
 ┌──────────────────────────────┐                   ┌──────────────────────────────────────────┐
 │ permissions-broker (daemon)  │  request.sock     │ /run/permissions/                         │
-│  consent, leases, grant store├──────────────────►│   request.sock   (core requests)          │
+│  consent, leases             ├──────────────────►│   request.sock   (core requests)          │
 │  plugins, mount helpers      │  grant dir bind   │   <grant>/       (attach mounts)          │
 │                              │                   │   <grant>.sock   (service sockets)        │
 │ control.sock (host only) ◄───┼─ Permissions      │                                          │
@@ -104,8 +104,8 @@ the pid is checked to be in it. The pidfd turning readable means the sandbox end
 plugin units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
 
 Started again after a crash, it finds the same sandbox the same way and reconciles before serving: it detaches
-everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and replays only
-the `always` grants. Leases that ran while it was down are gone rather than extended; Claude asks again.
+everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and starts without
+grants. Leases that ran while it was down are gone rather than extended; Claude asks again.
 
 Grants end with the daemon, a crash included: service units are bound to its unit (`BindsTo=`), so systemd stops them
 when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd runs after a
@@ -120,9 +120,8 @@ checks that the client is in M1 and makes
 `/run/permissions` shared there. In M1 that mount is a bind of the host directory, so it stays a slave of the host
 too; files the daemon creates on the host side (sockets) show up as before. The daemon serves `share` once per sandbox: a
 second one, from anything else in M1, would come after the FHS env's bwrap copied M1, where
-grants no longer reach the app. Replaying makes no grant of what's live already. If `share` fails, the launcher goes
-on without attach grants rather than not starting; the daemon then refuses attach requests and skips them when
-replaying, and the window says why.
+grants no longer reach the app. If `share` fails, the launcher goes on without attach grants rather than not
+starting; the daemon then refuses attach requests, and the window says why.
 
 ### Privileged steps in a Go process
 
@@ -244,12 +243,11 @@ list holds on the path alone. A ceiling root on a host mount that aliases a deni
 responsibility.
 
 The path shown to the user is the one resolved, read back from the fd. A grant is of the path: what's mounted is
-whatever is at the path at mount time, within the ceiling and outside the denied list, for a fresh grant and an
-`always` one (replayed at a later launch, or matched by a later request) alike. Between the question and the mount
+whatever is at the path at mount time, within the ceiling and outside the denied list. Between the question and the mount
 the sandbox can only rename within its own rw binds, so a directory it swaps into the path is one it could read and
 write already: that gains it nothing.
 
-Never grantable, whatever a ceiling says: every launcher's state directory (the grant store) and
+Never grantable, whatever a ceiling says: every launcher's state directory (another sandbox's home and store) and
 `$XDG_RUNTIME_DIR` (the control sockets and every launcher's grant directory). A grant there would let the sandbox
 approve its own requests. The daemon refuses to start when one of them expands to an empty or relative path.
 A ceiling over `$HOME` or `~/.config`, rw, would hand the sandbox code execution on the host (user units, autostart):
@@ -280,8 +278,8 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
 - `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`, as
   a JSON array of objects. Outside `attach`, a request must match one of them, or it is refused without asking the
   user: an instance matches when each of its keys has the same value in the request's params. A `list` that fails
-  refuses every request. `list` runs again when the user answers and when an `always` grant is replayed, so an
-  instance gone by then (a VM shut down) isn't granted. Attach requests may name a folder below a listed root, so
+  refuses every request. `list` runs again when the user answers, so an instance gone by then (a VM shut down)
+  isn't granted. Attach requests may name a folder below a listed root, so
   `sources` decide there.
 - `exclusive` (optional): an instance may be granted to one launcher at a time (a VM's QMP connection takes one
   client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance `list`
@@ -322,7 +320,7 @@ request of at most 64 KiB; accept errors are waited out rather than ending the s
 requests; `list` runs one per capability, outside those four, so the window's state isn't held up by them, and its
 output is kept for five seconds; and requests a grant already covers are answered one at a time
 per capability, without logging them. `lease` is the
-caller's proposal: `session`, `lock`, `PT<n>H` or `always`.
+caller's proposal: `session`, `lock` or `PT<n>H`.
 
 The caller's session comes from its pidfd (`SO_PEERPIDFD`): the daemon walks its ancestors to the first with
 `CLAUDE_CODE_SESSION_ID` in its environment, and takes that process's parent as the session's anchor if it is the
@@ -349,8 +347,7 @@ The daemon asks with a notification on the host (`org.freedesktop.Notifications`
 built by the daemon from the validated, resolved request ("Claude wants read-write access to
 ~/Workspace/agent/notes"), and the reason follows below it, quoted and marked as Claude's. The reason never stands
 in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 hour"), Deny, and Options, which opens
-the window on the request to pick another lease or narrow it (read-only instead of rw). `always` is offered only in
-the window, never as a notification button.
+the window on the request to pick another lease or narrow it (read-only instead of rw).
 
 The sandbox can post notifications too, through the notification portal (`org.freedesktop.portal.Notification`; the
 proxy doesn't let it reach `org.freedesktop.Notifications`), with any title, body and buttons. A look-alike's
@@ -370,8 +367,8 @@ Lifted from windows-vm:
   Options, the window owns the request: the timeout pauses while it's open, for 10 minutes at most.
 - One open request per capability; three refusals in a row stop requests for that capability for 2 minutes.
 
-A grant with lease `always` skips the notification on later requests with exactly the same parameters. A read-only
-grant never covers a read-write request, and a folder never covers its subfolders or parent.
+A live grant answers later requests with exactly the same parameters without asking. A read-only grant never covers a
+read-write request, and a folder never covers its subfolders or parent.
 
 The consent UI is only ever drawn on the host. Nothing the sandbox sends is shown other than as plain text.
 
@@ -382,7 +379,6 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 | `session` | the session's anchor process exits (pidfd); attach counts holding sessions |
 | `lock`    | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep` |
 | duration  | the time runs out; the window can extend it                                |
-| `always`  | revoked (or forgotten) in the window, which removes it from the store too; replayed at every launch |
 
 Every grant also ends on revoke in the window, on its plugin's `watch` or `serve` exiting, and with the sandbox.
 `release` from inside drops only the releasing session's hold: the daemon records every session a grant was given to
@@ -391,8 +387,7 @@ session releasing a grant, after the nudge below say, doesn't cut off another th
 drops its holds too: a session lease ends with its last holder, any other lease runs on until its own end or a release
 from any session finds nobody holding it. A caller without a
 session (nothing found above it) ends the grant on release: that only takes access away. The lease's own end (time,
-lock, the session lease's last anchor), revoke and the plugin's triggers end it for everyone. An `always` grant ended
-by release is replayed at the next launch; only revoke and forget remove it from the store. The daemon watches logind on the system bus from the host, where it has access. It runs in a
+lock, the session lease's last anchor), revoke and the plugin's triggers end it for everyone. The daemon watches logind on the system bus from the host, where it has access. It runs in a
 user unit, outside any login session, so `session/self` doesn't resolve for it, and logind sends no signals on that
 alias anyway: it reads the `Display` property of `user/self` for the graphical session's object path and watches that
 one. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
@@ -402,15 +397,6 @@ Releasing voluntarily: once a session has held grants for 15 minutes, the core M
 tool results listing them and asking Claude to release what it no longer needs, at most every 10 minutes. By age,
 not idleness: the daemon can't tell whether a socket-activated plugin's socket or a folder is still in use. Claude
 Code's channels could push this instead, but they need `--channels` at startup, which the app doesn't pass.
-
-## Grant store
-
-`$stateDir/permissions.json` on the host, outside every bind, written only by the daemon, one save at a time,
-synced before the rename that replaces it. A store that doesn't parse is set aside as `permissions.json.broken`, and
-the daemon starts without it. It holds `always` grants
-(capability, parameters, when granted) and a log of recent decisions for the window. At launch, after `share`, the
-daemon replays the `always` grants: attach grants are mounted, service plugins started; a command runs on request
-without asking. Persisting a grant needs no config change or rebuild; Nix only sets what may be granted at all.
 
 ## MCP
 
@@ -455,14 +441,15 @@ UEFI variables, host applications, website logins (`service`); devices and wifi 
 
 `claude-desktop[-<name>] --permissions` opens the window. `claude-desktop.sh` handles it first, before it looks for a
 running sandbox: otherwise it would hand the flag to the running app through nsenter, as it does with `claude://`
-URLs. With no sandbox running, the window says so and shows the stored `always` grants.
+URLs. With no sandbox running, the window says so. The recent decisions it lists are the daemon's, kept in memory:
+a daemon started again starts them afresh.
 
 ## Steps
 
-1. Daemon: request and control sockets, consent, refusal limit, leases with logind and session triggers, the grant
-   store, plugin runner for `service` and `command`, `share`, tests in Go and in the VM test.
+1. Daemon: request and control sockets, consent, refusal limit, leases with logind and session triggers, plugin
+   runner for `service` and `command`, `share`, tests in Go and in the VM test.
 2. Permissions window and the desktop action.
-3. Folder mounts as the first attach plugin, with the mount helpers, persisted grants and revoke reporting holders.
+3. Folder mounts as the first attach plugin, with the mount helpers and revoke reporting holders.
 4. Windows VM plugin in agent-sandbox-plugins; consent code out of windows-vm.
 5. Hosts switch over and drop the `windows-vm-claude` bind.
 
@@ -482,8 +469,8 @@ These were open when the design was written and decided while the user was away.
    plugin authors know.
 5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
 6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
-   a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it replays the
-   `always` ones (Claude asks again for the rest).
+   a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it has none (Claude
+   asks again).
 7. Service plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
 8. Grants die with the daemon (Anders): service units `BindsTo=` its unit, folder grants detached by its
    `ExecStopPost=`.

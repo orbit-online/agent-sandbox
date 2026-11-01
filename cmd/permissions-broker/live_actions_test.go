@@ -21,7 +21,7 @@ import (
 // Folders more often: more of their requests are refused
 var liveCaps = []string{liveCmd, liveSvc, liveFolder, liveFolder}
 
-var liveLeases = []string{"", "session", "lock", "always", "always", "PT1H"}
+var liveLeases = []string{"", "session", "lock", "PT1H"}
 
 func (mc *liveMachine) drawParams(t *rapid.T, c string) string {
 	kv := map[string]any{}
@@ -119,9 +119,6 @@ func (mc *liveMachine) predict(c, p, lease, sess string) (string, *refGrant) {
 	if g := m.matching(c, p); g != nil {
 		return "live", g
 	}
-	if m.isAlways(c, p) {
-		return "always", nil
-	}
 	if g := m.gate(c); g.asking || m.now.Before(g.blockedUntil) {
 		return "refused", nil
 	}
@@ -193,15 +190,6 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 			mc.m.hold(live, who.sess)
 			mc.delivered(t, live, res)
 		}
-	case "always":
-		if results[0].Grant == nil {
-			mc.fatalf(t, "Always grant %s %s not granted: %s", c, p, results[0].Error)
-		}
-		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "always", "")
-		for _, res := range results {
-			mc.m.hold(g, who.sess)
-			mc.delivered(t, g, res)
-		}
 	case "ask":
 		for _, res := range results {
 			if res.Error == "" {
@@ -234,15 +222,8 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response) {
 // asked checks the question as the window shows it (P7: the daemon's summary, the reason cleaned) and notes it pending
 func (mc *liveMachine) asked(t *rapid.T, q *pending, req request, sess string, done chan response) {
 	lease := req.Lease
-	switch lease {
-	case "":
+	if lease == "" {
 		lease = "session"
-	case "always":
-		// always only from the window (P2): the notification offers the session, or an hour without one
-		lease = "PT1H"
-		if sess != "" {
-			lease = "session"
-		}
 	}
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	if !strings.HasPrefix(q.Summary, mc.lv.desc[req.Capability]) || strings.Contains(q.Summary, tag) ||
@@ -317,7 +298,7 @@ func (mc *liveMachine) Lock(t *rapid.T) {
 	mc.waitEnded(t, mc.m.endWhere(func(g *refGrant) bool { return g.lease == "lock" })...)
 }
 
-// Revoke: the user revokes a grant in the window; an always grant leaves the store too
+// Revoke: the user revokes a grant in the window
 func (mc *liveMachine) Revoke(t *rapid.T) {
 	id := mc.drawGrant(t)
 	res := mc.lv.control(request{Op: "revoke", Grant: id})
@@ -331,33 +312,12 @@ func (mc *liveMachine) Revoke(t *rapid.T) {
 	if res.Error != "" {
 		mc.fatalf(t, "Revoke %s: %s", id, res.Error)
 	}
-	if g.lease == "always" {
-		mc.m.removeAlways(storeKey{g.cap, g.params})
-	}
 	delete(mc.m.grants, id)
 	mc.waitEnded(t, id)
 }
 
-// Forget: the user forgets an always grant in the window: out of the store, and its live grants end
-func (mc *liveMachine) Forget(t *rapid.T) {
-	var k storeKey
-	if len(mc.m.store) > 0 && rapid.Bool().Draw(t, "stored") {
-		k = rapid.SampledFrom(mc.m.store).Draw(t, "always")
-	} else {
-		k.cap = rapid.SampledFrom(liveCaps).Draw(t, "capability")
-		k.params = mc.drawParams(t, k.cap)
-	}
-	if res := mc.lv.control(request{Op: "forget", Capability: k.cap, Params: json.RawMessage(k.params)}); res.Error != "" {
-		mc.fatalf(t, "Forget %v: %s", k, res.Error)
-	}
-	mc.m.removeAlways(k)
-	mc.waitEnded(t, mc.m.endWhere(func(g *refGrant) bool {
-		return g.cap == k.cap && g.params == k.params && g.lease == "always"
-	})...)
-}
-
 // Restart: systemctl restarts the daemon. Its grants end with it (ExecStopPost, units bound to it), its questions go
-// unanswered; the new one replays the stored always services and folders (P12)
+// unanswered; the new one starts from nothing (P12)
 func (mc *liveMachine) Restart(t *rapid.T) {
 	m := mc.m
 	pending := m.pending
@@ -370,28 +330,4 @@ func (mc *liveMachine) Restart(t *rapid.T) {
 	clear(m.grants)
 	clear(m.gates)
 	m.pending = nil
-	var want []storeKey
-	for _, k := range m.store {
-		if k.cap == liveCmd || !mc.passes(k.cap, k.params) || slices.Contains(want, k) {
-			continue
-		}
-		want = append(want, k)
-	}
-	// Replayed: found in the window by capability and parameters, in store order
-	var found map[storeKey]string
-	mc.waitFor(t, fmt.Sprintf("the replay of %v", want), func() bool {
-		found = map[storeKey]string{}
-		for _, g := range mc.lv.control(request{Op: "state"}).Grants {
-			found[storeKey{g.Capability, string(g.Params)}] = g.ID
-		}
-		for _, k := range want {
-			if found[k] == "" {
-				return false
-			}
-		}
-		return true
-	})
-	for _, k := range want {
-		m.grant(found[k], k.cap, k.params, "always", "")
-	}
 }

@@ -49,8 +49,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
   One concern per file: `sockets.go` (listening, peer checks, the request and
-  control handlers), `consent.go`, `leases.go` (and logind), `store.go`
-  (always grants, replay, the log), `notify.go`, `views.go`, `types.go`,
+  control handlers), `consent.go` (and the log of decisions), `leases.go` (and
+  logind), `notify.go`, `views.go`, `types.go`,
   `clock.go` (the time and timers of leases and answers, which tests fake) and
   `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
   locks) and `plugintools.go` for plugins and their MCP tools,
@@ -177,10 +177,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   covering the same request only), a request or window answer naming no instance
   a capability's `list` prints refused without asking (and with a failing
   `list`; not for attach capabilities), and an Allow refused when the instance went away
-  while the user was asked, a replay of an always grant `list` no longer
-  prints, the refusal limit, `always` only from the
-  window and with exact parameters, and gone from the store when revoked
-  (also as read by a daemon started again, and forgotten), the store, duration, lock (none granted when the lock stops being
+  while the user was asked, the refusal limit, a window answer with its
+  narrowed parameters, duration, lock (none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name; one allowed after its anchor exited ends, closing no file of
@@ -200,13 +198,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   parameter or reason in the notification, make a click on its replacement of
   the broker's notification or an `ActionInvoked` of its own allow (a fake
   notification server on a `dbus-daemon` of the test's), anchor a session at or above the
-  sandbox or, from a re-entry (`--shell`), at a host session above nsenter, make one always grant start several units or
-  mount an always folder twice (replays, a second `share`), get a command's output after
+  sandbox or, from a re-entry (`--shell`), at a host session above nsenter, get `share` served twice, get a command's output after
   its lease ran out or for a grant revoked while its request waited for a
   plugin slot, or hold every plugin slot with one capability whose commands hang (another's run, and its own
   `list` for the window); plus a window answer while the notification is up, pending requests
-  in arrival order, unit
-  names per launcher, and a broken store set aside. Attach grants against a stand-in
+  in arrival order, and unit
+  names per launcher. Attach grants against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, the cloned tree
   received close-on-exec, a folder mounted read-only where the app sees it and
@@ -220,7 +217,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   gone on revoke, a session lease two sessions hold, a release dropping only the releasing
   session's hold (the grant ends with the last, or at once for a caller
   without a session), a daemon started again
-  taking over the shared grant directory and replaying an always folder, and
+  taking over the shared grant directory and mounting a folder there, and
   the sandbox's attacks: a link out of the ceiling, a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
   (found by identity, as the source or beneath it), and a re-bind in a nested
@@ -245,9 +242,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   a fake clock: requests of each type from sessions, a forged session and a
   caller without one, floods and crafted requests, answers on the
   notification and in the window, releases, sessions ending, lock events,
-  time passing, revoke, forget, a restart with replay, `share`, `list`
+  time passing, revoke, a restart, `share`, `list`
   changing, another launcher's exclusive locks and control.sock from inside.
-  After every step the broker's grants, holders and gates, its store file,
+  After every step the broker's grants, holders and gates, its
   units, mounts and locks and the window's view match a reference model
   (P1, P3, P4, P9, P10, P12, P13, P14, release holds). `go test` runs 50
   sequences of about 30 steps (half a minute or less); more with
@@ -260,7 +257,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
-  forget, a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
+  a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
   replaced in place.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
@@ -305,15 +302,13 @@ modules and a user alice (the `home-manager` input exists only for it).
   pid, its re-entry found by app ID, its state dir and GC root, and its
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
-  from there, a grant of a test plugin through the MCP server after a restart
-  of the daemon with `always` grants stored, a SIGKILL of the daemon ending
-  its service unit and its folder grant, both back under new ids after its
-  restart, an `always` folder then mounted
-  read-only, nodev and nosuid where the app runs and one with a mount beneath
-  it refused, an `always` service plugin socket-activated by systemd whose tool
-  the MCP server inside offers and forwards a call to, the Permissions window
-  staying
-  up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
+  from there, grants through the MCP server that the test answers on
+  `control.sock`: a test plugin's command, its service plugin socket-activated
+  by systemd whose tool the MCP server inside offers and forwards a call to, a
+  folder mounted read-only, nodev and nosuid where the app runs and one with a
+  mount beneath it refused; a SIGKILL of the daemon ending its service unit and
+  its folder grant, none left after its restart, the Permissions window
+  staying up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`
@@ -337,10 +332,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   `claude`, a forged one below a copy named `node`, one without a session.
   The actions: requests of each type (the test plugins' command and service,
   folders beneath `/srv/notes` and outside it) and lease, floods, crafted
-  requests and `share` from inside, the user's answers, revoke and forget
-  through `control.sock`, releases, sessions ending, `systemctl restart`
-  with replay, and logind's Lock of a graphical session of alice's made for
-  it. After every step the window's state, the store file, the socket units,
+  requests and `share` from inside, the user's answers and revoke
+  through `control.sock`, releases, sessions ending, `systemctl restart`,
+  and logind's Lock of a graphical session of alice's made for
+  it. After every step the window's state, the socket units,
   the grant directory and the mounts in the outer mount namespace and where
   the app runs match the reference model. 15 sequences with seed 1 (about a
   minute); by hand, `LIVE_RAPID` replaces the flags, for example

@@ -92,9 +92,6 @@ func (mc *liveMachine) allowed(t *rapid.T, p *refPending, lease, params string, 
 		mc.waitFor(t, "the gone session's hold dropped", func() bool { return !mc.holds(g.id, p.sess) })
 		mc.waitEnded(t, m.sessionEnd(p.sess)...)
 	}
-	if lease == "always" {
-		m.store = append(m.store, storeKey{p.cap, params})
-	}
 }
 
 // holds reports whether the window shows sess holding grant id

@@ -130,19 +130,6 @@ func TestRefusalLimit(t *testing.T) {
 	}
 }
 
-func TestAlwaysOnlyFromWindow(t *testing.T) {
-	b, _ := testBroker(t, "allow")
-	c := testCap(t, "command")
-	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "always"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g.Lease != "PT1H" || len(b.store.Always) != 0 {
-		t.Errorf("A notification's Allow on always gave lease %q, stored %v", g.Lease, b.store.Always)
-	}
-}
-
 func TestWindowAnswer(t *testing.T) {
 	b, _ := testBroker(t, "options")
 	c := testCap(t, "command")
@@ -158,7 +145,7 @@ func TestWindowAnswer(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true, Lease: "always", Params: json.RawMessage(`{"path": "/a", "ro": true}`)})
+				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"path": "/a", "ro": true}`)})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -168,16 +155,8 @@ func TestWindowAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Lease != "always" || string(g.Params) != `{"path":"/a","ro":true}` {
+	if g.Lease != "PT8H" || string(g.Params) != `{"path":"/a","ro":true}` {
 		t.Errorf("Window's answer gave %+v", g)
-	}
-	// Stored with exact parameters: read-only doesn't cover read-write
-	if !b.isAlways(c, json.RawMessage(`{"path":"/a","ro":true}`)) || b.isAlways(c, json.RawMessage(`{"path":"/a"}`)) {
-		t.Errorf("Always grants: %v", b.store.Always)
-	}
-	b2, err := newBroker(b.cfg, b.caps, b.sb, nil)
-	if err != nil || len(b2.store.Always) != 1 {
-		t.Errorf("Store not saved: %v, %v", b2.store.Always, err)
 	}
 }
 

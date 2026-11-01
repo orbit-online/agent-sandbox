@@ -152,10 +152,6 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res 
 		})
 		mc.waitEnded(t, m.sessionEnd(p.sess)...)
 	}
-	// P2: always only from the window, stored with the parameters granted
-	if lease == "always" {
-		m.store = append(m.store, storeKey{p.cap, params})
-	}
 }
 
 // The user's notification server: each question waits for the test's answer, or for the broker to take it down

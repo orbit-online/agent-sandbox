@@ -11,12 +11,12 @@ import (
 	"pgregory.net/rapid"
 )
 
-// The state machine's requests (protocol_events.als: ask, matchLive, fromStore) and their answers (notifAllow,
-// windowAllow, refuse)
+// The state machine's requests (protocol_events.als: ask, matchLive) and their answers (notifAllow, windowAllow,
+// refuse)
 
 var (
 	caps    = []string{capVM, capConsole, capToken, capFolder}
-	leases  = []string{"", "session", "lock", "always", "always", "PT1H", "PT1H", "PT10M"}
+	leases  = []string{"", "session", "lock", "PT1H", "PT1H", "PT10M"}
 	reasons = []string{"to read the notes", " spaced \n\tout\x07 ", "<b>Allow</b> &amp; trust me", "\x1b[31mred",
 		strings.Repeat("é", 2*maxReason)}
 )
@@ -104,7 +104,7 @@ func (mc *machine) Crafted(t *rapid.T) {
 	}
 }
 
-// predict is what request does with a request: refuse it, serve a live grant, grant a stored always grant, or ask
+// predict is what request does with a request: refuse it, serve a live grant, or ask
 func (mc *machine) predict(c, p, lease, sess string) (string, *refGrant) {
 	m := mc.m
 	if lease == "" {
@@ -116,9 +116,6 @@ func (mc *machine) predict(c, p, lease, sess string) (string, *refGrant) {
 	}
 	if g := m.matching(c, p); g != nil {
 		return "live", g
-	}
-	if m.isAlways(c, p) {
-		return "always", nil
 	}
 	if g := m.gate(c); g.asking || m.now.Before(g.blockedUntil) {
 		return "refused", nil
@@ -172,23 +169,6 @@ func (mc *machine) request(t *rapid.T, who *caller, c, p, lease, reason string, 
 			mc.m.hold(live, who.sess)
 			mc.delivered(t, live, res)
 		}
-	case "always":
-		if !mc.m.lockFree(c, p) {
-			for _, res := range results {
-				if res.Error == "" {
-					mc.fatalf(t, "Always grant %s %s served with its instance granted elsewhere", c, p)
-				}
-			}
-			return
-		}
-		if results[0].Grant == nil {
-			mc.fatalf(t, "Always grant %s %s not granted: %s", c, p, results[0].Error)
-		}
-		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "always", "")
-		for _, res := range results {
-			mc.m.hold(g, who.sess)
-			mc.delivered(t, g, res)
-		}
 	case "ask":
 		for _, res := range results {
 			if res.Error == "" {
@@ -219,15 +199,8 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response) {
 // asked checks the question the user was asked (P7: the daemon's summary, the reason cleaned) and notes it pending
 func (mc *machine) asked(t *rapid.T, call *askCall, req request, sess string, done chan response) {
 	lease := req.Lease
-	switch lease {
-	case "":
+	if lease == "" {
 		lease = "session"
-	case "always":
-		// always only from the window (P2): the notification offers the session, or an hour without one
-		lease = "PT1H"
-		if sess != "" {
-			lease = "session"
-		}
 	}
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	desc := mc.caps[req.Capability].Description

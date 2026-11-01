@@ -28,7 +28,7 @@ it finds the launcher's running sandbox by app ID, listens on request.sock in
 the grant directory for the sandbox and on control.sock for the Permissions
 window, asks the user about each request with a notification, and ends grants
 on their lease. Exits when the sandbox does. <config> is the JSON the module
-writes: appId, launcher, grantDir, controlSocket, store, sandboxGrantDir,
+writes: appId, launcher, grantDir, controlSocket, sandboxGrantDir,
 window (the command opening the Permissions window) and plugins (each a
 manifest path and a ceiling). Environment variables in the paths and the window
 command are expanded.
@@ -125,7 +125,6 @@ type config struct {
 	Launcher      string `json:"launcher"`
 	GrantDir      string `json:"grantDir"`
 	ControlSocket string `json:"controlSocket"`
-	Store         string `json:"store"`
 	// The daemon's systemd unit, which service units are bound to
 	Unit            string   `json:"unit"`
 	SandboxGrantDir string   `json:"sandboxGrantDir"`
@@ -148,7 +147,7 @@ func readConfig(path string) (config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("Parse config %s: %w", path, err)
 	}
-	for _, p := range []*string{&cfg.GrantDir, &cfg.ControlSocket, &cfg.Store} {
+	for _, p := range []*string{&cfg.GrantDir, &cfg.ControlSocket} {
 		*p = os.ExpandEnv(*p)
 	}
 	for i := range cfg.Window {

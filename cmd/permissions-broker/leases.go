@@ -21,7 +21,6 @@ func (b *broker) now() time.Time { return b.clock.now() }
 
 func (b *broker) checkLease(lease string, sess *session) error {
 	switch lease {
-	case "always":
 	case "session":
 		if sess == nil {
 			return errors.New("No Claude Code session found above the caller, so no session lease: ask for a duration")
@@ -35,7 +34,7 @@ func (b *broker) checkLease(lease string, sess *session) error {
 		}
 	default:
 		if _, err := parseDuration(lease); err != nil {
-			return fmt.Errorf("Lease %q: session, lock, always or a duration such as PT1H", lease)
+			return fmt.Errorf("Lease %q: session, lock or a duration such as PT1H", lease)
 		}
 	}
 	return nil
@@ -225,17 +224,13 @@ func (b *broker) lockEvent(why string) {
 	}
 }
 
-// revoke ends a grant for the user and returns what still held files on it (attach grants). An always grant goes from
-// the store too: revoked is revoked, not back on the next request or launch
+// revoke ends a grant for the user and returns what still held files on it (attach grants)
 func (b *broker) revoke(id string) ([]holder, error) {
 	b.mu.Lock()
 	g, ok := b.grants[id]
 	b.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("No grant %q", id)
-	}
-	if g.Lease == "always" {
-		b.removeAlways(g.Capability, g.Params)
 	}
 	g.end("revoked by the user")
 	return g.Holders, nil

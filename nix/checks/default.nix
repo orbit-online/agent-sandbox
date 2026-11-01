@@ -330,7 +330,7 @@ let
               # Its own state dir's parts it holds anyway, a scratchpad's subdir included
               binds."/srv/own".src = "/home/alice/.local/share/claude-desktop/tmp-scratchpad/x";
               launchers.work.binds."/srv/other".src = "/home/alice/.local/share/claude-desktop/home";
-              launchers.work.binds."/srv/store".src = "/home/alice/.local/share/claude-desktop-work/permissions.json";
+              launchers.work.binds."/srv/store".src = "/home/alice/.local/share/claude-desktop-work/nix-store.id";
             }
           )
         )
@@ -343,7 +343,7 @@ let
         ''binds."/srv/run" binds /run/user/1000''
         ''binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
         ''launchers.work.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
-        ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/permissions.json''
+        ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
       ];
     };
     testLauncherName = {
@@ -652,7 +652,6 @@ in
           jq -e '.appId == "com.nixpak.ClaudeDesktop.work" and .launcher == "work"
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
-            and .store == "/home/alice/.local/share/claude-desktop-work/permissions.json"
             and .unit == "claude-desktop-work-permissions.service"
             and .sandboxGrantDir == "/run/permissions"
             and .window[1] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"

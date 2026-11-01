@@ -52,7 +52,6 @@ type response struct {
 	Capabilities []capabilityInfo `json:"capabilities,omitempty"`
 	Pending      []*pending       `json:"pending,omitempty"`
 	Holders      []holder         `json:"holders,omitempty"`
-	Always       []alwaysGrant    `json:"always,omitempty"`
 	Log          []logEntry       `json:"log,omitempty"`
 	Held         []held           `json:"held,omitempty"`
 }
@@ -112,22 +111,11 @@ type pending struct {
 	seq uint64
 }
 
-type alwaysGrant struct {
-	Capability string          `json:"capability"`
-	Params     json.RawMessage `json:"params"`
-	Granted    time.Time       `json:"granted"`
-}
-
 type logEntry struct {
 	Time     time.Time `json:"time"`
 	Summary  string    `json:"summary"`
 	Reason   string    `json:"reason,omitempty"`
 	Decision string    `json:"decision"`
-}
-
-type storeData struct {
-	Always []alwaysGrant `json:"always"`
-	Log    []logEntry    `json:"log"`
 }
 
 // The notification's question and the user's answer: allow, deny or options
@@ -151,12 +139,12 @@ type broker struct {
 	sb   *sandbox
 	ask  asker
 
-	mu         sync.Mutex
-	saving     sync.Mutex
-	grants     map[string]*grant
-	pending    map[string]*pending
-	gates      map[string]*gate
-	store      storeData
+	mu      sync.Mutex
+	grants  map[string]*grant
+	pending map[string]*pending
+	gates   map[string]*gate
+	// The recent decisions, for the window: this daemon's only
+	log        []logEntry
 	shared     bool
 	pendingSeq uint64
 	// share was asked for, or an earlier daemon's found: it's done once per sandbox

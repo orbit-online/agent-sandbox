@@ -182,3 +182,13 @@ func TestRemoveLocksDefault(t *testing.T) {
 		t.Error("Left the default launcher's own lock")
 	}
 }
+
+// writeList gives c a list command printing instances
+func writeList(t *testing.T, c *capability, instances string) {
+	t.Helper()
+	list := filepath.Join(t.TempDir(), "list")
+	if err := os.WriteFile(list, []byte("#!/bin/sh\necho '"+instances+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.List, c.listedAt = []string{list}, time.Time{}
+}

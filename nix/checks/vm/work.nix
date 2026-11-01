@@ -50,28 +50,45 @@
       # request.sock answers from inside, and refuses share from where the app runs
       status, out = workstation.execute(work_cmd("${pkgs.lib.getExe broker} share") + " 2>&1")
       assert status != 0 and "outer mount namespace" in out, out
-      # A grant through the MCP server: with an always grant stored, after a restart of the daemon (which finds
-      # the sandbox again), it's issued without asking, for the ceiling's maxValidity
-      # /srv/mounted has a mount beneath it, which would come along unchecked: never mounted
-      make_folders()
-      workstation.succeed(
-          "echo '{\"always\": [{\"capability\": \"test/thing\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"},"
-          " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/notes\"}, \"granted\": \"2026-01-01T00:00:00Z\"},"
-          " {\"capability\": \"folders/folder\", \"params\": {\"path\": \"/srv/mounted\"}, \"granted\": \"2026-01-01T00:00:00Z\"},"
-          " {\"capability\": \"test/echo\", \"params\": {}, \"granted\": \"2026-01-01T00:00:00Z\"}]}'"
-          " | runuser -u alice -- tee ${workStateDir}/permissions.json"
-      )
-      workstation.succeed("systemctl --user -M alice@ restart claude-desktop-work-permissions")
-      rpc = "\n".join(json.dumps(m) for m in [
+      # The user's side through control.sock, as the window has it
+      control_sock = "/run/user/1000/claude-desktop/permissions-work-control.sock"
+      def control(req, tries=1):
+          script = ("import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]);"
+                    " s.sendall(sys.argv[2].encode()); print(s.makefile().readline())")
+          for _ in range(tries):
+              status, out = workstation.execute(alice_cmd(
+                  f"${pkgs.python3.interpreter} -c {shlex.quote(script)} {control_sock} {shlex.quote(json.dumps(req))}"
+              ))
+              if status == 0:
+                  return json.loads(out)
+              time.sleep(1)
+          raise Exception(f"control.sock doesn't answer {req}")
+
+      def answer(capability, params):
+          for _ in range(60):
+              for p in control({"op": "state"}).get("pending", []):
+                  if p["capability"] == capability and p["params"] == params:
+                      return control({"op": "answer", "pending": p["id"], "allow": True})
+              time.sleep(1)
+          raise Exception(f"No request of {capability} {params} pending")
+
+      init = [
           {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
               "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "vm", "version": "0"}}},
           {"jsonrpc": "2.0", "method": "notifications/initialized"},
-          {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "request", "arguments": {
-              "capability": "test/thing", "reason": "the VM test", "lease": "PT1H"}}},
-      ])
-      # Stdin stays open a while for the answer. Retried until the restarted daemon listens
-      mcp = f"(printf '%s\\n' {shlex.quote(rpc)}; sleep 3) | ${pkgs.lib.getExe broker} mcp"
-      # Retried until the restarted daemon listens; the MCP server's whole output, stderr too, if it never answers
+      ]
+      def mcp_script(*calls, wait=3):
+          lines = " ".join(shlex.quote(json.dumps(m)) for m in init)
+          script = f"(printf '%s\\n' {lines}; sleep 3"
+          for c in calls:
+              script += f"; printf '%s\\n' {shlex.quote(json.dumps(c))}; sleep {wait}"
+          return script + ") | ${pkgs.lib.getExe broker} mcp"
+
+      def request_call(capability, params, n=2):
+          return {"jsonrpc": "2.0", "id": n, "method": "tools/call", "params": {"name": "request", "arguments": {
+              "capability": capability, "params": params, "reason": "the VM test", "lease": "PT1H"}}}
+
+      # Retried until the daemon listens; the MCP server's whole output, stderr too, if it never answers
       def mcp_until(script, want, tries=20):
           for _ in range(tries):
               _, out = workstation.execute(work_cmd(f"sh -c {shlex.quote(script + ' 2>&1')}"))
@@ -80,22 +97,41 @@
               time.sleep(3)
           raise Exception(f"No {want!r} from the MCP server: {out}")
 
-      mcp_until(mcp, "issued-PT28800S")
-      # The always service grant: its plugin runs socket-activated by systemd, on a socket in the grant directory,
-      # and the MCP server offers its tool and forwards a call to it
-      call = json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-          "name": "test_echo", "arguments": {"text": "from the sandbox"}}})
-      mcp = (f"(printf '%s\\n' {shlex.quote(rpc.splitlines()[0])} {shlex.quote(rpc.splitlines()[1])}; sleep 3;"
-             f" printf '%s\\n' {shlex.quote(call)}; sleep 3) | ${pkgs.lib.getExe broker} mcp")
-      mcp_until(mcp, "echo: from the sandbox")
+      # A request through the MCP server in the background, its output in the sandbox's home, which the user answers
+      def granted(name, capability, params, want):
+          script = mcp_script(request_call(capability, params), wait=60) + f" >/home/alice/{name}.out 2>&1"
+          workstation.succeed(f"systemd-run --user -M alice@ --unit {name} --"
+                              f" /etc/profiles/per-user/alice/bin/claude-desktop-work --exec sh -c {shlex.quote(script)}")
+          answer(capability, params)
+          workstation.wait_until_succeeds(f"grep -q {shlex.quote(want)} ${workStateDir}/home/{name}.out", timeout=60)
+
+      # A command grant, issued for the ceiling's maxValidity
+      make_folders()
+      granted("thing", "test/thing", {}, "issued-PT28800S")
+      # A service grant: its plugin runs socket-activated by systemd, on a socket in the grant directory, and the MCP
+      # server offers its tool and forwards a call to it
+      granted("echo", "test/echo", {}, ".sock")
+      call = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+          "name": "test_echo", "arguments": {"text": "from the sandbox"}}}
+      mcp_until(mcp_script(call), "echo: from the sandbox")
+      # A folder, mounted read-only, nodev and nosuid where the app runs; /srv/mounted has a mount beneath it, which
+      # would come along unchecked: never mounted
+      granted("notes", "folders/folder", {"path": "/srv/notes"}, "/run/permissions/")
+      workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)
+      granted("mounted", "folders/folder", {"path": "/srv/mounted"}, '"isError":true')
+      status, _ = workstation.execute(work_cmd("sh -c 'touch /run/permissions/*/new'"))
+      assert status != 0, "the read-only folder grant is writable"
+      grants = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions/" in l]
+      assert len(grants) == 1, f"one folder mounted, not the one with a mount beneath it: {grants}"
+      opts = grants[0].split()[5].split(",")
+      assert {"ro", "nodev", "nosuid"} <= set(opts), grants[0]
 
       # A crash ends the daemon's grants: ExecStopPost detaches the folder, and the service units are bound to it.
-      # Started again, it replays the always grants under new ids
+      # Started again, it has none
       socket_unit = workstation.succeed(
           "systemctl --user -M alice@ list-units --plain --no-legend 'perm-work_*.socket' | cut -d' ' -f1"
       ).strip()
-      folder = next(l.split()[4] for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions/" in l)
-      # The restarted daemon cleans up too, so the wiring is checked as such
+      folder = grants[0].split()[4]
       bound = workstation.succeed(f"systemctl --user -M alice@ show -P BindsTo {socket_unit}")
       assert "claude-desktop-work-permissions.service" in bound, f"{socket_unit} bound to {bound!r}"
       stop_post = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-work-permissions")
@@ -104,16 +140,8 @@
       workstation.wait_until_fails(f"systemctl --user -M alice@ is-active -q {socket_unit}", timeout=30)
       workstation.wait_until_succeeds(work_cmd(f"sh -c '! grep -q \" {folder} \" /proc/self/mountinfo'"), timeout=30)
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
-      workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)
-      # The always folder too: the restarted daemon takes over the shared grant directory, mounts the folder there
-      # from the host, and it reaches the app's mount namespace, read-only
-      workstation.wait_until_succeeds(work_cmd("sh -c 'cat /run/permissions/*/file'") + " | grep -qx notes", timeout=60)
-      status, _ = workstation.execute(work_cmd("sh -c 'touch /run/permissions/*/new'"))
-      assert status != 0, "the read-only folder grant is writable"
-      grants = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions/" in l]
-      assert len(grants) == 1, f"one folder mounted, not the one with a mount beneath it: {grants}"
-      opts = grants[0].split()[5].split(",")
-      assert {"ro", "nodev", "nosuid"} <= set(opts), grants[0]
+      state = control({"op": "state"}, tries=30)
+      assert "grants" not in state, f"grants after a restart: {state['grants']}"
 
       # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
       # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds

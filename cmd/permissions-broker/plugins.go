@@ -30,7 +30,7 @@ type capability struct {
 	Exclusive   bool                       `json:"exclusive"`
 	Ceiling     ceiling                    `json:"-"`
 
-	// Held while a request looks for a grant covering it, or makes one from an always grant
+	// Held while a request looks for a grant covering it
 	covered sync.Mutex
 	// One run or resolve command of this capability's at a time, so a capability whose commands hang (each request a
 	// live command grant covers reruns run, a minute at most) holds one of pluginSlots, not all of them

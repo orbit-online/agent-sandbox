@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -222,28 +221,25 @@ func TestSessionsShare(t *testing.T) {
 	}
 }
 
-// A daemon started again while the sandbox runs takes over the shared grant directory and replays always grants
+// A daemon started again while the sandbox runs takes over the shared grant directory: folders are granted into it
 func TestAdoptShared(t *testing.T) {
 	src := t.TempDir()
 	b, _, _ := sandboxC(t)
 	c := folders(t, `{"path": "`+src+`"}`)
-	again, err := newBroker(b.cfg, map[string]*capability{c.id(): c}, b.sb, nil)
+	f := &fakeAsker{answers: []string{"allow"}}
+	again, err := newBroker(b.cfg, map[string]*capability{c.id(): c}, b.sb, f.ask)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { again.endAll("test over") })
-	again.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{"path":"` + src + `"}`)}}
 	again.adoptShared()
-	for range 50 {
-		if gs := again.liveGrants(""); len(gs) == 1 {
-			if _, err := os.Stat(fmt.Sprintf("/proc/%d/root%s", b.sb.pid, gs[0].Path)); err != nil {
-				t.Error(err)
-			}
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	g, _, err := again.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Error("The always folder wasn't replayed")
+	if _, err := os.Stat(fmt.Sprintf("/proc/%d/root%s", b.sb.pid, g.Path)); err != nil {
+		t.Error(err)
+	}
 }
 
 // What a daemon leaves when it stops, a crash included, ExecStopPost ends: its units, its locks, its folder grants
@@ -296,29 +292,11 @@ func TestCleanup(t *testing.T) {
 	}
 }
 
-// P12: share is served once, and replays mount an always folder once however often they run
-func TestReplayOnce(t *testing.T) {
-	src := t.TempDir()
+// share is served once
+func TestShareOnce(t *testing.T) {
 	b, _, _ := sandboxC(t)
-	c := folders(t, `{"path": "`+src+`"}`)
-	b.caps[c.id()] = c
 	if err := b.shareFrom(peerAt(t, b.sb.pid)); err == nil {
 		t.Error("share served twice")
-	}
-	b.store.Always = []alwaysGrant{{Capability: c.id(), Params: json.RawMessage(`{"path":"` + src + `"}`)}}
-	var wg sync.WaitGroup
-	for range 3 {
-		wg.Go(func() { b.replay("attach") })
-	}
-	wg.Wait()
-	if gs := b.liveGrants(""); len(gs) != 1 {
-		t.Errorf("Replays made %d grants of one always folder", len(gs))
-	}
-	if err := b.forget(c.id(), json.RawMessage(`{"path":"`+src+`"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if gs := b.liveGrants(""); len(gs) != 0 {
-		t.Errorf("Forget left %d grants", len(gs))
 	}
 }
 

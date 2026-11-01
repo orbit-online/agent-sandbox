@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -18,9 +17,8 @@ import (
 // The state machine tests (machine_test.go) live, in the VM test (nix/checks/vm.nix): a smaller set of the same
 // actions against the work launcher's daemon under systemd, its real sandbox and plugins. Requests come from this
 // binary run inside the sandbox through the launcher's re-entry (live_procs_test.go), as a session's agent below an
-// anchor named claude, a forged session below one named node, or a caller without one; the user's answers, revoke and
-// forget come through control.sock from the host. After every step the window's state, the store file, the service
-// units, the grant directory and the mounts in the sandbox's outer mount namespace and where the app runs match the
+// anchor named claude, a forged session below one named node, or a caller without one; the user's answers and revoke
+// come through control.sock from the host. After every step the window's state, the service units, the grant directory and the mounts in the sandbox's outer mount namespace and where the app runs match the
 // reference model (machine_model_test.go).
 //
 // Without LIVE_CONFIG it skips. The VM test sets: LIVE_CONFIG (the daemon's config), LIVE_LAUNCHER (the launcher,
@@ -118,8 +116,8 @@ type liveMachine struct {
 	tags         int
 }
 
-// newLiveMachine starts an iteration from a clean daemon: nothing stored, the daemon restarted (no grants, gates or
-// pending requests left from the last)
+// newLiveMachine starts an iteration from a clean daemon: restarted, so no grants, gates or pending requests are left
+// from the last
 func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 	mc := &liveMachine{lv: lv, sessions: map[string]*liveProc{}}
 	t.Cleanup(func() {
@@ -131,12 +129,6 @@ func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 			p.kill()
 		}
 	})
-	state := lv.control(request{Op: "state"})
-	for _, a := range state.Always {
-		if res := lv.control(request{Op: "forget", Capability: a.Capability, Params: a.Params}); res.Error != "" {
-			t.Fatalf("Forget %s: %s", a.Capability, res.Error)
-		}
-	}
 	mc.ev = lv.watch()
 	t.Cleanup(func() { close(mc.ev.stop) })
 	mc.restartDaemon(t)
@@ -256,8 +248,8 @@ func (mc *liveMachine) waitDone(t *rapid.T, p *refPending) response {
 	}
 }
 
-// Check: after every action the live system matches the reference, waiting a while for what it does on its own (an
-// attach replay, a holder dropped). Pending requests near the daemon's two minutes are denied first
+// Check: after every action the live system matches the reference, waiting a while for what it does on its own (a
+// holder dropped). Pending requests near the daemon's two minutes are denied first
 func (mc *liveMachine) Check(t *rapid.T) {
 	for _, p := range slices.Clone(mc.m.pending) {
 		if time.Since(p.asked) > 90*time.Second {
@@ -266,9 +258,9 @@ func (mc *liveMachine) Check(t *rapid.T) {
 	}
 	m := mc.m
 	for id, r := range m.grants {
-		// P1: an always grant only while stored, any other only after an Allow
-		if r.lease == "always" && !m.isAlways(r.cap, r.params) || r.lease != "always" && !m.consented[storeKey{r.cap, r.params}] {
-			mc.fatalf(t, "Grant %s (%s %s %s) without consent or a stored always grant", id, r.cap, r.params, r.lease)
+		// P1: only after an Allow
+		if !m.consented[storeKey{r.cap, r.params}] {
+			mc.fatalf(t, "Grant %s (%s %s %s) without consent", id, r.cap, r.params, r.lease)
 		}
 	}
 	var err error
@@ -322,19 +314,6 @@ func (mc *liveMachine) compare(t *rapid.T) error {
 	}
 	slices.Sort(services)
 	slices.Sort(folders)
-	// P2, P12, revoke: the window's always grants and the store file are the reference's
-	if ks := storeKeys(st.Always); !slices.Equal(ks, m.store) {
-		return fmt.Errorf("The window shows always grants %v, want %v", ks, m.store)
-	}
-	var s storeData
-	if data, err := os.ReadFile(lv.cfg.Store); err == nil {
-		if err := json.Unmarshal(data, &s); err != nil {
-			return fmt.Errorf("Store: %v", err)
-		}
-	}
-	if ks := storeKeys(s.Always); !slices.Equal(ks, m.store) {
-		return fmt.Errorf("Store %v, want %v", ks, m.store)
-	}
 	if len(st.Pending) != len(m.pending) {
 		return fmt.Errorf("The window shows %d pending requests, want %d", len(st.Pending), len(m.pending))
 	}

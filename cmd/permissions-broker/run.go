@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,29 +13,8 @@ import (
 )
 
 func newBroker(cfg config, caps map[string]*capability, sb *sandbox, ask asker) (*broker, error) {
-	b := &broker{cfg: cfg, caps: caps, sb: sb, ask: ask, grants: map[string]*grant{}, pending: map[string]*pending{},
-		gates: map[string]*gate{}, watches: map[chan []byte]bool{}, clock: realClock{}}
-	data, err := os.ReadFile(cfg.Store)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return nil, fmt.Errorf("Read the grant store: %w", err)
-	default:
-		// A broken store mustn't keep the daemon from starting: it's set aside, and always grants are asked again
-		if err := json.Unmarshal(data, &b.store); err != nil {
-			slog.Warn("Broken grant store, set aside", "store", cfg.Store, "err", err)
-			b.store = storeData{}
-			_ = os.Rename(cfg.Store, cfg.Store+".broken")
-		}
-		// Saved indented: compacted again to the validated form, which isAlways, forget and revoke compare exactly
-		for i, a := range b.store.Always {
-			var p bytes.Buffer
-			if json.Compact(&p, a.Params) == nil {
-				b.store.Always[i].Params = p.Bytes()
-			}
-		}
-	}
-	return b, nil
+	return &broker{cfg: cfg, caps: caps, sb: sb, ask: ask, grants: map[string]*grant{}, pending: map[string]*pending{},
+		gates: map[string]*gate{}, watches: map[chan []byte]bool{}, clock: realClock{}}, nil
 }
 
 // run starts the daemon and serves until the sandbox ends
@@ -62,7 +39,7 @@ func (b *broker) run() error {
 	return nil
 }
 
-// start reconciles what a previous daemon left, listens on both sockets and replays the always grants
+// start reconciles what a previous daemon left and listens on both sockets
 func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	// What an earlier daemon left, if its ExecStopPost didn't get to it
 	cleanup(b.cfg, b.sb)
@@ -81,7 +58,6 @@ func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 		reqLn.Close()
 		return nil, nil, err
 	}
-	b.replay("service")
 	b.adoptShared()
 	return reqLn, ctlLn, nil
 }
