@@ -743,7 +743,10 @@ let
           STATE_DIR = stateDir;
           STORE_ROOTS = "${storeRoots}";
           STATE = lib.getExe state;
+          UNSHARE = lib.getExe' pkgs.util-linux "unshare";
         };
+        # unshare runs newuidmap and newgidmap from PATH
+        prelude = "PATH=$PATH:${osConfig.security.wrapperDir}\n";
       };
       # Shallowest first, so nested binds override their parents. nixpak mounts all rw binds before the ro ones
       binds =

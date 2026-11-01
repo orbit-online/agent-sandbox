@@ -291,7 +291,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   refused, links in its home replaced, alice's files neither read nor written,
   the keyfile swapped for a link while it runs, the store dir swapped for a
   directory of its own between launches refused, and with no record of the
-  store dir, `nix/` set aside and the closure synced into a fresh one, recorded), `/nix/store` not renameable
+  store dir, `nix/` deleted, a subuid's files included, and the closure synced into a fresh one, recorded), `/nix/store` not renameable
   inside directly, the launcher refusing a missing bind source that isn't optional,
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
