@@ -78,8 +78,6 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker. Built so far:
   everything but device grants.
-- `scripts/claude-desktop-test.sh`: starts a second sandbox built from this
-  checkout next to the running one. Run on the host.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
 - `scripts/ns-inject-spike.py`: spike for binding host folders and device
   nodes into a running sandbox and detaching them, against two nested bwraps
@@ -335,7 +333,6 @@ Beyond the checks:
 
 - In a consumer: build its config with `--override-input agent-sandbox
   path:<this checkout>`.
-- On the host: `scripts/claude-desktop-test.sh` runs the real app from this
-  checkout. Inside that sandbox, `scripts/nettest.sh HOST:PORT...` checks
-  that the given host-only services are unreachable and the internet is
+- Inside a running sandbox, `scripts/nettest.sh HOST:PORT...` checks that
+  the given host-only services are unreachable and the internet is
   reachable.
