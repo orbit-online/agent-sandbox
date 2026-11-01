@@ -24,8 +24,9 @@ import (
 //     identity, clones it (open_tree, without its submounts) and passes the tree's fd back;
 //   move-tree joins the sandbox's mount namespace and attaches that tree at the mountpoint (move_mount);
 //   detach joins it and unmounts mountpoints there.
-// The sandbox can't write the grant directory, but it can plant links and rename directories in its rw binds, which
-// may lie under a ceiling root: hence no links followed at all, and identities rather than paths for what's denied.
+// The sandbox can't write the grant directory, but it can plant links in its rw binds, which may lie under a ceiling
+// root, and a link can point anywhere: hence no links followed at all. The host has other paths to a directory too
+// (bind mounts, its own links): hence identities rather than paths for what's denied.
 
 // resolved is what an attach plugin's resolve command prints
 type resolved struct {

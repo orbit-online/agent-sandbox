@@ -224,8 +224,8 @@ Only ending the sandbox ends every access to a grant for sure.
 
 ### Source ceiling and resolving paths
 
-The sandbox has rw binds of its own, which may lie under a ceiling root, and there it can plant links and rename
-directories at will. So a path check followed by a mount of the path isn't enough. The daemon checks the path
+The sandbox has rw binds of its own, which may lie under a ceiling root, and there it can plant links that point
+anywhere on the host. So a path check followed by a mount of the path isn't enough. The daemon checks the path
 lexically first, refusing early what no ceiling source covers (the longest matching source decides whether rw is
 allowed). Then the clone helper, after its `unshare`:
 
