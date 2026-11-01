@@ -241,7 +241,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state),
-  forget, a repeated action still a change.
+  forget, a repeated action still a change, Allow and Deny off for a second after a pending row moved up.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.

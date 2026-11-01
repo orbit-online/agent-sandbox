@@ -44,6 +44,26 @@ Item {
         return edits[req.id]
     }
 
+    // A pending request moved up, a row above it gone: when the sandbox's requests end is partly its choice (they time
+    // out), and a click meant for one would land on the next. Allow and Deny stay off for a second after, as the
+    // notification ignores a click right after it appears
+    property var pendingIds: []
+    property bool settling: false
+    property int settleMs: 1000
+    onPendingChanged: {
+        const ids = pending.map(p => p.id)
+        if (pendingIds.some((id, i) => ids.includes(id) && ids.indexOf(id) !== i)) {
+            settling = true
+            settle.restart()
+        }
+        pendingIds = ids
+    }
+    Timer {
+        id: settle
+        interval: root.settleMs
+        onTriggered: root.settling = false
+    }
+
     // A counter in each command, so the same action twice is still a change of broker.command
     property int sent: 0
     function send(cmd) {
@@ -152,12 +172,14 @@ Item {
                             Button {
                                 objectName: "deny"
                                 text: "Deny"
+                                enabled: !root.settling
                                 onClicked: root.send({ op: "answer", pending: request.modelData.id, allow: false })
                             }
                             Button {
                                 objectName: "allow"
                                 text: "Allow"
                                 highlighted: true
+                                enabled: !root.settling
                                 onClicked: root.send({ op: "answer", pending: request.modelData.id, allow: true,
                                                        lease: lease.currentValue, params: request.edited })
                             }

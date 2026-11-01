@@ -105,4 +105,24 @@ TestCase {
         mouseClick(findChild(view, "deny"))
         verify(mock.command !== first)
     }
+
+    // The sandbox's request above another ends (it timed out): the other moves up under the pointer, and a click
+    // right then doesn't answer it
+    function test_rows_shift() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        const second = Object.assign({}, st.pending[0], { id: "p2", summary: "another" })
+        st.pending.push(second)
+        mock.state = JSON.stringify(st)
+        st.pending.shift()
+        mock.state = JSON.stringify(st)
+        const allow = findChild(view, "allow")
+        const command = mock.command
+        mouseClick(allow)
+        compare(mock.command, command, "a click right after the rows moved answered")
+        tryVerify(() => allow.enabled, 3000)
+        mouseClick(allow)
+        compare(sent().pending, "p2")
+        mock.state = before
+    }
 }
