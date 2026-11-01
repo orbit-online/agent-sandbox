@@ -51,6 +51,9 @@ buildGoModule {
   # miqt binds Qt through cgo
   env.CGO_ENABLED = 1;
   dontWrapQtApps = true;
+  # buildGoModule's checkPhase drops -trimpath from GOFLAGS, which changes every action ID, so go test would compile
+  # miqt's cgo again instead of taking it from the build phase's cache. The tests don't need source paths
+  checkFlags = [ "-trimpath" ];
   # Offscreen, in Plasma's style as on the host
   preCheck = ''
     export HOME=$TMPDIR QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=org.kde.desktop QML_IMPORT_PATH=${qmlPath} \
