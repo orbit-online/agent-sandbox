@@ -13,20 +13,14 @@ fi
 # directory that is a mountpoint where it runs from a namespace of its own (models/README.md, S12) and put a directory
 # of its own in its place, which a check for a link misses
 id_file=$STATE_DIR/nix-store.id
-if [[ -e $id_file ]]; then
-  if [[ $(stat -c %d:%i "$store" 2>/dev/null) != "$(<"$id_file")" ]]; then
-    echo "claude-desktop: $store isn't the store directory this launcher made: the sandbox replaced it (see" \
-      "$STATE_DIR/nix for the original). Remove $id_file to have the next launch delete $STATE_DIR/nix and start" \
-      "afresh" >&2
-    exit 1
-  fi
-else
-  # No record: an install from before the launcher kept one. Whatever store directory is there may be the sandbox's
-  # own by now, so nix/ goes whole and the closure is copied into a fresh one: nothing else in it is the host's. As root
-  # of a userns holding the user's subuids and subgids, so files a container in the sandbox made go too. Outside
-  # confine.sh, whose userns maps the user alone; rm doesn't follow links, and the sandbox isn't running
+if [[ ! -e $id_file || $(stat -c %d:%i "$store" 2>/dev/null) != "$(<"$id_file")" ]]; then
+  # No record (an install from before the launcher kept one), or a store directory the sandbox put in place of the
+  # one recorded. Either way nothing in nix/ can be trusted, and nothing in it is the host's: it goes whole and the
+  # closure is copied into a fresh one. As root of a userns holding the user's subuids and subgids, so files a
+  # container in the sandbox made go too. Outside confine.sh, whose userns maps the user alone; rm doesn't follow
+  # links, and the sandbox isn't running
   if [[ -e $STATE_DIR/nix || -L $STATE_DIR/nix ]]; then
-    echo "claude-desktop: No record of the store directory this launcher made, so $STATE_DIR/nix is deleted and" \
+    echo "claude-desktop: $store isn't the store directory this launcher recorded, so $STATE_DIR/nix is deleted and" \
       "the closure copied afresh" >&2
     "$UNSHARE" --map-auto --map-root-user rm -rf "$STATE_DIR/nix"
   fi

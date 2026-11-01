@@ -103,9 +103,8 @@ remove it.
 
 A single-user store of its own: `nix/` in the state dir, bound rw at `/nix`,
 and its `store/` bound again at `/nix/store`. The next launch refuses a
-`store/` other than the one it made, a link included. With no record of the
-one it made (an install from before it kept one), it deletes `nix/` and
-copies the closure into a fresh one: what was installed in `/nix` before is
+`store/` that is a link. If `store/` isn't the one it recorded, or there's
+no record (an install from before it kept one), it deletes `nix/` and copies the closure into a fresh one: what was installed in `/nix` before is
 gone then. No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
 closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on

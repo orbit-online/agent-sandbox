@@ -146,7 +146,7 @@ joining needs CAP_SYS_ADMIN in init).
 | helper binaries | nsenter, setpriv, the launcher's scripts | resolved on the host's mounts, or in MU's closure binds | never in M1 or M2, where the sandbox can swap a directory (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
-| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; the launch refuses a store dir other than the one it made (`store-sync.sh`, by device and inode); with no record of it, `nix/` is set aside and the closure synced into a fresh one |
+| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; a store dir other than the one the launch recorded (`store-sync.sh`, by device and inode), or no record, and `nix/` is deleted and the closure synced into a fresh one |
 
 ## Trust boundaries
 
