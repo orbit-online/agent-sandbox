@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
@@ -328,5 +329,99 @@ func TestSessionWatchedOnce(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if n := watches() - before; n > 2 {
 		t.Errorf("%d watches of two sessions", n)
+	}
+}
+
+// A session that ends drops its hold on a grant of any lease: once the other holder releases a duration grant, nobody
+// holds it and it ends. One whose last holder ended runs on, and a release from any session ends it
+func TestEndedSessionDropsHold(t *testing.T) {
+	b, _ := testBroker(t)
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	// The child's pid is printed before it execs with the variable: retried until it has
+	start := func(id string) (*exec.Cmd, *session) {
+		t.Helper()
+		t.Setenv("SESSION_ID", id)
+		anchor, child := startAnchor(t, "claude")
+		for range 100 {
+			if s, _ := b.sb.sessionOf(child); s != nil {
+				return anchor, s
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("No session %s", id)
+		return nil, nil
+	}
+	hold := func(g *grant, s *session) {
+		if !b.hold(g, s) {
+			unix.Close(s.pidfd)
+		}
+	}
+	sessions := map[string]*session{}
+	anchors := map[string]*exec.Cmd{}
+	for _, id := range []string{"session-1", "session-2"} {
+		anchors[id], sessions[id] = start(id)
+	}
+	dropped := func(g *grant, id string) {
+		t.Helper()
+		for range 100 {
+			b.mu.Lock()
+			_, held := g.sessions[id]
+			b.mu.Unlock()
+			if !held {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatalf("%s's hold outlived its anchor", id)
+	}
+	ended := func(g *grant) bool {
+		select {
+		case <-g.ended:
+			return true
+		default:
+			return false
+		}
+	}
+
+	g, err := b.grant(c, json.RawMessage(`{}`), "x", "PT1H", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sessions {
+		hold(g, s)
+	}
+	anchors["session-1"].Process.Kill()
+	dropped(g, "session-1")
+	if ended(g) {
+		t.Fatal("Ended with the first of two holders")
+	}
+	if slices.Contains(b.view(g).Sessions, "session-1") {
+		t.Errorf("Held by the ended session: %v", b.view(g).Sessions)
+	}
+	if err := b.release(g.ID, &session{id: "session-2"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !ended(g) {
+		t.Error("Live after its last live holder released it")
+	}
+
+	// The last holder ends: the grant runs on until a release from any session
+	anchor, s3 := start("session-3")
+	g, err = b.grant(c, json.RawMessage(`{}`), "x", "PT1H", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold(g, s3)
+	anchor.Process.Kill()
+	dropped(g, "session-3")
+	if ended(g) {
+		t.Fatal("A duration grant ended with its last holder's session")
+	}
+	if err := b.release(g.ID, &session{id: "session-2"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !ended(g) {
+		t.Error("Live after a release with nobody holding it")
 	}
 }

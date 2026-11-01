@@ -45,9 +45,9 @@ func (mc *machine) Check(t *rapid.T) {
 				s.g.Expires, r.cap, r.params, r.lease, r.expires)
 		}
 		if !slices.Equal(s.g.Sessions, r.holders) || s.anon != r.anon ||
-			!slices.Equal(s.anchors, slices.Sorted(maps.Keys(r.anchors))) {
-			mc.fatalf(t, "Grant %s held by %v (anonymous %v, anchors %v), want %v (%v, %v)", id, s.g.Sessions, s.anon,
-				s.anchors, r.holders, r.anon, slices.Sorted(maps.Keys(r.anchors)))
+			!slices.Equal(s.anchors, slices.Sorted(slices.Values(r.holders))) {
+			mc.fatalf(t, "Grant %s held by %v (anonymous %v, anchors %v), want %v (%v)", id, s.g.Sessions, s.anon,
+				s.anchors, r.holders, r.anon)
 		}
 		// P1: an always grant only while stored, any other only after an Allow
 		if r.lease == "always" && !m.isAlways(r.cap, r.params) || r.lease != "always" && !m.consented[storeKey{r.cap, r.params}] {

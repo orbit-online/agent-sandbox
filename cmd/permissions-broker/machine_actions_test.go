@@ -54,7 +54,7 @@ func (mc *machine) NewSession(t *rapid.T) {
 	mc.w.session()
 }
 
-// EndSession: a session's anchor exits; the session leases it was the last anchor of end (P8)
+// EndSession: a session's anchor exits, dropping its holds; the session leases it was the last holder of end (P8)
 func (mc *machine) EndSession(t *rapid.T) {
 	if len(mc.w.sessions) == 0 {
 		t.Skip("No session")
@@ -62,8 +62,8 @@ func (mc *machine) EndSession(t *rapid.T) {
 	id := rapid.SampledFrom(slices.Sorted(maps.Keys(mc.w.sessions))).Draw(t, "session")
 	mc.w.endSession(id)
 	mc.waitEnded(t, mc.m.sessionEnd(id)...)
-	// The anchors of the session leases that go on drop it too
-	mc.waitFor(t, "the session's anchors dropped", func() bool {
+	// The grants that go on drop it too
+	mc.waitFor(t, "the session's holds dropped", func() bool {
 		mc.b.mu.Lock()
 		defer mc.b.mu.Unlock()
 		for _, g := range mc.b.grants {

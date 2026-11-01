@@ -15,9 +15,8 @@ import (
 type refGrant struct {
 	id, cap, params, lease string
 	expires                time.Time
-	// The sessions holding it, in order (grant.Sessions), and of a session lease the ones whose anchors tie it
+	// The sessions holding it, in order (grant.Sessions): those it was given to, until they release it or end
 	holders []string
-	anchors map[string]bool
 	// Given to a caller without a session
 	anon bool
 	// Its place in the order grants were made, which draws go by: ids are random
@@ -161,9 +160,9 @@ func (m *model) grant(id, cap, p, lease, sess string) (*refGrant, bool) {
 		return nil, false
 	}
 	m.made++
-	g := &refGrant{id: id, cap: cap, params: p, lease: lease, anchors: map[string]bool{}, seq: m.made}
+	g := &refGrant{id: id, cap: cap, params: p, lease: lease, seq: m.made}
 	if lease == "session" {
-		g.anchors[sess], g.holders = true, []string{sess}
+		g.holders = []string{sess}
 	}
 	if d, err := parseDuration(lease); err == nil {
 		g.expires = m.now.Add(d)
@@ -177,26 +176,17 @@ func (m *model) hold(g *refGrant, sess string) {
 	switch {
 	case sess == "":
 		g.anon = true
-	case g.lease != "session":
-		if !slices.Contains(g.holders, sess) {
-			g.holders = append(g.holders, sess)
-		}
-	case len(g.anchors) > 0 && !g.anchors[sess]:
-		g.anchors[sess] = true
+	case !slices.Contains(g.holders, sess):
 		g.holders = append(g.holders, sess)
 	}
 }
 
-// release drops sess's hold, and ends g once nobody holds it. Returns whether it ended
+// release drops sess's hold, and ends g once nobody holds it: no session, nor but for a session lease a caller
+// without one. Returns whether it ended
 func (m *model) release(g *refGrant, sess string) bool {
 	if sess != "" {
 		g.holders = slices.DeleteFunc(g.holders, func(s string) bool { return s == sess })
-		delete(g.anchors, sess)
-		held := len(g.holders) > 0 || g.anon
-		if g.lease == "session" {
-			held = len(g.anchors) > 0
-		}
-		if held {
+		if len(g.holders) > 0 || g.anon && g.lease != "session" {
 			return false
 		}
 	}
@@ -204,16 +194,16 @@ func (m *model) release(g *refGrant, sess string) bool {
 	return true
 }
 
-// sessionEnd: the session's anchor exited. Returns the grants that ended: session leases it was the last anchor of
+// sessionEnd: the session's anchor exited, dropping its holds. Returns the grants that ended: session leases it was the
+// last holder of. Other leases stay until their own end, or a release finding nobody holding them
 func (m *model) sessionEnd(sess string) []string {
 	var ended []string
 	for id, g := range m.grants {
-		if g.lease != "session" || !g.anchors[sess] {
+		if !slices.Contains(g.holders, sess) {
 			continue
 		}
-		delete(g.anchors, sess)
 		g.holders = slices.DeleteFunc(g.holders, func(s string) bool { return s == sess })
-		if len(g.anchors) == 0 {
+		if g.lease == "session" && len(g.holders) == 0 {
 			delete(m.grants, id)
 			ended = append(ended, id)
 		}

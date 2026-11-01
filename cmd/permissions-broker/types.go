@@ -75,8 +75,7 @@ type grant struct {
 	Summary    string          `json:"summary"`
 	Lease      string          `json:"lease"`
 	Expires    time.Time       `json:"expires,omitzero"`
-	// The sessions it was given to, which hold it until they release it. A session lease's are its anchors too: it
-	// ends with the last
+	// The sessions it was given to, which hold it until they release it or end. A session lease ends with the last
 	Sessions []string `json:"sessions,omitempty"`
 	Socket   string   `json:"socket,omitempty"`
 	// Attach: where it's mounted in the sandbox, and what, as resolved
@@ -89,9 +88,10 @@ type grant struct {
 	mnt *grantMount
 
 	cap      *capability
-	sessions map[string]*session // under broker.mu
+	sessions map[string]*session // the holding sessions' anchors, under broker.mu
 	anon     bool                // given to a caller without a session, under broker.mu
-	sessGone chan struct{}       // closed when the last session leaves
+	sessGone chan struct{}       // a session lease's: closed when the last session leaves
+	over     bool                // ending: no more holds, under broker.mu
 	ended    chan struct{}
 	end      func(why string)
 	unlock   func()

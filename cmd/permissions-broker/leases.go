@@ -97,6 +97,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 		once.Do(func() {
 			b.mu.Lock()
 			delete(b.grants, g.ID)
+			g.over = true
 			b.mu.Unlock()
 			stopWatch()
 			switch c.Type {
@@ -159,8 +160,8 @@ func (b *broker) lease(g *grant, watchDone <-chan struct{}) {
 }
 
 // hold records that a caller of sess (nil: no session found) was given g: a release from a session drops its hold
-// only, and the grant ends on release once nobody holds it. A session lease is tied to sess's anchor too, taking its
-// pidfd: returns whether it did
+// only, and the grant ends on release once nobody holds it. The hold lasts until the session releases g or its anchor
+// exits, so g takes sess's pidfd: returns whether it did
 func (b *broker) hold(g *grant, sess *session) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -168,14 +169,8 @@ func (b *broker) hold(g *grant, sess *session) bool {
 		g.anon = true
 		return false
 	}
-	if g.Lease != "session" {
-		if !slices.Contains(g.Sessions, sess.id) {
-			g.Sessions = append(g.Sessions, sess.id)
-		}
-		return false
-	}
-	if _, ok := g.sessions[sess.id]; ok || len(g.sessions) == 0 {
-		// Known, or the grant is ending: its last session left
+	if _, ok := g.sessions[sess.id]; ok || g.over || g.Lease == "session" && len(g.sessions) == 0 {
+		// Known, or the grant is ending: a session lease's last session left
 		return false
 	}
 	g.sessions[sess.id] = sess
@@ -184,7 +179,7 @@ func (b *broker) hold(g *grant, sess *session) bool {
 	return true
 }
 
-// watchSession drops s from g when its anchor exits, and closes g.sessGone when it was the last
+// watchSession drops s's hold on g when its anchor exits, and closes g.sessGone when it was a session lease's last
 func (b *broker) watchSession(g *grant, s *session) {
 	fds := []unix.PollFd{{Fd: int32(s.pidfd), Events: unix.POLLIN}}
 	for {
@@ -216,7 +211,7 @@ func (b *broker) watchSession(g *grant, s *session) {
 	unix.Close(s.pidfd)
 	delete(g.sessions, s.id)
 	g.Sessions = slices.DeleteFunc(g.Sessions, func(id string) bool { return id == s.id })
-	if len(g.sessions) == 0 {
+	if g.Lease == "session" && len(g.sessions) == 0 {
 		close(g.sessGone)
 	}
 }
@@ -246,8 +241,8 @@ func (b *broker) revoke(id string) ([]holder, error) {
 	return g.Holders, nil
 }
 
-// release drops sess's hold on a grant, and ends it once nobody holds it (a session lease: no session). A caller
-// without a session ends it: that only takes access away
+// release drops sess's hold on a grant, and ends it once nobody holds it: no session, nor (but for a session lease) a
+// caller without one. A caller without a session ends it outright: that only takes access away
 func (b *broker) release(id string, sess *session, why string) error {
 	b.mu.Lock()
 	g, ok := b.grants[id]
@@ -261,11 +256,7 @@ func (b *broker) release(id string, sess *session, why string) error {
 			delete(g.sessions, sess.id)
 			close(s.dropped)
 		}
-		held := len(g.Sessions) > 0 || g.anon
-		if g.Lease == "session" {
-			held = len(g.sessions) > 0
-		}
-		if held {
+		if len(g.sessions) > 0 || g.anon && g.Lease != "session" {
 			b.mu.Unlock()
 			slog.Info("Released by a session", "grant", g.ID, "session", sess.id)
 			b.event("released", g.ID)

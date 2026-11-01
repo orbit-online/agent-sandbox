@@ -384,7 +384,9 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 Every grant also ends on revoke in the window, on its plugin's `watch` or `serve` exiting, and with the sandbox.
 `release` from inside drops only the releasing session's hold: the daemon records every session a grant was given to
 (asked for it, or covered by it), whatever its lease, and the grant ends on release once none of them holds it. So one
-session releasing a grant, after the nudge below say, doesn't cut off another that's using it. A caller without a
+session releasing a grant, after the nudge below say, doesn't cut off another that's using it. A session that ends
+drops its holds too: a session lease ends with its last holder, any other lease runs on until its own end or a release
+from any session finds nobody holding it. A caller without a
 session (nothing found above it) ends the grant on release: that only takes access away. The lease's own end (time,
 lock, the session lease's last anchor), revoke and the plugin's triggers end it for everyone. An `always` grant ended
 by release is replayed at the next launch; only revoke and forget remove it from the store. The daemon watches logind on the system bus from the host, where it has access. It runs in a
