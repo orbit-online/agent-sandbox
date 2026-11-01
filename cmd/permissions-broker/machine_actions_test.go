@@ -192,7 +192,7 @@ func (mc *machine) replayed(t *rapid.T, typ string, before int) {
 		}
 		if m.lockFree(k.cap, k.params) {
 			// Granted, here under a provisional id, so the next one sees its lock
-			m.grant("replay-"+k.params, k.cap, k.params, "always", "")
+			m.grant("replay-"+k.cap+k.params, k.cap, k.params, "always", "")
 			want = append(want, k)
 		}
 	}
@@ -211,7 +211,7 @@ func (mc *machine) replayed(t *rapid.T, typ string, before int) {
 	mc.b.mu.Lock()
 	defer mc.b.mu.Unlock()
 	for _, k := range want {
-		g := m.grants["replay-"+k.params]
+		g := m.grants["replay-"+k.cap+k.params]
 		delete(m.grants, g.id)
 		for id, bg := range mc.b.grants {
 			if bg.Capability == k.cap && string(bg.Params) == k.params {
