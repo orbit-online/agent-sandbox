@@ -523,6 +523,9 @@ let
           # Not the login shell from /etc/passwd
           SHELL = "/run/current-system/sw/bin/bash";
           NIXOS_OZONE_WL = "1";
+          # libnotify (Electron's notifications) through the portal: it only finds a sandbox by /.flatpak-info,
+          # which the app's root lacks. See patch-asar.sh for the app's own backend
+          NOTIFY_FORCE_PORTAL = "1";
           # Chromium takes the first desktop it knows. On GNOME it hands the tray its icon as a file in the sandbox's
           # /tmp, which the shell can't read; on COSMIC as pixmaps, with the same GTK theme and proxy settings. GLib and
           # the app's own checks still find GNOME in the list. Empty when the host's is unset
@@ -848,15 +851,20 @@ let
             };
             # Calls only, never "talk": xdg-dbus-proxy filters by name, and talk reaches every object the name's owner
             # exports (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see
-            # the name and get replies and the owner's signals. The proxy checks a call to the owner's unique name
-            # against the rules of every name it holds, so no other name may get talk where one of these owners holds it
+            # the name and get replies and the owner's signals (the proxy passes a name's broadcasts once it has any
+            # rule, and signals sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the
+            # owner's unique name against the rules of every name it holds, so no other name may get talk where one of
+            # these owners holds it. No org.freedesktop.Notifications: notifications go through the portal, which
+            # keys them by app ID, so the app can't replace or close another's (the permissions broker's), nor reach
+            # plasmashell
             dbus.rules.call = {
               "org.freedesktop.portal.Desktop" = [
                 "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
                 "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
+                # libnotify with NOTIFY_FORCE_PORTAL; its GDBusProxy loads the interface's version with GetAll
+                "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
+                "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
               ];
-              # What libnotify calls (Notify, CloseNotification, GetCapabilities, GetServerInformation)
-              "org.freedesktop.Notifications" = [ "org.freedesktop.Notifications.*@/org/freedesktop/Notifications" ];
             }
             // lib.optionalAttrs lcfg.tray {
               # What Chromium's StatusIconLinuxDbus calls
@@ -865,14 +873,9 @@ let
                 "org.freedesktop.DBus.Properties.Get@/StatusNotifierWatcher"
               ];
             };
-            # xdg-dbus-proxy 0.1.7 passes a name's broadcasts once it has any rule; these say what's meant, for a
-            # proxy that filters them
-            dbus.rules.broadcast = {
-              "org.freedesktop.portal.Desktop" = [
-                "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
-              ];
-              "org.freedesktop.Notifications" = [ "org.freedesktop.Notifications.*@/org/freedesktop/Notifications" ];
-            };
+            dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
+              "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
+            ];
             gpu = {
               enable = true;
               # Not "nixos": /run/opengl-driver links into the system closure

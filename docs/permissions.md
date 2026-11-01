@@ -319,14 +319,15 @@ in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 hou
 the window on the request to pick another lease or narrow it (read-only instead of rw). `always` is offered only in
 the window, never as a notification button.
 
-The sandbox can post notifications too (its D-Bus policy talks to `org.freedesktop.Notifications`), with any app
-name, icon and buttons. A look-alike's buttons only reach the sandbox, so it can't grant anything, but it can be
-timed to sit where the user is about to click. The daemon ignores an action that arrives within a second of its
-notification appearing, and asks again. The notification server also lets anyone replace a notification by its id
-(Plasma's does), and ids are counted up, so the sandbox can swap the daemon's notification for one with its own text
-and buttons. It can't make a click grant anything: each of the daemon's buttons has a random action key, new for every
-notification, the daemon counts only `ActionInvoked` and `NotificationClosed` sent by the server's own connection (the
-current owner of its name), and an action key that isn't one of its own is a deny.
+The sandbox can post notifications too, through the notification portal (`org.freedesktop.portal.Notification`; the
+proxy doesn't let it reach `org.freedesktop.Notifications`), with any title, body and buttons. A look-alike's
+buttons only reach the sandbox, so it can't grant anything, but it can be timed to sit where the user is about to
+click. The daemon ignores an action that arrives within a second of its notification appearing, and asks again. The
+portal keys notifications by app ID, so the sandbox can't replace or close the daemon's, which the notification
+server itself would let anyone do by id (Plasma's does). The daemon's guards from when it could stay: each of its
+buttons has a random action key, new for every notification, it counts only `ActionInvoked` and
+`NotificationClosed` sent by the server's own connection (the current owner of its name), and an action key that
+isn't one of its own is a deny.
 
 Lifted from windows-vm:
 

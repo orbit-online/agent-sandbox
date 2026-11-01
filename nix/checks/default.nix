@@ -103,6 +103,39 @@ let
       p: p.name == "claude-desktop-sandboxed"
     ) null sys.config.home-manager.users.alice.home.packages;
   sandboxed = sandboxedOf system;
+  # patch-asar.sh on an asar holding the app's notification backend choice as 4.x has it (the app the checks build
+  # predates it): the native backend's condition made false, and the build refusing an app with two of them
+  notificationPatch =
+    pkgs.runCommand "claude-desktop-notification-patch"
+      {
+        nativeBuildInputs = [
+          pkgs.asar
+          pkgs.jq
+        ];
+      }
+      ''
+        pick='(Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),P.info("NotificationService initialized"))'
+        app() {
+          mkdir -p "$1/.vite/build"
+          echo '{"main": "main.js"}' >"$1/package.json"
+          echo '"use strict";' >"$1/main.js"
+          echo 'function c(e){return e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"}' >>"$1/main.js"
+          echo "nJr=new class{constructor(){this.telemetryName=\"freedesktop\"}};async function i(){$2}" \
+            >"$1/.vite/build/index.chunk-x.js"
+          touch "$1/stub.node"
+          asar pack "$1" "$1.asar" --unpack '*.node'
+        }
+        app one "$pick"
+        ASAR=$PWD/one.asar out=$PWD/patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
+        grep -qaF '(!1&&Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),' patched.asar ||
+          { echo "the native notification backend can still be picked" >&2; exit 1; }
+        app two "$pick;$pick"
+        if ASAR=$PWD/two.asar out=$PWD/patched-two.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}; then
+          echo "patch-asar.sh took an app with two places picking the notification backend" >&2
+          exit 1
+        fi
+        touch $out
+      '';
   # A stand-in for agent-memos' Home Manager module, with the options this module reads
   memoStub =
     { lib, ... }:
@@ -479,6 +512,7 @@ in
           workClosure = pkgs.closureInfo { rootPaths = [ work ]; };
           inherit work;
           customClosure = pkgs.closureInfo { rootPaths = [ customDoc ]; };
+          inherit notificationPatch;
         }
         ''
           paths=$closure/store-paths

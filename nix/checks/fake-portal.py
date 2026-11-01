@@ -1,8 +1,10 @@
 # The settings part of xdg-desktop-portal, for the VM test: the color scheme starts dark, and SetColorScheme
-# (a test hook) changes it and emits SettingChanged as the portal would. And the parts of Plasma the sandbox talks to,
-# each next to an object it mustn't reach: plasmashell's notification server with its clipboard (klipper) on one
-# connection, kded's StatusNotifierWatcher with another module's object on a second
+# (a test hook) changes it and emits SettingChanged as the portal would; and its notifications. And the parts of Plasma
+# next to objects the sandbox mustn't reach: plasmashell's notification server, which the sandbox mustn't reach either,
+# with its clipboard (klipper) on one connection, kded's StatusNotifierWatcher with another module's object on a second
 import asyncio
+import json
+import os
 
 from dbus_next import Variant
 from dbus_next.aio import MessageBus
@@ -27,6 +29,33 @@ class Settings(ServiceInterface):
     @signal()
     def SettingChanged(self, namespace, key, value) -> "ssv":
         return [namespace, key, value]
+
+
+class PortalNotification(ServiceInterface):
+    """The portal's notifications, which the app's libnotify uses (NOTIFY_FORCE_PORTAL): each one is appended to
+    $XDG_RUNTIME_DIR/fake-portal-notifications as JSON"""
+
+    def __init__(self):
+        super().__init__("org.freedesktop.portal.Notification")
+
+    @method()
+    def AddNotification(self, id: "s", notification: "a{sv}"):
+        fields = {k: v.value for k, v in notification.items() if isinstance(v.value, (str, int, bool))}
+        path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "fake-portal-notifications")
+        with open(path, "a") as f:
+            f.write(json.dumps({"id": id, **fields}) + "\n")
+
+    @method()
+    def RemoveNotification(self, id: "s"):
+        pass
+
+    @dbus_property(access=PropertyAccess.READ)
+    def version(self) -> "u":
+        return 2
+
+    @signal()
+    def ActionInvoked(self, id, action, parameter) -> "ssav":
+        return [id, action, parameter]
 
 
 class Notifications(ServiceInterface):
@@ -82,6 +111,7 @@ class Kded(ServiceInterface):
 async def main():
     bus = await MessageBus().connect()
     bus.export("/org/freedesktop/portal/desktop", Settings())
+    bus.export("/org/freedesktop/portal/desktop", PortalNotification())
     await bus.request_name("org.freedesktop.portal.Desktop")
     shell = await MessageBus().connect()
     shell.export("/org/freedesktop/Notifications", Notifications())

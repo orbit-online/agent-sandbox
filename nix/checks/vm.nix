@@ -298,7 +298,7 @@ pkgs.testers.runNixOSTest {
           assert app_caps == "0000000000000000", f"the app has capabilities {app_caps}"
           assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
 
-      with subtest("D-Bus reaches only the notification and tray calls on Plasma's connections"):
+      with subtest("D-Bus reaches the portal's notifications and the tray's calls, nothing else of Plasma's"):
           gdbus = "${pkgs.lib.getExe' pkgs.glib "gdbus"}"
 
           def bus_call(dest, path, method, *args):
@@ -307,12 +307,16 @@ pkgs.testers.runNixOSTest {
                   f"{gdbus} call --session --dest {dest} --object-path {path} --method {method} {q}"
               ) + " 2>&1")
 
+          # Notifications go through the portal (libnotify with NOTIFY_FORCE_PORTAL, as the app's Electron), never to
+          # the notification server, where the sandbox could replace or close the permissions broker's
+          in_sandbox("notify-send hello-portal")
+          workstation.wait_until_succeeds("grep -q hello-portal /run/user/1000/fake-portal-notifications", timeout=30)
           status, out = bus_call("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
                                  "org.freedesktop.Notifications.Notify", "test", "uint32 0", "", "summary", "body",
                                  "@as []", "@a{sv} {}", "int32 -1")
-          assert status == 0 and "uint32 7" in out, f"Notify: {status} {out}"
-          shell = in_sandbox(f"{gdbus} call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus"
-                             " --method org.freedesktop.DBus.GetNameOwner org.freedesktop.Notifications").split("'")[1]
+          assert status != 0 and "uint32 7" not in out, f"Notify on the notification server: {status} {out}"
+          shell = as_alice(f"{gdbus} call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus"
+                           " --method org.freedesktop.DBus.GetNameOwner org.freedesktop.Notifications").split("'")[1]
           status, out = bus_call("org.kde.klipper", "/klipper", "org.kde.klipper.klipper.getClipboardContents")
           assert status != 0 and "secret" not in out, f"the clipboard by its name: {status} {out}"
           # The notification server's own connection, by its unique name: the rules of the names it holds apply

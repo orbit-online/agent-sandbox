@@ -56,11 +56,12 @@ in the init namespaces unless noted.
    talks to it too.
 5. **xdg-dbus-proxy**: nixpak's, in a plain bwrap; filters the session bus
    for the sandbox, by call rules only (no `talk`, which reaches every
-   object the name's owner exports): the `org.freedesktop.Notifications`
-   interface on `/org/freedesktop/Notifications`, with the tray
-   `RegisterStatusNotifierItem` and `Properties.Get` on
-   `/StatusNotifierWatcher` and one StatusNotifierItem name to own,
-   OpenURI and Settings on the portal. A call to an owner's unique name
+   object the name's owner exports): OpenURI, Settings and Notification
+   on the portal (the app's notifications go through it: libnotify with
+   `NOTIFY_FORCE_PORTAL`, the app's own backend patched out), with the
+   tray `RegisterStatusNotifierItem` and `Properties.Get` on
+   `/StatusNotifierWatcher` and one StatusNotifierItem name to own. Not
+   `org.freedesktop.Notifications`. A call to an owner's unique name
    is checked against the rules of every name it holds. Its rules are
    fixed at start.
 6. **Launcher**: `claude-desktop.sh`, nixpak's launcher, `bwrap-subid.sh`
@@ -136,7 +137,7 @@ joining needs CAP_SYS_ADMIN in init).
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
 | netns-macvlan `<pid>` | netns-macvlan | the host (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
 | `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
-| notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox can still post look-alikes and replace the broker's notification by its id |
+| notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox posts look-alikes through the portal, which keys them by app ID: it can't replace or close the broker's |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
 | grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory; in M1 the helpers open it with `RESOLVE_NO_SYMLINKS`, check it's the host's directory (device and inode) and a mount root, and act on single entries beneath it |
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling (lexical, then `openat2` without links or mount crossings beneath the root), denied directories by identity, no submounts, ro/nodev/nosuid |
@@ -159,9 +160,9 @@ joining needs CAP_SYS_ADMIN in init).
   runtime dir on the host.
 - B4: consent: what the user sees and clicks | what the sandbox can draw.
   The broker's notification and the window against look-alike
-  notifications. The sandbox reaches the notification server's
-  Notifications interface only, not the rest of what its process exports
-  (plasmashell's on-screen display, clipboard, scripting, quit).
+  notifications. The sandbox reaches notifications through the portal
+  only, not the notification server or the rest of what its process
+  exports (plasmashell's on-screen display, clipboard, scripting, quit).
 
 ## Attacker
 

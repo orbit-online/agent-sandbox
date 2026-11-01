@@ -145,7 +145,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   its closure: the import of `environment.md` (in the closure, all
   sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
   the devices (`/dev/kvm` once, from `kvm` and `devices`) and PATH in `claude-environment.md`, the patched asar's tray
-  icon (by the colour scheme, also on GNOME), and nixpak's
+  icon (by the colour scheme, also on GNOME), the notification patch (on a
+  4.x-shaped asar: the native backend never picked, an app with two such places
+  refused), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
   the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
@@ -257,9 +259,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   inside directly, the launcher refusing a missing bind source that isn't optional,
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
-  set, with no capabilities left), D-Bus through the proxy (a fake Plasma on
-  the fake portal's process: Notify and the tray's registration reach it, its
-  clipboard and another kded object don't, by name or by unique name), the subid maps (alice's auto range in the sandbox's userns
+  set, with no capabilities left), D-Bus through the proxy (`notify-send` reaching the fake portal's
+  notifications; a fake Plasma on the fake portal's process: the tray's
+  registration reaches it, its notification server, clipboard and another kded
+  object don't, by name or by unique name), the subid maps (alice's auto range in the sandbox's userns
   from the host's view, the FHS env's identity map, `/etc/subuid` and
   `/etc/subgid` inside, `unshare --map-auto` and a root-mapping map through
   the shims and the broker, the shim in `/usr/bin`, a file written inside

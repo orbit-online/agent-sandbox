@@ -13,6 +13,7 @@
   asar,
   coreutils,
   glib,
+  libnotify,
 }:
 let
   app = writeShellScript "claude-desktop" ''
@@ -61,6 +62,8 @@ buildFHSEnv {
   passthru = { inherit unwrapped; };
   targetPkgs = _: [
     unwrapped
+    # notify-send, which uses libnotify as Electron does
+    libnotify
     (writeScriptBin "nettest" (builtins.readFile ../../scripts/nettest.sh))
   ];
   runScript = "claude-desktop";

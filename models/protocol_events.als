@@ -87,8 +87,8 @@ pred options[r: Req] {
   keepDaemons and keepGates and keepEnv and keepGrants and stored' = stored
 }
 
-// The sandbox calls Notify with replaces_id set to the broker's
-// notification: Plasma 6.6 replaces it whoever sends it
+// With RawNotify only: the sandbox calls Notify with replaces_id set to
+// the broker's notification: Plasma 6.6 replaces it whoever sends it
 // (libnotificationmanager/server_p.cpp, Notify: no check of the sender;
 // abstractnotificationsmodel.cpp:110-137 swaps it in place), with the
 // sandbox's text and buttons. The id is guessable: Plasma counts them up.
@@ -96,6 +96,7 @@ pred options[r: Req] {
 // it takes ActionInvoked only from the server's own connection (askOn,
 // notify.go): a click on the replacement's buttons is a refusal.
 pred forge[r: Req] {
+  some RawNotify
   r in Pending - Opened
   Forged' = Forged + r
   some t: Text - r.summary | r.shows' = t

@@ -83,6 +83,12 @@ sig Req {
 // Mature: its notification has been up a second. Opened: Options clicked,
 // the window owns it. Forged: the sandbox replaced its notification.
 var sig Pending, Mature, Opened, Asked, Forged in Req {}
+// The sandbox reaches the notification server itself, as with the proxy's
+// talk on org.freedesktop.Notifications. Today it reaches the portal's
+// notifications only (libnotify with NOTIFY_FORCE_PORTAL, the app's own
+// backend patched out, hm/patch-asar.sh), which keys them by app ID: it
+// can't replace or close the broker's. The models without it are today's.
+lone sig RawNotify {}
 
 fact static {
   all i: Instance | lone c: Capability | i in Param.(c.matches)
