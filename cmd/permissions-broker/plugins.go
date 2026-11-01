@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -65,8 +67,24 @@ func (c *capability) runPluginIf(cmd *exec.Cmd, ready func() error) error {
 	return cmd.Run()
 }
 
-// A parameter's string value is at most this long: the notification shows it whole
-const maxParam = 200
+// A parameter's string value is at most this long: the notification shows it whole. An opaque one, data for the
+// plugin that the user has nothing to read in (a CSR), is shown as a digest instead and may be up to maxOpaque long
+const (
+	maxParam  = 200
+	maxOpaque = 8192
+)
+
+// paramSchema is what the broker reads of a parameter's JSON Schema
+type paramSchema struct {
+	Type   string `json:"type"`
+	Opaque bool   `json:"opaque"`
+}
+
+func (c *capability) param(name string) paramSchema {
+	var s paramSchema
+	_ = json.Unmarshal(c.Params[name], &s)
+	return s
+}
 
 // What a plugin may grant at all, from the module. Plugin-specific fields pass through to its commands in Raw
 type ceiling struct {
@@ -136,9 +154,12 @@ func (c *capability) check() error {
 		return fmt.Errorf("%s has type %q, not service, command or attach", c.Name, c.Type)
 	}
 	for k, schema := range c.Params {
-		var s struct{ Type string }
+		var s paramSchema
 		if err := json.Unmarshal(schema, &s); err != nil || !paramTypes[s.Type] {
 			return fmt.Errorf("%s: parameter %s needs a type of string, boolean, integer or number", c.Name, k)
+		}
+		if s.Opaque && s.Type != "string" {
+			return fmt.Errorf("%s: parameter %s is opaque, which only a string can be", c.Name, k)
 		}
 	}
 	return nil
@@ -158,19 +179,21 @@ func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 		}
 	}
 	for k, v := range params {
-		schema, ok := c.Params[k]
-		if !ok {
+		if _, ok := c.Params[k]; !ok {
 			return nil, fmt.Errorf("%s takes no parameter %q", c.id(), k)
 		}
-		var s struct{ Type string }
-		_ = json.Unmarshal(schema, &s)
-		ok = false
+		s := c.param(k)
+		ok := false
 		switch v := v.(type) {
 		case string:
 			ok = s.Type == "string"
-			if strings.IndexFunc(v, unicode.IsControl) >= 0 || utf8.RuneCountInString(v) > maxParam {
+			limit := maxParam
+			if s.Opaque {
+				limit = maxOpaque
+			}
+			if strings.IndexFunc(v, unicode.IsControl) >= 0 || utf8.RuneCountInString(v) > limit {
 				return nil, fmt.Errorf("Parameter %s of %s: at most %d characters, none of them control characters",
-					k, c.id(), maxParam)
+					k, c.id(), limit)
 			}
 		case bool:
 			ok = s.Type == "boolean"
@@ -185,6 +208,12 @@ func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(params) // maps marshal with sorted keys
 }
 
+// opaqueDigest is how an opaque parameter is shown: enough to tell two apart, nothing to read
+func opaqueDigest(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return fmt.Sprintf("sha256:%s (%d characters)", hex.EncodeToString(sum[:])[:16], utf8.RuneCountInString(v))
+}
+
 // describe is the notification's summary of a validated request, built from its parameters, not from the reason
 func (c *capability) describe(params json.RawMessage) string {
 	var m map[string]any
@@ -197,7 +226,9 @@ func (c *capability) describe(params json.RawMessage) string {
 	parts := make([]string, len(keys))
 	// Quoted, so a value can't pass itself off as more parameters or text of the notification's own
 	for i, k := range keys {
-		if v, ok := m[k].(string); ok {
+		if v, ok := m[k].(string); ok && c.param(k).Opaque {
+			parts[i] = k + "=" + opaqueDigest(v)
+		} else if ok {
 			parts[i] = fmt.Sprintf("%s=%q", k, v)
 		} else {
 			parts[i] = fmt.Sprintf("%s=%v", k, m[k])

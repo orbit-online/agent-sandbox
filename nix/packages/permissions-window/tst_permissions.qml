@@ -163,6 +163,28 @@ TestCase {
         mock.state = before
     }
 
+    // An opaque parameter (a CSR) is shown as such, never its value, gets no field to edit, and goes back unchanged
+    function test_opaque() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        const csr = "MIIBQUFBQUFBQUFB".repeat(40)
+        st.capabilities.push({ id: "certs/kube", type: "command",
+                               params: { csr: { type: "string", opaque: true } } })
+        st.pending = [{ id: "p3", capability: "certs/kube", params: { csr: csr },
+                        summary: "a kube cert (csr=sha256:0123456789abcdef (640 characters))",
+                        reason: "kubectl", lease: "PT1H" }]
+        mock.state = JSON.stringify(st)
+        tryVerify(() => !view.settling, 3000)
+        const line = findChild(view, "opaque-csr")
+        verify(line && line.visible, "the opaque line")
+        compare(line.text, "opaque, 640 characters, as in the summary")
+        verify(!findChild(view, "field-csr").visible, "a field shows the opaque value")
+        verify(!findChild(view, "param-csr").visible, "a checkbox for the opaque value")
+        mouseClick(findChild(view, "allow"))
+        compare(sent().params.csr, csr)
+        mock.state = before
+    }
+
     // A row replaced in place: the sandbox times another request for the moment its first ends, [p1] turns [p2] and
     // [p0, p1] turns [p0, p2], and nothing moves. A click right then answers neither
     function test_rows_replaced() {

@@ -39,13 +39,14 @@ Item {
     }
     // What still holds folder grants that ended, however they ended
     readonly property var held: st.held || []
-    // Each capability's parameter types, for the fields that narrow a request
+    // Each capability's parameter types, for the fields that narrow a request. An opaque parameter (data for the
+    // plugin, such as a CSR) gets no field: there's nothing to narrow, and the summary shows its digest
     readonly property var types: {
         const t = {}
         for (const c of st.capabilities || []) {
             t[c.id] = {}
             for (const k in c.params || {})
-                t[c.id][k] = c.params[k].type || "string"
+                t[c.id][k] = c.params[k].opaque ? "opaque" : c.params[k].type || "string"
         }
         return t
     }
@@ -165,6 +166,14 @@ Item {
                                 required property string modelData
                                 readonly property string kind: request.paramTypes[modelData]
                                 Label { text: param.modelData }
+                                Label {
+                                    objectName: "opaque-" + param.modelData
+                                    visible: param.kind === "opaque"
+                                    readonly property var value: request.edited[param.modelData]
+                                    text: value === undefined ? "not given"
+                                                              : "opaque, " + String(value).length + " characters, as in the summary"
+                                    font.italic: true
+                                }
                                 CheckBox {
                                     objectName: "param-" + param.modelData
                                     visible: param.kind === "boolean"
@@ -172,7 +181,8 @@ Item {
                                     onToggled: request.edited[param.modelData] = checked
                                 }
                                 TextField {
-                                    visible: param.kind !== "boolean"
+                                    objectName: "field-" + param.modelData
+                                    visible: param.kind !== "boolean" && param.kind !== "opaque"
                                     Layout.fillWidth: true
                                     text: request.edited[param.modelData] !== undefined ? String(request.edited[param.modelData]) : ""
                                     onEditingFinished: {

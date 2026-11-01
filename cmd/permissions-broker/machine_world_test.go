@@ -277,13 +277,14 @@ func (w *world) script(name, body string) []string {
 // capabilities makes the plugins' capabilities
 func (w *world) capabilities() map[string]*capability {
 	str, boolean := json.RawMessage(`{"type": "string"}`), json.RawMessage(`{"type": "boolean"}`)
+	opaque := json.RawMessage(`{"type": "string", "opaque": true}`)
 	vm := &capability{Plugin: "vm", Name: "machine", Type: "service", Description: "a VM", Exclusive: true,
 		Params: map[string]json.RawMessage{"name": str, "ro": boolean}, Serve: []string{"serve"},
 		List: w.script("list", "cat "+w.instances)}
 	console := &capability{Plugin: "vm", Name: "console", Type: "service", Description: "a VM's console",
 		Params: map[string]json.RawMessage{"name": str}, Serve: []string{"serve"}, List: vm.List}
 	token := &capability{Plugin: "vault", Name: "token", Type: "command", Description: "a token",
-		Params: map[string]json.RawMessage{"scope": str}, Run: w.script("run", "cat"),
+		Params: map[string]json.RawMessage{"scope": str, "csr": opaque}, Run: w.script("run", "cat"),
 		Ceiling: ceiling{MaxValidity: "PT30M", Raw: json.RawMessage(`{"maxValidity":"PT30M"}`)}}
 	// resolve: the path, read-only unless ro is false
 	folder := &capability{Plugin: "folders", Name: "folder", Type: "attach", Description: "a folder",

@@ -28,6 +28,11 @@ func (mc *machine) drawParams(t *rapid.T, c string) string {
 		kv["name"] = rapid.SampledFrom([]string{"a", "a", "b", "c"}).Draw(t, "name")
 	case capToken:
 		kv["scope"] = rapid.SampledFrom([]string{"read", "write"}).Draw(t, "scope")
+		// Opaque, past what a plain string may be
+		if csr := rapid.SampledFrom([]string{"", "", strings.Repeat("A", maxParam+1), strings.Repeat("B", maxOpaque)}).
+			Draw(t, "csr"); csr != "" {
+			kv["csr"] = csr
+		}
 	case capFolder:
 		kv["path"] = rapid.SampledFrom([]string{mc.w.root + "/x", mc.w.root + "/x", mc.w.root + "/w", mc.w.outside}).Draw(t,
 			"path")
@@ -91,6 +96,8 @@ func (mc *machine) Crafted(t *rapid.T) {
 		{Capability: capVM, Params: json.RawMessage(`{"name":5}`), Reason: "x"},
 		{Capability: capVM, Params: json.RawMessage(`{"name":"a\nAllowed"}`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`{"scope":"` + strings.Repeat("w", maxParam+1) + `"}`), Reason: "x"},
+		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"` + strings.Repeat("C", maxOpaque+1) + `"}`), Reason: "x"},
+		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"MIIB\nAllowed"}`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`["scope"]`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: " \n\x07\t "},
 		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: "x", Lease: "forever"},

@@ -303,7 +303,8 @@ process whose principal is in the Sandbox domain, at any time.
   `control.sock` client.
 - P7. Consent text is the daemon's: the summary comes from the validated
   parameters and the resolved source; the reason and string parameters
-  appear only quoted, without markup or control characters.
+  appear only quoted, without markup or control characters, and opaque
+  ones only as a digest.
 - P8. A session lease's anchors are processes inside the sandbox running a
   binary named `claude`, not a pid namespace's init, not the sandbox's
   pid; it ends when the last anchor exits, and never outlives the sandbox.

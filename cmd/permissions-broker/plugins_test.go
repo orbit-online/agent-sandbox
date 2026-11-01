@@ -28,6 +28,42 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// An opaque parameter (a CSR) is data for the plugin: longer than the notification could show, so it shows a digest,
+// and still free of control characters, so it can't forge lines of its own
+func TestOpaqueParam(t *testing.T) {
+	c := testCap(t, "command")
+	c.Params["csr"] = json.RawMessage(`{"type": "string", "opaque": true}`)
+	if err := c.check(); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	csr := strings.Repeat("MIIB", maxOpaque/4)
+	got, err := c.validate(json.RawMessage(`{"csr": "` + csr + `"}`))
+	if err != nil {
+		t.Fatalf("validate refused %d characters: %v", len(csr), err)
+	}
+	d := c.describe(got)
+	if strings.Contains(d, "MIIB") || !strings.Contains(d, "csr=sha256:") || !strings.Contains(d, "(8192 characters)") {
+		t.Errorf("describe = %.120q", d)
+	}
+	other, _ := c.validate(json.RawMessage(`{"csr": "` + csr[1:] + `"}`))
+	if c.describe(other) == d {
+		t.Error("two different values describe the same")
+	}
+	for _, bad := range []string{
+		`{"csr": "` + csr + `A"}`,
+		`{"csr": "MIIB\nAllowed by the host"}`,
+		`{"path": "` + strings.Repeat("x", maxParam+1) + `"}`,
+	} {
+		if _, err := c.validate(json.RawMessage(bad)); err == nil {
+			t.Errorf("validate accepted %.60s", bad)
+		}
+	}
+	c.Params["big"] = json.RawMessage(`{"type": "boolean", "opaque": true}`)
+	if err := c.check(); err == nil {
+		t.Error("check accepted an opaque boolean")
+	}
+}
+
 func TestService(t *testing.T) {
 	log := fakeSystemd(t)
 	b, _ := testBroker(t, "allow")

@@ -284,7 +284,8 @@ A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
 }
 ```
 
-- `params` is a JSON Schema properties object; the daemon validates requests against it.
+- `params` is a JSON Schema properties object; the daemon validates requests against it. A string parameter marked
+  `"opaque": true` is data for the plugin that the user has nothing to read in (a CSR): see Requests.
 - `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`, as
   a JSON array of objects. Outside `attach`, a request must match one of them, or it is refused without asking the
   user: an instance matches when each of its keys has the same value in the request's params. A `list` that fails
@@ -321,7 +322,10 @@ is refused without asking the user.
 
 `reason` is required and goes into the notification as text: whitespace and control characters folded to single
 spaces, 300 characters, quoted, markup escaped. Parameter values are quoted in the summary, and a string value is at
-most 200 characters without control characters, so neither can pass itself off as more of the notification.
+most 200 characters without control characters, so neither can pass itself off as more of the notification. An opaque
+one may be up to 8192 characters, still without control characters (a CSR goes as one line of base64 DER), and is shown
+as `sha256:<16 hex digits> (<n> characters)` in the summary and the log; the window shows it as opaque, with no field
+to narrow it, and passes it back unchanged. The plugin gets the value itself.
 
 What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch
 streams included), so a full `request.sock` leaves `control.sock` to the window; a client has 10 seconds to send a
