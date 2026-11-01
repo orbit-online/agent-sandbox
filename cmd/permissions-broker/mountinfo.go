@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -87,37 +85,15 @@ func unescapeMountinfo(s string) string {
 	return b.String()
 }
 
-// A process in the sandbox holding files, mappings, its working directory or a mount of its own of a grant. Start
-// (its start time) tells it from a later process with the same pid
-type holder struct {
-	Pid   int    `json:"pid"`
-	Comm  string `json:"comm"`
-	Start uint64 `json:"start"`
-}
-
-// How long the holders' scan may take: the sandbox decides how many processes and files there are
-var holdersTimeout = 10 * time.Second
-
-// tasks lists the /proc directories of pid's threads. Each may have a working directory, root, file table and mount
-// namespace of its own (unshare with CLONE_FS, CLONE_FILES or CLONE_NEWNS on one thread), which the thread group
-// leader's entries don't show
-func tasks(pid int) []string {
-	entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
-	dirs := make([]string, 0, len(entries))
-	for _, e := range entries {
-		dirs = append(dirs, fmt.Sprintf("/proc/%d/task/%s", pid, e.Name()))
-	}
-	return dirs
-}
-
 // An attach grant's mount in M1, found when it's attached by the tree's mount id, not by its path: the sandbox can
 // rename the grant directory in M1 (models/README.md, Attacker 6). Its id, peer group, and device and root, by which
-// copies of it are found, and the tree itself, which the daemon keeps open
+// copies of it are found; the tree itself, which the daemon keeps open, and its device as stat gives it
 type grantMount struct {
 	id        uint64
 	group     string
 	dev, root string
 	tree      *os.File
+	srcDev    uint64
 }
 
 // grantMountOf finds the mount the tree (attached in M1) is in M1's mountinfo, by its mount id
@@ -127,13 +103,17 @@ func (s *sandbox) grantMountOf(tree *os.File) (*grantMount, error) {
 		stx.Mask&unix.STATX_MNT_ID == 0 {
 		return nil, fmt.Errorf("The grant's mount id: %v", err)
 	}
+	var st unix.Stat_t
+	if err := unix.Fstat(int(tree.Fd()), &st); err != nil {
+		return nil, err
+	}
 	lines, err := s.mountinfo()
 	if err != nil {
 		return nil, fmt.Errorf("The sandbox's mounts: %w", err)
 	}
 	for _, l := range lines {
 		if l.id == stx.Mnt_id {
-			m := &grantMount{id: l.id, dev: l.dev, root: l.root, tree: tree}
+			m := &grantMount{id: l.id, dev: l.dev, root: l.root, tree: tree, srcDev: st.Dev}
 			for _, o := range l.optional {
 				if g, ok := strings.CutPrefix(o, "shared:"); ok {
 					m.group = g
@@ -178,101 +158,6 @@ func (s *sandbox) grantMounts(m *grantMount) map[uint64]map[uint64]bool {
 		}
 	}
 	return byNs
-}
-
-// holdersAfter lists, after the detach, the processes in the sandbox still holding the grant: files, mappings, a
-// working directory or root on its mounts (by mount id, which an open file keeps), or a mount of their own of the same
-// filesystem and root, which a process can make in a mount namespace of its own and the detach doesn't reach. Every
-// thread counts. Best effort: an fd in flight in an SCM_RIGHTS message or registered with io_uring shows nowhere in
-// /proc, and keeps the grant readable until it's closed or the sandbox ends
-func (s *sandbox) holdersAfter(ids map[uint64]map[uint64]bool, dev, root string) []holder {
-	deadline := time.Now().Add(holdersTimeout)
-	var hs []holder
-	rebinds := map[uint64]bool{}
-	for _, pid := range s.members() {
-		if time.Now().After(deadline) {
-			slog.Warn("Holders' scan cut short", "after", holdersTimeout)
-			break
-		}
-		held := false
-		for _, task := range tasks(pid) {
-			ns, ok := mntNs(task)
-			if !ok {
-				continue
-			}
-			held = holdsMount(task, ids[ns])
-			if !held && dev != "" {
-				if _, checked := rebinds[ns]; !checked {
-					rebinds[ns] = mountsOf(readMountinfo(task+"/mountinfo"), dev, root)
-				}
-				held = rebinds[ns]
-			}
-			if held {
-				break
-			}
-		}
-		if !held {
-			held = holdsMapping(pid, ids)
-		}
-		if held {
-			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-			if start, ok := startTime(pid); ok {
-				hs = append(hs, holder{Pid: pid, Comm: strings.TrimSpace(string(comm)), Start: start})
-			}
-		}
-	}
-	return hs
-}
-
-// mntNs is the mount namespace of the task or process at dir in /proc, by inode
-func mntNs(dir string) (uint64, bool) {
-	var st unix.Stat_t
-	if unix.Stat(dir+"/ns/mnt", &st) != nil {
-		return 0, false
-	}
-	return st.Ino, true
-}
-
-// onMount reports whether path (a magic link in /proc) leads to one of the mounts
-func onMount(path string, ids map[uint64]bool) bool {
-	var stx unix.Statx_t
-	return unix.Statx(unix.AT_FDCWD, path, 0, unix.STATX_MNT_ID, &stx) == nil && ids[stx.Mnt_id]
-}
-
-// holdsMount reports whether the thread at task (its /proc directory) has its working directory, root or an open
-// file on one of the mounts
-func holdsMount(task string, ids map[uint64]bool) bool {
-	if len(ids) == 0 {
-		return false
-	}
-	if onMount(task+"/cwd", ids) || onMount(task+"/root", ids) {
-		return true
-	}
-	entries, _ := os.ReadDir(task + "/fd")
-	for _, e := range entries {
-		if onMount(task+"/fd/"+e.Name(), ids) {
-			return true
-		}
-	}
-	return false
-}
-
-// holdsMapping reports whether pid maps a file on one of the grant's mounts, in any namespace: its threads share
-// their mappings
-func holdsMapping(pid int, ids map[uint64]map[uint64]bool) bool {
-	all := map[uint64]bool{}
-	for _, set := range ids {
-		for id := range set {
-			all[id] = true
-		}
-	}
-	entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/map_files", pid))
-	for _, e := range entries {
-		if onMount(fmt.Sprintf("/proc/%d/map_files/%s", pid, e.Name()), all) {
-			return true
-		}
-	}
-	return false
 }
 
 // mountsOf reports whether there is a mount of the filesystem dev (major:minor) whose root is root or beneath it

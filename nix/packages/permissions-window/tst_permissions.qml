@@ -83,10 +83,12 @@ TestCase {
         compare(sent().grant, "g1")
         const st = JSON.parse(mock.state)
         st.held = [{ grant: "g1", summary: "the test thing", why: "revoked by the user",
-                     holders: [{ pid: 42, comm: "cat", start: 1 }] }]
+                     holders: [{ pid: 42, comm: "cat", start: 1 }, { pid: 43, comm: "less", start: 2, possible: true }] }]
         mock.state = JSON.stringify(st)
         const end = findChild(view, "end")
         tryVerify(() => end.visible)
+        compare(findChild(view, "held").text,
+                "Still open in folders no longer granted: the test thing (revoked by the user): cat (42), less (43, possibly)")
         mouseClick(end)
         compare(sent().op, "end")
         compare(sent().grants, ["g1"])

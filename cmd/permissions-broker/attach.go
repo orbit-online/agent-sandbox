@@ -171,7 +171,7 @@ func (b *broker) detachGrant(g *grant) {
 		slog.Warn("Detach", "grant", g.ID, "err", err)
 	}
 	removeMountpoint(b.cfg.GrantDir, g.ID)
-	g.Holders = b.sb.holdersAfter(ids, g.mnt.dev, g.mnt.root)
+	g.Holders = b.sb.holdersAfter(ids, g.mnt)
 	if len(g.Holders) > 0 {
 		slog.Info("Still held", "grant", g.ID, "holders", g.Holders)
 	}

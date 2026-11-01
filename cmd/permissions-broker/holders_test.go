@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,8 +14,10 @@ import (
 )
 
 // threadHoldMain holds $HOLD on one thread only, as $HOLD_MODE says: cwd (its working directory, in a filesystem
-// context of its own), fd (an open file, in a file table of its own), root (chroot) or bind (a bind of it in a mount
-// namespace of its own, at $HOLD_AT). The process's main thread holds nothing. Writes "ready" or the error to $READY
+// context of its own), fd (an open file, in a file table of its own), root (chroot), bind (a bind of it in a mount
+// namespace of its own, at $HOLD_AT) or opentree (a clone of it by open_tree, in no mount table: in a mount namespace
+// of its own, whose copy of the grant at $HOLD_GRANT it unmounts). The process's main thread holds nothing. Writes "ready" or the
+// error to $READY
 func threadHoldMain() {
 	// The main thread, the thread group leader, stays this goroutine's: the holder is another thread
 	runtime.LockOSThread()
@@ -40,6 +43,17 @@ func threadHoldMain() {
 			if err = unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err == nil {
 				err = unix.Mount(path, os.Getenv("HOLD_AT"), "", unix.MS_BIND, "")
 			}
+		case "opentree":
+			if err = unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err == nil {
+				// Private first: an unmount of a peer of M1's would propagate there
+				err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "")
+			}
+			if err == nil {
+				_, err = unix.OpenTree(unix.AT_FDCWD, path, unix.OPEN_TREE_CLONE)
+			}
+			if err == nil {
+				err = unix.Unmount(os.Getenv("HOLD_GRANT"), unix.MNT_DETACH)
+			}
 		}
 		errs <- err
 		// Blocked in the kernel for good: with a file table of its own, the thread mustn't run Go's scheduler, which
@@ -57,11 +71,34 @@ func threadHoldMain() {
 	time.Sleep(time.Hour)
 }
 
-// P5: a process holding a grant on one thread alone is a holder: by that thread's working directory, open file,
-// root, or a re-bind in that thread's mount namespace
-func TestHoldersThreads(t *testing.T) {
+// threadHold starts threadHoldMain in the stand-in, holding hold as mode says, and waits until it does
+func threadHold(t *testing.T, stdin io.Writer, out io.Reader, grant, hold, mode string) int {
+	t.Helper()
 	self, _ := os.Executable()
-	for _, mode := range []string{"cwd", "fd", "root", "bind"} {
+	ready := filepath.Join(t.TempDir(), "ready")
+	fmt.Fprintf(stdin, "run cd / && exec env BROKER_TEST=threadhold HOLD=%s HOLD_GRANT=%s HOLD_MODE=%s HOLD_AT=%s READY=%s %s\n",
+		hold, grant, mode, t.TempDir(), ready, self)
+	var pid int
+	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
+		t.Fatal(pid, err)
+	}
+	for range 100 {
+		if data, _ := os.ReadFile(ready); len(data) > 0 {
+			if string(data) != "ready" {
+				t.Fatalf("The holder: %s", data)
+			}
+			return pid
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("The holder didn't start")
+	return 0
+}
+
+// P5: a process holding a grant on one thread alone is a holder: by that thread's working directory, open file,
+// root, a re-bind in that thread's mount namespace, or a clone of the grant in no mount namespace
+func TestHoldersThreads(t *testing.T) {
+	for _, mode := range []string{"cwd", "fd", "root", "bind", "opentree"} {
 		t.Run(mode, func(t *testing.T) {
 			src := t.TempDir()
 			b, stdin, out := sandboxC(t, "allow")
@@ -71,27 +108,12 @@ func TestHoldersThreads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ready := filepath.Join(t.TempDir(), "ready")
-			fmt.Fprintf(stdin, "run cd / && exec env BROKER_TEST=threadhold HOLD=%s HOLD_MODE=%s HOLD_AT=%s READY=%s %s\n",
-				g.Path, mode, t.TempDir(), ready, self)
-			var pid int
-			if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
-				t.Fatal(pid, err)
-			}
-			for range 100 {
-				if data, _ := os.ReadFile(ready); len(data) > 0 {
-					if string(data) != "ready" {
-						t.Fatalf("The holder: %s", data)
-					}
-					break
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
+			pid := threadHold(t, stdin, out, g.Path, g.Path, mode)
 			holders, err := b.revoke(g.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+			if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && !h.Possible }) {
 				t.Errorf("%d, holding the grant on a thread, isn't among the holders %+v", pid, holders)
 			}
 		})
@@ -138,4 +160,28 @@ func TestEndIgnoresTerm(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Errorf("%d, ignoring SIGTERM, still runs after End", pid)
+}
+
+// P5: a file of the grant's filesystem on a detached mount that the daemon can't tie to the grant's files, here a
+// clone of a file of the grant, which /proc names "/", makes its process a possible holder
+func TestHoldersPossible(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "file"), []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, stdin, out := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := threadHold(t, stdin, out, g.Path, g.Path+"/file", "opentree")
+	holders, err := b.revoke(g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && h.Possible }) {
+		t.Errorf("%d, holding a clone of a file of the grant, isn't a possible holder in %+v", pid, holders)
+	}
 }

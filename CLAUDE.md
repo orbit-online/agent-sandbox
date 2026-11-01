@@ -59,7 +59,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (the clone helper it runs through `nsenter` to clone a host path),
   `helpers.go` (the helpers that join the sandbox's mount namespace only after
   their exec on the host's mounts, to share the grant directory and mount and
-  unmount grants there), `mountinfo.go` (mount tables, holders) and `attach.go`
+  unmount grants there), `mountinfo.go` (mount tables, the grant's mount), `scan.go` (the holders' scan) and `attach.go`
   (mounting, unmounting, cleanup). Each `*_test.go` follows its file;
   `main_test.go` has `TestMain` and the shared fakes.
 - `nix/packages/permissions-folders/`: the broker's built-in attach plugin,
@@ -208,8 +208,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, a folder mounted
   read-only where the app sees it and not on the host, its holders listed and
-  ended (one ignoring SIGTERM too; one holding it on a thread alone, by that thread's cwd, fd, root or
-  mount namespace; not a process outside the sandbox; a re-entry's too, found by user
+  ended (one ignoring SIGTERM too; one holding it on a thread alone, by that thread's cwd, fd, root,
+  mount namespace or an `open_tree` clone in no mount table; a clone of a file of it as a possible
+  holder; not a process outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
   record), detached with its mountpoint
   gone on revoke, a session lease two sessions hold, a release dropping only the releasing
@@ -241,7 +242,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   main thread: loading without QML warnings, the state arriving, a click
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
-  fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state),
+  fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
   forget, a repeated action still a change, Allow and Deny off for a second after a pending row moved up.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.

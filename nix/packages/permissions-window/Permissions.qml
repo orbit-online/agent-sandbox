@@ -194,11 +194,13 @@ Item {
                 Layout.rightMargin: 12
                 visible: root.held.length > 0
                 Label {
+                    objectName: "held"
                     Layout.fillWidth: true
                     // A folder grant that ended is unmounted, but what's open in it stays readable to whoever holds it
                     text: "Still open in folders no longer granted: "
                           + root.held.map(g => g.summary + " (" + g.why + "): "
-                                          + g.holders.map(h => h.comm + " (" + h.pid + ")").join(", ")).join("; ")
+                                          + g.holders.map(h => h.comm + " (" + h.pid + (h.possible ? ", possibly" : "")
+                                                          + ")").join(", ")).join("; ")
                     textFormat: Text.PlainText
                     wrapMode: Text.Wrap
                 }
