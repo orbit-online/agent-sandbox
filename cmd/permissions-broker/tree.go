@@ -13,18 +13,18 @@ import (
 )
 
 // attach clones root/rel and mounts it at name in the grant directory in M1.
-// Returns the source as resolved
-func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDir, name string) (string, error) {
+// Returns the tree, which is the mount in M1 now, and the source as resolved
+func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDir, name string) (*os.File, string, error) {
 	if err := s.check(); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	self, err := executable()
 	if err != nil {
-		return "", fmt.Errorf("Find own executable: %w", err)
+		return nil, "", fmt.Errorf("Find own executable: %w", err)
 	}
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	ours, theirs := os.NewFile(uintptr(pair[0]), "clone"), os.NewFile(uintptr(pair[1]), "clone-helper")
 	defer ours.Close()
@@ -41,17 +41,17 @@ func (s *sandbox) attach(root, rel string, ro bool, denied []string, dir grantDi
 	out, err := clone.CombinedOutput()
 	theirs.Close()
 	if err != nil {
-		return "", fmt.Errorf("Clone %s: %s", filepath.Join(root, rel), strings.TrimSpace(string(out)))
+		return nil, "", fmt.Errorf("Clone %s: %s", filepath.Join(root, rel), strings.TrimSpace(string(out)))
 	}
 	tree, resolvedPath, err := recvTree(int(ours.Fd()))
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	defer tree.Close()
 	if err := s.inM1(dir, []*os.File{tree}, "move-tree", name); err != nil {
-		return "", fmt.Errorf("Mount %s/%s: %w", dir.path, name, err)
+		tree.Close()
+		return nil, "", fmt.Errorf("Mount %s/%s: %w", dir.path, name, err)
 	}
-	return resolvedPath, nil
+	return tree, resolvedPath, nil
 }
 
 func recvTree(sock int) (*os.File, string, error) {

@@ -86,8 +86,8 @@ type grant struct {
 	Granted time.Time `json:"granted"`
 	// Attach, once revoked: what still held files on it
 	Holders []holder `json:"holders,omitempty"`
-	// Attach: the device and root of its mount, by which copies of it are found
-	dev, root string
+	// Attach: its mount in M1, by which copies of it are found
+	mnt *grantMount
 
 	cap      *capability
 	sessions map[string]*session // under broker.mu

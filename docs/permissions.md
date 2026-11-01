@@ -175,9 +175,16 @@ mounts, single `/dev` nodes, block devices mounted on the host and handed over a
 Open files survive a revoke of an attach grant (verified item 3), and so does a copy of the mount a process in the
 sandbox made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
 mountpoint end the grant's mounts in every namespace it propagated to, not copies made elsewhere. Neither can be
-taken back short of ending the processes. So the daemon reads the grant's mount ids in each mount namespace in the
-sandbox (of every process of the sandbox's, found by user namespace as for sessions below, re-entries included),
-detaches, and then lists the holders, within ten seconds: processes with a thread whose working directory, root or
+taken back short of ending the processes. The daemon knows the grant's mount by the mount id of the tree it attached,
+read from M1's mountinfo right after the attach with its device, root and peer group (no grant if that fails), not by
+its path: the sandbox can rename `/run/permissions` in M1 as above and put another directory there. That hides no
+holder, and the detach still goes through: the helper refuses the directory in its place, and the daemon removing the
+mountpoint on the host unmounts the grant in every namespace. `/run` in M1 stays writable to the sandbox: it's a
+directory on bwrap's root tmpfs, nixpak passes bwrap no `--remount-ro`, and a read-only root would need checking
+against everything that runs there, for a rename that no longer hides anything.
+So the daemon reads the ids of that mount and those propagated from it (its peer group, by `shared:` and `master:`) in
+each mount namespace in the sandbox (of every process of the sandbox's, found by user namespace as for sessions below,
+re-entries included), detaches, and then lists the holders, within ten seconds: processes with a thread whose working directory, root or
 open files are on those mounts, or with mappings there (by `statx`'s mount id, which an open file keeps), and
 processes with a thread whose mount namespace has a mount of the grant's filesystem and root. Every thread counts:
 one can have a working directory, file table and mount namespace of its own (`unshare` with `CLONE_FS`,

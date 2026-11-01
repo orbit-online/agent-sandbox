@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -201,5 +202,43 @@ func TestAttackGrantDirSwap(t *testing.T) {
 	}
 	if dev, _ := mountOf(lines, b.cfg.SandboxGrantDir+".orig/"+g.ID); dev != "" {
 		t.Error("The grant is still mounted")
+	}
+}
+
+// mountOf finds the device and root of the mount at mountpoint, the last one there
+func mountOf(lines []mountLine, mountpoint string) (dev, root string) {
+	for _, l := range lines {
+		if l.point == mountpoint {
+			dev, root = l.dev, l.root
+		}
+	}
+	return dev, root
+}
+
+// P5: the sandbox renames the grant directory in M1 while a process of its has its working directory on a grant. The
+// grant's mounts are known by id, not by path: the revoke still lists it
+func TestAttackGrantDirRenameHolders(t *testing.T) {
+	src := t.TempDir()
+	b, stdin, out := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(stdin, "hold %s\n", g.Path)
+	var pid int
+	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
+		t.Fatalf("Holder: %d, %v", pid, err)
+	}
+	out.ReadString('\n')
+	attackSwap(t, stdin, out, "SWAP_DIR="+filepath.Dir(b.cfg.SandboxGrantDir),
+		"SWAP_NAME="+filepath.Base(b.cfg.SandboxGrantDir), "SWAP_LINK="+t.TempDir())
+	holders, err := b.revoke(g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+		t.Errorf("%d, its working directory on the grant, isn't among the holders %+v", pid, holders)
 	}
 }

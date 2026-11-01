@@ -131,13 +131,20 @@ func (b *broker) attachGrant(g *grant) error {
 		return err
 	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
-	if g.Source, err = b.sb.attach(src.root, src.rel, src.ro, b.cfg.Denied, dir, g.ID); err != nil {
+	tree, source, err := b.sb.attach(src.root, src.rel, src.ro, b.cfg.Denied, dir, g.ID)
+	if err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err
 	}
-	// Without them, a copy of the mount in a nested namespace isn't found as a holder; the grant stands
-	if lines, err := b.sb.mountinfo(); err == nil {
-		g.dev, g.root = mountOf(lines, g.Path)
+	g.Source = source
+	// Without it, neither the grant's mounts nor copies of them are found as holders: no grant then
+	if g.mnt, err = b.sb.grantMountOf(tree); err != nil {
+		tree.Close()
+		if err := b.sb.detach(dir, g.ID); err != nil {
+			slog.Warn("Detach", "grant", g.ID, "err", err)
+		}
+		removeMountpoint(b.cfg.GrantDir, g.ID)
+		return err
 	}
 	return nil
 }
@@ -145,12 +152,17 @@ func (b *broker) attachGrant(g *grant) error {
 // detachGrant detaches an attach grant and removes its mountpoint, which ends its mounts in every namespace it
 // propagated to, then lists what still holds it. Its mount ids are taken first, while its mount points resolve
 func (b *broker) detachGrant(g *grant) {
+	if g.mnt == nil {
+		// Never attached
+		return
+	}
+	defer g.mnt.tree.Close()
 	if !b.sb.alive() {
 		// Its mounts went with the sandbox
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return
 	}
-	ids := b.sb.grantMounts(g.Path)
+	ids := b.sb.grantMounts(g.mnt)
 	dir, err := grantDirOf(b.cfg)
 	if err == nil {
 		err = b.sb.detach(dir, g.ID)
@@ -159,7 +171,7 @@ func (b *broker) detachGrant(g *grant) {
 		slog.Warn("Detach", "grant", g.ID, "err", err)
 	}
 	removeMountpoint(b.cfg.GrantDir, g.ID)
-	g.Holders = b.sb.holdersAfter(ids, g.dev, g.root)
+	g.Holders = b.sb.holdersAfter(ids, g.mnt.dev, g.mnt.root)
 	if len(g.Holders) > 0 {
 		slog.Info("Still held", "grant", g.ID, "holders", g.Holders)
 	}

@@ -219,7 +219,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   the sandbox's attacks: a link out of the ceiling, a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
   (found by identity, as the source or beneath it), and a re-bind in a nested
-  mount namespace (reported as a holder), and the swap of a directory that is a
+  mount namespace (reported as a holder), a rename of the grant directory in M1
+  hiding no holder, and the swap of a directory that is a
   mountpoint in the stand-in's mount namespace from a nested one (pivot_root,
   the old root detached, then a rename): the store directory holding the
   helpers' binary (they still run the daemon's) and the grant directory for a

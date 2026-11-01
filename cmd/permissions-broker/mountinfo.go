@@ -110,9 +110,54 @@ func tasks(pid int) []string {
 	return dirs
 }
 
-// grantMounts maps each mount namespace in the sandbox (by inode) to the ids of the grant's mounts there: those at or
-// below its mount point. Read once per namespace, any thread's, before detaching, while the mount points still resolve
-func (s *sandbox) grantMounts(mountpoint string) map[uint64]map[uint64]bool {
+// An attach grant's mount in M1, found when it's attached by the tree's mount id, not by its path: the sandbox can
+// rename the grant directory in M1 (models/README.md, Attacker 6). Its id, peer group, and device and root, by which
+// copies of it are found, and the tree itself, which the daemon keeps open
+type grantMount struct {
+	id        uint64
+	group     string
+	dev, root string
+	tree      *os.File
+}
+
+// grantMountOf finds the mount the tree (attached in M1) is in M1's mountinfo, by its mount id
+func (s *sandbox) grantMountOf(tree *os.File) (*grantMount, error) {
+	var stx unix.Statx_t
+	if err := unix.Statx(int(tree.Fd()), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &stx); err != nil ||
+		stx.Mask&unix.STATX_MNT_ID == 0 {
+		return nil, fmt.Errorf("The grant's mount id: %v", err)
+	}
+	lines, err := s.mountinfo()
+	if err != nil {
+		return nil, fmt.Errorf("The sandbox's mounts: %w", err)
+	}
+	for _, l := range lines {
+		if l.id == stx.Mnt_id {
+			m := &grantMount{id: l.id, dev: l.dev, root: l.root, tree: tree}
+			for _, o := range l.optional {
+				if g, ok := strings.CutPrefix(o, "shared:"); ok {
+					m.group = g
+				}
+			}
+			return m, nil
+		}
+	}
+	return nil, fmt.Errorf("The grant's mount (%d) isn't in the sandbox's mount namespace", stx.Mnt_id)
+}
+
+// copyOf reports whether l is the grant's mount, or one propagated from it: in its peer group or its slave
+func (m *grantMount) copyOf(l mountLine) bool {
+	if l.id == m.id {
+		return true
+	}
+	return m.group != "" && slices.ContainsFunc(l.optional, func(o string) bool {
+		return o == "shared:"+m.group || o == "master:"+m.group
+	})
+}
+
+// grantMounts maps each mount namespace in the sandbox (by inode) to the ids of the grant's mounts there: the mount
+// itself and those propagated from it, whatever their paths. Read once per namespace, any thread's, before detaching
+func (s *sandbox) grantMounts(m *grantMount) map[uint64]map[uint64]bool {
 	byNs := map[uint64]map[uint64]bool{}
 	for _, pid := range s.members() {
 		for _, task := range tasks(pid) {
@@ -125,7 +170,7 @@ func (s *sandbox) grantMounts(mountpoint string) map[uint64]map[uint64]bool {
 			}
 			set := map[uint64]bool{}
 			for _, l := range readMountinfo(task + "/mountinfo") {
-				if l.point == mountpoint || strings.HasPrefix(l.point, mountpoint+"/") {
+				if m.copyOf(l) {
 					set[l.id] = true
 				}
 			}
@@ -238,16 +283,6 @@ func mountsOf(lines []mountLine, dev, root string) bool {
 		}
 	}
 	return false
-}
-
-// mountOf finds the device and root of the mount at mountpoint, the last one there
-func mountOf(lines []mountLine, mountpoint string) (dev, root string) {
-	for _, l := range lines {
-		if l.point == mountpoint {
-			dev, root = l.dev, l.root
-		}
-	}
-	return dev, root
 }
 
 // isShared reports whether dir is a shared mount in the sandbox's mount namespace: a daemon started again finds the
