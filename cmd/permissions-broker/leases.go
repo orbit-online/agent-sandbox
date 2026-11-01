@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (b *broker) now() time.Time { return time.Now().Add(time.Duration(b.skew.Load())) }
+func (b *broker) now() time.Time { return b.clock.now() }
 
 func (b *broker) checkLease(lease string, sess *session) error {
 	switch lease {
@@ -141,9 +141,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 func (b *broker) lease(g *grant, watchDone <-chan struct{}) {
 	var timeout <-chan time.Time
 	if !g.Expires.IsZero() {
-		t := time.NewTimer(g.Expires.Sub(b.now()))
-		defer t.Stop()
-		timeout = t.C
+		timeout = b.clock.after(g.Expires.Sub(b.now()))
 	}
 	b.mu.Lock()
 	for _, s := range g.sessions {

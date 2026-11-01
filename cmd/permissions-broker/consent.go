@@ -257,10 +257,16 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 		b.event("answered", p.ID)
 	}()
 
-	ctx, cancelTimeout := context.WithTimeout(context.Background(), askTimeout)
-	defer cancelTimeout()
-	ctx, cancel := context.WithCancelCause(ctx)
+	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
+	timeout := b.clock.after(askTimeout)
+	go func() {
+		select {
+		case <-timeout:
+			cancel(context.DeadlineExceeded)
+		case <-ctx.Done():
+		}
+	}()
 	type result struct {
 		action string
 		err    error
@@ -292,7 +298,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	select {
 	case a := <-p.answer:
 		return windowDecision(a, lease), nil
-	case <-time.After(optionsTimeout):
+	case <-b.clock.after(optionsTimeout):
 		return decision{}, nil
 	}
 }

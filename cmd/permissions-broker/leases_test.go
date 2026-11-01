@@ -120,13 +120,15 @@ func TestSessionStopsAtSandbox(t *testing.T) {
 
 func TestRanOut(t *testing.T) {
 	b, _ := testBroker(t, "allow")
+	clk := newFakeClock()
+	b.clock = clk
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
 	// The lease is over, its timer not yet fired: no output without a validity
-	b.skew.Store(int64(2 * time.Hour))
+	clk.jump(2 * time.Hour)
 	if _, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
 		t.Errorf("Issued %q after the lease ran out", cred)
 	}

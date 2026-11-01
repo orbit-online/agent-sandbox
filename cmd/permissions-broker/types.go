@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -166,8 +165,8 @@ type broker struct {
 	watches    map[chan []byte]bool
 	// What still held attach grants when they ended
 	heldGrants []held
-	// Added to the time, by tests
-	skew atomic.Int64
+	// The time and the timers of leases and answers, which tests fake
+	clock clock
 }
 
 func randomID() string {

@@ -110,6 +110,8 @@ func TestListed(t *testing.T) {
 
 func TestRefusalLimit(t *testing.T) {
 	b, f := testBroker(t)
+	clk := newFakeClock()
+	b.clock = clk
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	for i := range maxRefusals {
@@ -121,7 +123,7 @@ func TestRefusalLimit(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "in a row") || f.count() != maxRefusals {
 		t.Errorf("After %d refusals: %v, asked %d times", maxRefusals, err, f.count())
 	}
-	b.skew.Store(int64(blockFor + time.Second))
+	clk.advance(blockFor + time.Second)
 	f.answers = []string{"allow"}
 	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Errorf("Not asked again after the block: %v", err)

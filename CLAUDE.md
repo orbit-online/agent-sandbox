@@ -50,7 +50,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
   One concern per file: `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go`, `leases.go` (and logind), `store.go`
-  (always grants, replay, the log), `notify.go`, `views.go`, `types.go` and
+  (always grants, replay, the log), `notify.go`, `views.go`, `types.go`,
+  `clock.go` (the time and timers of leases and answers, which tests fake) and
   `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
   locks) and `plugintools.go` for plugins and their MCP tools,
   `mcp.go` the MCP server, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
