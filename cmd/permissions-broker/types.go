@@ -54,6 +54,7 @@ type response struct {
 	Holders      []holder         `json:"holders,omitempty"`
 	Log          []logEntry       `json:"log,omitempty"`
 	Standing     []standingGrant  `json:"standing,omitempty"`
+	Overview     json.RawMessage  `json:"overview,omitempty"`
 	Held         []held           `json:"held,omitempty"`
 }
 

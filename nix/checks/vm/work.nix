@@ -152,6 +152,8 @@
       again = {g["capability"]: g["id"] for g in state["grants"] if g["lease"] == "standing"}
       assert sorted(again) == ["test/echo", "test/thing"] and len(state["grants"]) == 2, f"grants after a restart: {state}"
       assert not set(again.values()) & set(standing.values()), f"the same ids after a restart: {again}"
+      # The window's overview of the configuration
+      assert state["overview"]["network"] and any(b["path"] == "/home/alice" for b in state["overview"]["binds"]), state["overview"]
       workstation.succeed(f"systemctl --user -M alice@ is-active -q perm-work_{again['test/echo']}.socket")
 
       # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.

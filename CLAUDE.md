@@ -160,7 +160,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its standing grants, the wrapper's variables; none
+  read-only `/run/permissions` bind, the config with its standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; none
   of it for the default launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
   handler).
@@ -198,7 +198,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   refused by `control.sock`, `share` and `request` (S13), the sandbox's
   namespaces pinned (helpers refused once its pid moves to namespaces of its
   own) and not found from a stale instance directory or in a user namespace
-  that isn't a child of ours, the sockets end to end with `watch` events, and what
+  that isn't a child of ours, the sockets end to end with `watch` events, the config's overview passed on in `state`, and what
   the sandbox can't do to it: hold every connection (control.sock still
   answers, idle clients time out), send an oversized request, dress up a
   parameter or reason in the notification, make a click on its replacement of
@@ -266,7 +266,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
-  a standing grant shown as from the config, a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
+  a standing grant shown as from the config, the overview of the configuration (binds, devices, D-Bus, the
+  network, the standing grants live and ended, the implicit lines), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
   replaced in place.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
@@ -318,7 +319,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   server that the test answers on `control.sock`: the service again, a folder
   mounted read-only, nodev and nosuid where the app runs and one with a mount
   beneath it refused; a SIGKILL of the daemon ending its service unit and its
-  folder grant, the standing grants alone back under new ids after its restart, the Permissions window
+  folder grant, the standing grants alone back under new ids after its restart, the overview in its state, the Permissions window
   staying up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host

@@ -86,7 +86,8 @@ host (user, no capabilities)                       sandbox
   of `request.sock`.
 - The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
   action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
-  rest. It is a client only: all state lives in the daemon. It refreshes on every watch event, which the sandbox can
+  rest. It is a client only: all state lives in the daemon. Above the grants it shows, read-only, what the
+  configuration gives the sandbox from its start (Overview, below). It refreshes on every watch event, which the sandbox can
   cause at will, so pending requests come in the order they arrived (a row doesn't move under the pointer) and what
   the user set on a row (narrowed parameters, a lease) is kept by request id through the refresh.
 
@@ -418,7 +419,7 @@ Holds and release work as for any other grant. Revoke in the window, or a releas
 for the daemon's life: later requests ask the user like any other. The next start brings it back. There is nothing
 to forget: the config is the only place they live.
 
-The window lists them among the grants as "from config", with Revoke.
+The window lists them among the grants as "from config", with Revoke, and in its overview (below), each live or ended.
 
 ## MCP
 
@@ -458,6 +459,23 @@ hosts drop the `windows-vm-claude` bind.
 
 Designed for, not planned: certs from a host CA, SSH and Kubernetes certs (`command`); systemd, journal, BlueZ, TPM,
 UEFI variables, host applications, website logins (`service`); devices and wifi (`attach`).
+
+## Overview
+
+The window shows what the sandbox reaches without asking, under "From the configuration", so the user sees the
+whole of its access in one place. The module writes it into the daemon's config, derived from the launcher's
+settings and nixpak's, and the daemon passes it on unchanged as `overview` in control.sock's `state`, next to
+`standing` (the standing grants, each with its live grant or ended):
+
+- `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
+- `devices`: from `devices` and `kvm`, each bound if present;
+- `dbus`: the proxy's policies and its call and broadcast rules;
+- `network`: its own network namespace with a macvlan on the LAN, which the module always sets up;
+- `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
+  the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
+  `files`), `/tmp` with the scratchpad, and `/run/permissions`.
+
+It carries no consent: nothing in it can be changed from the window. A config change and a rebuild change it.
 
 ## Launcher
 

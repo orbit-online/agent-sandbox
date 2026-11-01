@@ -707,7 +707,14 @@ in
             and (.plugins | length) == 2 and .plugins[1].ceiling == {sources: [{path: "/srv/notes", rw: false}]}
             and (.plugins[1].manifest | endswith("/share/agent-sandbox/permissions/folders.json"))
             and (.plugins[0].manifest | endswith("/share/agent-sandbox/permissions/test.json"))
-            and .grants == [{capability: "test/thing", params: {scope: "read"}}]' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+            and .grants == [{capability: "test/thing", params: {scope: "read"}}]
+            and (.overview.network | startswith("Its own network namespace"))
+            and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
+            and .overview.devices == []
+            and (.overview.dbus.call | has("org.freedesktop.portal.Desktop"))
+            and (.overview.dbus.broadcast | has("org.freedesktop.portal.Desktop"))
+            and any(.overview.implicit[]; . == "Sockets: Wayland")
+            and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
             { echo "the default launcher starts the broker" >&2; exit 1; }
           ! grep -q '^Name=Permissions$' ${sandboxed}/share/applications/*.desktop ||

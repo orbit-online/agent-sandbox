@@ -173,6 +173,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 		res.Capabilities = b.listCapabilities()
 		res.Held = b.heldViews()
 		res.Standing = b.standingViews()
+		res.Overview = b.cfg.Overview
 	case "options":
 		err = b.markOptions(req.Pending)
 	case "answer":

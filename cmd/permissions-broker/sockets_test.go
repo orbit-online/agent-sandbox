@@ -187,3 +187,14 @@ func TestPeerGoneAfterRead(t *testing.T) {
 		t.Error("share served a peer that's gone")
 	}
 }
+
+// control.sock's state passes the config's overview on to the window as it is
+func TestStateOverview(t *testing.T) {
+	b, _ := testBroker(t)
+	b.cfg.Overview = json.RawMessage(`{"network":"its own","binds":[{"path":"/srv","rw":true}]}`)
+	res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"})
+	data, _ := json.Marshal(res)
+	if !strings.Contains(string(data), `"overview":{"network":"its own","binds":[{"path":"/srv","rw":true}]}`) {
+		t.Errorf("State %s", data)
+	}
+}

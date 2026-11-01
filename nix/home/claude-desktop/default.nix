@@ -996,6 +996,41 @@ let
             capability = "${g.plugin}/${g.capability}";
             inherit (g) params;
           }) lcfg.permissions.grants;
+          # What the sandbox reaches from its start, for the window's read-only overview
+          overview =
+            let
+              nixpak = sandboxed.config;
+              sockets = {
+                wayland = "Wayland";
+                pipewire = "PipeWire";
+                pulse = "PulseAudio";
+                x11 = "X11";
+              };
+              socketsOn = lib.attrNames (lib.filterAttrs (_: on: on == true) nixpak.bubblewrap.sockets);
+            in
+            {
+              binds = map (b: { inherit (b) path src rw optional; }) (
+                lib.sortOn (b: b.path) (
+                  lib.mapAttrsToList (path: b: b // { inherit path; }) (lib.filterAttrs (_: b: b.enable) lcfg.binds)
+                )
+              );
+              inherit devices;
+              dbus = {
+                inherit (nixpak.dbus) policies;
+                inherit (nixpak.dbus.rules) call broadcast;
+              };
+              network = "Its own network namespace, with a macvlan on the LAN that gets its address by DHCP: no host-only services, routes or abstract sockets";
+              implicit =
+                lib.optional (socketsOn != [ ]) "Sockets: ${lib.concatMapStringsSep ", " (s: sockets.${s} or s) socketsOn}"
+                ++ lib.optional nixpak.gpu.enable "GPU: /dev/dri, with the host's graphics drivers (${nixpak.gpu.provider})"
+                ++ [
+                  "From the Nix store, read-only: the app's closure, the PATH packages at /run/current-system/sw, /etc's ${lib.concatStringsSep ", " (lib.filter (e: !lib.elem e hostEtc) etcEntries)}${
+                    lib.concatMapStrings (f: ", ${f}") (lib.attrNames (lib.filterAttrs (_: f: f.enable) lcfg.files))
+                  }"
+                  "/tmp: a tmpfs, with /tmp/claude-<uid> from ${scratchpad}"
+                  "/run/permissions: this broker's grant directory, read-only"
+                ];
+            };
         }
       );
       # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
