@@ -12,6 +12,31 @@ Item {
     readonly property var pending: st.pending || []
     readonly property var grants: st.grants || []
     readonly property var log: (st.log || []).slice().reverse().slice(0, 30)
+    // What the sandbox reaches from its start, from the launcher's config, read-only: each section a title and its lines
+    readonly property var standing: st.standing || []
+    readonly property var overview: {
+        const o = st.overview || {}
+        const d = o.dbus || {}
+        const sections = []
+        const add = (key, title, lines) => {
+            if (lines.length > 0)
+                sections.push({ key: key, title: title, text: lines.join("\n") })
+        }
+        add("binds", "Binds", (o.binds || []).map(b => b.path + " (" + (b.rw ? "read-write" : "read-only")
+                                                   + (b.src && b.src !== b.path ? ", from " + b.src : "")
+                                                   + (b.optional ? ", if there" : "") + ")"))
+        add("devices", "Devices, if there", o.devices || [])
+        add("dbus", "D-Bus, through the proxy", [].concat(
+            Object.keys(d.policies || {}).map(n => n + ": " + d.policies[n]),
+            Object.keys(d.call || {}).map(n => n + ": calls " + d.call[n].join(", ")),
+            Object.keys(d.broadcast || {}).map(n => n + ": broadcasts " + d.broadcast[n].join(", "))))
+        add("network", "Network", o.network ? [o.network] : [])
+        add("standing", "Standing grants", root.standing.map(g => g.summary + ": "
+                                                             + (g.ended ? "ended until the broker starts again"
+                                                                        : g.grant ? "granted" : "not granted now")))
+        add("implicit", "Also", o.implicit || [])
+        return sections
+    }
     // What still holds folder grants that ended, however they ended
     readonly property var held: st.held || []
     // Each capability's parameter types, for the fields that narrow a request
@@ -209,6 +234,35 @@ Item {
                     objectName: "end"
                     text: "End them"
                     onClicked: root.send({ op: "end", grants: root.held.map(g => g.grant) })
+                }
+            }
+
+            Label {
+                Layout.leftMargin: 12
+                text: "From the configuration"
+                font.bold: true
+                visible: root.overview.length > 0
+            }
+            Repeater {
+                model: root.overview
+                delegate: ColumnLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    Layout.rightMargin: 12
+                    spacing: 2
+                    Label {
+                        text: modelData.title
+                        font.italic: true
+                    }
+                    Label {
+                        objectName: "overview-" + modelData.key
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 12
+                        text: modelData.text
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                    }
                 }
             }
 

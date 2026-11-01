@@ -17,8 +17,9 @@ Usage:
   permissions-window <control-socket> [<title>]
 
 A client of the broker's control.sock (docs/permissions.md): shows pending
-requests to answer, live grants to revoke and the recent decisions, and
-refreshes on the broker's watch events. Without a running broker it says so.
+requests to answer, what the configuration gives the sandbox (read-only), live
+grants to revoke and the recent decisions, and refreshes on the broker's watch
+events. Without a running broker it says so.
 `
 
 func main() {

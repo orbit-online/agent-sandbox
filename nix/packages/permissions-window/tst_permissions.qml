@@ -18,6 +18,18 @@ TestCase {
             grants: [{ id: "g1", capability: "test/thing", params: {}, summary: "the test thing", lease: "session" },
                      { id: "g2", capability: "test/echo", params: {}, summary: "the echo", lease: "standing" }],
             log: [],
+            standing: [{ capability: "test/echo", params: {}, summary: "the echo", grant: "g2" },
+                       { capability: "test/thing", params: {}, summary: "the test thing", ended: true }],
+            overview: {
+                binds: [{ path: "/home/alice", src: "/srv/home", rw: true, optional: false },
+                        { path: "/srv/notes", src: "/srv/notes", rw: false, optional: true }],
+                devices: ["/dev/kvm"],
+                dbus: { policies: { "org.kde.StatusNotifierItem-100-1": "own" },
+                        call: { "org.freedesktop.portal.Desktop": ["a@/x", "b@/x"] },
+                        broadcast: { "org.freedesktop.portal.Desktop": ["c@/x"] } },
+                network: "its own",
+                implicit: ["Sockets: Wayland"]
+            },
             capabilities: [{ id: "folders/folder", type: "attach",
                              params: { path: { type: "string" }, ro: { type: "boolean" } } }]
         })
@@ -103,6 +115,20 @@ TestCase {
     // A standing grant shows as from the config
     function test_standing_grant() {
         compare(findChild(view, "grant-g2").text, "the echo, from config")
+    }
+
+    // What the configuration gives, read-only, above the grants
+    function test_overview() {
+        compare(findChild(view, "overview-binds").text,
+                "/home/alice (read-write, from /srv/home)\n/srv/notes (read-only, if there)")
+        compare(findChild(view, "overview-devices").text, "/dev/kvm")
+        compare(findChild(view, "overview-dbus").text,
+                "org.kde.StatusNotifierItem-100-1: own\norg.freedesktop.portal.Desktop: calls a@/x, b@/x\n"
+                + "org.freedesktop.portal.Desktop: broadcasts c@/x")
+        compare(findChild(view, "overview-network").text, "its own")
+        compare(findChild(view, "overview-standing").text,
+                "the echo: granted\nthe test thing: ended until the broker starts again")
+        compare(findChild(view, "overview-implicit").text, "Sockets: Wayland")
     }
 
     // The same action twice is still a change: each command carries its own number
