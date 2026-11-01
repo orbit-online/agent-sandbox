@@ -306,7 +306,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   it refused, an `always` service plugin socket-activated by systemd whose tool
   the MCP server inside offers and forwards a call to, the Permissions window
   staying
-  up against it, the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
+  up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`
@@ -322,6 +322,26 @@ modules and a user alice (the `home-manager` input exists only for it).
   root made and mapped her uid into. bob's commands go through `runuser`,
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
   with `nix run .#checks.x86_64-linux.vm.driverInteractive`.
+  The broker's state machine tests also run live there (`TestLiveMachine`,
+  `live*_test.go`, skipped elsewhere): the test binary, built with `go test
+  -c`, drives the work launcher's daemon under systemd from the host as
+  alice, with copies of itself inside the sandbox (through the launcher's
+  re-entry) as callers on `request.sock`: sessions anchored at a copy named
+  `claude`, a forged one below a copy named `node`, one without a session.
+  The actions: requests of each type (the test plugins' command and service,
+  folders beneath `/srv/notes` and outside it) and lease, floods, crafted
+  requests and `share` from inside, the user's answers, revoke and forget
+  through `control.sock`, releases, sessions ending, `systemctl restart`
+  with replay, and logind's Lock of a graphical session of alice's made for
+  it. After every step the window's state, the store file, the socket units,
+  the grant directory and the mounts in the outer mount namespace and where
+  the app runs match the reference model. 15 sequences with seed 1 (about a
+  minute); by hand, `LIVE_RAPID` replaces the flags, for example
+  `LIVE_RAPID='-rapid.seed=0 -rapid.checks=100' LIVE_TIMEOUT=3600 nix run
+  .#checks.x86_64-linux.vm.driverInteractive`, then `test_script()`.
+  A failure shrinks slowly here (each attempt replays its sequence live):
+  `-rapid.seed` of the failing sequence with `-rapid.checks=1` and a long
+  `-rapid.shrinktime` gets further.
 
 CI runs on pushes to `main` and on pull requests, split by what changed
 (`.github/workflows/test-*.yaml`, each with its own `paths:`): `test-go`

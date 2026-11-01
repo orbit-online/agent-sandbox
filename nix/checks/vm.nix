@@ -64,6 +64,22 @@ let
       ];
     }
   );
+  # The broker's test binary, for TestLiveMachine (cmd/permissions-broker/live_test.go): the state machine tests
+  # against the live daemon and sandbox
+  brokerLive = broker.overrideAttrs {
+    pname = "permissions-broker-live";
+    doCheck = false;
+    buildPhase = ''
+      runHook preBuild
+      go test -c -o permissions-broker-live ./cmd/permissions-broker
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 permissions-broker-live $out/bin/permissions-broker-live
+      runHook postInstall
+    '';
+  };
   stateDir = "/home/alice/.local/share/claude-desktop";
   sandboxHome = "${stateDir}/home";
   scratchpad = "${stateDir}/tmp-scratchpad";
@@ -169,7 +185,7 @@ pkgs.testers.runNixOSTest {
       workstationIP = nodes.workstation.networking.primaryIPAddress;
     in
     ''
-      import json, shlex, time
+      import json, os, shlex, time
 
       scratchpad = "${scratchpad}"
 
@@ -620,6 +636,39 @@ pkgs.testers.runNixOSTest {
           assert len(grants) == 1, f"one folder mounted, not the one with a mount beneath it: {grants}"
           opts = grants[0].split()[5].split(",")
           assert {"ro", "nodev", "nosuid"} <= set(opts), grants[0]
+
+          # The state machine tests live (TestLiveMachine): rapid's sequences of requests from processes in the sandbox
+          # (sessions anchored at a copy of the test binary named claude, a forged one below a copy named node, a caller
+          # without one), answers, revoke and forget through control.sock, releases, sessions ending, restarts with
+          # replay and lock events, the live state checked against the reference model after every step. A fixed seed;
+          # LIVE_RAPID replaces the rapid flags in the interactive driver, -rapid.seed=0 for a random one, and LIVE_TIMEOUT its
+          # 15 minutes
+          workstation.succeed("mkdir -p /srv/notes/sub /srv/outside && chown alice /srv/notes/sub /srv/outside")
+          workstation.succeed(
+              f"install -D -m755 -o alice ${brokerLive}/bin/permissions-broker-live {work_home}/live/claude"
+              f" && cp -p {work_home}/live/claude {work_home}/live/node"
+          )
+          # A graphical session of alice's, whose Lock the daemon watches from its start
+          workstation.succeed(
+              "systemd-run --unit fake-session -p PAMName=login -p User=alice -p TTYPath=/dev/tty3"
+              " -E XDG_SESSION_TYPE=wayland -E XDG_SESSION_CLASS=user -- /run/current-system/sw/bin/sleep infinity"
+          )
+          workstation.wait_until_succeeds("loginctl show-user alice -P Display | grep -q .", timeout=30)
+          lock_session = workstation.succeed("loginctl show-user alice -P Display").strip()
+          exec_start = workstation.succeed("systemctl --user -M alice@ show -P ExecStart claude-desktop-work-permissions")
+          live_config = exec_start.split(" serve ")[1].split()[0]
+          rapid_flags = os.environ.get("LIVE_RAPID", "-rapid.seed=1")
+          started = time.monotonic()
+          status, out = workstation.execute(alice_cmd(
+              "/run/current-system/sw/bin/env PATH=/run/current-system/sw/bin"
+              f" LIVE_CONFIG={live_config} LIVE_LAUNCHER=/etc/profiles/per-user/alice/bin/claude-desktop-work"
+              f" LIVE_BIN=/home/alice/live/claude LIVE_ROOT=/srv/notes LIVE_OUTSIDE=/srv/outside LIVE_LOCK_SESSION={lock_session}"
+              f" ${brokerLive}/bin/permissions-broker-live -test.run '^TestLiveMachine$' -test.v -rapid.nofailfile {rapid_flags}"
+          ) + " 2>&1", timeout=int(os.environ.get("LIVE_TIMEOUT", "900")))
+          print(out)
+          assert status == 0 and "--- PASS: TestLiveMachine" in out, f"TestLiveMachine failed after {time.monotonic() - started:.0f} s"
+          print(f"TestLiveMachine took {time.monotonic() - started:.0f} s")
+          workstation.succeed("systemctl stop fake-session")
 
           # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
           # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds

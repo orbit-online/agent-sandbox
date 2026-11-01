@@ -20,8 +20,10 @@ import (
 
 // Re-executed as the processes the broker inspects. wait: blocks until stdin closes. anchor: starts a wait child with
 // CLAUDE_CODE_SESSION_ID set, prints its pid and waits. mount: in a user and mount namespace of its own, mounts a
-// tmpfs on $MOUNT_AT, prints "ready" and waits. swap: see swap_test.go. threadhold: see holders_test.go
+// tmpfs on $MOUNT_AT, prints "ready" and waits. swap: see swap_test.go. threadhold: see holders_test.go. live-agent and
+// live-anchor (arguments, not BROKER_TEST, which the launcher's re-entry drops): see live_procs_test.go
 func TestMain(m *testing.M) {
+	liveHelper()
 	if len(os.Args) > 2 && slices.Contains([]string{"make-shared", "clone-tree", "move-tree", "detach"}, os.Args[1]) {
 		main()
 		return
