@@ -11,12 +11,18 @@ abstract sig DType {}
 one sig Service, Command, Attach extends DType {}
 
 // Requested or granted lease. A duration is LDuration with a counter.
+// LStanding only for a standing grant from the config: no request or
+// answer picks it.
 abstract sig Lease {}
-one sig LSession, LLock, LDuration, LAlways extends Lease {}
+one sig LSession, LLock, LDuration, LStanding extends Lease {}
 
-// One daemon per launcher, with its own store (stateDir) and gates.
+// One daemon per launcher, with its gates. standing: the standing grants
+// the launcher's config declares (capability, exact parameters), static:
+// nothing at runtime adds or removes one. ended: those the user revoked or
+// released in this daemon's life; a start clears it.
 sig Launcher {
-  var stored: Capability -> Param,
+  standing: Capability -> Param,
+  var ended: Capability -> Param,
   var asking: set Capability,
   var refused: Capability -> lone Int,
   var blocked: set Capability
@@ -74,12 +80,12 @@ var sig Live, Ended, UnitUp, Mounted, ToRun in Grant {}
 var sig Anon in Grant {}
 
 // One request on request.sock: what the sandbox sends and the daemon
-// derives from it. asked: the lease the notification offers. summary: the
+// derives from it. summary: the
 // daemon's text (describe, describeAttach). shows: what the notification with
 // the request's id draws now.
 sig Req {
   rl: one Launcher, rcap: one Capability, rparams: one Param, rlease: one Lease, rsess: lone Session,
-  asked: one Lease, summary: one Text,
+  summary: one Text,
   var shownDir: lone Dir,
   var shows: lone Text,
   // who answered it
@@ -103,14 +109,17 @@ fact static {
   // daemon's, a function of capability and parameters
   all r: Req | r.rlease = LSession implies some r.rsess
   all r, q: Req | (r.rcap = q.rcap and r.rparams = q.rparams) implies r.summary = q.summary
-  all r: Req | offered[r]
+  // request() refuses lease standing (consent.go)
+  no rlease.LStanding
+  // standing grants are of types service and command only: folders that
+  // should always be there are binds (the module's assertion)
+  all l: Launcher | no l.standing.Param & dtype.Attach
 }
 
-// always is offered in the window only: the notification proposes the
-// session, or an hour without one (broker.go:588-595).
-pred offered[r: Req] {
-  r.rlease = LAlways implies r.asked = (some r.rsess implies LSession else LDuration)
-  else r.asked = r.rlease
+// Not ended by the user in this daemon's life: request() grants it
+// without asking (isStanding, consent.go). Exact parameters only.
+pred standingNow[l: Launcher, c: Capability, p: Param] {
+  p in l.standing[c] - l.ended[c]
 }
 
 // Sessions don't come back: an anchor that exited is gone.
@@ -186,6 +195,10 @@ fun typed[t: DType]: set Grant { (gcap.dtype).t }
 fun locksOf[G: set Grant]: Capability -> Instance -> Launcher {
   { c: Exclusive, i: Instance, l: Launcher | some g: G | g.gcap = c and i in g.gparams.(c.matches) and g.gl = l }
 }
+// The standing grants among E, as the daemon records them ended.
+fun standingOf[E: set Grant]: Launcher -> Capability -> Param {
+  { l: Launcher, c: Capability, p: Param | some g: E & glease.LStanding | g.gl = l and g.gcap = c and g.gparams = p }
+}
 fun nref[l: Launcher, c: Capability]: Int { some c.(l.refused) implies c.(l.refused) else 0 }
 
 pred keepDaemons { Up' = Up and Dirty' = Dirty and SharedDir' = SharedDir and Watched' = Watched and Gone' = Gone }
@@ -226,7 +239,7 @@ pred change[N, E: set Grant] {
 pred endOnly[E: set Grant] {
   change[none, E]
   keepHolds
-  keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
+  keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
 }
 
 // A request leaves the daemon: answered, refused, failed.
@@ -254,5 +267,6 @@ pred init {
   no Live + Ended + UnitUp + Mounted + ToRun
   no Pending + Mature + Opened + Asked + Forged
   no asking and no refused and no blocked and no lockFile
+  no ended
   no holders and no Anon and no left and no mdir and no shownDir and no shows
 }

@@ -44,13 +44,14 @@ in the init namespaces unless noted.
 2. **permissions-broker daemon**: one per launcher, the transient user
    unit `claude-desktop[-<name>]-permissions.service` (`Restart=on-failure`
    up to 3 starts in 10 minutes, `ExecStopPost=permissions-broker cleanup`). Listens on `request.sock`
-   and `control.sock`, runs plugin commands, holds the grant store. Its
-   helpers (`make-shared`, `clone-tree`, `move-tree`, `detach`) run through
-   `nsenter` in the user namespace that owns M1, with every capability
-   there, exec'd on the host's mounts; all but `clone-tree` then join M1
-   on a thread of their own and resolve only the grant directory there.
+   and `control.sock`, runs plugin commands, grants the config's standing
+   grants at start. Its helpers (`make-shared`, `clone-tree`, `move-tree`,
+   `detach`) run through `nsenter` in the user namespace that owns M1,
+   with every capability there, exec'd on the host's mounts; all but
+   `clone-tree` then join M1 on a thread of their own and resolve only the
+   grant directory there.
 3. **Permissions window**: Qt app, a client of `control.sock`. Answers
-   pending requests, revokes, forgets `always` grants, ends holders.
+   pending requests, revokes, ends holders.
 4. **Notification daemon** (Plasma's): draws the consent notification the
    broker posts over D-Bus (godbus) and signals the action. The sandbox
    talks to it too.
@@ -141,7 +142,7 @@ joining needs CAP_SYS_ADMIN in init).
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
 | grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory; in M1 the helpers open it with `RESOLVE_NO_SYMLINKS`, check it's the host's directory (device and inode) and a mount root, and act on single entries beneath it |
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling and denied directories (lexical, then `openat2` without links or mount crossings beneath the root), no submounts, ro/nodev/nosuid |
-| the grant store `$stateDir/permissions.json` | broker | host only (stateDir's `home/`, `nix/`, `tmp-scratchpad/` are bound, not stateDir) | written only by the daemon |
+| the daemon's config (ceilings, standing grants) | the Home Manager module, a read-only path in the host's Nix store | host only (the host's store isn't bound) | nothing writes it at runtime; what the user ends lives in the daemon's memory |
 | helper binaries | nsenter, setpriv, the launcher's scripts | resolved on the host's mounts, or in MU's closure binds | never in M1 or M2, where the sandbox can swap a directory (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
@@ -253,17 +254,21 @@ process whose principal is in the Sandbox domain, at any time.
 - S13. Every peer check that reads `/proc/<pid>` is about the process the
   pidfd names: no answer is based on a recycled pid.
 - S14. Nothing a sandbox process can write is read by a host process as
-  the sandbox's identity (`bwrapinfo.json`, `info`, the grant store). The
-  module's assertion refuses a bind holding a state dir or
+  the sandbox's identity (`bwrapinfo.json`, `info`, the daemon's
+  config). The module's assertion refuses a bind holding a state dir or
   `$XDG_RUNTIME_DIR`, or in either's identity parts.
 
 ### Protocol (`protocol.als`)
 
 - P1. No grant without consent: every live grant was preceded by an Allow
   for its capability and parameters, from the notification or the window,
-  or is an `always` grant from the store (replayed, or matched exactly).
-- P2. An `always` grant enters the store only from a window answer with
-  lease `always`, never from a notification or the request's proposal.
+  or comes from the config as a standing grant with exactly its
+  parameters that the user hasn't ended in this daemon's life. One the
+  user revoked or released isn't granted again without asking until the
+  daemon restarts.
+- P2. A standing grant comes only from the config: no request, answer or
+  event adds one, none is of type attach, and lease `standing` is never a
+  request's or an answer's.
 - P3. Never above the ceiling: a grant's parameters validate, match an
   instance `list` prints (service, command), and its source passes S11
   (attach), at grant time and again after a window narrows it.
@@ -302,8 +307,9 @@ process whose principal is in the Sandbox domain, at any time.
   `maxValidity` and at most what's left of a duration lease.
 - P11. Every grant ends with the daemon (service by `BindsTo=`, attach by
   `ExecStopPost` or the next start's cleanup) and with the sandbox.
-- P12. After the daemon starts again, the live grants are exactly the
-  stored `always` grants that still pass P3.
+- P12. After the daemon starts, the live grants are exactly the
+  configured standing grants that pass P3 and the exclusive lock: a
+  restart brings back the ones the user ended, and nothing else survives.
 - P13. An exclusive instance is granted to at most one launcher at a time.
 - P14. The sandbox can't keep the user from answering: one pending request
   per capability, three refusals in a row block it for 2 minutes, and a
@@ -363,7 +369,10 @@ Also left out: plugins' own code (trusted host code; a plugin's MCP tool
 descriptions reach Claude as text), the network beyond the macvlan
 (LAN peers, DHCP spoofing other than through udhcpc), side channels,
 timing beyond the fake clock (plan decision 2026-10-31), and resource
-exhaustion of the host other than the broker's budgets. A ceiling root
+exhaustion of the host other than the broker's budgets. The window's
+overview of static access (binds, ceilings, standing grants) is
+read-only and carries no consent, and the recent-decisions log, in the
+daemon's memory only, decides nothing. A ceiling root
 on a host mount that aliases a denied directory (a ceiling on `/mnt/home`
 where that's a bind of `/home`) gets a denied directory past the path
 check: that's the user's own mount and ceiling configuration.

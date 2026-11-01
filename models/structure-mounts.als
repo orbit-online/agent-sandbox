@@ -91,10 +91,9 @@ pred writes[p: Process, f: File] {
 // ---------------------------------------------------------------------
 // Host files. The grant directory, control.sock and the .flatpak
 // instance dirs (bwrapinfo.json, info) are in $XDG_RUNTIME_DIR; the
-// grant store and the sandbox's home, store and scratchpad in the
-// launcher's state dir (hm/default.nix:90, 535-547, 855-857).
+// sandbox's home, store and scratchpad in the launcher's state dir (hm/default.nix:90, 535-547, 855-857).
 
-one sig FsRoot, RuntimeDir, GrantDir, FlatpakDir, StateDir, GrantStore,
+one sig FsRoot, RuntimeDir, GrantDir, FlatpakDir, StateDir,
   SandboxHome, SandboxNix, Scratch extends File {}
 // tmpfs and other filesystems made in a namespace: no host file in them
 sig Anon extends File {}
@@ -110,7 +109,7 @@ fact hostFiles {
   all f: File - Anon - FsRoot | some f.up and f.up not in Anon
   all a: Anon | a.up in Anon
   (GrantDir + FlatpakDir).up = RuntimeDir
-  (GrantStore + SandboxHome + SandboxNix + Scratch).up = StateDir
+  (SandboxHome + SandboxNix + Scratch).up = StateDir
   RuntimeDir not in StateDir.*up and StateDir not in RuntimeDir.*up
   no (UserBind + CeilingRoot) & Anon
 }
@@ -267,11 +266,12 @@ assert S10grantDirReadOnly {
 check S10grantDirReadOnly for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
 
 // S14: nothing the sandbox writes is what the host reads as its
-// identity: bwrapinfo.json and info (under the .flatpak dir) and the
-// grant store. Holds with the default binds, as S10.
+// identity: bwrapinfo.json and info (under the .flatpak dir). The
+// daemon's config is a path in the host's Nix store, which no bind
+// reaches. Holds with the default binds, as S10.
 assert S14identityNotWritable {
   (world and guarded and defaultBinds) implies
-    no p: sandboxProcs | writes[p, FlatpakDir] or writes[p, GrantStore]
+    no p: sandboxProcs | writes[p, FlatpakDir]
 }
 check S14identityNotWritable for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
 
@@ -279,16 +279,16 @@ check S14identityNotWritable for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2
 // the paths the ceiling's denied list refuses as grant sources. Holds.
 assert S14anyBinds {
   (world and guarded) implies
-    no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir] or writes[p, GrantStore]
+    no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir]
 }
 check S14anyBinds for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
 
 // S14, revert: without the assertion a bind holding a state dir or
-// $XDG_RUNTIME_DIR passes (a rw bind of ~/.local/share exposes
-// permissions.json, so `always` grants without consent).
+// $XDG_RUNTIME_DIR passes (a rw bind of $XDG_RUNTIME_DIR exposes
+// bwrapinfo.json and the grant directory).
 assert S14anyBindsRevert {
   (world and Guards.on = Guard - BindsAsserted) implies
-    no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir] or writes[p, GrantStore]
+    no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir]
 }
 check S14anyBindsRevert for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 1
 

@@ -1,7 +1,7 @@
 /*
  * The grants' lifecycle: P3, P4, P9-P13 and P15 over the system in
- * protocol.als, with the findings about replay, forget and exclusive
- * instances, and the holds that releases and session ends drop. As in
+ * protocol.als, with the findings about the start's standing grants and
+ * exclusive instances, and the holds that releases and session ends drop. As in
  * protocol-consent.als, each claim has a `run` for its premise, and
  * "Revert:" names the check dropped to see it fail (tried 2026-10-31).
  */
@@ -23,14 +23,13 @@ check P3folderWithinCeiling for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Par
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 0
 run P3folders {
   eventually some g: Grant | born[g] and g.gcap.dtype = Attach
-  eventually some r: Req, g: Grant | r.rcap.dtype = Attach and (notifAllow[r, g] or fromStore[r, g])
+  eventually some r: Req, g: Grant | r.rcap.dtype = Attach and notifAllow[r, g]
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
 // P3, service and command: the parameters match an instance `list` prints at
 // grant time. request() runs inList before asking and again on every
-// answer (consent.go), replay("service") before starting a stored grant
-// (store.go). Holds. Revert: notifAllow without its `list` (as before the
+// answer (consent.go), start before granting a standing grant (run.go). Holds. Revert: notifAllow without its `list` (as before the
 // fix): an Allow up to 2 minutes later grants whatever `list` says by
 // then (counterexample found).
 assert P3listedAtGrant {
@@ -127,47 +126,51 @@ run P11restarts {
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
-// P12. After the daemon starts, its live grants are exactly the stored
-// always grants that pass P3 (service and attach; a command runs on
-// request), attach only once the grant directory is shared.
-// replay("service") runs `list` as a request does (store.go). Holds.
-// Revert: replayOK without `list` (as before the fix): an always grant of
-// a VM that no longer runs is started again (counterexample found).
-assert P12replayIsStoreUnderCeiling {
+// P12. After the daemon starts, its live grants are exactly the standing
+// grants of the config that pass P3 and the exclusive lock (service and
+// command; a command runs on request). start runs `list` as a request
+// does (run.go), and nothing of the earlier daemon's life survives. Holds.
+// Revert: standingOK without `list`: a standing grant of a VM that isn't
+// running is started (counterexample, tried 2026-11-01).
+assert P12startIsStandingUnderCeiling {
   always all l: Launcher | start[l] implies
     { c: Capability, p: Param | some g: Live' & gl.l | g.gcap = c and g.gparams = p }
-    = { c: Capability, p: Param | p in l.stored[c] and passes[c, p] and c.dtype != Command
-        and (c.dtype = Attach implies l in SharedDir) and (c in Exclusive implies no p.(c.matches).(c.lockFile) - l) }
+    = { c: Capability, p: Param | p in l.standing[c] and passes[c, p]
+        and (c in Exclusive implies no p.(c.matches).(c.lockFile) - l) }
 }
-check P12replayIsStoreUnderCeiling for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+check P12startIsStandingUnderCeiling for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..4 steps expect 0
-run P12replays {
-  eventually some l: Launcher | start[l] and some (Live' - Live) & typed[Attach]
+run P12starts {
+  eventually some l: Launcher | start[l] and some (Live' - Live) & typed[Service]
+  eventually some l: Launcher | start[l] and some (Live' - Live) & typed[Command]
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..6 steps expect 1
 
-// One live grant per launcher, capability and parameters. share runs
-// once per sandbox (sockets.go), a replay grants nothing already live,
-// and an answer that finds a grant of the same made while the user was
-// asked uses it (consent.go, all under c.covered). Holds. Revert: share
-// without its once and replays without the look for a live grant (as
-// before the fix): udhcpc's script sends share again and every always
-// folder is mounted once more (counterexample found; either alone holds).
+// P12. A restart brings back what the user ended: after a start, every
+// standing grant that passes is live again, whether or not it was revoked
+// or released before (start clears what was ended, run.go). Revert: start
+// keeping `ended` and granting only standing grants not in it: a revoked
+// one stays out after a restart (counterexample, tried 2026-11-01).
+assert P12restartRestoresStanding {
+  always all l: Launcher, c: Capability, p: l.standing[c] |
+    (start[l] and passes[c, p] and (c in Exclusive implies no p.(c.matches).(c.lockFile) - l))
+      implies after some g: Live | g.gl = l and g.gcap = c and g.gparams = p and g.glease = LStanding
+}
+check P12restartRestoresStanding for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  1 Session, 3 Grant, 2 Req, 1 Text, 3 Int, 1..7 steps expect 0
+
+// One live grant per launcher, capability and parameters. A request a
+// live grant covers uses it, a standing one included (matching, before
+// isStanding), and an answer that finds a grant of the same made while
+// the user was asked uses it (consent.go, all under c.covered). Holds.
+// Revert: fromConfig without the look for a live grant: a second request
+// for a live standing grant starts another (counterexample, tried
+// 2026-11-01).
 assert P12noDuplicateGrants {
   always all disj g, h: Live | not (g.gl = h.gl and g.gcap = h.gcap and g.gparams = h.gparams)
 }
 check P12noDuplicateGrants for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..5 steps expect 0
-
-// Forget leaves no live always grant of its parameters: it ends every
-// one (store.go), and with P12noDuplicateGrants there is at most one.
-// Holds (a counterexample before both fixes).
-assert P12forgetEndsAlways {
-  always all l: Launcher, c: Capability, p: Param, w: Principal |
-    forget[l, c, p, w] implies after no h: Live | h.gl = l and h.gcap = c and h.gparams = p and h.glease = LAlways
-}
-check P12forgetEndsAlways for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 3 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
 // P13. Two launchers never hold the same exclusive parameters at once
 // (exclusiveLock's O_EXCL files, instances.go; a crashed daemon's

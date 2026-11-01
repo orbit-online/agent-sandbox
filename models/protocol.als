@@ -1,14 +1,15 @@
 /*
  * Step 3: the permissions broker's protocol over time (README.md, P1-P15).
  * This file holds the system: requests, consent, grants per delivery type,
- * leases, the store, the daemon's crashes and restarts, several launchers,
- * and the attacker's moves interleaved; its own commands only test the
- * encoding. protocol-consent.als checks consent (P1, P2, P6, P7, P14),
- * protocol-life.als the grants' lifecycle (P3, P4, P9-P13, P15),
- * protocol-tree.als the process tree (P5, P8), protocol-window.als the
- * window's view. The system is in protocol_state.als, protocol_events.als
- * and protocol_system.als, which the checks `open` (Alloy module names
- * can't contain '-'); this file holds the encoding's own runs.
+ * leases, standing grants from the config, the daemon's crashes and
+ * restarts, several launchers, and the attacker's moves interleaved; its
+ * own commands only test the encoding. protocol-consent.als checks
+ * consent (P1, P2, P6, P7, P14), protocol-life.als the grants'
+ * lifecycle (P3, P4, P9-P13, P15), protocol-tree.als the process tree
+ * (P5, P8), protocol-window.als the window's view. The system is in
+ * protocol_state.als, protocol_events.als and protocol_system.als, which
+ * the checks `open` (Alloy module names can't contain '-'); this file
+ * holds the encoding's own runs.
  *
  * Sources: nix/packages/permissions-broker/{broker,plugins,mounts,sandbox}.go
  * at 9a902c9; the code wins where docs/permissions.md differs.
@@ -31,7 +32,7 @@ open protocol_system
 
 // ---------------------------------------------------------------------
 // Checks of the encoding itself: every delivery type is granted and ends,
-// and a daemon crashes, is cleaned up and replays. No claim about the
+// and a daemon crashes, is cleaned up and starts again. No claim about the
 // broker; protocol-*.als hold those.
 
 run deliveries {

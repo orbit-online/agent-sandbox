@@ -1,6 +1,7 @@
 /*
- * The protocol model's daemon life (crash, cleanup, start, replay), command
- * delivery, and the traces that interleave every event (protocol.als).
+ * The protocol model's daemon life (crash, cleanup, start with the
+ * standing grants), command delivery, and the traces that interleave
+ * every event (protocol.als).
  */
 module protocol_system
 open protocol_events
@@ -8,37 +9,32 @@ open protocol_events
 // ---------------------------------------------------------------------
 // The daemon's life.
 
-// replay (store.go): every stored always grant of type t that validates,
-// matches an instance `list` prints (service) or resolves beneath the
-// ceiling (attach), and isn't live already, is granted again.
-pred replays[l: Launcher, t: DType, N: set Grant] {
-  all g: N | g.gl = l and g.glease = LAlways and g.gcap.dtype = t and g.gparams in l.stored[g.gcap]
-  all c: Capability, p: l.stored[c] | (c.dtype = t and replayOK[l, c, p] and no liveOf[l, c, p])
-    implies one g: N | g.gcap = c and g.gparams = p
-  all g: N | replayOK[l, g.gcap, g.gparams] and no liveOf[l, g.gcap, g.gparams]
+// start (run.go): every standing grant of the config that validates,
+// matches an instance `list` prints and whose exclusive lock is free is
+// granted, with lease standing; one that fails is skipped. The start
+// removed the launcher's own stale locks first (cleanup), so only another
+// launcher's lock keeps one out.
+pred standingGrants[l: Launcher, N: set Grant] {
+  all g: N | g.gl = l and g.glease = LStanding and g.gparams in l.standing[g.gcap]
+  all c: Capability, p: l.standing[c] | standingOK[l, c, p] implies one g: N | g.gcap = c and g.gparams = p
+  all g: N | standingOK[l, g.gcap, g.gparams]
 }
-// Under c.covered, a replay makes no grant of what is live already.
-fun liveOf[l: Launcher, c: Capability, p: Param]: set Grant { { h: Live | h.gl = l and h.gcap = c and h.gparams = p } }
-// A start removes the launcher's own stale locks first (cleanup), so only
-// another launcher's lock keeps a grant from replaying.
-pred replayOK[l: Launcher, c: Capability, p: Param] {
+pred standingOK[l: Launcher, c: Capability, p: Param] {
   p in c.wellFormed
-  c.dtype != Attach implies some p.(c.matches) & Listed
-  c.dtype = Attach implies (some p.resolves and p.resolves in InCeiling)
+  some p.(c.matches) & Listed
   c in Exclusive implies no p.(c.matches).(c.lockFile) - l
 }
 
-// share from M1 (shareFrom, broker.go:485-497): shared, then replay C.
+// share from M1 (sockets.go): the grant directory is shared; no grant
+// comes with it (no standing grant is an attach one).
 pred share[l: Launcher, w: Principal] {
   inM1[w] and l in Up - Gone
   // once per sandbox (shareAsked, sockets.go)
   l not in SharedDir
   SharedDir' = SharedDir + l
   Up' = Up and Dirty' = Dirty and Watched' = Watched and Gone' = Gone
-  replays[l, Attach, Live' - Live]
-  change[Live' - Live, none]
-  keepHolds
-  keepGates and keepEnv and keepReqs and stored' = stored
+  keepGrants
+  keepGates and keepEnv and keepReqs and ended' = ended
 }
 
 // The daemon dies. Its service units stop with it (BindsTo); its folders
@@ -58,7 +54,7 @@ pred crash[l: Launcher] {
   Asked' = Asked and Forged' = Forged and shownDir' = shownDir and shows' = shows and by' = by
   asking' = asking - l -> Capability and refused' = refused - l -> Capability -> Int
   blocked' = blocked - l -> Capability
-  keepEnv and stored' = stored
+  keepEnv and ended' = ended
 }
 
 // ExecStopPost: permissions-broker cleanup.
@@ -68,20 +64,20 @@ pred stopPost[l: Launcher] {
   cleanup[l]
   Live' = Live and Ended' = Ended and ToRun' = ToRun
   keepHolds and left' = left and mdir' = mdir
-  keepGates and keepEnv and keepReqs and stored' = stored
+  keepGates and keepEnv and keepReqs and ended' = ended
 }
 
-// run() (broker.go:203-238): cleanup, replay A, and, when an earlier
-// daemon shared the grant directory, replay C (adoptShared).
+// start (run.go): cleanup, then the standing grants; nothing else of an
+// earlier daemon survives, and what the user ended in its life is
+// forgotten. A standing command grant runs its command only when the
+// sandbox asks for it.
 pred start[l: Launcher] {
   l not in Up + Gone
   Up' = Up + l and Dirty' = Dirty - l
   SharedDir' = SharedDir and Watched' = Watched and Gone' = Gone
   let N = Live' - Live {
     all g: N | g.gl = l
-    replays[l, Service, N & typed[Service]]
-    l in SharedDir implies replays[l, Attach, N & typed[Attach]] else no N & typed[Attach]
-    no N & typed[Command]
+    standingGrants[l, N]
     no N & (Live + Ended)
     exclusiveLockFree[N, l]
     mountChecks[N]
@@ -93,7 +89,8 @@ pred start[l: Launcher] {
     all g: Grant - (N & typed[Attach]) | g.mdir' = g.mdir
   }
   keepHolds and left' = left
-  keepGates and keepEnv and keepReqs and stored' = stored
+  keepGates and keepEnv and keepReqs
+  ended' = ended - l -> Capability -> Param
 }
 
 // The sandbox ends: endAll, the daemon exits, the mounts go with M1.
@@ -110,7 +107,7 @@ pred sandboxEnd[l: Launcher] {
   Pending' = Pending - rl.l and Mature' = Mature - rl.l and Opened' = Opened - rl.l
   Asked' = Asked and Forged' = Forged and shownDir' = shownDir and shows' = shows and by' = by
   asking' = asking - l -> Capability and refused' = refused and blocked' = blocked
-  keepEnv and stored' = stored
+  keepEnv and ended' = ended
 }
 
 // deliver() for a command (consent.go): the validity, refused when it is not
@@ -124,7 +121,7 @@ pred runCommand[g: Grant] {
   ToRun' = ToRun - g
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted
   keepHolds and left' = left and mdir' = mdir and lockFile' = lockFile
-  keepDaemons and keepGates and keepEnv and keepReqs and stored' = stored
+  keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
 }
 pred credential[g: Grant] { runCommand[g] and validity[g] > 0 }
 
@@ -136,11 +133,11 @@ pred env {
   Alive in Alive'
   Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
   keepHolds and left' = left and mdir' = mdir and lockFile' = lockFile
-  keepDaemons and keepGates and keepReqs and stored' = stored
+  keepDaemons and keepGates and keepReqs and ended' = ended
 }
 
 pred stutter {
-  keepDaemons and keepGates and keepEnv and keepGrants and keepReqs and stored' = stored
+  keepDaemons and keepGates and keepEnv and keepGrants and keepReqs and ended' = ended
 }
 
 // Who tries control.sock and request.sock: the window, and a process of
@@ -153,7 +150,7 @@ fact traces {
   always (
     stutter or env or tick
     or (some r: Req | ask[r] or mature[r] or options[r] or forge[r] or refuse[r] or drop[r])
-    or (some r: Req, g: Grant | matchLive[r, g] or fromStore[r, g] or notifAllow[r, g])
+    or (some r: Req, g: Grant | matchLive[r, g] or fromConfig[r, g] or notifAllow[r, g])
     or (some r: Req, w: Clients, ls: Lease, p: Param, g: Grant | windowAllow[r, w, ls, p, g])
     or (some g: Grant | release[g, none] or watchEnd[g] or expire[g] or runCommand[g])
     or (some g: Grant, s: Session | release[g, s])
@@ -163,7 +160,5 @@ fact traces {
           or start[l] or sandboxEnd[l])
     or (some l: Launcher, w: Clients + BwrapInitP + UdhcpcP | share[l, w])
     or (some l: Launcher, c: Capability | unblock[l, c])
-    or (some l: Launcher, c: Capability, p: Param, w: Clients |
-          forget[l, c, p, w])
   )
 }

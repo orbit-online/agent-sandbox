@@ -18,24 +18,35 @@ pred allowedByHost[g: Grant] {
   }
 }
 
+// A standing grant of the config with exactly g's capability and
+// parameters, which the user hasn't ended in this daemon's life, or which
+// a start grants (start clears what was ended).
+pred fromConfigNow[g: Grant] {
+  g.glease = LStanding
+  g.gparams in g.gl.standing[g.gcap]
+  start[g.gl] or g.gparams not in g.gl.ended[g.gcap]
+}
+
 // P1. No grant without consent: a grant is born from an Allow by a host
 // principal (the notification's action or a control.sock client) for its
-// capability and parameters, or from the store, with exactly its
-// parameters (isAlways, broker.go:697-707; answer from the host only,
-// broker.go:386).
-// Revert: hostOnly true, or isAlways matching any stored parameters of
-// the capability: counterexample either way.
+// capability and parameters, or from the config as a standing grant with
+// exactly its parameters that the user hasn't ended in this daemon's life
+// (isStanding, consent.go; start, run.go; answers from the host only,
+// sockets.go).
+// Revert: hostOnly true, or isStanding matching any standing parameters
+// of the capability: counterexample either way.
 assert P1noGrantWithoutConsent {
-  always all g: Grant | born[g] implies
-    allowedByHost[g] or g.gparams in g.gl.stored[g.gcap]
+  always all g: Grant | born[g] implies allowedByHost[g] or fromConfigNow[g]
 }
 check P1noGrantWithoutConsent for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 0
-// P1's premise: grants born from the notification, the window and the store.
+// P1's premise: grants born from the notification, the window, a start
+// and a request a standing grant covers.
 run P1grants {
   eventually some r: Req, g: Grant | notifAllow[r, g]
   eventually some r: Req, w: Principal, ls: Lease, p: Param, g: Grant | windowAllow[r, w, ls, p, g]
-  eventually some r: Req, g: Grant | fromStore[r, g]
+  eventually some l: Launcher | start[l] and some Live' & gl.l
+  eventually some r: Req, g: Grant | fromConfig[r, g]
 } for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 
@@ -52,34 +63,53 @@ assert P1sessionLeaseNotWidened {
 check P1sessionLeaseNotWidened for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 1
 
-// P1: a revoked always grant stays revoked. Revoke removes its store
-// entry too (revoke, leases.go), so the sandbox's next request with the
-// same parameters asks again. Holds. Revert: revoke keeping the store
-// entry (as before the fix): fromStore grants it back without a
-// notification (counterexample found).
-assert P1revokedStaysRevoked {
-  always all r: Req, g: Grant | fromStore[r, g] implies
-    not (once some h: Grant, w: Principal | revoke[h, w] and h.gl = g.gl and h.gcap = g.gcap and h.gparams = g.gparams)
+// The user ends a standing grant of (l, c, p) in this step: revokes it,
+// or releases it and it ends.
+pred userEnds[l: Launcher, c: Capability, p: Param] {
+  some h: Live & glease.LStanding {
+    h.gl = l and h.gcap = c and h.gparams = p
+    (some w: Principal | revoke[h, w])
+      or ((release[h, none] or some s: Session | release[h, s]) and after h not in Live)
+  }
 }
-check P1revokedStaysRevoked for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
-// P2. always enters the store only from a window answer with lease always
-// (broker.go:588-595: the notification offers session or an hour instead;
-// 632-634: addAlways only for the answer's lease).
-// Revert: offered[] with asked = rlease: the notification's Allow stores it.
-assert P2alwaysFromWindowOnly {
-  always all l: Launcher, c: Capability, p: Param |
-    (p not in l.stored[c] and after p in l.stored[c]) implies
-      some r: Req, w: Principal, g: Grant | r.rl = l and r.rcap = c and windowAllow[r, w, LAlways, p, g]
+// P1: a standing grant the user ended stays ended until the daemon
+// restarts. Revoke and a release that ends it record it as ended
+// (revoke, release, leases.go), so the sandbox's next request with the
+// same parameters asks again; only a start grants it again. Holds.
+// Revert: revoke or release not recording it: request() grants it back
+// without asking (counterexample, tried 2026-11-01).
+assert P1endedStandingAsks {
+  always all g: Grant | (born[g] and g.glease = LStanding and not start[g.gl]) implies
+    not ((not start[g.gl]) since userEnds[g.gl, g.gcap, g.gparams])
 }
-check P2alwaysFromWindowOnly for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
+check P1endedStandingAsks for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  2 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..7 steps expect 0
+// P1's premise: a revoked standing grant asked for again, and back after
+// a restart.
+run P1standingBackAfterRestart {
+  some l: Launcher, c: Capability, p: Param | eventually (userEnds[l, c, p]
+    and after eventually ((some r: Req | r.rl = l and r.rcap = c and r.rparams = p and ask[r])
+      and after eventually (start[l] and after (some g: Live | g.gl = l and g.gcap = c and g.gparams = p))))
+} for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
+  1 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..9 steps expect 1
+
+// P2. A standing grant comes only from the config: every grant with lease
+// standing is one the launcher's config declares, and no request or
+// answer picks lease standing (request() and windowDecision, consent.go);
+// none is of type attach (the module's assertion).
+// Revert: windowAllow without `ls != LStanding`: the window's answer makes
+// a standing grant of what the config doesn't declare (counterexample,
+// tried 2026-11-01).
+assert P2standingFromConfigOnly {
+  always all g: Live & glease.LStanding | g.gparams in g.gl.standing[g.gcap] and g.gcap.dtype != Attach
+}
+check P2standingFromConfigOnly for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 0
-// P2's premise: a request for always, allowed on the notification, and one
-// stored from the window.
-run P2stores {
-  eventually some r: Req, g: Grant | r.rlease = LAlways and notifAllow[r, g]
-  eventually some l: Launcher, c: Capability | some l.stored[c]
+// P2's premise: standing grants of service and command.
+run P2standing {
+  eventually some g: Live & glease.LStanding | g.gcap.dtype = Service
+  eventually some g: Live & glease.LStanding | g.gcap.dtype = Command
 } for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
 

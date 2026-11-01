@@ -3,7 +3,7 @@
  * answers one (P1, P6 on the window's side). The window refreshes its
  * state on every event of the broker's watch stream (window.go,
  * main.go), which the sandbox triggers at will: a request for another
- * capability (`pending`), a release (`ended`), a request an always grant
+ * capability (`pending`), a release (`ended`), a request a standing grant
  * covers (`granted`). The broker sends the pending requests in arrival
  * order (sockets.go), so a row keeps its place while others come after
  * it, and the QML keeps what the user set on each row by request id
