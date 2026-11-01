@@ -240,7 +240,20 @@ modules and a user alice (the `home-manager` input exists only for it).
   minutes, not again right after, and in tool results; service units bound
   to the daemon's unit, and the cleanup a stopped daemon's `ExecStopPost`
   runs (units stopped, locks removed, folder grants detached, mountpoints
-  removed, also without the sandbox).
+  removed, also without the sandbox). Stateful property tests
+  (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
+  protocol model's actions against the broker on the stand-in sandbox, with
+  a fake clock: requests of each type from sessions, a forged session and a
+  caller without one, floods and crafted requests, answers on the
+  notification and in the window, releases, sessions ending, lock events,
+  time passing, revoke, forget, a restart with replay, `share`, `list`
+  changing, another launcher's exclusive locks and control.sock from inside.
+  After every step the broker's grants, holders and gates, its store file,
+  units, mounts and locks and the window's view match a reference model
+  (P1, P3, P4, P9, P10, P12, P13, P14, release holds). `go test` runs 50
+  sequences of about 30 steps (half a minute or less); more with
+  `-rapid.checks=1000 -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`),
+  a failure again with the `-rapid.seed` it prints.
 - `permissions-window`: the package build runs, offscreen in Plasma's
   style, its Go tests (`window_test.go`: the operations against a fake
   `control.sock`, and the Qt glue, checked in `TestMain` since Qt wants the

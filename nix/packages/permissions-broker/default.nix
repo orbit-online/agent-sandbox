@@ -20,7 +20,7 @@ buildGoModule {
     ];
   };
   subPackages = [ "cmd/permissions-broker" ];
-  vendorHash = "sha256-tJjl2D5Mv+/ukjWB0EmbYxeQ/v3mU8VFMRQJ742kKk8=";
+  vendorHash = "sha256-4Of8zQcd0WJzGnwkK/GWhawzSDpKSHcjyx8mcLJaadE=";
   env.CGO_ENABLED = 0;
   ldflags = [
     "-X main.nsenter=${lib.getExe' util-linux "nsenter"}"

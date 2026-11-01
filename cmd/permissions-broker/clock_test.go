@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -15,8 +16,30 @@ type fakeClock struct {
 }
 
 type fakeTimer struct {
-	at time.Time
-	ch chan time.Time
+	at    time.Time
+	ch    chan time.Time
+	owner *clockView
+}
+
+// clockView is a fake clock as one daemon sees it: when that daemon dies, its timers die with it, also those it asks
+// for after
+type clockView struct {
+	c    *fakeClock
+	dead bool // under c.mu
+}
+
+func (c *fakeClock) view() *clockView { return &clockView{c: c} }
+
+func (v *clockView) now() time.Time { return v.c.now() }
+
+func (v *clockView) after(d time.Duration) <-chan time.Time { return v.c.afterFor(v, d) }
+
+// die forgets the view's timers, which then never fire
+func (v *clockView) die() {
+	v.c.mu.Lock()
+	defer v.c.mu.Unlock()
+	v.dead = true
+	v.c.timers = slices.DeleteFunc(v.c.timers, func(t fakeTimer) bool { return t.owner == v })
 }
 
 func newFakeClock() *fakeClock {
@@ -29,15 +52,20 @@ func (c *fakeClock) now() time.Time {
 	return c.t
 }
 
-func (c *fakeClock) after(d time.Duration) <-chan time.Time {
+func (c *fakeClock) after(d time.Duration) <-chan time.Time { return c.afterFor(nil, d) }
+
+func (c *fakeClock) afterFor(owner *clockView, d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.made[d]++
 	ch := make(chan time.Time, 1)
+	if owner != nil && owner.dead {
+		return ch
+	}
+	c.made[d]++
 	if d <= 0 {
 		ch <- c.t
 	} else {
-		c.timers = append(c.timers, fakeTimer{at: c.t.Add(d), ch: ch})
+		c.timers = append(c.timers, fakeTimer{at: c.t.Add(d), ch: ch, owner: owner})
 	}
 	return ch
 }
@@ -63,13 +91,6 @@ func (c *fakeClock) jump(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.t = c.t.Add(d)
-}
-
-// drop forgets every timer, which then never fires: their daemon died
-func (c *fakeClock) drop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.timers = nil
 }
 
 // asked is how many timers of d were asked for

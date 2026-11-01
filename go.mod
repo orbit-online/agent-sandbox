@@ -8,6 +8,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/vishvananda/netlink v1.3.1
 	golang.org/x/sys v0.48.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (

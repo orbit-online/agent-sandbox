@@ -18,7 +18,7 @@ buildGoModule {
     ];
   };
   subPackages = [ "cmd/subid-broker" ];
-  vendorHash = "sha256-6WYYokJ/y3VehAE6U6RdX5+6Tvi+yP/WjHCeabw+1Xg=";
+  vendorHash = "sha256-9UzyyyNvGaCiJ2bqgMenRS3pq0k/O3cjqxI0+WcWUYE=";
   env.CGO_ENABLED = 0;
   ldflags = [ "-X main.nsenter=${lib.getExe' util-linux "nsenter"}" ];
   # The shims, which the sandbox puts where shadow's would be
