@@ -161,8 +161,14 @@ let
       ];
       virtualisation = {
         memorySize = 2048;
-        # The store syncs copy the sandbox closure (graphics drivers included) into alice's home, once per launcher
+        # The store syncs copy the sandbox closure into alice's home, once per launcher
         diskSize = 12288;
+      };
+      # No graphics stack in the sandbox closure the store syncs copy, a third of it with mesa's: the stub app draws
+      # nothing, and the module's graphics assertion still holds
+      hardware.graphics = {
+        package = pkgs.emptyDirectory;
+        extraPackages = lib.mkForce [ ];
       };
       # netns-macvlan puts the macvlan on the default route's device
       networking.defaultGateway = nodes.router.networking.primaryIPAddress;
