@@ -97,3 +97,45 @@ func TestHoldersThreads(t *testing.T) {
 		})
 	}
 }
+
+// Ending a holder works on one that ignores SIGTERM: the window's End sends SIGKILL
+func TestEndIgnoresTerm(t *testing.T) {
+	src := t.TempDir()
+	b, stdin, out := sandboxC(t, "allow")
+	c := folders(t, `{"path": "`+src+`"}`)
+	b.caps[c.id()] = c
+	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// exec keeps the ignored signal
+	fmt.Fprintf(stdin, "run trap '' TERM && cd %s && exec sleep 600\n", g.Path)
+	var pid int
+	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
+		t.Fatal(pid, err)
+	}
+	for range 100 {
+		if comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); string(comm) == "sleep\n" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	holders, err := b.revoke(g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+		t.Fatalf("%d isn't among the holders %+v", pid, holders)
+	}
+	if err := b.endHeld(g.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		// A zombie until the stand-in reaps it, which startTime doesn't count
+		if _, ok := startTime(pid); !ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("%d, ignoring SIGTERM, still runs after End", pid)
+}

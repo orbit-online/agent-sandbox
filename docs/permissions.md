@@ -183,9 +183,9 @@ processes with a thread whose mount namespace has a mount of the grant's filesys
 one can have a working directory, file table and mount namespace of its own (`unshare` with `CLONE_FS`,
 `CLONE_FILES` or `CLONE_NEWNS`). It does so however the grant ended (revoked, released from
 inside, its lease run out) and keeps the last twenty grants' holders for the window, which shows them and offers to
-end them: `SIGTERM` through a pidfd, only for processes in the sandbox, and only to the process recorded (by its start
-time), not to a later one that got its pid. The daemon doesn't refuse a revoke because something is in
-use, and doesn't kill anything without the user saying so.
+end them: `SIGKILL`, which a process can't ignore, through a pidfd, only for processes in the sandbox, and only to the
+process recorded (by its start time), not to a later one that got its pid. The daemon doesn't refuse a revoke because
+something is in use, and doesn't kill anything without the user saying so.
 
 Finding holders is best effort. A file descriptor can stay open where `/proc` shows no process holding it: in flight
 in an `SCM_RIGHTS` message queued on a socket nobody reads yet, or registered with an io_uring as a fixed file. Either

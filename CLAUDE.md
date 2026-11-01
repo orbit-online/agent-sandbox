@@ -208,7 +208,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, a folder mounted
   read-only where the app sees it and not on the host, its holders listed and
-  ended (one holding it on a thread alone, by that thread's cwd, fd, root or
+  ended (one ignoring SIGTERM too; one holding it on a thread alone, by that thread's cwd, fd, root or
   mount namespace; not a process outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
   record), detached with its mountpoint

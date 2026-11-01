@@ -75,8 +75,9 @@ func (b *broker) endHeld(grant string) error {
 	return b.endHolders(hs)
 }
 
-// endHolders ends holders, each through a pidfd taken first, and only while the pidfd's process is the one recorded
-// (its start time) and in the sandbox, as checked after those reads: a pid since reused isn't signalled
+// endHolders ends holders with SIGKILL, which no process can ignore or handle, each through a pidfd taken first, and
+// only while the pidfd's process is the one recorded (its start time) and in the sandbox, as checked after those reads:
+// a pid since reused isn't signalled
 func (b *broker) endHolders(hs []holder) error {
 	var errs []error
 	for _, h := range hs {
@@ -91,7 +92,7 @@ func (b *broker) endHolders(hs []holder) error {
 		case !b.sb.contains(h.Pid) || !proc.Alive(fd):
 			errs = append(errs, fmt.Errorf("%d isn't in the sandbox", h.Pid))
 		default:
-			if err := unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+			if err := unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 				errs = append(errs, fmt.Errorf("End %d: %w", h.Pid, err))
 			}
 		}
