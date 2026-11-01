@@ -129,6 +129,10 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 		return nil, errors.New("Screen lock isn't watched any more, so no lock lease: ask for a duration")
 	}
 	b.grants[g.ID] = g
+	// Under b.mu, before anyone can find the grant: a session hold adds later watches its own
+	for _, s := range g.sessions {
+		go b.watchSession(g, s)
+	}
 	b.mu.Unlock()
 	go b.lease(g, watchDone)
 	slog.Info("Granted", "grant", g.ID, "capability", g.Capability, "lease", lease)
@@ -143,11 +147,6 @@ func (b *broker) lease(g *grant, watchDone <-chan struct{}) {
 	if !g.Expires.IsZero() {
 		timeout = b.clock.after(g.Expires.Sub(b.now()))
 	}
-	b.mu.Lock()
-	for _, s := range g.sessions {
-		go b.watchSession(g, s)
-	}
-	b.mu.Unlock()
 	select {
 	case <-timeout:
 		g.end("its time ran out")

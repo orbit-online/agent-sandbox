@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -292,5 +294,39 @@ func TestSessionGoneWhileAsked(t *testing.T) {
 			t.Errorf("The request closed a file it didn't own: %d, %v", fd, err)
 		}
 		unix.Close(fd)
+	}
+}
+
+// watches counts the goroutines watching a session
+func watches() int {
+	buf := make([]byte, 1<<22)
+	return strings.Count(string(buf[:runtime.Stack(buf, true)]), ").watchSession(")
+}
+
+// A session given a session lease before its lease's watches started is watched once: watched twice, a release would
+// have both watches close its pidfd
+func TestSessionWatchedOnce(t *testing.T) {
+	// The grant's lease starts after the hold
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	b, _ := testBroker(t)
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	_, a := startAnchor(t, "claude")
+	t.Setenv("SESSION_ID", "session-2")
+	_, other := startAnchor(t, "claude")
+	s1, _ := b.sb.sessionOf(a)
+	s2, _ := b.sb.sessionOf(other)
+	if s1 == nil || s2 == nil {
+		t.Fatal("No sessions")
+	}
+	before := watches()
+	g, err := b.grant(c, json.RawMessage(`{}`), "x", "session", s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.hold(g, s2)
+	time.Sleep(100 * time.Millisecond)
+	if n := watches() - before; n > 2 {
+		t.Errorf("%d watches of two sessions", n)
 	}
 }
