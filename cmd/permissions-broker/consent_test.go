@@ -31,7 +31,7 @@ func TestConsent(t *testing.T) {
 	if f.asked[1].Summary != `the test thing (path="/a")` || f.asked[1].Reason != "testing" {
 		t.Errorf("Asked %+v", f.asked[1])
 	}
-	// The credential's validity is the shorter of the lease's remainder and maxValidity
+	// The output's validity is the shorter of the lease's remainder and maxValidity
 	var in pluginInput
 	if err := json.Unmarshal([]byte(cred), &in); err != nil || in.Validity != "PT3600S" {
 		t.Errorf("Issued with %q (%v), want the lease's hour", in.Validity, err)

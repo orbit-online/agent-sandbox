@@ -159,7 +159,7 @@ and streams it), D-Bus services (an xdg-dbus-proxy instance per grant, since rul
 website logins (an HTTP proxy that adds cookies the sandbox never sees).
 
 **`command`: run once on the host.** The daemon runs the plugin's `run` command with the request's parameters (the
-sandbox's public key or CSR among them) and the validity as JSON on stdin, and returns what it prints. The validity
+sandbox's public key or CSR among them) and the validity as JSON on stdin, and returns what it prints, as the answer's `output`. The validity
 is the shorter of the plugin's `maxValidity` (from its ceiling) and a duration lease. The lease decides only whether
 another `run` asks the user first. What a command printed can't be taken back: revoke means "won't run again". Fits:
 credentials (certs from a host CA, SSH certificates, Kubernetes client certs) and host actions.
@@ -273,7 +273,7 @@ is refused without asking the user.
 | op        | parameters                              | answer                                      |
 |-----------|-----------------------------------------|---------------------------------------------|
 | `list`    |                                         | capabilities and instances, with live grants |
-| `request` | `capability`, `params`, `reason`, `lease` | the delivery: socket path, credential or mount path |
+| `request` | `capability`, `params`, `reason`, `lease` | the delivery: socket path, mount path or a command's `output` |
 | `release` | `grant`                                 | drops the caller's session's hold; ends the grant once nobody holds it |
 | `status`  |                                         | the grants the caller's session holds        |
 | `watch`   |                                         | a stream of grant events, one JSON per line |
@@ -303,7 +303,7 @@ such an anchor gets no session leases.
 A grant belongs to the sandbox, not to the session that asked for it. Every process in the sandbox runs as the same
 user in the same namespaces, so nothing could keep one session from another's grant: any process in the sandbox can
 use any live grant (a folder is mounted in the mount namespace everyone shares, a service's socket sits in the grant
-directory everyone sees, a credential is a string), and every session's MCP server offers every grant's tools. The
+directory everyone sees, a command's output is a string), and every session's MCP server offers every grant's tools. The
 session id only ties a "this session" lease's lifetime to that session's `claude` process, and records who still
 holds a grant for `release` and the nudge. Anything in the sandbox can set the variable; nothing relies on it to
 authenticate a caller. A request a live grant covers is answered without asking, from any session: a Claude Code

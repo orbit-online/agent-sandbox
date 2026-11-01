@@ -117,7 +117,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 		res.Grants = b.grantViews("")
 	case "request":
 		var g *grant
-		g, res.Credential, err = b.request(p, req)
+		g, res.Output, err = b.request(p, req)
 		res.Grant = b.view(g)
 	case "release":
 		// The caller's session drops its hold; without one, the grant ends

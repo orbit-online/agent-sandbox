@@ -41,7 +41,7 @@ func (b *broker) checkLease(lease string, sess *session) error {
 	return nil
 }
 
-// validity is how long a command's credential lasts: maxValidity, or a duration lease's remainder if shorter
+// validity is how long what a command prints lasts: maxValidity, or a duration lease's remainder if shorter
 func (b *broker) validity(c *capability, g *grant) time.Duration {
 	v, _ := parseDuration(c.Ceiling.MaxValidity)
 	if !g.Expires.IsZero() {

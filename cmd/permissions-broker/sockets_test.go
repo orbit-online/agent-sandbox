@@ -75,7 +75,7 @@ func TestSockets(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	res, err := callBroker(sock, req(c.id(), `{"path": "/a"}`, "PT1H"))
-	if err != nil || res.Grant == nil || res.Credential == "" {
+	if err != nil || res.Grant == nil || res.Output == "" {
 		t.Fatalf("request: %+v, %v", res, err)
 	}
 	list, err := callBroker(sock, request{Op: "list"})

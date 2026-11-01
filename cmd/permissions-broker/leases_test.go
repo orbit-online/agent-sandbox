@@ -125,15 +125,15 @@ func TestRanOut(t *testing.T) {
 	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
-	// The lease is over, its timer not yet fired: no credential without a validity
+	// The lease is over, its timer not yet fired: no output without a validity
 	b.skew.Store(int64(2 * time.Hour))
 	if _, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
 		t.Errorf("Issued %q after the lease ran out", cred)
 	}
 }
 
-// P4: a request a live command grant covers waits for a plugin slot; the grant is revoked meanwhile. No credential
-func TestNoCredentialAfterEnd(t *testing.T) {
+// P4: a request a live command grant covers waits for a plugin slot; the grant is revoked meanwhile. No output
+func TestNoOutputAfterEnd(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
 	b.caps[c.id()] = c

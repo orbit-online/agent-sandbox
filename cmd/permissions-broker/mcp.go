@@ -42,7 +42,7 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 	server := mcp.NewServer(implementation, &mcp.ServerOptions{
 		InitializedHandler: func(context.Context, *mcp.InitializedRequest) { initialized() },
 		Instructions: "Access outside the sandbox that the user grants while it runs: folders, devices, services, " +
-			"credentials. list shows what can be asked for. request asks the user, who sees what you ask for and your " +
+			"commands run on the host. list shows what can be asked for. request asks the user, who sees what you ask for and your " +
 			"reason, and waits for their answer. Ask only for what the task needs, for as short as it needs, and " +
 			"release a grant as soon as you're done with it. A grant belongs to the whole sandbox, not to the session " +
 			"that asked: every session can use it, and a session lease only ends with the session. Some grants bring " +
@@ -60,7 +60,7 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "request", Description: "Ask the user for a grant. Waits for their " +
 		"answer, up to two minutes, longer if they open the Permissions window on it. Returns the grant: a socket to " +
-		"connect to, a credential or a path."},
+		"connect to, a path, or for a command what it printed (output), run again on every request the grant covers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			params, _ := json.Marshal(in.Params)
 			res, err := call(request{Op: "request", Capability: in.Capability, Params: params, Reason: in.Reason,
@@ -68,7 +68,7 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 			if err != nil {
 				return nil, nil, err
 			}
-			return n.add(jsonResult(map[string]any{"grant": res.Grant, "credential": res.Credential}))
+			return n.add(jsonResult(map[string]any{"grant": res.Grant, "output": res.Output}))
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "release", Description: "Give a grant back once you're done with it. " +
 		"It ends once no session that was given it still holds it."},

@@ -49,7 +49,7 @@ let
         {
           name = "thing";
           type = "command";
-          description = "a test credential";
+          description = "a test command";
           run = [
             (pkgs.writeShellScript "run" "echo issued-$(${pkgs.lib.getExe pkgs.jq} -r .validity)")
           ];

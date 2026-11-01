@@ -48,7 +48,7 @@ type request struct {
 type response struct {
 	Error        string           `json:"error,omitempty"`
 	Grant        *grant           `json:"grant,omitempty"`
-	Credential   string           `json:"credential,omitempty"`
+	Output       string           `json:"output,omitempty"` // what a command grant's run printed
 	Grants       []*grant         `json:"grants,omitempty"`
 	Capabilities []capabilityInfo `json:"capabilities,omitempty"`
 	Pending      []*pending       `json:"pending,omitempty"`

@@ -158,7 +158,7 @@ func TestDieWith(t *testing.T) {
 	}{
 		{"its parent", os.Getpid(), true},
 		// As after the wrapper gave up on the socket and exited: the reaper is the parent now
-		{"parent gone", os.Getpid() + 1 << 20, false},
+		{"parent gone", os.Getpid() + 1<<20, false},
 	} {
 		cmd := exec.Command("/proc/self/exe")
 		cmd.Env = append(os.Environ(), "SUBID_BROKER_TEST=die-with", "SUBID_BROKER_TEST_PARENT="+strconv.Itoa(tc.parent))
