@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"slices"
@@ -47,9 +48,10 @@ func (mc *machine) Check(t *rapid.T) {
 			mc.fatalf(t, "Grant %s held by %v (anonymous %v, anchors %v), want %v (%v)", id, s.g.Sessions, s.anon,
 				s.anchors, r.holders, r.anon)
 		}
-		// P1: only after an Allow
-		if !m.consented[storeKey{r.cap, r.params}] {
-			mc.fatalf(t, "Grant %s (%s %s %s) without consent", id, r.cap, r.params, r.lease)
+		// P1: only after an Allow, or a standing grant from the config the user hasn't ended
+		if r.lease == "standing" && !m.isStanding(r.cap, r.params) ||
+			r.lease != "standing" && !m.consented[storeKey{r.cap, r.params}] {
+			mc.fatalf(t, "Grant %s (%s %s %s) without consent or a standing grant", id, r.cap, r.params, r.lease)
 		}
 		// P3: a folder beneath its ceiling
 		if r.cap == capFolder && !strings.HasPrefix(s.g.Source, mc.w.root+"/") {
@@ -139,6 +141,9 @@ func (mc *machine) checkWindow(t *rapid.T) {
 	if slices.Sort(ids); !slices.Equal(ids, slices.Sorted(maps.Keys(mc.m.grants))) {
 		mc.fatalf(t, "The window shows grants %v, want %v", ids, slices.Sorted(maps.Keys(mc.m.grants)))
 	}
+	if err := checkStandingView(mc.m, res.Standing); err != nil {
+		mc.fatalf(t, "%v", err)
+	}
 	if len(res.Pending) != len(mc.m.pending) {
 		mc.fatalf(t, "The window shows %d pending requests, want %d", len(res.Pending), len(mc.m.pending))
 	}
@@ -149,6 +154,26 @@ func (mc *machine) checkWindow(t *rapid.T) {
 				p.Lease, p.Options, r.id, r.cap, r.params, r.lease, r.options)
 		}
 	}
+}
+
+// checkStandingView: the window's standing grants are the config's, each ended as the user ended it and with its live
+// grant
+func checkStandingView(m *model, views []standingGrant) error {
+	if len(views) != len(m.standing) {
+		return fmt.Errorf("The window shows %d standing grants, want %d", len(views), len(m.standing))
+	}
+	for i, v := range views {
+		k := m.standing[i]
+		live := ""
+		if g := m.matching(k.cap, k.params); g != nil && g.lease == "standing" {
+			live = g.id
+		}
+		if v.Capability != k.cap || string(v.Params) != k.params || v.Ended != m.ended[k] || v.Grant != live {
+			return fmt.Errorf("The window shows standing grant %s %s ended %v live %q, want %v ended %v live %q",
+				v.Capability, v.Params, v.Ended, v.Grant, k, m.ended[k], live)
+		}
+	}
+	return nil
 }
 
 func describeGrants[V any](gs map[string]V, g func(V) grant) []string {

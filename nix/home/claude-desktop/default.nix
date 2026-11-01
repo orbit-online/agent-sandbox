@@ -432,6 +432,35 @@ let
         default = { };
         description = "Plugins whose capabilities the broker grants, by name.";
       };
+      grants = mkOption {
+        type = types.listOf (
+          types.submodule {
+            options = {
+              plugin = mkOption {
+                type = types.str;
+                description = "The plugin, by its name in `permissions.plugins`.";
+              };
+              capability = mkOption {
+                type = types.str;
+                description = "The plugin's capability, by name: a `service` or `command` one.";
+              };
+              params = mkOption {
+                type = (pkgs.formats.json { }).type;
+                default = { };
+                description = "Its parameters, as a request names them. A request with exactly these gets the grant.";
+              };
+            };
+          }
+        );
+        default = [ ];
+        example = lib.literalExpression ''[ { plugin = "windows-vm"; capability = "vm"; params.vm = "win11"; } ]'';
+        description = ''
+          Standing grants: the broker grants them at every start, without asking, still within the capability's
+          ceiling and `list` (one its capability doesn't take stops the broker). Revoked or released, one stays ended
+          until the broker starts again. A command's runs without asking, valid for the ceiling's `maxValidity`. No
+          folders: what should always be there is a bind (`binds`).
+        '';
+      };
       folders = mkOption {
         type = types.listOf (
           types.submodule {
@@ -963,6 +992,10 @@ let
               manifest = "${permissionsFolders}/share/agent-sandbox/permissions/folders.json";
               ceiling.sources = lcfg.permissions.folders;
             };
+          grants = map (g: {
+            capability = "${g.plugin}/${g.capability}";
+            inherit (g) params;
+          }) lcfg.permissions.grants;
         }
       );
       # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
@@ -1222,6 +1255,24 @@ in
             lib.optionalString (name != "") "launchers.${name}."
           }binds.\"${path}\" binds ${b.src}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those";
         }) (stateBinds (if name == "" then null else name) (if name == "" then cfg else cfg.launchers.${name}))
+        ++ (
+          let
+            lcfg = if name == "" then cfg else cfg.launchers.${name};
+            opt = "agent-sandbox.claude-desktop: ${lib.optionalString (name != "") "launchers.${name}."}permissions.grants";
+          in
+          lib.optional (lcfg.permissions.grants != [ ]) {
+            assertion = lcfg.permissions.enable;
+            message = "${opt} needs permissions.enable";
+          }
+          ++ map (g: {
+            assertion = g.plugin != "folders";
+            message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
+          }) lcfg.permissions.grants
+          ++ map (g: {
+            assertion = g.plugin == "folders" || lcfg.permissions.plugins ? ${g.plugin};
+            message = "${opt}: no plugin ${g.plugin} in permissions.plugins";
+          }) lcfg.permissions.grants
+        )
         ++ lib.optional (name != "") {
           # File names, the app ID and the .desktop file's Name take it as is
           assertion = builtins.match "[a-z][a-z0-9-]*" name != null;

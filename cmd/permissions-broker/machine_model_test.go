@@ -9,8 +9,8 @@ import (
 	"unicode"
 )
 
-// The reference the state machine tests check the broker against: a small model of its grants, holders, leases, gates
-// and pending requests, following models/protocol_state.als and protocol_events.als
+// The reference the state machine tests check the broker against: a small model of its grants, holders, leases, gates,
+// standing grants and pending requests, following models/protocol_state.als and protocol_events.als
 
 type refGrant struct {
 	id, cap, params, lease string
@@ -44,10 +44,13 @@ type refGate struct {
 type storeKey struct{ cap, params string }
 
 type model struct {
-	now     time.Time
-	grants  map[string]*refGrant
-	gates   map[string]*refGate
-	pending []*refPending
+	now    time.Time
+	grants map[string]*refGrant
+	gates  map[string]*refGate
+	// The config's standing grants, and those the user ended in this daemon's life
+	standing []storeKey
+	ended    map[storeKey]bool
+	pending  []*refPending
 	// The grant directory shared in the sandbox; share asked once
 	shared, shareAsked bool
 	lockOK             bool
@@ -58,9 +61,26 @@ type model struct {
 	made      int
 }
 
-func newModel(now time.Time) *model {
-	return &model{now: now, grants: map[string]*refGrant{}, gates: map[string]*refGate{}, listed: map[string]bool{},
-		other: map[string]bool{}, consented: map[storeKey]bool{}}
+func newModel(now time.Time, standing []standingConfig) *model {
+	m := &model{now: now, grants: map[string]*refGrant{}, gates: map[string]*refGate{}, listed: map[string]bool{},
+		other: map[string]bool{}, consented: map[storeKey]bool{}, ended: map[storeKey]bool{}}
+	for _, s := range standing {
+		m.standing = append(m.standing, storeKey{s.Capability, string(s.Params)})
+	}
+	return m
+}
+
+// isStanding: a standing grant with exactly these parameters, which the user hasn't ended
+func (m *model) isStanding(cap, p string) bool {
+	k := storeKey{cap, p}
+	return slices.Contains(m.standing, k) && !m.ended[k]
+}
+
+// endedByUser records a standing grant the user ended (revoke, or a release that ends it)
+func (m *model) endedByUser(g *refGrant) {
+	if g.lease == "standing" {
+		m.ended[storeKey{g.cap, g.params}] = true
+	}
 }
 
 func (m *model) gate(c string) *refGate {

@@ -13,8 +13,12 @@ import (
 )
 
 func newBroker(cfg config, caps map[string]*capability, sb *sandbox, ask asker) (*broker, error) {
+	standing, err := checkStanding(cfg.Grants, caps)
+	if err != nil {
+		return nil, err
+	}
 	return &broker{cfg: cfg, caps: caps, sb: sb, ask: ask, grants: map[string]*grant{}, pending: map[string]*pending{},
-		gates: map[string]*gate{}, watches: map[chan []byte]bool{}, clock: realClock{}}, nil
+		gates: map[string]*gate{}, watches: map[chan []byte]bool{}, clock: realClock{}, standing: standing}, nil
 }
 
 // run starts the daemon and serves until the sandbox ends
@@ -39,7 +43,8 @@ func (b *broker) run() error {
 	return nil
 }
 
-// start reconciles what a previous daemon left and listens on both sockets
+// start reconciles what a previous daemon left, grants the standing grants and listens on both sockets: served, the
+// daemon has its standing grants
 func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	// What an earlier daemon left, if its ExecStopPost didn't get to it
 	cleanup(b.cfg, b.sb)
@@ -51,6 +56,7 @@ func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	if fi, err := os.Lstat(b.cfg.GrantDir); err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
 		return nil, nil, fmt.Errorf("The grant directory %s isn't a directory of ours", b.cfg.GrantDir)
 	}
+	b.grantStanding()
 	if reqLn, err = listen(filepath.Join(b.cfg.GrantDir, "request.sock")); err != nil {
 		return nil, nil, err
 	}

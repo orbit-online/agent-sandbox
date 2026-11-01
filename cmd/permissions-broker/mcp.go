@@ -45,7 +45,8 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 			"commands run on the host. list shows what can be asked for. request asks the user, who sees what you ask for and your " +
 			"reason, and waits for their answer. Ask only for what the task needs, for as short as it needs, and " +
 			"release a grant as soon as you're done with it. A grant belongs to the whole sandbox, not to the session " +
-			"that asked: every session can use it, and a session lease only ends with the session. Some grants bring " +
+			"that asked: every session can use it, and a session lease only ends with the session. Grants with lease " +
+			"standing come from the sandbox's configuration and are there from the start. Some grants bring " +
 			"tools of their own, named after their plugin, which are listed while the grant lives.",
 	})
 	call := func(req request) (response, error) { return callBroker(socket, req) }

@@ -73,10 +73,17 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		return nil, "", err
 	}
 
-	// Already granted: a live grant serves without asking again. One request per capability at a time here, so
-	// concurrent requests find the grant the first made instead of each making one
+	// Already granted: a live grant, or a standing grant from the config with exactly these parameters, serves without
+	// asking. One request per capability at a time here, so concurrent requests find the grant the first made instead
+	// of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
+	if g == nil && b.isStanding(c, params) {
+		if g, err = b.grant(c, params, summary, "standing", nil); err != nil {
+			c.covered.Unlock()
+			return nil, "", err
+		}
+	}
 	if g != nil {
 		// Another session wants it too: it holds it now, and a session lease lasts until the last of them ends
 		keepSess = b.hold(g, sess)

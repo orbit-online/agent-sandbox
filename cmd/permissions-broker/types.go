@@ -53,6 +53,7 @@ type response struct {
 	Pending      []*pending       `json:"pending,omitempty"`
 	Holders      []holder         `json:"holders,omitempty"`
 	Log          []logEntry       `json:"log,omitempty"`
+	Standing     []standingGrant  `json:"standing,omitempty"`
 	Held         []held           `json:"held,omitempty"`
 }
 
@@ -144,7 +145,9 @@ type broker struct {
 	pending map[string]*pending
 	gates   map[string]*gate
 	// The recent decisions, for the window: this daemon's only
-	log        []logEntry
+	log []logEntry
+	// The config's standing grants, which of them the user ended under mu
+	standing   []*standingGrant
 	shared     bool
 	pendingSeq uint64
 	// share was asked for, or an earlier daemon's found: it's done once per sandbox

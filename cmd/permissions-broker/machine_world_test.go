@@ -36,6 +36,13 @@ const (
 	maxValidity = 30 * time.Minute
 )
 
+// The standing grants: a service of an instance list prints, one of the exclusive service, a command
+var standingGrants = []standingConfig{
+	{Capability: capConsole, Params: json.RawMessage(`{"name":"a"}`)},
+	{Capability: capVM, Params: json.RawMessage(`{"name":"b"}`)},
+	{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`)},
+}
+
 // fixture is what a test's iterations share: copies of the test binary named as Claude Code and as something else,
 // for anchors, and the fake systemd's log
 type fixture struct {
@@ -104,7 +111,7 @@ func newWorld(t *rapid.T, f *fixture) *world {
 		w.unitsFrom = fi.Size()
 	}
 	w.cfg = config{Launcher: "test", GrantDir: dir + "/grants", ControlSocket: dir + "/control.sock",
-		SandboxGrantDir: dir + "/inside", Window: []string{"window"}}
+		SandboxGrantDir: dir + "/inside", Window: []string{"window"}, Grants: standingGrants}
 	w.startStandIn()
 	fd, err := unix.PidfdOpen(os.Getpid(), 0)
 	if err != nil {

@@ -42,6 +42,7 @@ func (mc *machine) Release(t *rapid.T) {
 		mc.fatalf(t, "Release %s: %s", id, res.Error)
 	}
 	if mc.m.release(g, who.sess) {
+		mc.m.endedByUser(g)
 		mc.waitEnded(t, id)
 	}
 }
@@ -114,7 +115,7 @@ func (mc *machine) Advance(t *rapid.T) {
 	}
 }
 
-// Revoke: the user revokes a grant in the window
+// Revoke: the user revokes a grant in the window; a standing grant stays ended until a restart
 func (mc *machine) Revoke(t *rapid.T) {
 	id := mc.drawGrant(t)
 	res := mc.b.handleControl(nil, mc.w.host, request{Op: "revoke", Grant: id})
@@ -128,12 +129,13 @@ func (mc *machine) Revoke(t *rapid.T) {
 	if res.Error != "" {
 		mc.fatalf(t, "Revoke %s: %s", id, res.Error)
 	}
+	mc.m.endedByUser(g)
 	delete(mc.m.grants, id)
 	mc.waitEnded(t, id)
 }
 
 // Restart: the daemon dies and systemd starts it again. What it had dies with it: its grants, timers and session
-// watches, its questions. The new one cleans up and starts from nothing (P12)
+// watches, its questions. The new one cleans up and starts from its standing grants alone, the ended ones too (P12)
 func (mc *machine) Restart(t *rapid.T) {
 	old := mc.b
 	old.mu.Lock()
@@ -148,8 +150,9 @@ func (mc *machine) Restart(t *rapid.T) {
 	m := mc.m
 	clear(m.grants)
 	clear(m.gates)
+	clear(m.ended)
 	m.pending, m.lockOK, m.shareAsked = nil, false, m.shared
-	mc.startBroker()
+	mc.startBroker(t)
 }
 
 // Share: the sandbox's outer mount namespace asks for the grant directory shared, once

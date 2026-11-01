@@ -179,6 +179,14 @@ let
               permissions = {
                 enable = true;
                 folders = [ { path = "/srv/notes"; } ];
+                plugins.test.package = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" "{}";
+                grants = [
+                  {
+                    plugin = "test";
+                    capability = "thing";
+                    params.scope = "read";
+                  }
+                ];
               };
             };
           };
@@ -411,6 +419,44 @@ let
           command = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
           args = [ "mcp" ];
         }
+      ];
+    };
+    # Standing grants only with the broker, of a plugin it has, and never of folders
+    testStandingGrants = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              permissions.grants = [
+                {
+                  plugin = "test";
+                  capability = "thing";
+                }
+              ];
+              launchers.work.permissions = {
+                enable = true;
+                folders = [ { path = "/srv/notes"; } ];
+                grants = [
+                  {
+                    plugin = "folders";
+                    capability = "folder";
+                    params.path = "/srv/notes";
+                  }
+                  {
+                    plugin = "none";
+                    capability = "thing";
+                  }
+                ];
+              };
+            }
+          )
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: permissions.grants needs permissions.enable"
+        "agent-sandbox.claude-desktop: permissions.grants: no plugin test in permissions.plugins"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: folders get no standing grants, a folder that should always be there is a bind (binds)"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no plugin none in permissions.plugins"
       ];
     };
     testMcpServersHmTransform = {
@@ -658,8 +704,10 @@ in
             and .window[2] == "Claude permissions (work)"
             and .denied == ["/home/alice/.local/share/claude-desktop", "/home/alice/.local/share/claude-desktop-work",
               "${"$"}{XDG_RUNTIME_DIR}"]
-            and (.plugins | length) == 1 and .plugins[0].ceiling == {sources: [{path: "/srv/notes", rw: false}]}
-            and (.plugins[0].manifest | endswith("/share/agent-sandbox/permissions/folders.json"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+            and (.plugins | length) == 2 and .plugins[1].ceiling == {sources: [{path: "/srv/notes", rw: false}]}
+            and (.plugins[1].manifest | endswith("/share/agent-sandbox/permissions/folders.json"))
+            and (.plugins[0].manifest | endswith("/share/agent-sandbox/permissions/test.json"))
+            and .grants == [{capability: "test/thing", params: {scope: "read"}}]' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
             { echo "the default launcher starts the broker" >&2; exit 1; }
           ! grep -q '^Name=Permissions$' ${sandboxed}/share/applications/*.desktop ||

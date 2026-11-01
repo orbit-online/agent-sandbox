@@ -70,15 +70,16 @@ func newMachine(t *rapid.T, f *fixture) *machine {
 	w := newWorld(t, f)
 	mc := &machine{w: w, clk: newFakeClock(), caps: w.capabilities(), ev: &events{ended: map[string]bool{}},
 		otherLocks: map[string]func(){}}
-	mc.m = newModel(mc.clk.now())
+	mc.m = newModel(mc.clk.now(), w.cfg.Grants)
 	mc.setListed([]string{"a", "b"})
-	mc.startBroker()
+	mc.startBroker(t)
 	t.Cleanup(func() { mc.b.endAll("test over") })
 	return mc
 }
 
-// startBroker starts a daemon as run does, without serving the sockets: requests come straight to the handlers
-func (mc *machine) startBroker() {
+// startBroker starts a daemon as run does, without serving the sockets: requests come straight to the handlers. It
+// grants the standing grants that pass the ceiling and the exclusive locks, in the config's order (P12)
+func (mc *machine) startBroker(t *rapid.T) {
 	mc.n = &notifier{calls: make(chan *askCall, 8)}
 	b, err := newBroker(mc.w.cfg, mc.caps, mc.w.sb, mc.n.ask)
 	if err != nil {
@@ -88,12 +89,28 @@ func (mc *machine) startBroker() {
 	b.clock = mc.view
 	mc.b = b
 	mc.watch()
+	before := mc.grantedCount()
 	reqLn, ctlLn, err := b.start()
 	if err != nil {
 		mc.w.t.Fatal(err)
 	}
 	reqLn.Close()
 	ctlLn.Close()
+	made, m := mc.grantedSince(before), mc.m
+	n := 0
+	for _, k := range m.standing {
+		if !m.passes(k.cap, k.params, mc.w.root) || !m.lockFree(k.cap, k.params) {
+			continue
+		}
+		if n == len(made) {
+			mc.fatalf(t, "Standing grant %v not granted at start: made %v", k, made)
+		}
+		m.grant(made[n], k.cap, k.params, "standing", "")
+		n++
+	}
+	if n != len(made) {
+		mc.fatalf(t, "Grants made at start %v, want %d", made, n)
+	}
 }
 
 func (mc *machine) setListed(names []string) {

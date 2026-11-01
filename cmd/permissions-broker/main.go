@@ -29,8 +29,9 @@ the grant directory for the sandbox and on control.sock for the Permissions
 window, asks the user about each request with a notification, and ends grants
 on their lease. Exits when the sandbox does. <config> is the JSON the module
 writes: appId, launcher, grantDir, controlSocket, sandboxGrantDir,
-window (the command opening the Permissions window) and plugins (each a
-manifest path and a ceiling). Environment variables in the paths and the window
+window (the command opening the Permissions window), plugins (each a
+manifest path and a ceiling) and grants (the standing grants, each a
+capability and its parameters, granted at start without asking). Environment variables in the paths and the window
 command are expanded.
 
 cleanup ends the grants of a daemon that stopped, as its unit's ExecStopPost:
@@ -136,6 +137,7 @@ type config struct {
 		Manifest string          `json:"manifest"`
 		Ceiling  json.RawMessage `json:"ceiling"`
 	} `json:"plugins"`
+	Grants []standingConfig `json:"grants"`
 }
 
 func readConfig(path string) (config, error) {

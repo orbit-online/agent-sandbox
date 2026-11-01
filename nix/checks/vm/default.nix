@@ -155,6 +155,16 @@ let
                 package = testPlugin;
                 ceiling.maxValidity = "PT8H";
               };
+              grants = [
+                {
+                  plugin = "test";
+                  capability = "thing";
+                }
+                {
+                  plugin = "test";
+                  capability = "echo";
+                }
+              ];
             };
           };
         })

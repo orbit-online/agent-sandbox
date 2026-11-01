@@ -50,7 +50,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
   One concern per file: `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
-  logind), `notify.go`, `views.go`, `types.go`,
+  logind), `standing.go` (the standing grants from the config), `notify.go`,
+  `views.go`, `types.go`,
   `clock.go` (the time and timers of leases and answers, which tests fake) and
   `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
   locks) and `plugintools.go` for plugins and their MCP tools,
@@ -136,7 +137,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
-  `permissions.enable`, and the assertion on binds that reach a launcher's
+  `permissions.enable`, the assertions on standing grants (only with the
+  broker, of a plugin it has, none of folders), and the assertion on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
@@ -158,7 +160,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
-  read-only `/run/permissions` bind, the config, the wrapper's variables; none
+  read-only `/run/permissions` bind, the config with its standing grants, the wrapper's variables; none
   of it for the default launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
   handler).
@@ -178,7 +180,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   a capability's `list` prints refused without asking (and with a failing
   `list`; not for attach capabilities), and an Allow refused when the instance went away
   while the user was asked, the refusal limit, a window answer with its
-  narrowed parameters, duration, lock (none granted when the lock stops being
+  narrowed parameters, standing grants (a config error refused: no such
+  capability, attach, parameters it doesn't take, one twice; granted at start
+  when `list` prints them, once however many ask at once; a command's run
+  without asking for `maxValidity`; revoked or released, asked for until the
+  daemon starts again), duration, lock (none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
   at another name; one allowed after its anchor exited ends, closing no file of
@@ -239,13 +245,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   removed, also without the sandbox). Stateful property tests
   (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
   protocol model's actions against the broker on the stand-in sandbox, with
-  a fake clock: requests of each type from sessions, a forged session and a
+  a fake clock, with standing grants of both services and the command in its
+  config: requests of each type from sessions, a forged session and a
   caller without one, floods and crafted requests, answers on the
   notification and in the window, releases, sessions ending, lock events,
-  time passing, revoke, a restart, `share`, `list`
+  time passing, revoke, a restart (granting the standing grants that pass
+  `list` and the locks, ended ones too), `share`, `list`
   changing, another launcher's exclusive locks and control.sock from inside.
   After every step the broker's grants, holders and gates, its
-  units, mounts and locks and the window's view match a reference model
+  units, mounts and locks and the window's view (the standing grants, ended
+  and live, included) match a reference model
   (P1, P3, P4, P9, P10, P12, P13, P14, release holds). `go test` runs 50
   sequences of about 30 steps (half a minute or less); more with
   `-rapid.checks=1000 -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`),
@@ -257,7 +266,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
-  a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
+  a standing grant shown as from the config, a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
   replaced in place.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
@@ -302,12 +311,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   pid, its re-entry found by app ID, its state dir and GC root, and its
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
-  from there, grants through the MCP server that the test answers on
-  `control.sock`: a test plugin's command, its service plugin socket-activated
-  by systemd whose tool the MCP server inside offers and forwards a call to, a
-  folder mounted read-only, nodev and nosuid where the app runs and one with a
-  mount beneath it refused; a SIGKILL of the daemon ending its service unit and
-  its folder grant, none left after its restart, the Permissions window
+  from there, the test plugin's standing grants from the config: its command
+  issued through the MCP server without asking, its service plugin
+  socket-activated by systemd whose tool the MCP server inside offers and
+  forwards a call to, and revoked, asked for again; grants through the MCP
+  server that the test answers on `control.sock`: the service again, a folder
+  mounted read-only, nodev and nosuid where the app runs and one with a mount
+  beneath it refused; a SIGKILL of the daemon ending its service unit and its
+  folder grant, the standing grants alone back under new ids after its restart, the Permissions window
   staying up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
@@ -330,10 +341,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   alice, with copies of itself inside the sandbox (through the launcher's
   re-entry) as callers on `request.sock`: sessions anchored at a copy named
   `claude`, a forged one below a copy named `node`, one without a session.
+  The daemon has standing grants of the test plugins' command and service.
   The actions: requests of each type (the test plugins' command and service,
   folders beneath `/srv/notes` and outside it) and lease, floods, crafted
   requests and `share` from inside, the user's answers and revoke
-  through `control.sock`, releases, sessions ending, `systemctl restart`,
+  through `control.sock`, releases, sessions ending, `systemctl restart`
+  (the standing grants back),
   and logind's Lock of a graphical session of alice's made for
   it. After every step the window's state, the socket units,
   the grant directory and the mounts in the outer mount namespace and where

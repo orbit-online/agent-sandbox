@@ -21,7 +21,7 @@ import (
 // Folders more often: more of their requests are refused
 var liveCaps = []string{liveCmd, liveSvc, liveFolder, liveFolder}
 
-var liveLeases = []string{"", "session", "lock", "PT1H"}
+var liveLeases = []string{"", "session", "lock", "PT1H", "standing"}
 
 func (mc *liveMachine) drawParams(t *rapid.T, c string) string {
 	kv := map[string]any{}
@@ -119,6 +119,9 @@ func (mc *liveMachine) predict(c, p, lease, sess string) (string, *refGrant) {
 	if g := m.matching(c, p); g != nil {
 		return "live", g
 	}
+	if m.isStanding(c, p) {
+		return "standing", nil
+	}
 	if g := m.gate(c); g.asking || m.now.Before(g.blockedUntil) {
 		return "refused", nil
 	}
@@ -190,6 +193,15 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 			mc.m.hold(live, who.sess)
 			mc.delivered(t, live, res)
 		}
+	case "standing":
+		if results[0].Grant == nil {
+			mc.fatalf(t, "Standing grant %s %s not granted: %s", c, p, results[0].Error)
+		}
+		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "standing", "")
+		for _, res := range results {
+			mc.m.hold(g, who.sess)
+			mc.delivered(t, g, res)
+		}
 	case "ask":
 		for _, res := range results {
 			if res.Error == "" {
@@ -259,6 +271,7 @@ func (mc *liveMachine) Release(t *rapid.T) {
 		mc.fatalf(t, "Release %s: %s", id, res.Error)
 	}
 	if mc.m.release(g, who.sess) {
+		mc.m.endedByUser(g)
 		mc.waitEnded(t, id)
 	}
 }
@@ -298,7 +311,7 @@ func (mc *liveMachine) Lock(t *rapid.T) {
 	mc.waitEnded(t, mc.m.endWhere(func(g *refGrant) bool { return g.lease == "lock" })...)
 }
 
-// Revoke: the user revokes a grant in the window
+// Revoke: the user revokes a grant in the window; a standing grant stays ended until a restart
 func (mc *liveMachine) Revoke(t *rapid.T) {
 	id := mc.drawGrant(t)
 	res := mc.lv.control(request{Op: "revoke", Grant: id})
@@ -312,12 +325,13 @@ func (mc *liveMachine) Revoke(t *rapid.T) {
 	if res.Error != "" {
 		mc.fatalf(t, "Revoke %s: %s", id, res.Error)
 	}
+	mc.m.endedByUser(g)
 	delete(mc.m.grants, id)
 	mc.waitEnded(t, id)
 }
 
 // Restart: systemctl restarts the daemon. Its grants end with it (ExecStopPost, units bound to it), its questions go
-// unanswered; the new one starts from nothing (P12)
+// unanswered; the new one starts from its standing grants alone, the ended ones too (P12)
 func (mc *liveMachine) Restart(t *rapid.T) {
 	m := mc.m
 	pending := m.pending
@@ -329,5 +343,7 @@ func (mc *liveMachine) Restart(t *rapid.T) {
 	}
 	clear(m.grants)
 	clear(m.gates)
+	clear(m.ended)
 	m.pending = nil
+	mc.started(t)
 }

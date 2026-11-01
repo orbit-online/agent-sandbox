@@ -116,8 +116,8 @@ type liveMachine struct {
 	tags         int
 }
 
-// newLiveMachine starts an iteration from a clean daemon: restarted, so no grants, gates or pending requests are left
-// from the last
+// newLiveMachine starts an iteration from a clean daemon: restarted, so no grants but the standing ones, no gates or
+// pending requests are left from the last
 func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 	mc := &liveMachine{lv: lv, sessions: map[string]*liveProc{}}
 	t.Cleanup(func() {
@@ -132,10 +132,32 @@ func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 	mc.ev = lv.watch()
 	t.Cleanup(func() { close(mc.ev.stop) })
 	mc.restartDaemon(t)
-	mc.m = newModel(time.Now())
+	mc.m = newModel(time.Now(), lv.cfg.Grants)
 	mc.m.shared, mc.m.shareAsked, mc.m.lockOK = true, true, lv.lockSess != ""
+	mc.started(t)
 	mc.anonymous(t)
 	return mc
+}
+
+// started finds the standing grants a daemon that just started granted: every one, as the test plugins have no list
+// and no exclusive instances (P12)
+func (mc *liveMachine) started(t *rapid.T) {
+	m := mc.m
+	found := map[storeKey]string{}
+	for _, g := range mc.lv.control(request{Op: "state"}).Grants {
+		if g.Lease == "standing" {
+			found[storeKey{g.Capability, string(g.Params)}] = g.ID
+		}
+	}
+	if len(found) != len(m.standing) {
+		mc.fatalf(t, "Standing grants at start %v, want %v", found, m.standing)
+	}
+	for _, k := range m.standing {
+		if found[k] == "" {
+			mc.fatalf(t, "Standing grant %v not granted at start: %v", k, found)
+		}
+		m.grant(found[k], k.cap, k.params, "standing", "")
+	}
 }
 
 func (mc *liveMachine) pendingNow() []*refPending {
@@ -258,9 +280,10 @@ func (mc *liveMachine) Check(t *rapid.T) {
 	}
 	m := mc.m
 	for id, r := range m.grants {
-		// P1: only after an Allow
-		if !m.consented[storeKey{r.cap, r.params}] {
-			mc.fatalf(t, "Grant %s (%s %s %s) without consent", id, r.cap, r.params, r.lease)
+		// P1: only after an Allow, or a standing grant from the config the user hasn't ended
+		if r.lease == "standing" && !m.isStanding(r.cap, r.params) ||
+			r.lease != "standing" && !m.consented[storeKey{r.cap, r.params}] {
+			mc.fatalf(t, "Grant %s (%s %s %s) without consent or a standing grant", id, r.cap, r.params, r.lease)
 		}
 	}
 	var err error
@@ -314,6 +337,9 @@ func (mc *liveMachine) compare(t *rapid.T) error {
 	}
 	slices.Sort(services)
 	slices.Sort(folders)
+	if err := checkStandingView(m, st.Standing); err != nil {
+		return err
+	}
 	if len(st.Pending) != len(m.pending) {
 		return fmt.Errorf("The window shows %d pending requests, want %d", len(st.Pending), len(m.pending))
 	}

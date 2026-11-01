@@ -224,7 +224,8 @@ func (b *broker) lockEvent(why string) {
 	}
 }
 
-// revoke ends a grant for the user and returns what still held files on it (attach grants)
+// revoke ends a grant for the user and returns what still held files on it (attach grants). A standing grant stays
+// ended until the daemon starts again
 func (b *broker) revoke(id string) ([]holder, error) {
 	b.mu.Lock()
 	g, ok := b.grants[id]
@@ -232,12 +233,14 @@ func (b *broker) revoke(id string) ([]holder, error) {
 	if !ok {
 		return nil, fmt.Errorf("No grant %q", id)
 	}
+	b.endStanding(g)
 	g.end("revoked by the user")
 	return g.Holders, nil
 }
 
 // release drops sess's hold on a grant, and ends it once nobody holds it: no session, nor (but for a session lease) a
-// caller without one. A caller without a session ends it outright: that only takes access away
+// caller without one. A caller without a session ends it outright: that only takes access away. A standing grant
+// released so stays ended until the daemon starts again
 func (b *broker) release(id string, sess *session, why string) error {
 	b.mu.Lock()
 	g, ok := b.grants[id]
@@ -259,6 +262,7 @@ func (b *broker) release(id string, sess *session, why string) error {
 		}
 	}
 	b.mu.Unlock()
+	b.endStanding(g)
 	g.end(why)
 	return nil
 }

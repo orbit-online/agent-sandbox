@@ -59,6 +59,8 @@ doesn't exist in here; if you need something that isn't bound, say what and
 why, and the user adds it. `/proc/self/mountinfo` shows the live set. With the
 `permissions` MCP server, ask through it instead for what its `list` offers:
 the user answers on the host, and grants show up under `/run/permissions`.
+Grants with lease `standing` come from the configuration and are there from
+the start.
 
 - Own PID, user, UTS and IPC namespaces (pid 1 is `bwrap`), new session.
   Portals see the app as Flatpak `com.nixpak.ClaudeDesktop`, or

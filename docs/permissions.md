@@ -1,7 +1,7 @@
 # Permissions: granting the sandbox outside access while it runs
 
 Status: written 2026-10-31. Built: the daemon (`cmd/permissions-broker/`) with the service and command types, consent,
-leases, the MCP server with plugin tools and nudges, the Permissions window
+leases, standing grants from the Nix config, the MCP server with plugin tools and nudges, the Permissions window
 (`nix/packages/permissions-window/`) and the attach type with the folders plugin (`nix/packages/permissions-folders/`,
 `permissions.folders`), behind a launcher's `permissions.enable`. Not yet: device grants.
 
@@ -25,7 +25,7 @@ code.
 - A notification for every request (reason, Allow, Deny, Options), and a Permissions window from the launcher's
   desktop actions, next to "New shell", listing what's granted and what can be.
 - Leases: this session, until the screen locks, for a duration. Grants end on their lease, on revoke, on release
-  from inside, and on plugin triggers.
+  from inside, and on plugin triggers. What should always be granted is declared in Nix as standing grants.
 - One plugin API with three delivery types, `service`, `command` and `attach` (below). Folder mounts are the first
   plugin and live here; others, such as the Windows VM, live in secoya/agent-sandbox-plugins.
 - One MCP server inside the sandbox for every plugin.
@@ -104,8 +104,8 @@ the pid is checked to be in it. The pidfd turning readable means the sandbox end
 plugin units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
 
 Started again after a crash, it finds the same sandbox the same way and reconciles before serving: it detaches
-everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and starts without
-grants. Leases that ran while it was down are gone rather than extended; Claude asks again.
+everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and starts with its
+standing grants alone. Leases that ran while it was down are gone rather than extended; Claude asks again.
 
 Grants end with the daemon, a crash included: service units are bound to its unit (`BindsTo=`), so systemd stops them
 when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd runs after a
@@ -367,7 +367,7 @@ Lifted from windows-vm:
   Options, the window owns the request: the timeout pauses while it's open, for 10 minutes at most.
 - One open request per capability; three refusals in a row stop requests for that capability for 2 minutes.
 
-A live grant answers later requests with exactly the same parameters without asking. A read-only grant never covers a
+A live grant answers later requests with exactly the same parameters without asking, as does a standing grant (below). A read-only grant never covers a
 read-write request, and a folder never covers its subfolders or parent.
 
 The consent UI is only ever drawn on the host. Nothing the sandbox sends is shown other than as plain text.
@@ -379,6 +379,7 @@ The consent UI is only ever drawn on the host. Nothing the sandbox sends is show
 | `session` | the session's anchor process exits (pidfd); attach counts holding sessions |
 | `lock`    | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep` |
 | duration  | the time runs out; the window can extend it                                |
+| `standing` | revoked in the window or released from inside, until the daemon starts again; only from the config |
 
 Every grant also ends on revoke in the window, on its plugin's `watch` or `serve` exiting, and with the sandbox.
 `release` from inside drops only the releasing session's hold: the daemon records every session a grant was given to
@@ -397,6 +398,27 @@ Releasing voluntarily: once a session has held grants for 15 minutes, the core M
 tool results listing them and asking Claude to release what it no longer needs, at most every 10 minutes. By age,
 not idleness: the daemon can't tell whether a socket-activated plugin's socket or a folder is still in use. Claude
 Code's channels could push this instead, but they need `--channels` at startup, which the app doesn't pass.
+
+## Standing grants
+
+A launcher's `permissions.grants` lists grants the daemon makes whenever it starts, without asking: each a plugin's
+capability and its exact parameters, of the `service` and `command` types. Folders get none: what should always be
+there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
+config, and taken away by a rebuild, rather than widened for good by one click in a dialog the sandbox brought up.
+
+The module writes them into the daemon's config. At start the daemon checks them against the plugins: a capability
+none has, an attach one, parameters it doesn't take or one listed twice is a config error, and the daemon doesn't
+start. The module catches what it can at eval time (no broker, a plugin not in `permissions.plugins`, folders).
+Then it grants each with lease `standing`, under the same checks as a request: one whose instance `list` doesn't
+print (a VM not running yet) or another launcher holds is left out with a warning, and a later request with exactly
+its parameters gets it without asking. A command's runs without asking, its output valid for the ceiling's
+`maxValidity`.
+
+Holds and release work as for any other grant. Revoke in the window, or a release that ends it, ends a standing grant
+for the daemon's life: later requests ask the user like any other. The next start brings it back. There is nothing
+to forget: the config is the only place they live.
+
+The window lists them among the grants as "from config", with Revoke.
 
 ## MCP
 
@@ -469,8 +491,8 @@ These were open when the design was written and decided while the user was away.
    plugin authors know.
 5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
 6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
-   a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it has none (Claude
-   asks again).
+   a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it has its standing
+   grants alone (Claude asks again for the rest).
 7. Service plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
 8. Grants die with the daemon (Anders): service units `BindsTo=` its unit, folder grants detached by its
    `ExecStopPost=`.
