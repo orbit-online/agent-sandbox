@@ -269,13 +269,23 @@ process whose principal is in the Sandbox domain, at any time.
   (attach), at grant time and again after a window narrows it.
 - P4. A grant that ended is dead: no further delivery (service socket gone
   and unit stopped, attach detached in M1 and everywhere it propagated,
-  command never run again).
+  before anything else, the holders' scan included, command never run
+  again).
 - P5. After an attach grant ends, every sandbox process that still holds it
-  where `/proc` shows it (a thread's cwd, root, open file or mount
-  namespace with a mount of the same filesystem and root, or a mapping)
-  is listed as a holder. Best effort: an fd queued in an `SCM_RIGHTS`
-  message or registered with io_uring holds it unseen, until the sandbox
-  ends.
+  where `/proc` shows it is listed as a holder: a thread's cwd, root or
+  open file on the grant's mount or one propagated from it, known by the
+  mount id and peer group read at attach (not by path, which the sandbox
+  can rename, Attacker 6); a thread's cwd, root or open file on a detached
+  mount of the grant's filesystem (an `open_tree` clone, a lazy unmount),
+  a holder when its path names the grant's inode beneath the grant's tree
+  and a possible holder otherwise; a mount namespace with a mount of the
+  same filesystem and root; a mapping of one of the grant's files, from
+  `/proc/<pid>/maps` by device, inode and path (`map_files` takes
+  capabilities in the initial user namespace). Best effort: an fd queued in
+  an `SCM_RIGHTS` message or registered with io_uring, a detached mount
+  attached in a namespace no process is in, a mapping whose path can't be
+  looked up beneath the grant, and what the 10 s scan doesn't reach hold it
+  unseen, until the sandbox ends.
 - P6. Only host principals answer: a pending request is decided by the
   notification's own action (not within 1 s of it appearing) or by a
   `control.sock` client.

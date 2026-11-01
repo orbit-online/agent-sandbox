@@ -39,7 +39,9 @@ check P3listedAtGrant for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 
   1 Session, 2 Grant, 2 Req, 1 Text, 3 Int, 1..6 steps expect 0
 
 // P4. A grant that ended is dead: its service unit and socket are gone
-// (stopServe, BindsTo= on a crash) and its folder detached (detachGrant), the
+// (stopServe, BindsTo= on a crash) and its folder detached (detachGrant, the
+// holders' scan only after, so the sandbox can't hold the detach up with
+// namespaces and mounts for it to read; the end is one step here), the
 // latter only once ExecStopPost or the next start has run after a crash.
 // Revert: bindsTo with UnitUp unchanged; or cleanup leaving Mounted: a
 // counterexample either way.

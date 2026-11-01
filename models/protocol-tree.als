@@ -5,8 +5,9 @@
  * during them is S13's.
  *
  * Sources: session.go (sessionOf), members.go (contains, members: the
- * sandbox's processes by user namespace), mountinfo.go (grantMounts,
- * holdersAfter), leases.go (endHolders), claude-desktop.sh:48-88
+ * sandbox's processes by user namespace), mountinfo.go (grantMountOf),
+ * scan.go (holdersAfter, viewMounts, holds, file, mapped), holders.go
+ * (endHolders), attach.go (detachGrant), claude-desktop.sh:48-88
  * (re-entries through nsenter after `env -i`).
  */
 open sandbox
@@ -23,12 +24,23 @@ one sig Tree {
   var claudeExe: set Process,
   // the init of its own pid namespace (innermost NSpid 1)
   var nsInit: set Process,
-  // after an attach grant's detach: cwd, open file or mapping on it, or a
-  // mount of its filesystem and root in the process's mount namespace
-  var holds: set Process,
+  // after an attach grant's detach, how each process holds it (Way)
+  var holds: Process -> Way,
+  // the sandbox renamed the grant directory in M1 before the grant ended
+  // (Attacker 6)
+  var renamed: lone Tree,
   // processes holdersAfter didn't get to before its 10 s deadline
   var unscanned: set Process
 }
+
+// How a process holds a grant that ended, as /proc shows it (scan.go): a
+// thread's cwd, root or fd on the grant's mount or one propagated from it
+// (should the detach have left one); on a detached mount of the grant's
+// filesystem (an open_tree clone, a lazy unmount), tied to the grant's
+// files by inode or listed as possible; a mount of the same filesystem and
+// root in a thread's mount namespace; a mapping of one of its files.
+abstract sig Way {}
+one sig OnMount, OnDetached, Rebind, Mapping extends Way {}
 
 fun sandboxProcs: set Process { principal.domain.Sandbox }
 // The sandbox's processes as the broker finds them (members.go): those
@@ -39,7 +51,7 @@ fun inside: set Process { userns.(Tree.top.userns.*~parent) }
 fact shape {
   frozen
   always { cause' = cause and top' = top and hostInit' = hostInit and hasVar' = hasVar and claudeExe' = claudeExe
-    and nsInit' = nsInit and holds' = holds and unscanned' = unscanned }
+    and nsInit' = nsInit and holds' = holds and renamed' = renamed and unscanned' = unscanned }
   no p: Process | p in p.^ppid
   let t = Tree.top, h = Tree.hostInit {
     t.principal = BwrapInitP and t.ppid.principal.domain = Host and t in Tree.nsInit
@@ -61,9 +73,9 @@ fact shape {
     sandboxProcs in inside
     no principal.domain.Host & inside
   }
-  Tree.holds + Tree.unscanned in sandboxProcs
+  Tree.holds.Way + Tree.unscanned in sandboxProcs
   // bwrap's init only reaps: no cwd, file or mount of a grant
-  Tree.top not in Tree.holds
+  Tree.top not in Tree.holds.Way
 }
 
 // sessionOf's walk from p: q is read when every process from p up to q,
@@ -115,36 +127,52 @@ run P8forgedInside {
   some p: sandboxProcs | some anchorOf[p] & inside
 } for 7 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 4 OwnedNS, 1 steps expect 1
 
-// What holdersAfter lists (mountinfo.go): the sandbox's processes it
-// reached that hold the grant. endHolders ends only the sandbox's too
+// Which ways the scan sees. Mounts by the id and peer group read when the
+// grant was attached (grantMountOf), so a rename of the grant directory
+// hides none; mappings from /proc/<pid>/maps (device, inode, path), which
+// the daemon can read, where /proc/<pid>/map_files needs CAP_SYS_ADMIN or
+// CAP_CHECKPOINT_RESTORE in the initial user namespace; files on mounts in
+// no mountinfo, by the grant's device.
+pred seen[w: Way] {
+  w in OnMount + OnDetached + Rebind + Mapping
+}
+fun held: set Process { Tree.holds.Way }
+// What holdersAfter lists: the sandbox's processes it reached that hold
+// the grant in a way it sees. endHolders ends only the sandbox's too
 // (contains, members.go).
-fun listed: set Process { (inside - Tree.unscanned) & Tree.holds }
+fun listed: set Process { (inside - Tree.unscanned) & { p: Process | some w: p.(Tree.holds) | seen[w] } }
 
 // P5. After an attach grant ends, every sandbox process that still holds
 // it is listed. The broker finds the sandbox's processes by user
 // namespace (members.go), so a --shell process (and what it starts),
 // whose parent is nsenter on the host, is among them. Tree.holds is
 // holding as /proc shows it, on any thread (cwd, root, fds and mount
-// namespace per task, mountinfo.go): an fd queued in an SCM_RIGHTS
-// message or registered with io_uring holds the grant too and shows
-// nowhere, so P5 is best effort, outside this model; only the sandbox's
-// end ends those (docs/permissions.md). Holds. Revert:
-// `inside` as the sandbox pid's descendants (as before the fix): a cwd on
-// the grant or a re-bind in a re-entry's own mount namespace isn't
-// listed (counterexample found).
+// namespace per task, scan.go): an fd queued in an SCM_RIGHTS message or
+// registered with io_uring, a detached mount attached in a namespace no
+// process is in, or a mapping whose path can't be looked up beneath the
+// grant holds the grant too and shows nowhere, so P5 is best effort,
+// outside this model; only the sandbox's end ends those
+// (docs/permissions.md). Holds, also when the sandbox renamed the grant
+// directory. Reverts: `inside` as the sandbox pid's descendants (as before
+// the fix): a cwd on the grant or a re-bind in a re-entry's own mount
+// namespace isn't listed; seen without Mapping (map_files, as before the
+// fix) or without OnDetached (mount ids alone): a mapping alone, or an
+// open_tree clone, isn't; seen with `w = OnMount implies no Tree.renamed`
+// (mounts by path, as before the fix): a cwd on the grant after a rename
+// isn't (counterexamples found).
 assert P5holdersListed {
-  always no Tree.unscanned implies Tree.holds in listed
+  always no Tree.unscanned implies held in listed
 }
 check P5holdersListed for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 0
 
 // P5 for processes below the sandbox's pid. Known, a finding: the scan
-// stops after 10 s (holdersTimeout, mounts.go:483-490) and the sandbox
+// stops after 10 s (holdersTimeout, scan.go) and the sandbox
 // decides how many processes and open files it walks through, breadth
 // first from the sandbox's pid, so a holder placed after enough decoys
 // isn't listed.
 // With `no Tree.unscanned` assumed, the claim holds.
 assert P5holdersListedInside {
-  always Tree.holds in inside implies Tree.holds in listed
+  always held in inside implies held in listed
 }
 check P5holdersListedInside for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
 // How the grant ended, and what reaches the user: holdersAfter runs on
@@ -162,10 +190,16 @@ fun shownToUser: set Process { listed }
 // before the fix, when only revoke's answer carried them): the window
 // shows no holder and the folder stays reachable (counterexample found).
 assert P5holdersShown {
-  always (all p: sandboxProcs - Tree.top | p in inside) and no Tree.unscanned implies Tree.holds in shownToUser
+  always (all p: sandboxProcs - Tree.top | p in inside) and no Tree.unscanned implies held in shownToUser
 }
 check P5holdersShown for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 0
 
 run P5holders {
   some listed
+} for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
+// P5's premises: after a rename of the grant directory, a process holding
+// the grant only by a mapping, and another only on a detached mount.
+run P5holdersRenamedMappedDetached {
+  some Tree.renamed
+  some p, q: Process | p.(Tree.holds) = Mapping and q.(Tree.holds) = OnDetached
 } for 6 but 0 Mount, 0 File, 0 Socket, 2 UserNS, 3 OwnedNS, 1 steps expect 1
