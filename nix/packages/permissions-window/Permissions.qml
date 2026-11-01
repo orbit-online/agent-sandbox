@@ -44,15 +44,16 @@ Item {
         return edits[req.id]
     }
 
-    // A pending request moved up, a row above it gone: when the sandbox's requests end is partly its choice (they time
-    // out), and a click meant for one would land on the next. Allow and Deny stay off for a second after, as the
-    // notification ignores a click right after it appears
+    // Another request where a row was: one moved up, a row above it gone, or one in a row's place, [A] turned [B] or
+    // [X, A] turned [X, B], or a row where there was none. When the sandbox's requests end and arrive is partly its
+    // choice (they time out), and a click meant for one would land on the other. Allow and Deny stay off for a second
+    // after, as the notification ignores a click right after it appears
     property var pendingIds: []
     property bool settling: false
     property int settleMs: 1000
     onPendingChanged: {
         const ids = pending.map(p => p.id)
-        if (pendingIds.some((id, i) => ids.includes(id) && ids.indexOf(id) !== i)) {
+        if (ids.some((id, i) => id !== pendingIds[i])) {
             settling = true
             settle.restart()
         }

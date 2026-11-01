@@ -353,8 +353,10 @@ The sandbox can post notifications too, through the notification portal (`org.fr
 proxy doesn't let it reach `org.freedesktop.Notifications`), with any title, body and buttons. A look-alike's
 buttons only reach the sandbox, so it can't grant anything, but it can be timed to sit where the user is about to
 click. The daemon ignores an action that arrives within a second of its notification appearing, and asks again. The
-portal keys notifications by app ID, so the sandbox can't replace or close the daemon's, which the notification
-server itself would let anyone do by id (Plasma's does). The daemon's guards from when it could stay: each of its
+window turns Allow and Deny off for a second whenever another request takes a row's place: one moving up, one in
+the place of one that ended ([A] turning [B]), or one where there was no row, as the sandbox can time when its
+requests end and arrive. The portal keys notifications by app ID, so the sandbox can't replace or close the daemon's,
+which the notification server itself would let anyone do by id (Plasma's does). The daemon's guards from when it could stay: each of its
 buttons has a random action key, new for every notification, it counts only `ActionInvoked` and
 `NotificationClosed` sent by the server's own connection (the current owner of its name), and an action key that
 isn't one of its own is a deny.

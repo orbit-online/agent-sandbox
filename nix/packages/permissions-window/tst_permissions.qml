@@ -35,6 +35,11 @@ TestCase {
         return JSON.parse(mock.command)
     }
 
+    // The rows arriving at the start, or a test before that changed them, leave Allow and Deny off for a second
+    function init() {
+        tryVerify(() => !view.settling, 3000)
+    }
+
     function test_allow_narrowed() {
         const ro = findChild(view, "param-ro")
         verify(ro, "the ro field")
@@ -64,6 +69,7 @@ TestCase {
                           lease: "PT1H" })
         mock.state = JSON.stringify(st)
         tryVerify(() => findChild(view, "param-ro") !== ro, 1000, "the list wasn't rebuilt")
+        tryVerify(() => findChild(view, "allow").enabled, 3000)
         mouseClick(findChild(view, "allow"))
         const c = sent()
         compare(c.params, { path: "/srv/notes", ro: false })
@@ -125,6 +131,27 @@ TestCase {
         tryVerify(() => allow.enabled, 3000)
         mouseClick(allow)
         compare(sent().pending, "p2")
+        mock.state = before
+    }
+
+    // A row replaced in place: the sandbox times another request for the moment its first ends, [p1] turns [p2] and
+    // [p0, p1] turns [p0, p2], and nothing moves. A click right then answers neither
+    function test_rows_replaced() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        const p1 = st.pending[0]
+        const p0 = Object.assign({}, p1, { id: "p0", summary: "above" })
+        const p2 = Object.assign({}, p1, { id: "p2", summary: "another" })
+        for (const [from, to] of [[[p1], [p2]], [[p0, p1], [p0, p2]]]) {
+            st.pending = from
+            mock.state = JSON.stringify(st)
+            tryVerify(() => !view.settling, 3000)
+            st.pending = to
+            mock.state = JSON.stringify(st)
+            const command = mock.command
+            mouseClick(findChild(view, "allow"))
+            compare(mock.command, command, "a click right after a row was replaced answered")
+        }
         mock.state = before
     }
 }
