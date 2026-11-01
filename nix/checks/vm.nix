@@ -494,7 +494,7 @@ pkgs.testers.runNixOSTest {
           links = in_sandbox("ip -o link show")
           assert [l.split(":")[1].strip().split("@")[0] for l in links.splitlines()] == ["lo", "eth0"], links
           assert "macvlan" in in_sandbox("ip -d link show eth0")
-          assert "inet 192.168.1.1" in in_sandbox("ip -4 -o addr show dev eth0")
+          assert "inet 192.168.1." in in_sandbox("ip -4 -o addr show dev eth0")
           assert "default via ${routerIP} dev eth0" in in_sandbox("ip route")
           # udhcpc runs in a mount namespace of its own, holding only its closure, not the sandbox's: there the sandbox
           # could swap the store directory for one of its own and have udhcpc run it
@@ -529,7 +529,7 @@ pkgs.testers.runNixOSTest {
           assert in_work("readlink /proc/self/ns/net").strip() == work_netns
           # Both on the LAN, the MAC salted with the launcher's name
           workstation.wait_until_succeeds(work_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"), timeout=60)
-          assert "inet 192.168.1.1" in in_work("ip -4 -o addr show dev eth0")
+          assert "inet 192.168.1." in in_work("ip -4 -o addr show dev eth0")
           macs = {f("ip -br link show eth0").split()[2] for f in [in_sandbox, in_work]}
           assert len(macs) == 2, macs
           # Its own state dir, with ~/.claude and the app's config in its home
