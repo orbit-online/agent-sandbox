@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/docopt/docopt-go"
 	qt "github.com/mappu/miqt/qt6"
@@ -21,9 +22,6 @@ recent decisions, and refreshes on the broker's watch events. Without a running
 broker it says so.
 `
 
-// Set to the installed Main.qml at build time
-var qmlPath = "Main.qml"
-
 func main() {
 	opts, err := docopt.ParseDoc(usage)
 	if err != nil {
@@ -35,6 +33,13 @@ func main() {
 	if title == "" {
 		title = "Claude permissions"
 	}
+	// The package installs the QML in share/, beside the bin/ the binary runs from (its wrapper execs it there)
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Error("Find the executable", "err", err)
+		os.Exit(1)
+	}
+	qmlPath := filepath.Join(filepath.Dir(exe), "../share/permissions-window/Main.qml")
 	qt.NewQGuiApplication(os.Args)
 	qt.QGuiApplication_SetDesktopFileName("claude-permissions")
 	engine, _ := load(&window{socket: socket}, title, qmlPath, func(w string) { slog.Warn("QML", "warning", w) })
