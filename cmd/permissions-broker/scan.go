@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,9 +98,9 @@ func viewMounts(pids []int, m *grantMount, deadline time.Time) *mountView {
 }
 
 // holdersAfter lists, after the detach, the processes in the sandbox still holding the grant: a working directory,
-// root or open file on its mounts (by mount id, which an open file keeps) or on a detached mount of its files, or a
-// mount of their own of the same filesystem and root, which a process can make in a mount namespace of its own and the
-// detach doesn't reach. Every thread counts. Best effort: an fd in flight in an SCM_RIGHTS message or registered with
+// root or open file on its mounts (by mount id, which an open file keeps) or on a detached mount of its files, a
+// mapping of one of its files, or a mount of their own of the same filesystem and root, which a process can make in a
+// mount namespace of its own and the detach doesn't reach. Every thread counts. Best effort: an fd in flight in an SCM_RIGHTS message or registered with
 // io_uring shows nowhere in /proc, and keeps the grant readable until it's closed or the sandbox ends
 func (s *sandbox) holdersAfter(m *grantMount) []holder {
 	scanStarts()
@@ -112,7 +115,9 @@ func (s *sandbox) holdersAfter(m *grantMount) []holder {
 		}
 		held, possible := v.holds(pid)
 		if !held {
-			held = holdsMapping(pid, v.copies)
+			var maybe bool
+			held, maybe = v.mapped(pid)
+			possible = possible || maybe
 		}
 		if held || possible {
 			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
@@ -204,16 +209,53 @@ func (v *mountView) inTree(rel string) (unix.Stat_t, bool) {
 	return st, unix.Fstat(fd, &st) == nil
 }
 
-// holdsMapping reports whether pid maps a file on one of the grant's mounts, in any namespace: its threads share
-// their mappings
-func holdsMapping(pid int, all map[uint64]bool) bool {
-	entries, _ := os.ReadDir(fmt.Sprintf("/proc/%d/map_files", pid))
-	for _, e := range entries {
-		var stx unix.Statx_t
-		path := fmt.Sprintf("/proc/%d/map_files/%s", pid, e.Name())
-		if unix.Statx(unix.AT_FDCWD, path, 0, unix.STATX_MNT_ID, &stx) == nil && all[stx.Mnt_id] {
-			return true
+// mapped reports whether pid maps one of the grant's files, its threads sharing their mappings. /proc/<pid>/map_files
+// would give each mapping's mount, but following its links takes CAP_SYS_ADMIN or CAP_CHECKPOINT_RESTORE in the
+// initial user namespace. /proc/<pid>/maps gives the device (the superblock's, as mountinfo has it), inode and path: a
+// mapping on the grant's filesystem is the grant's when its path names that inode beneath the grant's tree, as for a
+// file on a detached mount. One deleted since is possibly the grant's when its path's directory, relative to a
+// detached mount's root, is one of the grant's
+func (v *mountView) mapped(pid int) (held, possible bool) {
+	f, err := os.Open(fmt.Sprintf("/proc/%d/maps", pid))
+	if err != nil {
+		return false, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() && time.Now().Before(v.deadline) {
+		dev, ino, path, ok := parseMapsLine(sc.Text())
+		if !ok || dev != v.m.sbDev || ino == 0 {
+			continue
+		}
+		if p, deleted := strings.CutSuffix(path, " (deleted)"); deleted {
+			if st, ok := v.inTree(strings.TrimPrefix(filepath.Dir(p), "/")); ok && st.Mode&unix.S_IFMT == unix.S_IFDIR {
+				possible = true
+			}
+			continue
+		}
+		if v.contains(path, ino) {
+			return true, false
 		}
 	}
-	return false
+	return false, possible
+}
+
+// parseMapsLine reads a line of /proc/<pid>/maps: address range, permissions, offset, device (major:minor in hex),
+// inode, and the path, which may hold spaces
+func parseMapsLine(line string) (dev, ino uint64, path string, ok bool) {
+	var f [5]string
+	rest := line
+	for i := range f {
+		rest = strings.TrimLeft(rest, " ")
+		f[i], rest, _ = strings.Cut(rest, " ")
+	}
+	major, minor, found := strings.Cut(f[3], ":")
+	maj, err1 := strconv.ParseUint(major, 16, 32)
+	mn, err2 := strconv.ParseUint(minor, 16, 32)
+	ino, err3 := strconv.ParseUint(f[4], 10, 64)
+	if !found || err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, "", false
+	}
+	return unix.Mkdev(uint32(maj), uint32(mn)), ino, strings.TrimLeft(rest, " "), true
 }

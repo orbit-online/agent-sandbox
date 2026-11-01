@@ -16,7 +16,7 @@ import (
 // threadHoldMain holds $HOLD on one thread only, as $HOLD_MODE says: cwd (its working directory, in a filesystem
 // context of its own), fd (an open file, in a file table of its own), root (chroot), bind (a bind of it in a mount
 // namespace of its own, at $HOLD_AT) or opentree (a clone of it by open_tree, in no mount table: in a mount namespace
-// of its own, whose copy of the grant at $HOLD_GRANT it unmounts). The process's main thread holds nothing. Writes "ready" or the
+// of its own, whose copy of the grant at $HOLD_GRANT it unmounts) or map (a shared mapping of it, its fd closed). The process's main thread holds nothing. Writes "ready" or the
 // error to $READY
 func threadHoldMain() {
 	// The main thread, the thread group leader, stays this goroutine's: the holder is another thread
@@ -42,6 +42,12 @@ func threadHoldMain() {
 		case "bind":
 			if err = unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err == nil {
 				err = unix.Mount(path, os.Getenv("HOLD_AT"), "", unix.MS_BIND, "")
+			}
+		case "map":
+			var fd int
+			if fd, err = unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC, 0); err == nil {
+				_, err = unix.Mmap(fd, 0, 1, unix.PROT_READ, unix.MAP_SHARED)
+				unix.Close(fd)
 			}
 		case "opentree":
 			if err = unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err == nil {
@@ -183,5 +189,41 @@ func TestHoldersPossible(t *testing.T) {
 	}
 	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && h.Possible }) {
 		t.Errorf("%d, holding a clone of a file of the grant, isn't a possible holder in %+v", pid, holders)
+	}
+}
+
+// P5: a shared mapping of a file of the grant, its fd closed, makes its process a holder; a possible one once the file
+// is deleted
+func TestHoldersMapping(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprint("deleted=", deleted), func(t *testing.T) {
+			src := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(src, "dir"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(src, "dir", "file"), []byte("notes"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			b, stdin, out := sandboxC(t, "allow")
+			c := folders(t, `{"path": "`+src+`"}`)
+			b.caps[c.id()] = c
+			g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid := threadHold(t, stdin, out, g.Path, g.Path+"/dir/file", "map")
+			if deleted {
+				if err := os.Remove(filepath.Join(src, "dir", "file")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			holders, err := b.revoke(g.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && h.Possible == deleted }) {
+				t.Errorf("%d, mapping a file of the grant, isn't among the holders %+v", pid, holders)
+			}
+		})
 	}
 }

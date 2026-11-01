@@ -87,13 +87,15 @@ func unescapeMountinfo(s string) string {
 
 // An attach grant's mount in M1, found when it's attached by the tree's mount id, not by its path: the sandbox can
 // rename the grant directory in M1 (models/README.md, Attacker 6). Its id, peer group, and device and root, by which
-// copies of it are found; the tree itself, which the daemon keeps open, and its device as stat gives it
+// copies of it are found; the tree itself, which the daemon keeps open, and its device as stat gives it (srcDev) and
+// as mountinfo and maps give it (sbDev, the superblock's; btrfs's stat gives a subvolume's)
 type grantMount struct {
 	id        uint64
 	group     string
 	dev, root string
 	tree      *os.File
 	srcDev    uint64
+	sbDev     uint64
 }
 
 // grantMountOf finds the mount the tree (attached in M1) is in M1's mountinfo, by its mount id
@@ -113,7 +115,7 @@ func (s *sandbox) grantMountOf(tree *os.File) (*grantMount, error) {
 	}
 	for _, l := range lines {
 		if l.id == stx.Mnt_id {
-			m := &grantMount{id: l.id, dev: l.dev, root: l.root, tree: tree, srcDev: st.Dev}
+			m := &grantMount{id: l.id, dev: l.dev, root: l.root, tree: tree, srcDev: st.Dev, sbDev: parseDev(l.dev)}
 			for _, o := range l.optional {
 				if g, ok := strings.CutPrefix(o, "shared:"); ok {
 					m.group = g
@@ -158,4 +160,12 @@ func (s *sandbox) isShared(dir string) bool {
 		}
 	}
 	return false
+}
+
+// parseDev reads a device as mountinfo gives it, major:minor in decimal
+func parseDev(s string) uint64 {
+	major, minor, _ := strings.Cut(s, ":")
+	maj, _ := strconv.ParseUint(major, 10, 32)
+	mn, _ := strconv.ParseUint(minor, 10, 32)
+	return unix.Mkdev(uint32(maj), uint32(mn))
 }

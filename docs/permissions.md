@@ -185,18 +185,25 @@ against everything that runs there, for a rename that no longer hides anything.
 The daemon detaches first: how many processes, namespaces and mounts the scan below reads is the sandbox's choice, so
 nothing of it comes before the detach. Then it lists the holders, within ten seconds, reading the mountinfo of each
 mount namespace in the sandbox once (of every process of the sandbox's, found by user namespace as for sessions below,
-re-entries included): processes with a thread whose working directory, root or open files are on the grant's mount or
-one propagated from it (its peer group, by `shared:` and `master:`), or with mappings there (by `statx`'s mount id,
-which an open file keeps), should the detach have left one; processes with a thread whose working directory, root or an open file is on a detached mount of the
-grant's filesystem, one in no mountinfo the daemon reads (a lazy unmount's, an `open_tree` clone's, one in a namespace
-no process is in); and processes with a thread whose mount namespace has a mount of the grant's filesystem and root.
-A file on a detached mount is the grant's when the path `/proc` gives for it, relative to that mount's root, names
-the same inode beneath the grant: the daemon keeps the tree it attached open and looks it up there without links.
-Otherwise its process is listed as a possible holder: it may hold another file of that filesystem, or a file of the
-grant's through a clone of a directory beneath it, or one deleted since. Every thread counts:
-one can have a working directory, file table and mount namespace of its own (`unshare` with `CLONE_FS`,
-`CLONE_FILES` or `CLONE_NEWNS`). It does so however the grant ended (revoked, released from
-inside, its lease run out) and keeps the last twenty grants' holders for the window, which shows them and offers to
+re-entries included):
+- processes with a thread whose working directory, root or an open file is on the grant's mount or one propagated
+  from it (its peer group, by `shared:` and `master:`), should the detach have left one, by `statx`'s mount id;
+- processes with a thread whose working directory, root or an open file is on a detached mount of the grant's
+  filesystem, one in no mountinfo the daemon reads (a lazy unmount's, an `open_tree` clone's, one in a namespace no
+  process is in);
+- processes mapping a file of the grant's, from `/proc/<pid>/maps`: the mapping's device (the superblock's, as
+  mountinfo gives it), inode and path. `/proc/<pid>/map_files` would give the mapping's mount, but following its
+  links takes `CAP_SYS_ADMIN` or `CAP_CHECKPOINT_RESTORE` in the initial user namespace, which the daemon lacks;
+- processes with a thread whose mount namespace has a mount of the grant's filesystem and root.
+
+A file on a detached mount, or a mapping on the grant's filesystem, is the grant's when the path `/proc` gives for it
+(relative to a detached mount's root, or below a copy's mount point) names the same inode beneath the grant: the
+daemon keeps the tree it attached open, and looks each tail of the path up there without links. Otherwise a file on a
+detached mount makes its process a possible holder: it may hold another file of that filesystem, a file of the
+grant's through a clone of something beneath it, or one deleted since; so does a mapping of a deleted file whose
+directory is still the grant's. Every thread counts: one can have a working directory, file table and mount
+namespace of its own (`unshare` with `CLONE_FS`, `CLONE_FILES` or `CLONE_NEWNS`). It does so however the grant ended
+(revoked, released from inside, its lease run out) and keeps the last twenty grants' holders for the window, which shows them and offers to
 end them: `SIGKILL`, which a process can't ignore, through a pidfd, only for processes in the sandbox, and only to the
 process recorded (by its start time), not to a later one that got its pid. The daemon doesn't refuse a revoke because
 something is in use, and doesn't kill anything without the user saying so.
@@ -204,9 +211,16 @@ something is in use, and doesn't kill anything without the user saying so.
 Finding holders is best effort. A file descriptor can stay open where `/proc` shows no process holding it: in flight
 in an `SCM_RIGHTS` message queued on a socket nobody reads yet, or registered with an io_uring as a fixed file. Either
 keeps a grant that ended readable (and writable, for a read-write one) through that descriptor, for as long as the
-sandbox likes, and the window lists nobody to end. A detached mount the daemon can't see is listed only through a
-file a process has open on it: an `open_tree` clone or a lazily unmounted copy, attached again in a mount namespace no
-process is in, shows nowhere. Only ending the sandbox ends every access to a grant for sure.
+sandbox likes, and the window lists nobody to end. Detached mounts and mappings show only partly:
+- A detached mount is listed only through a file a process has open on it: an `open_tree` clone or a lazily
+  unmounted copy, attached again in a mount namespace no process is in, shows nowhere.
+- A mapping names no mount, only a path, so one the daemon can't look up beneath the grant isn't listed: through a
+  detached clone of a directory beneath the grant (its path is relative to that directory), of a file renamed out
+  of the grant through another mount of the filesystem, of a file deleted along with its directory, or beneath a
+  directory the user can't search (the sandbox's subordinate ids own it).
+- Past ten seconds the scan stops, and the processes it didn't get to aren't listed.
+
+Only ending the sandbox ends every access to a grant for sure.
 
 ### Source ceiling and resolving paths
 
