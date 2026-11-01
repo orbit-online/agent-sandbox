@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"slices"
 	"testing"
@@ -233,5 +234,63 @@ func TestReleaseHold(t *testing.T) {
 	release(os.Getpid())
 	if b.isLive(g) {
 		t.Error("A release without a session didn't end the grant")
+	}
+}
+
+// slowGranted is a log handler that holds up whoever logs "Granted" until the grant has ended, then opens decoy files,
+// which take the lowest free fds
+type slowGranted struct {
+	slog.Handler
+	b      *broker
+	decoys *[]int
+}
+
+func (h slowGranted) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == "Granted" {
+		r.Attrs(func(a slog.Attr) bool {
+			for deadline := time.Now().Add(10 * time.Second); a.Key == "grant" && time.Now().Before(deadline); {
+				h.b.mu.Lock()
+				live := h.b.grants[a.Value.String()] != nil
+				h.b.mu.Unlock()
+				if !live {
+					for range 64 {
+						fd, _ := unix.Open("/dev/null", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+						*h.decoys = append(*h.decoys, fd)
+					}
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return true
+		})
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+// P8: a session lease allowed after its anchor exited ends at once, and its request closes no file of the daemon's:
+// the session's pidfd is the grant's, closed when the anchor's exit ended it, its number another file's by then
+func TestSessionGoneWhileAsked(t *testing.T) {
+	b, _ := testBroker(t)
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	anchor, child := startAnchor(t, "claude")
+	b.ask = func(context.Context, prompt) (string, error) {
+		anchor.Process.Kill()
+		anchor.Wait()
+		return "allow", nil
+	}
+	var decoys []int
+	old := slog.Default()
+	slog.SetDefault(slog.New(slowGranted{slog.NewTextHandler(os.Stderr, nil), b, &decoys}))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	_, _, _ = b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
+	if len(decoys) == 0 {
+		t.Fatal("The session lease didn't end with its anchor gone")
+	}
+	for _, fd := range decoys {
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil {
+			t.Errorf("The request closed a file it didn't own: %d, %v", fd, err)
+		}
+		unix.Close(fd)
 	}
 }

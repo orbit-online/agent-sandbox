@@ -185,7 +185,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   (also as read by a daemon started again, and forgotten), the store, duration, lock (none granted when the lock stops being
   watched while the user is asked) and session
   leases (a session anchored at a copy of the test binary named `claude`, none
-  at another name), service units in systemd (faked), exclusive instances across
+  at another name; one allowed after its anchor exited ends, closing no file of
+  the daemon's), service units in systemd (faked), exclusive instances across
   launchers (locked by the instance `list` prints, whatever other parameters
   a request carries; the default launcher's cleanup leaving a lock without content alone), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace, a second time, and once a process of

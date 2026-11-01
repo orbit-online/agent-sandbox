@@ -146,7 +146,8 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	} else if g, err = b.grant(c, params, summary, lease, sess); err != nil {
 		c.covered.Unlock()
 		return nil, "", err
-	} else if keepSess = len(g.sessions) > 0; !keepSess {
+	} else if keepSess = lease == "session"; !keepSess {
+		// A session lease took the session's pidfd, which its watch closes, already if the anchor is gone
 		b.hold(g, sess)
 	}
 	c.covered.Unlock()
