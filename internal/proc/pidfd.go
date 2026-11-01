@@ -31,9 +31,14 @@ func PidOf(pidfd int) (int, error) {
 	return 0, fmt.Errorf("No pid in pidfd info")
 }
 
-// Alive reports whether a pidfd's process still runs: a pidfd turns readable when it exits
+// Alive reports whether a pidfd's process still runs: a pidfd turns readable when it exits. A poll a signal interrupts
+// (Go's runtime sends them to preempt goroutines) is no answer, so it's asked again
 func Alive(pidfd int) bool {
 	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
-	n, _ := unix.Poll(fds, 0)
-	return n == 0
+	for {
+		n, err := unix.Poll(fds, 0)
+		if err != unix.EINTR {
+			return n == 0
+		}
+	}
 }
