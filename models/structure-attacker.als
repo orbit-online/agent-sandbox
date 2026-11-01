@@ -190,22 +190,15 @@ assert S3noJoinUp {
 }
 check S3noJoinUp for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
 
-// S4, as it matters: every user namespace the attacker makes is
-// strictly below U1 and maps only ids U1 maps. Holds (the kernel's map
-// rule and S3).
+// S4: every user namespace the attacker makes is strictly below U1 and
+// maps only ids U1 maps. Holds (the kernel's map rule and S3). Not "U2
+// or below", as the README had it: bwrap's init and udhcpc run in U1
+// and may unshare a user namespace there, a sibling of U2, which is no
+// more than U2 (owned by the user under U1, U1's ids).
 assert S4madeBelowU1 {
   always (Made in U1.^~parent and (all u: Made | u.mapped in U1.mapped))
 }
 check S4madeBelowU1 for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
-
-// S4 as the README words it, "U2 or below", fails: bwrap's init and
-// udhcpc run in U1 and may unshare a user namespace there, a sibling of
-// U2. Harmless: it is no more than U2 (owned by the user under U1, U1's
-// ids). The README should say "strictly below U1". Known.
-assert S4madeBelowU2 {
-  always Made in U2.*~parent
-}
-check S4madeBelowU2 for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 1
 
 // Vacuity guards: the attacker gets every capability in a namespace of
 // its own, and a mount namespace there; udhcpc's net caps count in U1.

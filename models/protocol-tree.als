@@ -152,7 +152,9 @@ fun listed: set Process { (inside - Tree.unscanned) & { p: Process | some w: p.(
 // process is in, or a mapping whose path can't be looked up beneath the
 // grant holds the grant too and shows nowhere, so P5 is best effort,
 // outside this model; only the sandbox's end ends those
-// (docs/permissions.md). Holds, also when the sandbox renamed the grant
+// (docs/permissions.md). That is Linux's limit: an open file keeps its
+// mount alive and there is no general revoke(), so only ending the
+// holders takes access back. Holds, also when the sandbox renamed the grant
 // directory. Reverts: `inside` as the sandbox pid's descendants (as before
 // the fix): a cwd on the grant or a re-bind in a re-entry's own mount
 // namespace isn't listed; seen without Mapping (map_files, as before the

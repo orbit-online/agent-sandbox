@@ -190,7 +190,7 @@ sig Grant {
 // Guards, so the revert checks can drop each.
 one sig Guards { on: set Guard }
 abstract sig Guard {}
-one sig NoLinks, Beneath, NoSubmounts, BindsAsserted extends Guard {}
+one sig NoLinks, Beneath, NoSubmounts, BindsAsserted, PinnedNS extends Guard {}
 
 fact grants {
   all g: Grant {
@@ -207,7 +207,12 @@ fact grants {
     // open_tree without AT_RECURSIVE in a locked copy: no mount below
     NoSubmounts in Guards.on implies no m: SMount - g.mnt |
       m.ns = HostMnt and m.how = Fresh and m.root in g.source.^~up
-    g.mnt.how = Fresh and g.mnt.root = g.source and g.mnt.ns = sb.mnt
+    g.mnt.how = Fresh and g.mnt.root = g.source
+    // attached in the mount namespace pinned when the daemon found the
+    // sandbox (pinSandbox: owned by a child of the init user namespace,
+    // with the pid in it, so M1); without the pin, wherever the
+    // sandbox's pid is when the grant is made
+    g.mnt.ns = (PinnedNS in Guards.on => M1 else sb.mnt)
     some g.ro iff ReadOnly in g.mnt.flags
     // nodev and nosuid for a directory; the model's files all may be
     NoDev + NoSuid in g.mnt.flags
@@ -244,8 +249,10 @@ run S5nestedWithCaps {
 // into the attacker's namespace after it was made is not MNT_LOCKED
 // there and unmounts (tried, see the header). What it reveals is the
 // empty mountpoint the broker made in the grant directory, in the
-// attacker's own namespace. Harmless; the README's S5 should say
-// "copies". Known.
+// attacker's own namespace. Made private there, the propagated grant
+// also keeps its access after the grant ends, until the processes
+// holding it end, as any open file does: Linux has no general revoke()
+// (docs/permissions.md). Known, accepted (README S5).
 assert S5propagatedLocked {
   world implies no p: sandboxProcs, m: SMount |
     m.from.ns = M2 and m.how in Copied + Propagated and canReveal[p, m]
@@ -327,16 +334,26 @@ assert S11flagsStay {
 check S11flagsStay for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
 
 // The same under the README's attacker, which counts bwrap's init in.
-// Run as the sandbox's pid, it unshares a user and mount namespace;
-// the broker then reads /proc/<pid>/ns/mnt and its owner afresh for
-// every grant (mounts.go:188-202), so move-tree attaches the tree in
-// the attacker's namespace, unlocked, and the attacker remounts a
-// read-only grant read-write and writes the host folder. Needs code
-// execution as bwrap's init (structure.als, sbPinned). A fix: pin the
-// namespaces when the daemon finds the sandbox, or refuse an owner
-// whose parent isn't the init user namespace. Known.
+// Run as the sandbox's pid, it unshares a user and mount namespace of
+// its own. Holds: the daemon pins the sandbox's mount and user
+// namespaces when it finds it (pinSandbox, cmd/permissions-broker/
+// sandbox.go), refusing a mount namespace whose owner isn't a child of
+// its own user namespace or doesn't hold the pid, and its helpers join
+// the pinned M1 by fd (inM1, helpers.go) after check() refuses once the
+// pid has left the pinned namespaces. The grant is attached in M1 and
+// reaches the attacker's namespace only as a flag-locked copy or
+// propagation. Revert: without the pin (the namespaces read afresh from
+// /proc/<pid>/ns for every grant, as before the fix), move-tree attaches
+// the tree in the attacker's namespace, unlocked, and the attacker
+// remounts a read-only grant read-write (counterexample found).
 assert S11flagsUnderHijack {
   (world and guarded) implies no p: sandboxProcs, g: Grant, m: SMount |
     g.mnt in m.*from and some g.ro and canClear[p, m, ReadOnly]
 }
-check S11flagsUnderHijack for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 1
+check S11flagsUnderHijack for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
+
+assert S11flagsUnderHijackRevert {
+  (world and Guards.on = Guard - PinnedNS) implies no p: sandboxProcs, g: Grant, m: SMount |
+    g.mnt in m.*from and some g.ro and canClear[p, m, ReadOnly]
+}
+check S11flagsUnderHijackRevert for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 1

@@ -220,11 +220,16 @@ process whose principal is in the Sandbox domain, at any time.
   only over N.
 - S3. No sandbox process can join (setns) U1, N, M1, P, or any host
   namespace.
-- S4. Every user namespace a sandbox process creates is U2 or below, and
-  maps only ids U1 maps (the subuid range and the user's own uid).
+- S4. Every user namespace a sandbox process creates is strictly below
+  U1, and maps only ids U1 maps (the subuid range and the user's own
+  uid).
 - S5. Every mount a nested mount namespace copies from M2 is locked: no
   sandbox process can unmount or move a bind to reveal what lies under it,
-  `/run/permissions` included.
+  `/run/permissions` included. Accepted: a grant propagated into a nested
+  namespace after it was made isn't locked there and unmounts, revealing
+  only the empty mountpoint in the grant directory; made private there, it
+  keeps the grant's access past its end until its holders end, as any
+  open file does (no `revoke()` in Linux, `docs/permissions.md`).
 - S6. `control.sock` answers no request from a sandbox process, however it
   reaches the socket (a watch stream aside, which carries what
   `request.sock`'s does).
@@ -290,7 +295,9 @@ process whose principal is in the Sandbox domain, at any time.
   an `SCM_RIGHTS` message or registered with io_uring, a detached mount
   attached in a namespace no process is in, a mapping whose path can't be
   looked up beneath the grant, and what the 10 s scan doesn't reach hold it
-  unseen, until the sandbox ends.
+  unseen, until the sandbox ends. Linux has no general `revoke()` and an
+  open file keeps its mount alive, so ending the holders, at worst the
+  sandbox, is the only way to take access back (`docs/permissions.md`).
 - P6. Only host principals answer: a pending request is decided by the
   notification's own action (not within 1 s of it appearing) or by a
   `control.sock` client.
@@ -369,7 +376,10 @@ Also left out: plugins' own code (trusted host code; a plugin's MCP tool
 descriptions reach Claude as text), the network beyond the macvlan
 (LAN peers, DHCP spoofing other than through udhcpc), side channels,
 timing beyond the fake clock (plan decision 2026-10-31), and resource
-exhaustion of the host other than the broker's budgets. The window's
+exhaustion of the host other than the broker's budgets. Taking back
+access a holder already has after a grant ends: Linux has no general
+`revoke()`, so the models ask only that holders are listed (P5) and
+that ending them ends it. The window's
 overview of static access (binds, ceilings, standing grants) is
 read-only and carries no consent, and the recent-decisions log, in the
 daemon's memory only, decides nothing. A ceiling root
