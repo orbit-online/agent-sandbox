@@ -60,9 +60,7 @@ func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 		return nil, nil, fmt.Errorf("The grant directory %s isn't a directory of ours", b.cfg.GrantDir)
 	}
 	for _, c := range b.caps {
-		if c.Type == "socket" {
-			b.syncSockets(c)
-		}
+		c.kind().start(b, c)
 	}
 	b.grantStanding()
 	if reqLn, err = listen(filepath.Join(b.cfg.GrantDir, "request.sock")); err != nil {

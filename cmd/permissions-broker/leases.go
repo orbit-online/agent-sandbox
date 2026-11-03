@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -34,8 +33,8 @@ func (b *broker) checkLease(lease string) error {
 	return nil
 }
 
-// grant makes a grant live: mounts a folder, gives a host socket its address, adds a D-Bus rule set to its proxy,
-// and ties it to its lease
+// grant makes a grant live, as its capability's kind does (mounts a folder, gives a host socket its address, adds a
+// D-Bus rule set to its proxy), and ties it to its lease
 func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string) (*grant, error) {
 	unlock, err := c.exclusiveLock(b.cfg.Launcher, params)
 	if err != nil {
@@ -46,25 +45,9 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	if d, err := duration.Parse(lease); err == nil {
 		g.Expires = g.Granted.Add(d)
 	}
-	switch c.Type {
-	case "socket":
-		b.syncSockets(c)
-		addr := socketAddr(c, params)
-		if !b.listening(addr) {
-			unlock()
-			return nil, fmt.Errorf("Can't listen at %s for %s", addr, c.id())
-		}
-		g.Socket = filepath.Join(b.cfg.SandboxGrantDir, addr)
-	case "attach":
-		if err := b.attachGrant(g); err != nil {
-			unlock()
-			return nil, err
-		}
-	case "dbus":
-		if err := b.dbusAdd(g); err != nil {
-			unlock()
-			return nil, err
-		}
+	if err := c.kind().live(b, g); err != nil {
+		unlock()
+		return nil, err
 	}
 	var once sync.Once
 	g.end = func(why string) {
@@ -74,13 +57,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 			g.over = true
 			b.mu.Unlock()
 			b.closeConns(g)
-			if c.Type == "dbus" {
-				b.dbusRemove(g)
-			}
-			if c.Type == "attach" {
-				b.detachGrant(g)
-				b.recordHeld(g, why)
-			}
+			c.kind().end(b, g, why)
 			g.unlock()
 			close(g.ended)
 			slog.Info("Grant ended", "grant", g.ID, "capability", g.Capability, "why", why)

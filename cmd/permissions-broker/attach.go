@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -169,4 +170,36 @@ func cleanup(cfg config, sb *sandbox) {
 			removeMountpoint(cfg.GrantDir, e.Name())
 		}
 	}
+}
+
+// attachKind is the kind of folder capabilities: a grant mounts the folder in the sandbox's grant directory, its end
+// detaches it and records what still held it
+type attachKind struct{ baseKind }
+
+func (attachKind) usable(b *broker) error {
+	b.mu.Lock()
+	shared := b.shared
+	b.mu.Unlock()
+	if !shared {
+		return errors.New("Folder and device grants need the sandbox's grant directory shared, which " +
+			"failed when it started: restart the app")
+	}
+	return nil
+}
+
+// describe checks the folder against the ceiling before asking: what's outside is refused without bothering the user.
+// What's mounted is what's at the path then, checked again
+func (attachKind) describe(b *broker, c *capability, params json.RawMessage) (string, error) {
+	src, err := b.resolveAttach(c, params)
+	if err != nil {
+		return "", err
+	}
+	return describeAttach(c.describe(params), src), nil
+}
+
+func (attachKind) live(b *broker, g *grant) error { return b.attachGrant(g) }
+
+func (attachKind) end(b *broker, g *grant, why string) {
+	b.detachGrant(g)
+	b.recordHeld(g, why)
 }

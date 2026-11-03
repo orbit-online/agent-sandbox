@@ -58,14 +58,8 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	if lease == "once" && call == nil {
 		return nil, errors.New("A once lease is for host command calls: ask for a duration")
 	}
-	if c.Type == "attach" {
-		b.mu.Lock()
-		shared := b.shared
-		b.mu.Unlock()
-		if !shared {
-			return nil, errors.New("Folder and device grants need the sandbox's grant directory shared, which " +
-				"failed when it started: restart the app")
-		}
+	if err := c.kind().usable(b); err != nil {
+		return nil, err
 	}
 	if p.gone() {
 		return nil, errors.New("The caller is gone")
@@ -76,16 +70,13 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	if err := b.checkLease(lease); err != nil {
 		return nil, err
 	}
-	summary := c.describe(params)
-	if c.Type == "attach" {
-		// Checked before asking: what's outside the ceiling is refused without bothering the user. What's mounted is
-		// what's at the path then, checked again
-		src, err := b.resolveAttach(c, params)
-		if err != nil {
-			return nil, err
-		}
-		summary = describeAttach(summary, src)
-	} else if err := c.inList(params); err != nil {
+	// Checked before asking: what the kind refuses (a folder outside the ceiling) or no instance is, without bothering
+	// the user
+	summary, err := c.kind().describe(b, c, params)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.inList(params); err != nil {
 		return nil, err
 	}
 
@@ -94,7 +85,6 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	// of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
-	var err error
 	if g == nil && b.isStanding(c, params) {
 		if g, err = b.grant(c, params, summary, "", "standing"); err != nil {
 			c.covered.Unlock()
@@ -137,13 +127,8 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 		if params, err = c.validate(answer.Params); err != nil {
 			return nil, err
 		}
-		summary = c.describe(params)
-		if c.Type == "attach" {
-			src, err := b.resolveAttach(c, params)
-			if err != nil {
-				return nil, err
-			}
-			summary = describeAttach(summary, src)
+		if summary, err = c.kind().describe(b, c, params); err != nil {
+			return nil, err
 		}
 	}
 	// The instances may have changed while the user was asked (a VM shut down): checked at grant time. An attach
@@ -237,13 +222,8 @@ type decision struct {
 func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string, call *askingCall) (decision, error) {
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan wire.Request, 1)}
-	bounds := ""
-	switch c.Type {
-	case "command":
-		p.Scope, bounds = c.scope(), c.bounds(params)
-	case "dbus":
-		p.Scope = c.DBus.Scope()
-	}
+	var bounds string
+	p.Scope, bounds = c.kind().scope(c, params)
 	if call != nil {
 		p.Command, p.Arguments = call.Command, call.Arguments
 	}

@@ -184,3 +184,21 @@ func (b *broker) closeSockets() {
 		delete(b.listeners, addr)
 	}
 }
+
+// socketKind is the kind of host socket capabilities: the broker listens at their addresses from its start, and a
+// grant lets connections there through
+type socketKind struct{ baseKind }
+
+func (socketKind) check(c *capability) error { return c.checkSocket() }
+
+func (socketKind) start(b *broker, c *capability) { b.syncSockets(c) }
+
+func (socketKind) live(b *broker, g *grant) error {
+	b.syncSockets(g.cap)
+	addr := socketAddr(g.cap, g.Params)
+	if !b.listening(addr) {
+		return fmt.Errorf("Can't listen at %s for %s", addr, g.cap.id())
+	}
+	g.Socket = filepath.Join(b.cfg.SandboxGrantDir, addr)
+	return nil
+}

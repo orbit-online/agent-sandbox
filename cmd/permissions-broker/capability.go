@@ -75,17 +75,11 @@ func (c *capability) check() error {
 		}
 		c.schemas[k] = s
 	}
-	switch c.Type {
-	case "command":
-		return c.checkCommands()
-	case "socket":
-		return c.checkSocket()
-	case "dbus":
-		return c.checkDBus()
-	case "attach":
-		return nil
+	k := c.kind()
+	if k == nil {
+		return fmt.Errorf("%s has type %q, not command, socket, dbus or attach", c.Name, c.Type)
 	}
-	return fmt.Errorf("%s has type %q, not command, socket, dbus or attach", c.Name, c.Type)
+	return k.check(c)
 }
 
 // validate checks params against the capability's declared ones: no others, each of its schema. Returns them re-encoded with sorted keys, so equal requests compare equal

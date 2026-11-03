@@ -322,3 +322,23 @@ func (b *broker) watchInstance(g *grant) {
 		}
 	}
 }
+
+// commandKind is the kind of host command capabilities: their grants make nothing live, calls run under them
+type commandKind struct{ baseKind }
+
+func (commandKind) check(c *capability) error { return c.checkCommands() }
+
+func (commandKind) scope(c *capability, params json.RawMessage) (string, string) {
+	return c.scope(), c.bounds(params)
+}
+
+func (commandKind) info(c *capability, i *capabilityInfo) {
+	// What the sandbox may call, not what runs on the host
+	i.Commands = map[string]*hostCommand{}
+	for name, cmd := range c.Commands {
+		v := *cmd
+		v.Run = nil
+		i.Commands[name] = &v
+	}
+	i.Scope = c.scopeItems()
+}

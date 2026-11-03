@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -101,3 +102,16 @@ func (b *broker) closeProxies() {
 		p.Close()
 	}
 }
+
+// dbusKind is the kind of D-Bus capabilities: a grant adds the rule set to its bus's proxy, its end removes it
+type dbusKind struct{ baseKind }
+
+func (dbusKind) check(c *capability) error { return c.checkDBus() }
+
+func (dbusKind) live(b *broker, g *grant) error { return b.dbusAdd(g) }
+
+func (dbusKind) end(b *broker, g *grant, _ string) { b.dbusRemove(g) }
+
+func (dbusKind) scope(c *capability, _ json.RawMessage) (string, string) { return c.DBus.Scope(), "" }
+
+func (dbusKind) info(c *capability, i *capabilityInfo) { i.Covers = c.DBus.Scope() }
