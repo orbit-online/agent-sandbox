@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
 func TestValidate(t *testing.T) {
@@ -32,7 +34,7 @@ func TestOpaqueParam(t *testing.T) {
 	if err := c.check(); err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	csr := strings.Repeat("MIIB", maxOpaque/4)
+	csr := strings.Repeat("MIIB", schema.MaxOpaque/4)
 	got, err := c.validate(json.RawMessage(`{"csr": "` + csr + `"}`))
 	if err != nil {
 		t.Fatalf("validate refused %d characters: %v", len(csr), err)

@@ -1,6 +1,12 @@
-package main
+// Package schema is the subset of JSON Schema the broker checks arguments and parameters against itself: string
+// (maxLength, pattern, enum), integer and number (minimum, maximum, enum), boolean, and arrays of those (items,
+// maxItems). opaque marks a string the user has nothing to read in (a CSR); multiline lets a string hold newlines and
+// tabs. A pattern matches the whole value. instances, on a host command capability's bounding argument, is the glob
+// its values come from
+package schema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -12,40 +18,38 @@ import (
 	"unicode/utf8"
 )
 
-// The subset of JSON Schema the broker checks arguments and parameters against itself: string (maxLength, pattern,
-// enum), integer and number (minimum, maximum, enum), boolean, and arrays of those (items, maxItems). opaque marks a
-// string the user has nothing to read in (a CSR); multiline lets a string hold newlines and tabs. A pattern matches the
-// whole value. instances, on a host command capability's bounding argument, is the glob its values come from
-
-type argSchema struct {
-	Type        string     `json:"type"`
-	Description string     `json:"description"`
-	Opaque      bool       `json:"opaque"`
-	Multiline   bool       `json:"multiline"`
-	MaxLength   *int       `json:"maxLength"`
-	Pattern     string     `json:"pattern"`
-	Enum        []any      `json:"enum"`
-	Minimum     *float64   `json:"minimum"`
-	Maximum     *float64   `json:"maximum"`
-	Items       *argSchema `json:"items"`
-	MaxItems    *int       `json:"maxItems"`
-	Instances   string     `json:"instances"`
+type Schema struct {
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	Opaque      bool     `json:"opaque"`
+	Multiline   bool     `json:"multiline"`
+	MaxLength   *int     `json:"maxLength"`
+	Pattern     string   `json:"pattern"`
+	Enum        []any    `json:"enum"`
+	Minimum     *float64 `json:"minimum"`
+	Maximum     *float64 `json:"maximum"`
+	Items       *Schema  `json:"items"`
+	MaxItems    *int     `json:"maxItems"`
+	Instances   string   `json:"instances"`
 
 	re *regexp.Regexp
 }
 
+// An opaque string, data that the user has nothing to read in (a CSR), may be this long: it's shown as a digest
+const MaxOpaque = 8192
+
 var argTypes = map[string]bool{"string": true, "boolean": true, "integer": true, "number": true, "array": true}
 
-// parseSchema reads and checks one argument's schema
-func parseSchema(raw json.RawMessage) (*argSchema, error) {
-	var s argSchema
+// Parse reads and checks one argument's schema
+func Parse(raw json.RawMessage) (*Schema, error) {
+	var s Schema
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, err
 	}
 	return &s, s.check(true)
 }
 
-func (s *argSchema) check(top bool) error {
+func (s *Schema) check(top bool) error {
 	if !argTypes[s.Type] || s.Type == "array" && !top {
 		return fmt.Errorf("type %q: string, boolean, integer, number, or an array of those", s.Type)
 	}
@@ -86,9 +90,9 @@ func normalize(v any) any {
 	return v
 }
 
-// checkValue checks v, decoded with UseNumber, against s. A string without maxLength may be maxDefault characters
+// CheckValue checks v, decoded with UseNumber, against s. A string without maxLength may be maxDefault characters
 // long, an opaque one maxOpaque
-func (s *argSchema) checkValue(v any, maxDefault int) error {
+func (s *Schema) CheckValue(v any, maxDefault int) error {
 	if s.Type != "array" {
 		return s.checkScalar(v, maxDefault)
 	}
@@ -107,7 +111,7 @@ func (s *argSchema) checkValue(v any, maxDefault int) error {
 	return nil
 }
 
-func (s *argSchema) checkScalar(v any, maxDefault int) error {
+func (s *Schema) checkScalar(v any, maxDefault int) error {
 	switch v := v.(type) {
 	case string:
 		if s.Type != "string" {
@@ -118,7 +122,7 @@ func (s *argSchema) checkScalar(v any, maxDefault int) error {
 		case s.MaxLength != nil:
 			limit = *s.MaxLength
 		case s.Opaque:
-			limit = maxOpaque
+			limit = MaxOpaque
 		}
 		if utf8.RuneCountInString(v) > limit || !utf8.ValidString(v) {
 			return fmt.Errorf("at most %d characters", limit)
@@ -158,7 +162,7 @@ func (s *argSchema) checkScalar(v any, maxDefault int) error {
 	return fmt.Errorf("must be a %s", s.Type)
 }
 
-func (s *argSchema) inEnum(v any) error {
+func (s *Schema) inEnum(v any) error {
 	if len(s.Enum) == 0 {
 		return nil
 	}
@@ -178,7 +182,7 @@ func (s *argSchema) inEnum(v any) error {
 	return fmt.Errorf("must be one of %v", s.Enum)
 }
 
-func (s *argSchema) bounds() string {
+func (s *Schema) bounds() string {
 	lo, hi := "any", "any"
 	if s.Minimum != nil {
 		lo = fmt.Sprint(*s.Minimum)
@@ -189,10 +193,10 @@ func (s *argSchema) bounds() string {
 	return lo + "–" + hi
 }
 
-// unrestricted reports whether any string the request size allows passes s: what the consent must say plainly
-func (s *argSchema) unrestricted() bool {
+// Unrestricted reports whether any string the request size allows passes s: what the consent must say plainly
+func (s *Schema) Unrestricted() bool {
 	if s.Type == "array" {
-		return s.Items.unrestricted()
+		return s.Items.Unrestricted()
 	}
 	return s.Type == "string" && len(s.Enum) == 0 && s.Pattern == ""
 }
@@ -201,11 +205,11 @@ func (s *argSchema) unrestricted() bool {
 // values when the user expands a grant
 const maxListedEnum = 8
 
-// allows says what s lets through, for the consent
-func (s *argSchema) allows() string {
+// Allows says what s lets through, for the consent
+func (s *Schema) Allows() string {
 	switch {
 	case s.Type == "array":
-		return "a list of " + s.Items.allows()
+		return "a list of " + s.Items.Allows()
 	case len(s.Enum) > maxListedEnum:
 		return fmt.Sprintf("one of %d values", len(s.Enum))
 	case len(s.Enum) > 0:
@@ -221,4 +225,21 @@ func (s *argSchema) allows() string {
 	default:
 		return "a number within " + s.bounds()
 	}
+}
+
+// DecodeObject decodes a JSON object with numbers as json.Number; nothing or null is an empty one
+func DecodeObject(raw json.RawMessage) (map[string]any, error) {
+	m := map[string]any{}
+	if len(raw) == 0 || string(raw) == "null" {
+		return m, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return map[string]any{}, nil
+	}
+	return m, nil
 }

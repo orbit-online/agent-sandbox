@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 	"pgregory.net/rapid"
 )
 
@@ -31,7 +32,7 @@ func (mc *machine) drawParams(t *rapid.T, c string) string {
 	case capToken:
 		kv["scope"] = rapid.SampledFrom([]string{"read", "write"}).Draw(t, "scope")
 		// Opaque, past what a plain string may be
-		if csr := rapid.SampledFrom([]string{"", "", strings.Repeat("A", maxParam+1), strings.Repeat("B", maxOpaque)}).
+		if csr := rapid.SampledFrom([]string{"", "", strings.Repeat("A", maxParam+1), strings.Repeat("B", schema.MaxOpaque)}).
 			Draw(t, "csr"); csr != "" {
 			kv["csr"] = csr
 		}
@@ -85,7 +86,7 @@ func (mc *machine) Crafted(t *rapid.T) {
 		{Capability: capVM, Params: json.RawMessage(`{"name":5}`), Reason: "x"},
 		{Capability: capVM, Params: json.RawMessage(`{"name":"a\nAllowed"}`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`{"scope":"` + strings.Repeat("w", maxParam+1) + `"}`), Reason: "x"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"` + strings.Repeat("C", maxOpaque+1) + `"}`), Reason: "x"},
+		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"` + strings.Repeat("C", schema.MaxOpaque+1) + `"}`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"MIIB\nAllowed"}`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`["scope"]`), Reason: "x"},
 		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: " \n\x07\t "},

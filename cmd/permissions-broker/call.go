@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
 // Calls of host commands: validated, covered by a grant or asked for, run as a transient user unit with the arguments
@@ -241,7 +243,7 @@ func (b *broker) recordCall(rec callRecord) {
 // shown is a call's arguments as the window shows them: opaque ones by digest, strings longer than cut cut (none with
 // cut 0, for the call asking the user, whose script they read whole)
 func (cmd *hostCommand) shown(args json.RawMessage, cut int) json.RawMessage {
-	m, _ := decodeObject(args)
+	m, _ := schema.DecodeObject(args)
 	for k, v := range m {
 		s, ok := v.(string)
 		switch {

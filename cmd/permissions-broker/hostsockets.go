@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 	"golang.org/x/sys/unix"
 )
 
@@ -117,7 +118,7 @@ func socketAddr(c *capability, params json.RawMessage) string {
 	if c.globArg == "" {
 		return filepath.Join(socketsDir, c.Name)
 	}
-	m, _ := decodeObject(params)
+	m, _ := schema.DecodeObject(params)
 	v, _ := m[c.globArg].(string)
 	return filepath.Join(socketsDir, c.Name, v)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
 // The host commands as MCP tools, from the declarations the module writes into the store: listed from the server's
@@ -86,7 +87,7 @@ func toolSchema(cc commandConfig, cmd *hostCommand) map[string]any {
 
 func commandHandler(socket string, n *nudger, cc commandConfig, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		in, err := decodeObject(req.Params.Arguments)
+		in, err := schema.DecodeObject(req.Params.Arguments)
 		if err != nil {
 			return nil, fmt.Errorf("Arguments aren't an object: %w", err)
 		}

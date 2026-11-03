@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
 type capability struct {
@@ -32,7 +33,7 @@ type capability struct {
 	// The bounding argument whose values the instances glob gives, and the glob
 	glob, globArg string
 
-	schemas map[string]*argSchema
+	schemas map[string]*schema.Schema
 
 	// Held while a request looks for a grant covering it
 	covered sync.Mutex
@@ -53,20 +54,17 @@ type capability struct {
 var callSlots = make(chan struct{}, 4)
 
 // A parameter's string value is at most this long: the notification shows it whole. An opaque one, data for a
-// host command that the user has nothing to read in (a CSR), is shown as a digest instead and may be up to maxOpaque
-// long
-const (
-	maxParam  = 200
-	maxOpaque = 8192
-)
+// host command that the user has nothing to read in (a CSR), is shown as a digest instead and may be up to
+// schema.MaxOpaque long
+const maxParam = 200
 
 // id is how requests name a capability
 func (c *capability) id() string { return c.Name }
 
 func (c *capability) check() error {
-	c.schemas = map[string]*argSchema{}
+	c.schemas = map[string]*schema.Schema{}
 	for k, raw := range c.Params {
-		s, err := parseSchema(raw)
+		s, err := schema.Parse(raw)
 		if err != nil {
 			return fmt.Errorf("%s: parameter %s: %w", c.Name, k, err)
 		}
@@ -91,7 +89,7 @@ func (c *capability) check() error {
 
 // validate checks params against the capability's declared ones: no others, each of its schema. Returns them re-encoded with sorted keys, so equal requests compare equal
 func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
-	params, err := decodeObject(raw)
+	params, err := schema.DecodeObject(raw)
 	if err != nil {
 		return nil, fmt.Errorf("Parameters aren't an object: %w", err)
 	}
@@ -100,28 +98,11 @@ func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s takes no parameter %q", c.id(), k)
 		}
-		if err := s.checkValue(v, maxParam); err != nil {
+		if err := s.CheckValue(v, maxParam); err != nil {
 			return nil, fmt.Errorf("Parameter %s of %s: %w", k, c.id(), err)
 		}
 	}
 	return json.Marshal(params) // maps marshal with sorted keys
-}
-
-// decodeObject decodes a JSON object with numbers as json.Number; nothing or null is an empty one
-func decodeObject(raw json.RawMessage) (map[string]any, error) {
-	m := map[string]any{}
-	if len(raw) == 0 || string(raw) == "null" {
-		return m, nil
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	if err := dec.Decode(&m); err != nil {
-		return nil, err
-	}
-	if m == nil {
-		return map[string]any{}, nil
-	}
-	return m, nil
 }
 
 // opaqueDigest is how an opaque parameter is shown: enough to tell two apart, nothing to read

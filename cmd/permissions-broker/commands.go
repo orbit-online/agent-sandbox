@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
 // Host commands (docs/permissions.md): scripts the module declares, run on the host per call under a grant of their
@@ -33,7 +35,7 @@ type hostCommand struct {
 	Timeout     string                     `json:"timeout"`
 	MaxValidity string                     `json:"maxValidity"`
 
-	args map[string]*argSchema
+	args map[string]*schema.Schema
 }
 
 const (
@@ -103,9 +105,9 @@ func (c *capability) checkCommands() error {
 				return fmt.Errorf("command %s: maxValidity: %w", name, err)
 			}
 		}
-		cmd.args = map[string]*argSchema{}
+		cmd.args = map[string]*schema.Schema{}
 		for arg, raw := range cmd.Arguments {
-			s, err := parseSchema(raw)
+			s, err := schema.Parse(raw)
 			if err != nil {
 				return fmt.Errorf("command %s: argument %s: %w", name, arg, err)
 			}
@@ -149,7 +151,7 @@ func (c *capability) checkBounding() error {
 // validateArgs checks a call's free arguments: each declared one, of its schema, and no other. Returns them re-encoded
 // with sorted keys
 func (cmd *hostCommand) validateArgs(raw json.RawMessage) (json.RawMessage, error) {
-	args, err := decodeObject(raw)
+	args, err := schema.DecodeObject(raw)
 	if err != nil {
 		return nil, fmt.Errorf("Arguments aren't an object: %w", err)
 	}
@@ -163,7 +165,7 @@ func (cmd *hostCommand) validateArgs(raw json.RawMessage) (json.RawMessage, erro
 		if !ok {
 			return nil, fmt.Errorf("Argument %s is missing", k)
 		}
-		if err := s.checkValue(v, maxFree); err != nil {
+		if err := s.CheckValue(v, maxFree); err != nil {
 			return nil, fmt.Errorf("Argument %s: %w", k, err)
 		}
 	}
@@ -204,7 +206,7 @@ func (c *capability) globMatches() (map[string]string, error) {
 		if c.Type == "socket" && !isHostSocket(m) {
 			continue
 		}
-		if s := c.schemas[c.globArg]; v != "" && found[v] == "" && s.checkValue(v, maxParam) == nil {
+		if s := c.schemas[c.globArg]; v != "" && found[v] == "" && s.CheckValue(v, maxParam) == nil {
 			found[v] = m
 		}
 	}
@@ -251,7 +253,7 @@ func (c *capability) scopeItems() []scopeItem {
 		for _, arg := range slices.Sorted(maps.Keys(cmd.args)) {
 			s := cmd.args[arg]
 			item := scopeItem{Command: name, Description: cmd.Description, Argument: arg, About: s.Description,
-				Allows: s.allows(), Unrestricted: s.unrestricted()}
+				Allows: s.Allows(), Unrestricted: s.Unrestricted()}
 			if item.Unrestricted {
 				open = append(open, item)
 			} else {
@@ -281,7 +283,7 @@ func (c *capability) scope() string {
 // bounds names the bounding values of params by their declarations' descriptions, for the consent's body: the summary
 // names them too, but a server may cut a summary. Opaque values by digest, as the summary has them
 func (c *capability) bounds(params json.RawMessage) string {
-	m, _ := decodeObject(params)
+	m, _ := schema.DecodeObject(params)
 	var parts []string
 	for _, k := range slices.Sorted(maps.Keys(m)) {
 		about := k

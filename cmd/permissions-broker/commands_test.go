@@ -148,3 +148,22 @@ func TestScopeItems(t *testing.T) {
 		t.Errorf("bounds = %s", bounds)
 	}
 }
+
+// What the consent says a schema allows, and which free arguments it calls unrestricted
+func TestSchemaScope(t *testing.T) {
+	c := testCap(t, "command")
+	c.Commands["exec"] = &hostCommand{Description: "Run PowerShell", Run: []string{"/bin/true"},
+		Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string", "multiline": true,
+			"description": "any PowerShell, as SYSTEM"}`)}}
+	c.Commands["click"] = &hostCommand{Description: "Click", Run: []string{"/bin/true"},
+		Arguments: map[string]json.RawMessage{"x": json.RawMessage(`{"type": "integer", "minimum": 0,
+			"maximum": 99, "description": "column"}`)}}
+	if err := c.check(); err != nil {
+		t.Fatal(err)
+	}
+	want := "Run PowerShell: any PowerShell, as SYSTEM, unrestricted (exec). Click: column, a number within 0–99 " +
+		"(click). print the input (run)."
+	if got := c.scope(); got != want {
+		t.Errorf("scope = %q\nwant    %q", got, want)
+	}
+}
