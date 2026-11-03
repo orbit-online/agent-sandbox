@@ -53,20 +53,21 @@ abstract sig Principal { domain: one Domain }
 // permissions broker daemon and its helpers, the Permissions window, the
 // notification daemon, nixpak's xdg-dbus-proxy, the launcher scripts
 // (claude-desktop.sh, nixpak's launcher, bwrap-subid.sh, net-setup.sh),
-// subid-broker, the netns-macvlan setcap wrapper, a service plugin's
-// units, and a plugin's target (the Windows VM).
+// subid-broker, the netns-macvlan setcap wrapper, the call units of host
+// commands, and what host commands and host sockets reach (a VM, a host
+// socket's server).
 one sig HostUserP, BrokerP, WindowP, NotifierP, DbusProxyP, LauncherP,
-  SubidBrokerP, NetnsMacvlanP, PluginUnitP, WindowsVMP extends Principal {}
+  SubidBrokerP, NetnsMacvlanP, CallUnitP, HostTargetP extends Principal {}
 // Sandbox side: bwrap's init and the FHS env script (in U1), udhcpc (in
 // U1 with net caps, parses LAN packets), the app, Claude Code sessions
-// and what they spawn (shells, MCP servers incl. permissions-mcp),
+// and what they spawn (shells, MCP servers incl. the permissions one),
 // anything those start in user namespaces of their own, and re-entries
 // (claude://, --shell): inside once joined, their parent a host nsenter
 // (README.md, Principals 16).
 one sig BwrapInitP, UdhcpcP, AppP, SessionP, NestedP, ReentryP extends Principal {}
 fact domains {
   (HostUserP + BrokerP + WindowP + NotifierP + DbusProxyP + LauncherP
-    + SubidBrokerP + NetnsMacvlanP + PluginUnitP + WindowsVMP).domain = Host
+    + SubidBrokerP + NetnsMacvlanP + CallUnitP + HostTargetP).domain = Host
   (BwrapInitP + UdhcpcP + AppP + SessionP + NestedP + ReentryP).domain = Sandbox
 }
 

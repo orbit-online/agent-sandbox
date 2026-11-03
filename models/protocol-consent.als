@@ -31,7 +31,7 @@ pred fromConfigNow[g: Grant] {
 // principal (the notification's action or a control.sock client) for its
 // capability and parameters, or from the config as a standing grant with
 // exactly its parameters that the user hasn't ended in this daemon's life
-// (isStanding, consent.go; start, run.go; answers from the host only,
+// (isStanding, standing.go; start, run.go; answers from the host only,
 // sockets.go).
 // Revert: hostOnly true, or isStanding matching any standing parameters
 // of the capability: counterexample either way.
@@ -39,7 +39,7 @@ assert P1noGrantWithoutConsent {
   always all g: Grant | born[g] implies allowedByHost[g] or fromConfigNow[g]
 }
 check P1noGrantWithoutConsent for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 0
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
 // P1's premise: grants born from the notification, the window, a start
 // and a request a standing grant covers.
 run P1grants {
@@ -48,33 +48,19 @@ run P1grants {
   eventually some l: Launcher | start[l] and some Live' & gl.l
   eventually some r: Req, g: Grant | fromConfig[r, g]
 } for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
-
-// Known, by design (Anders, 2026-10-31; docs/permissions.md, Requests): a
-// grant is the sandbox's, not a session's. A session lease the user
-// allowed "until this Claude session ends" gains every other session
-// that asks for the same parameters, without asking (hold, leases.go),
-// so it lasts as long as the longest of them; a subagent shares its
-// parent's session anyway. Sessions run as one user in one set of
-// namespaces, so no isolation between them could be enforced.
-assert P1sessionLeaseNotWidened {
-  always all g: Grant | (g in Live and g.glease = LSession) implies g.holders' in g.holders
-}
-check P1sessionLeaseNotWidened for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  2 Session, 2 Grant, 3 Req, 1 Text, 3 Int, 1..6 steps expect 1
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1
 
 // The user ends a standing grant of (l, c, p) in this step: revokes it,
-// or releases it and it ends.
+// or the sandbox releases it.
 pred userEnds[l: Launcher, c: Capability, p: Param] {
   some h: Live & glease.LStanding {
     h.gl = l and h.gcap = c and h.gparams = p
-    (some w: Principal | revoke[h, w])
-      or ((release[h, none] or some s: Session | release[h, s]) and after h not in Live)
+    (some w: Principal | revoke[h, w]) or release[h]
   }
 }
 
 // P1: a standing grant the user ended stays ended until the daemon
-// restarts. Revoke and a release that ends it record it as ended
+// restarts. Revoke and release record it as ended
 // (revoke, release, leases.go), so the sandbox's next request with the
 // same parameters asks again; only a start grants it again. Holds.
 // Revert: revoke or release not recording it: request() grants it back
@@ -84,7 +70,7 @@ assert P1endedStandingAsks {
     not ((not start[g.gl]) since userEnds[g.gl, g.gcap, g.gparams])
 }
 check P1endedStandingAsks for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  2 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..7 steps expect 0
+  3 Grant, 3 Req, 0 Conn, 1 Text, 3 Int, 1..7 steps expect 0
 // P1's premise: a revoked standing grant asked for again, and back after
 // a restart.
 run P1standingBackAfterRestart {
@@ -92,7 +78,7 @@ run P1standingBackAfterRestart {
     and after eventually ((some r: Req | r.rl = l and r.rcap = c and r.rparams = p and ask[r])
       and after eventually (start[l] and after (some g: Live | g.gl = l and g.gcap = c and g.gparams = p))))
 } for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 3 Grant, 3 Req, 1 Text, 3 Int, 1..9 steps expect 1
+  3 Grant, 3 Req, 0 Conn, 1 Text, 3 Int, 1..9 steps expect 1
 
 // P2. A standing grant comes only from the config: every grant with lease
 // standing is one the launcher's config declares, and no request or
@@ -105,17 +91,18 @@ assert P2standingFromConfigOnly {
   always all g: Live & glease.LStanding | g.gparams in g.gl.standing[g.gcap] and g.gcap.dtype != Attach
 }
 check P2standingFromConfigOnly for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 0
-// P2's premise: standing grants of service and command.
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
+// P2's premise: standing grants of a host socket and a host command.
 run P2standing {
-  eventually some g: Live & glease.LStanding | g.gcap.dtype = Service
+  eventually some g: Live & glease.LStanding | g.gcap.dtype = Socket
   eventually some g: Live & glease.LStanding | g.gcap.dtype = Command
 } for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1
 
 // P6. Only host principals answer: a pending request leaves by the
-// notification's action once it has been up a second (broker.go:1237), by
-// a control.sock client in the daemon's user namespace (broker.go:386), by
+// notification's action once it has been up a second (askOn, notify.go),
+// by a control.sock client in the daemon's user namespace (handleControl,
+// sockets.go), by
 // a refusal (deny, timeout), or with the daemon or the sandbox.
 // Revert: actionMature true, or hostOnly true: counterexample either way.
 assert P6onlyHostAnswers {
@@ -126,22 +113,22 @@ assert P6onlyHostAnswers {
   }
 }
 check P6onlyHostAnswers for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 0
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
 run P6answers {
   eventually some r: Req, w: Principal, ls: Lease, p: Param, g: Grant | r in Opened and windowAllow[r, w, ls, p, g]
 } for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 3 Req, 2 Text, 3 Int, 1..8 steps expect 1
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1
 
 // P7. Consent text is the daemon's: what the broker's notification shows
 // is the summary the daemon built (describe, describeAttach; reason quoted and
-// escaped, notify.go, plugins.go). Holds: the sandbox's notifications go
+// escaped, notify.go, capability.go). Holds: the sandbox's notifications go
 // through the portal, which keeps each app's to itself (no RawNotify).
 // Revert: P7consentTextRawNotify.
 assert P7consentTextIsDaemons {
   no RawNotify implies always all r: Pending - Opened | r.shows = r.summary
 }
 check P7consentTextIsDaemons for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 2 Text, 3 Int, 1..4 steps expect 0
+  2 Grant, 2 Req, 0 Conn, 2 Text, 3 Int, 1..4 steps expect 0
 // P7 with the sandbox on the notification server itself, as it was
 // (B4, confirmed against Plasma 6.6's source, not tried live): it calls
 // Notify with replaces_id set to the broker's notification id
@@ -153,7 +140,7 @@ assert P7consentTextRawNotify {
   always all r: Pending - Opened | r.shows = r.summary
 }
 check P7consentTextRawNotify for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 2 Text, 3 Int, 1..4 steps expect 1
+  2 Grant, 2 Req, 0 Conn, 2 Text, 3 Int, 1..4 steps expect 1
 // P7 as a grant: no Allow on a notification the sandbox drew. Holds: the
 // broker's buttons have random action keys per notification, and only
 // ActionInvoked from the server's connection counts (askOn, notify.go),
@@ -164,13 +151,13 @@ assert P7noAllowOnForged {
   always all r: Req, g: Grant | notifAllow[r, g] implies r not in Forged
 }
 check P7noAllowOnForged for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 2 Grant, 2 Req, 2 Text, 3 Int, 1..7 steps expect 0
+  2 Grant, 2 Req, 0 Conn, 2 Text, 3 Int, 1..7 steps expect 0
 
 // P14. The sandbox can't keep the user from answering: at most one
-// pending request per capability and launcher (openGate, broker.go:
-// 711-740), and none while a capability is blocked after three refusals.
-// The connection budgets (64 per socket, 10 s, 64 KiB) are counting, left
-// to the Go tests.
+// pending request per capability and launcher (openGate, consent.go),
+// and none while a capability is blocked after three refusals.
+// The connection budgets (64 per socket and per host socket address,
+// 10 s, 1 MiB) are counting, left to the Go tests.
 // Revert: gateOpen true: two pending requests for one capability.
 assert P14onePendingPerCapability {
   always all l: Launcher, c: Capability | lone r: Pending | r.rl = l and r.rcap = c
@@ -178,10 +165,10 @@ assert P14onePendingPerCapability {
   always all r: Req | (refuse[r] and nref[r.rl, r.rcap] = 2) implies after r.rcap in r.rl.blocked
 }
 check P14onePendingPerCapability for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
-  2 Session, 3 Grant, 4 Req, 2 Text, 3 Int, 1..8 steps expect 0
+  3 Grant, 4 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
 // P14's premise: a capability blocked after three refusals, and two
 // capabilities pending at once.
 run P14blocks {
   eventually some l: Launcher | some l.blocked
 } for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
-  1 Session, 1 Grant, 3 Req, 1 Text, 3 Int, 1..8 steps expect 1
+  1 Grant, 3 Req, 0 Conn, 1 Text, 3 Int, 1..8 steps expect 1

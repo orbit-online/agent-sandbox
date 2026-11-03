@@ -271,7 +271,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   After every step the broker's grants and gates, its
   mounts, locks, host socket addresses and open connections and the window's view (the standing grants, ended
   and live, included) match a reference model
-  (P1, P3, P4, P9, P10, P12, P13, P14). `go test` runs 50
+  (P1-P4, P6, P7, P9-P14, P16, P17; `models/README.md` lists the model's actions they leave to other tests). `go test` runs 50
   sequences of about 30 steps (half a minute or less); more with
   `-rapid.checks=1000 -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`),
   a failure again with the `-rapid.seed` it prints.

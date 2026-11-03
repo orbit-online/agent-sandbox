@@ -1,20 +1,21 @@
 /*
  * The protocol model's state (protocol.als): signatures, the checks the
  * daemon makes, and the frames and grant bookkeeping every event shares.
- * protocol_events.als adds requests, answers and ends of grants,
- * protocol_system.als the daemon's life and the traces.
+ * protocol_events.als adds requests, calls, answers, connections and ends
+ * of grants, protocol_system.als the daemon's life and the traces.
  */
 module protocol_state
 open sandbox
 
+// Host sockets, host commands, folders (capability.go).
 abstract sig DType {}
-one sig Service, Command, Attach extends DType {}
+one sig Socket, Command, Attach extends DType {}
 
 // Requested or granted lease. A duration is LDuration with a counter.
 // LStanding only for a standing grant from the config: no request or
-// answer picks it.
+// answer picks it. LOnce only for a call's grant (obtain, consent.go).
 abstract sig Lease {}
-one sig LSession, LLock, LDuration, LStanding extends Lease {}
+one sig LOnce, LLock, LDuration, LStanding extends Lease {}
 
 // One daemon per launcher, with its gates. standing: the standing grants
 // the launcher's config declares (capability, exact parameters), static:
@@ -34,17 +35,19 @@ var sig Up, Dirty, SharedDir, Watched, Gone in Launcher {}
 
 sig Capability {
   dtype: one DType,
-  // validate() passes
+  // validate() passes: the bounding values
   wellFormed: set Param,
-  // the instances `list` may print that these parameters match
+  // the instances its instances glob finds that these parameters match
+  // (instancesOf, instances.go)
   matches: Param -> Instance,
   // command: maxValidity
   maxV: one Int,
   // the exclusive lock files, by capability and instance
   var lockFile: Instance -> lone Launcher
 }
-// Exclusive capabilities are of types service and command, whose `list` names the
-// instances locked (an attach one would lock by its parameters; none is).
+// Exclusive capabilities are host commands and host sockets, whose
+// instances glob names the instances locked (an attach one would lock by
+// its parameters; none is).
 sig Exclusive in Capability {}
 fact { no Exclusive & dtype.Attach }
 // What an attach parameter resolves to now: the attacker renames
@@ -56,35 +59,24 @@ var sig Listed in Instance {}
 // mount crossings, not denied, no submounts (S11, clone-tree).
 sig Dir {}
 sig InCeiling in Dir {}
-// A Claude Code session, by its anchor; Alive while the anchor runs.
-sig Session {}
-var sig Alive in Session {}
 sig Text {}
 
 sig Grant {
   gl: one Launcher, gcap: one Capability, gparams: one Param, glease: one Lease,
-  // the sessions it was given to, which hold it until they release it or
-  // end, whatever the lease (holders, leases.go)
-  var holders: set Session,
   // a duration lease's remaining time
   var left: lone Int,
   // attach: the directory mounted
   var mdir: lone Dir
 }
-// UnitUp: the service unit and socket. Mounted: the attach mount in M1 and
-// everywhere it propagated. ToRun: a command grant waiting for a plugin
-// slot to run its `run` command.
-var sig Live, Ended, UnitUp, Mounted, ToRun in Grant {}
-// Given to a caller without a session (anon, leases.go): held, but for a
-// session lease, until it ends.
-var sig Anon in Grant {}
+// Mounted: the attach mount in M1 and everywhere it propagated.
+var sig Live, Ended, Mounted in Grant {}
 
 // One request on request.sock: what the sandbox sends and the daemon
 // derives from it. summary: the
 // daemon's text (describe, describeAttach). shows: what the notification with
 // the request's id draws now.
 sig Req {
-  rl: one Launcher, rcap: one Capability, rparams: one Param, rlease: one Lease, rsess: lone Session,
+  rl: one Launcher, rcap: one Capability, rparams: one Param, rlease: one Lease,
   summary: one Text,
   var shownDir: lone Dir,
   var shows: lone Text,
@@ -101,90 +93,143 @@ var sig Pending, Mature, Opened, Asked, Forged in Req {}
 // can't replace or close the broker's. The models without it are today's.
 lone sig RawNotify {}
 
+// A call (op call, call.go): a request that runs one of a host command
+// capability's commands, its parameters the bounding values, with free
+// arguments. ArgsOK: they validate against the command's schema
+// (validateArgs).
+// under: the grant that covers it, once it is served.
+sig CallReq in Req { var under: lone Grant }
+sig ArgsOK in CallReq {}
+// A call served: waiting for its slot (callSlot), then its transient unit
+// running (runCall).
+var sig Queued, Running in CallReq {}
+
+// A connection from the sandbox to a host socket's address in the grant
+// directory (sockets/<capability>[/<instance>], hostsockets.go), of a
+// launcher's sandbox, to the address of a capability and parameters.
+// Spliced: through to the host socket, under the grant via. Closed: by
+// either side or the broker; a connection isn't opened again.
+sig Conn { kl: one Launcher, kcap: one Capability, kparams: one Param, var via: lone Grant }
+var sig Spliced, Closed in Conn {}
+
 fact static {
   all i: Instance | lone c: Capability | i in Param.(c.matches)
   all c: Capability | c.matches.Instance in c.wellFormed
   all c: Capability | c.maxV > 0
-  // A request names a session only if it has one; the summary is the
-  // daemon's, a function of capability and parameters
-  all r: Req | r.rlease = LSession implies some r.rsess
+  // the summary is the daemon's, a function of capability and parameters
   all r, q: Req | (r.rcap = q.rcap and r.rparams = q.rparams) implies r.summary = q.summary
   // request() refuses lease standing (consent.go)
   no rlease.LStanding
-  // standing grants are of types service and command only: folders that
-  // should always be there are binds (the module's assertion)
+  // standing grants are of host commands and host sockets only: folders
+  // that should always be there are binds (the module's assertion)
   all l: Launcher | no l.standing.Param & dtype.Attach
 }
 
 // Not ended by the user in this daemon's life: request() grants it
-// without asking (isStanding, consent.go). Exact parameters only.
+// without asking (isStanding, standing.go). Exact parameters only.
 pred standingNow[l: Launcher, c: Capability, p: Param] {
   p in l.standing[c] - l.ended[c]
-}
-
-// Sessions don't come back: an anchor that exited is gone.
-fact sessions {
-  always all s: Session | (s in Alive and after s not in Alive) implies after always s not in Alive
 }
 
 // ---------------------------------------------------------------------
 // Checks the daemon makes, each named so a revert check can drop it.
 
-// The parameters validate, and match an instance `list` prints (service, command),
-// or resolve beneath the ceiling (attach): request() before asking, and again
-// when the window narrows (broker.go:516-563, 611-625; plugins.go:334-365;
-// mounts.go:664-690).
+// The parameters validate, and match an instance the instances glob finds
+// (host commands, host sockets: inList), or resolve beneath the ceiling
+// (attach): obtain before asking, and again on the answer (consent.go,
+// instances.go, ceiling.go).
 pred passes[c: Capability, p: Param] {
   p in c.wellFormed
   c.dtype = Attach implies (some p.resolves and p.resolves in InCeiling)
   c.dtype != Attach implies some p.(c.matches) & Listed
 }
 
-// checkLease (broker.go:653-673): a session lease needs a session, a lock
-// lease a watched logind.
-pred leaseOK[l: Launcher, ls: Lease, s: lone Session] {
-  ls = LSession implies (some s and s in Alive)
+// checkLease (leases.go): a lock lease needs a watched logind.
+pred leaseOK[l: Launcher, ls: Lease] {
   ls = LLock implies l in Watched
 }
 
-// openGate (broker.go:711-740): one open request per capability, none
-// while blocked.
+// call (call.go): a call names one of a host command capability's
+// commands, and its arguments validate, before obtain asks.
+pred callChecks[r: Req] {
+  r in CallReq implies (r.rcap.dtype = Command and r in ArgsOK)
+}
+
+// obtain (consent.go): a once lease only for a call, asked for or answered.
+pred onceForCalls[r: Req, ls: Lease] { ls = LOnce implies r in CallReq }
+
+// obtain (consent.go): the window may change a host command grant's lease,
+// never its bounding values.
+pred boundingFixed[r: Req, p: Param] { r.rcap.dtype = Command implies p = r.rparams }
+
+// matching (consent.go): a live grant of the same capability and exactly
+// the same parameters covers a request or call; a once grant covers the
+// call it was made for only.
+pred covers[g: Grant, l: Launcher, c: Capability, p: Param] {
+  g in Live and g.gl = l and g.gcap = c and g.gparams = p and g.glease != LOnce
+}
+
+// openGate (consent.go): one open request per capability, none while
+// blocked.
 pred gateOpen[l: Launcher, c: Capability] { c not in l.asking + l.blocked }
 
 // control.sock answers only peers in the daemon's user namespace
-// (broker.go:386).
+// (handleControl, sockets.go).
 pred hostOnly[w: Principal] { w.domain = Host }
 
-// share only from M1 (broker.go:486): bwrap's init and the FHS env script,
-// and udhcpc, which runs there too.
+// share only from M1 (handleRequest, sockets.go): bwrap's init and the
+// FHS env script, and udhcpc, which runs there too.
 pred inM1[w: Principal] { w in BwrapInitP + UdhcpcP }
 
-// notifyAsk ignores an action within a second of the notification
-// appearing (broker.go:1237).
+// askOn ignores an action within a second of the notification appearing
+// (notify.go).
 pred actionMature[r: Req] { r in Mature }
 
-// attachGrant resolves again and clone-tree checks what it opens (mounts.go:
-// 702-716, 228-283): an attach grant mounts only what is in the ceiling now.
+// attachGrant resolves again and clone-tree checks what it opens
+// (attach.go, tree.go): an attach grant mounts only what is in the
+// ceiling now.
 pred mountChecks[N: set Grant] {
   all g: N & typed[Attach] | some g.gparams.resolves and g.gparams.resolves in InCeiling
 }
 
 // exclusiveLock (instances.go): O_EXCL on a file per instance the
-// parameters match. The locks of L were removed first (a start's cleanup
-// of its own launcher's).
+// parameters match. A lock of this launcher's is shared only with a live
+// grant of it with the same parameters (a once grant beside another).
+// The locks of L were removed first (a start's cleanup of its own
+// launcher's).
 pred exclusiveLockFree[N: set Grant, L: set Launcher] {
-  all g: N & gcap.Exclusive | no g.gparams.(g.gcap.matches).(g.gcap.lockFile) - L
+  all g: N & gcap.Exclusive, i: g.gparams.(g.gcap.matches) | some i.(g.gcap.lockFile) - L implies
+    (i.(g.gcap.lockFile) = g.gl and some h: Live | h.gl = g.gl and h.gcap = g.gcap and h.gparams = g.gparams)
   all disj g, h: N & gcap.Exclusive | g.gcap != h.gcap or no g.gparams.(g.gcap.matches) & h.gparams.(h.gcap.matches)
 }
 
-// service units are BindsTo= the daemon's unit (plugins.go:246-248).
-pred bindsTo[l: Launcher] { UnitUp' = UnitUp - gl.l }
+// runCall (call.go): a grant's end stops the units of its calls (the
+// goroutine on g.ended); D are the calls answered in this step.
+pred stopCalls[D: set Req, E: set Grant] { Running' = Running - D - under.E }
 
-// cleanup (mounts.go:742-757): stops the launcher's units, removes its
-// locks, detaches its folders and removes their mountpoints.
+// g.end (leases.go) runs closeConns (splice.go): the connections spliced
+// under a grant that ends are closed.
+pred closeConns[E: set Grant] {
+  Spliced' = Spliced - via.E
+  Closed' = Closed + (Spliced & via.E)
+}
+
+// connectUnder (splice.go): a connection to an address is spliced under
+// the live grant of that address's capability and parameters.
+pred connectUnder[k: Conn, g: Grant] {
+  g in Live and g.gl = k.kl and g.gcap = k.kcap and g.gparams = k.kparams
+}
+
+// call units are BindsTo= the daemon's unit (runCall, call.go): they stop
+// when it does.
+pred bindsTo[l: Launcher] { Running' = Running - under.(gl.l) }
+
+// cleanup (attach.go): stops the launcher's call units, removes its locks,
+// detaches its folders and removes their mountpoints and the host sockets'
+// addresses.
 pred cleanup[l: Launcher] {
   Mounted' = Mounted - gl.l
-  UnitUp' = UnitUp - gl.l
+  Running' = Running - under.(gl.l)
   lockFile' = lockFile - (Capability -> Instance -> l)
 }
 
@@ -203,20 +248,22 @@ fun nref[l: Launcher, c: Capability]: Int { some c.(l.refused) implies c.(l.refu
 
 pred keepDaemons { Up' = Up and Dirty' = Dirty and SharedDir' = SharedDir and Watched' = Watched and Gone' = Gone }
 pred keepGates { asking' = asking and refused' = refused and blocked' = blocked }
-pred keepEnv { Listed' = Listed and resolves' = resolves and Alive' = Alive }
+pred keepEnv { Listed' = Listed and resolves' = resolves }
 pred keepReqs {
   Pending' = Pending and Mature' = Mature and Opened' = Opened and Asked' = Asked and Forged' = Forged
   shownDir' = shownDir and shows' = shows and by' = by
 }
-pred keepGrants {
-  Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
-  keepHolds and left' = left and mdir' = mdir and lockFile' = lockFile
+pred keepCalls { Queued' = Queued and Running' = Running and under' = under }
+pred keepConns { Spliced' = Spliced and Closed' = Closed and via' = via }
+pred keepLive {
+  Live' = Live and Ended' = Ended and Mounted' = Mounted
+  left' = left and mdir' = mdir and lockFile' = lockFile
 }
-pred keepHolds { holders' = holders and Anon' = Anon }
+pred keepGrants { keepLive and keepCalls and keepConns }
 
-// N are made live and E end in this step; the locks of E are released.
-// grant() (broker.go:840-913) and g.end (880-905). hold records who was
-// given them.
+// N are made live and E end in this step; the locks of E are released
+// unless a live grant of the same holds them, and E's connections close.
+// grant() and g.end (leases.go). The calls are the caller's: calls[].
 pred change[N, E: set Grant] {
   no N & (Live + Ended)
   E in Live
@@ -224,21 +271,28 @@ pred change[N, E: set Grant] {
   mountChecks[N]
   Live' = Live - E + N
   Ended' = Ended + E
-  UnitUp' = UnitUp - E + (N & typed[Service])
   Mounted' = Mounted - E + (N & typed[Attach])
-  // deliver() runs a new command grant's command, after a plugin slot frees
-  ToRun' = ToRun - E + (N & typed[Command])
   all g: N & typed[Attach] | g.mdir' = g.gparams.resolves
   all g: Grant - (N & typed[Attach]) | g.mdir' = g.mdir
   all g: N | g.glease = LDuration implies g.left' > 0 else no g.left'
   all g: Grant - N | g.left' = g.left
-  lockFile' = lockFile - locksOf[E] + locksOf[N]
+  lockFile' = lockFile - locksOf[E] + locksOf[Live - E + N]
+  closeConns[E] and via' = via
+}
+
+// The calls after this step: the call r (none, or a request that isn't
+// one: nothing) is served under g and waits for its slot, D are answered,
+// and the units of E's calls are stopped.
+pred calls[r: lone Req, g: lone Grant, D: set Req, E: set Grant] {
+  Queued' = Queued - D + (r & CallReq)
+  under' = under + (r & CallReq) -> g
+  stopCalls[D, E]
 }
 
 // Ends E, nothing else changes.
 pred endOnly[E: set Grant] {
   change[none, E]
-  keepHolds
+  calls[none, none, none, E]
   keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
 }
 
@@ -249,24 +303,13 @@ pred settle[r: Req, w: lone Principal] {
   by' = by - r -> Principal + r -> w
 }
 
-// hold (leases.go): a caller of s (none: no session found) was given g.
-// A session holds it; the hold of a session whose anchor is gone is
-// dropped at once by its watch, so it is never added here. A live session
-// lease nobody holds is ending: it takes no new hold.
-pred hold[g: Grant, s: lone Session] {
-  no s implies (Anon' = Anon + g and holders' = holders)
-  else {
-    Anon' = Anon
-    (s in Alive and not (g in Live and g.glease = LSession and no g.holders))
-      implies holders' = holders + g -> s else holders' = holders
-  }
-}
-
 pred init {
   no Up + Dirty + Gone
-  no Live + Ended + UnitUp + Mounted + ToRun
+  no Live + Ended + Mounted
   no Pending + Mature + Opened + Asked + Forged
+  no Queued + Running + Spliced + Closed
+  no under and no via
   no asking and no refused and no blocked and no lockFile
   no ended
-  no holders and no Anon and no left and no mdir and no shownDir and no shows
+  no left and no mdir and no shownDir and no shows
 }

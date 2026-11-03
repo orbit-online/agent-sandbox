@@ -1,6 +1,6 @@
 /*
- * The protocol model's events (protocol.als): requests, answers, and the
- * ends of grants.
+ * The protocol model's events (protocol.als): requests and calls, answers,
+ * calls running, connections to host sockets, and the ends of grants.
  */
 module protocol_events
 open protocol_state
@@ -8,21 +8,24 @@ open protocol_state
 // ---------------------------------------------------------------------
 // Requests and answers.
 
-// What request() checks before anything else (broker.go:512-563).
+// What obtain checks before anything else (call, request, obtain;
+// consent.go, call.go).
 pred reqOK[r: Req] {
   r.rl in Up - Gone and r not in Asked
+  callChecks[r]
+  onceForCalls[r, r.rlease]
   r.rcap.dtype = Attach implies r.rl in SharedDir
-  leaseOK[r.rl, r.rlease, r.rsess]
+  leaseOK[r.rl, r.rlease]
   passes[r.rcap, r.rparams]
 }
 
-// request() asks the user (consent.go). A request matching a live grant
-// or a standing grant the user hasn't ended is matchLive or fromConfig
-// instead.
+// obtain asks the user (consent.go). A request or call a live grant or
+// a standing grant the user hasn't ended covers is matchLive or
+// fromConfig instead.
 pred ask[r: Req] {
   let l = r.rl, c = r.rcap, p = r.rparams {
     reqOK[r]
-    no g: Live | g.gl = l and g.gcap = c and g.gparams = p
+    no g: Grant | covers[g, l, c, p]
     not standingNow[l, c, p]
     gateOpen[l, c]
     Pending' = Pending + r and Asked' = Asked + r
@@ -35,35 +38,32 @@ pred ask[r: Req] {
   }
 }
 
-// matching (broker.go:565-582): a live grant with the same parameters
-// covers the request, whatever lease it asks for. A session lease gains
-// the caller's session (addSession); a command runs again.
+// matching (consent.go): a live grant with the same parameters covers the
+// request, whatever lease it asks for; a call runs under it.
 pred matchLive[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap, p = r.rparams {
     reqOK[r]
-    g in Live and g.gl = l and g.gcap = c and g.gparams = p
+    covers[g, l, c, p]
     Asked' = Asked + r
     Pending' = Pending and Mature' = Mature and Opened' = Opened and Forged' = Forged
     shownDir' = shownDir and shows' = shows and by' = by
-    hold[g, r.rsess]
-    ToRun' = ToRun + (g & typed[Command])
-    Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted
-    left' = left and mdir' = mdir and lockFile' = lockFile
+    calls[r, g, none, none]
+    keepLive and keepConns
     keepDaemons and keepGates and keepEnv and ended' = ended
   }
 }
 
-// isStanding (consent.go): exact parameters of a standing grant in the
+// isStanding (standing.go): exact parameters of a standing grant in the
 // config, not ended by the user in this daemon's life, grant without
 // asking, with lease standing.
 pred fromConfig[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap, p = r.rparams {
     reqOK[r]
-    no h: Live | h.gl = l and h.gcap = c and h.gparams = p
+    no h: Grant | covers[h, l, c, p]
     standingNow[l, c, p]
     g.gl = l and g.gcap = c and g.gparams = p and g.glease = LStanding
     change[g, none]
-    hold[g, r.rsess]
+    calls[r, g, none, none]
     Asked' = Asked + r
     Pending' = Pending and Mature' = Mature and Opened' = Opened and Forged' = Forged
     shownDir' = shownDir and shows' = shows and by' = by
@@ -107,27 +107,27 @@ pred forge[r: Req] {
   keepDaemons and keepGates and keepEnv and keepGrants and ended' = ended
 }
 
-// Allow on the notification: the request's lease and parameters, checked again: `list` for service and command, attachGrant
-// for attach.
+// Allow on the notification: the request's lease and parameters, checked
+// again: the instances for host commands and host sockets, attachGrant
+// for attach. A call runs under the grant.
 pred notifAllow[r: Req, g: Grant] {
   let l = r.rl, c = r.rcap {
     r in Pending - Opened and actionMature[r]
     // only the broker's own notification carries its allow key
     r not in Forged
-    // `list` runs again after the answer (inList, consent.go); a folder
+    // inList runs again after the answer (obtain, consent.go); a folder
     // is whatever its path resolves to at mount time (mountChecks)
     c.dtype != Attach implies some r.rparams.(c.matches) & Listed
     l in Up - Gone
     // checked again at grant time (checkLease after the answer, and lockOK
     // under the lock in grant(), leases.go)
-    leaseOK[l, r.rlease, r.rsess]
-    r.rlease = LSession implies r.rsess in Alive
+    leaseOK[l, r.rlease]
     // a grant of the same made meanwhile serves instead (consent.go), as
     // matchLive does
-    no h: Live | h.gl = l and h.gcap = c and h.gparams = r.rparams
+    no h: Grant | covers[h, l, c, r.rparams]
     g.gl = l and g.gcap = c and g.gparams = r.rparams and g.glease = r.rlease
     change[g, none]
-    hold[g, r.rsess]
+    calls[r, g, none, none]
     ended' = ended
     settle[r, NotifierP]
     asking' = asking - l -> c and refused' = refused - l -> c -> Int and blocked' = blocked
@@ -137,20 +137,22 @@ pred notifAllow[r: Req, g: Grant] {
 
 // An answer on control.sock (answer, consent.go), from Options or while
 // the notification is still up. The window always sends the parameters
-// (Permissions.qml), so they are checked again. Its lease is never
-// standing (windowDecision, consent.go).
+// (Permissions.qml), so they are checked again; a host command's must be
+// the request's. Its lease is never standing (windowDecision,
+// consent.go), and once only for a call (obtain).
 pred windowAllow[r: Req, w: Principal, ls: Lease, p: Param, g: Grant] {
   let l = r.rl, c = r.rcap {
     r in Pending and hostOnly[w]
     l in Up - Gone
     passes[c, p]
+    boundingFixed[r, p]
     ls != LStanding
-    leaseOK[l, ls, r.rsess]
-    ls = LSession implies r.rsess in Alive
-    no h: Live | h.gl = l and h.gcap = c and h.gparams = p
+    onceForCalls[r, ls]
+    leaseOK[l, ls]
+    no h: Grant | covers[h, l, c, p]
     g.gl = l and g.gcap = c and g.gparams = p and g.glease = ls
     change[g, none]
-    hold[g, r.rsess]
+    calls[r, g, none, none]
     ended' = ended
     settle[r, w]
     asking' = asking - l -> c and refused' = refused - l -> c -> Int and blocked' = blocked
@@ -171,7 +173,8 @@ pred refuse[r: Req] {
   }
 }
 
-// Allowed, but grant() failed (a lock held, the mount refused).
+// Allowed, but grant() failed (a lock held, the mount refused, a host
+// socket's address not listened at).
 pred drop[r: Req] {
   r in Pending
   settle[r, none]
@@ -186,69 +189,122 @@ pred unblock[l: Launcher, c: Capability] {
 }
 
 // ---------------------------------------------------------------------
+// Calls (runCall, call.go).
+
+// What a call is told its output may be valid for (callValidity): what is
+// left of a duration lease, at most maxValidity.
+fun validity[g: Grant]: Int {
+  (g.glease = LDuration and g.left < g.gcap.maxV) implies g.left else g.gcap.maxV
+}
+
+// The call's slot is free. The grant must still be live, its instance
+// there and time left (isLive, inList, callValidity); then its unit
+// starts.
+pred startCall[r: Req] {
+  r in Queued
+  r.under in Live
+  some r.under.gparams.(r.under.gcap.matches) & Listed
+  validity[r.under] > 0
+  Queued' = Queued - r and Running' = Running + r and under' = under
+  keepLive and keepConns
+  keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
+}
+
+// The call is answered: its unit exited, or it failed before it ran (no
+// slot in time, the grant ended, its instance gone). Its output is handed
+// out only while the grant is live (runCall checks isLive again). A once
+// grant ends with its call (call: defer g.end).
+pred answerCall[r: Req] {
+  r in Queued + Running
+  let E = r.under & Live & glease.LOnce {
+    change[none, E]
+    calls[none, none, r, E]
+    keepDaemons and keepGates and keepEnv and keepReqs
+    ended' = ended
+  }
+}
+
+// ---------------------------------------------------------------------
+// Connections to host sockets (splice.go).
+
+// The sandbox connects to an address the broker listens at: spliced to
+// the host socket under the live grant that covers it (connectUnder), or
+// closed at once (no grant, or the host socket refused).
+pred connect[k: Conn, g: lone Grant] {
+  k.kl in Up - Gone and k.kcap.dtype = Socket
+  k not in Spliced + Closed
+  some g implies (connectUnder[k, g] and Spliced' = Spliced + k and Closed' = Closed and via' = via + k -> g)
+  else (Spliced' = Spliced and Closed' = Closed + k and via' = via)
+  keepLive and keepCalls
+  keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
+}
+
+// Either side closes a spliced connection.
+pred hangup[k: Conn] {
+  k in Spliced
+  Spliced' = Spliced - k and Closed' = Closed + k and via' = via
+  keepLive and keepCalls
+  keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
+}
+
+// ---------------------------------------------------------------------
 // Ends of grants.
 
-// release from inside (release, leases.go): the caller's session s drops
-// its hold, s none when no session is found for the caller. The grant
-// ends unless another session holds it or, but for a session lease, a
-// caller without a session was given it; a caller without a session ends
-// it outright (that only takes access away). A standing grant it ends is
-// ended for the rest of the daemon's life (release, leases.go).
-pred heldBesides[g: Grant, s: lone Session] {
-  some s and (some g.holders - s or (g in Anon and g.glease != LSession))
-}
-pred release[g: Grant, s: lone Session] {
+// release from inside (release, leases.go): ends the grant, which only
+// takes access away. A standing grant it ends is ended for the rest of
+// the daemon's life.
+pred release[g: Grant] {
   g in Live
-  holders' = holders - g -> s and Anon' = Anon
-  heldBesides[g, s] implies (change[none, none] and ended' = ended)
-  else (change[none, g] and ended' = ended + standingOf[g])
+  change[none, g]
+  calls[none, none, none, g]
   keepDaemons and keepGates and keepEnv and keepReqs
+  ended' = ended + standingOf[g]
 }
-// The plugin's watch or serve exits: the grant ends for everyone.
-pred watchEnd[g: Grant] { g in Live and endOnly[g] }
 // revoke in the window (leases.go): a standing grant is ended for the
 // rest of the daemon's life.
 pred revoke[g: Grant, w: Principal] {
   hostOnly[w] and g in Live
   change[none, g]
-  keepHolds
+  calls[none, none, none, g]
   keepDaemons and keepGates and keepEnv and keepReqs
   ended' = ended + standingOf[g]
 }
 pred expire[g: Grant] { g in Live and g.glease = LDuration and g.left = 0 and endOnly[g] }
 
+// watchInstance (commands.go): on its timer, a grant of a host command or
+// host socket whose instance the glob no longer finds ends.
+pred instanceGone[l: Launcher] {
+  endOnly[{ g: Live & gl.l - typed[Attach] | no g.gparams.(g.gcap.matches) & Listed }]
+}
+
 pred tick {
   all g: Grant | (g in Live and g.glease = LDuration and g.left > 0)
     implies g.left' = minus[g.left, 1] else g.left' = g.left
-  Live' = Live and Ended' = Ended and UnitUp' = UnitUp and Mounted' = Mounted and ToRun' = ToRun
-  keepHolds and mdir' = mdir and lockFile' = lockFile
+  Live' = Live and Ended' = Ended and Mounted' = Mounted
+  mdir' = mdir and lockFile' = lockFile and keepCalls and keepConns
   keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
 }
 
-// An anchor exits (watchSession, leases.go): the session drops its holds
-// on every grant, and a session lease ends with its last holder.
-pred sessionEnd[s: Session] {
-  s in Alive
-  Alive' = Alive - s and Listed' = Listed and resolves' = resolves
-  holders' = holders - Grant -> s and Anon' = Anon
-  change[none, { g: Live | g.glease = LSession and g.holders in s }]
-  keepDaemons and keepGates and keepReqs and ended' = ended
-}
-
-// Lock, LockedHint or PrepareForSleep (lockEvent, broker.go:986-992).
+// Lock, LockedHint or PrepareForSleep (lockEvent, leases.go).
 pred lockEv[l: Launcher] {
-  change[none, Live & gl.l & glease.LLock]
-  keepHolds
+  let E = Live & gl.l & glease.LLock {
+    change[none, E]
+    calls[none, none, none, E]
+  }
   keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
 }
 
-// The system bus lost: lockOK off, lock leases end (broker.go:1361-1364).
+// The system bus lost: lockOK off, lock leases end (lockSignals,
+// leases.go).
 pred lockLost[l: Launcher] {
   l in Watched
   Watched' = Watched - l
   Up' = Up and Dirty' = Dirty and SharedDir' = SharedDir and Gone' = Gone
-  change[none, Live & gl.l & glease.LLock]
-  keepHolds and keepGates and keepEnv and keepReqs and ended' = ended
+  let E = Live & gl.l & glease.LLock {
+    change[none, E]
+    calls[none, none, none, E]
+  }
+  keepGates and keepEnv and keepReqs and ended' = ended
 }
 
 pred lockGained[l: Launcher] {

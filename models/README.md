@@ -8,9 +8,10 @@ check. Properties are numbered (S for structure, P for the broker's
 protocol, L for the launch path) so model files, Go tests and commit
 messages can cite them.
 
-Sources, as of main 491eb09: `docs/permissions.md`, the namespace diagram
-at the top of `nix/home/claude-desktop/default.nix`, the module's scripts,
-and the Go in `nix/packages/`. Where the docs and the code disagree, the
+Sources, as of main 491eb09 (the broker's protocol as of acbceda):
+`docs/permissions.md`, the namespace diagram at the top of
+`nix/home/claude-desktop/default.nix`, the module's scripts, and the Go
+in `cmd/`. Where the docs and the code disagree, the
 inventory follows the code and says so.
 
 ## Running
@@ -42,14 +43,16 @@ in the init namespaces unless noted.
 1. **Host user**: the terminal, the desktop, a host Claude Code session.
    Launches the sandbox and answers consent.
 2. **permissions-broker daemon**: one per launcher, the transient user
-   unit `claude-desktop[-<name>]-permissions.service` (`Restart=on-failure`
-   up to 3 starts in 10 minutes, `ExecStopPost=permissions-broker cleanup`). Listens on `request.sock`
-   and `control.sock`, runs plugin commands, grants the config's standing
-   grants at start. Its helpers (`make-shared`, `clone-tree`, `move-tree`,
-   `detach`) run through `nsenter` in the user namespace that owns M1,
-   with every capability there, exec'd on the host's mounts; all but
-   `clone-tree` then join M1 on a thread of their own and resolve only the
-   grant directory there.
+   unit `claude-desktop[-<name>]-permissions.service`
+   (`Restart=on-failure` up to 3 starts in 10 minutes,
+   `ExecStopPost=permissions-broker cleanup`). Listens on `request.sock`
+   and `control.sock` and at the host sockets' addresses, runs host
+   command calls, grants the config's standing grants at start. Its
+   helpers (`make-shared`, `clone-tree`, `move-tree`, `detach`) run
+   through `nsenter` in the user namespace that owns M1, with every
+   capability there, exec'd on the host's mounts; all but `clone-tree`
+   then join M1 on a thread of their own and resolve only the grant
+   directory there.
 3. **Permissions window**: Qt app, a client of `control.sock`. Answers
    pending requests, revokes, ends holders.
 4. **Notification daemon** (Plasma's): draws the consent notification the
@@ -77,12 +80,14 @@ in the init namespaces unless noted.
    the sandbox, on `/run/subid-broker.sock`.
 8. **netns-macvlan**: setcap `cap_net_admin` wrapper, group `users`.
    Creates `eth0` in the sandbox's netns.
-9. **Service plugin units**: `perm[-<launcher>]_<grant>` socket-activated
-   transient user units, `BindsTo=` the daemon's unit; listen on
-   `<grant dir>/<grant>.sock`. A command's `run`, an attach's `resolve`,
-   `list` and `watch` run as the daemon's children.
-10. **Windows VM**: the example plugin target, reached only through its
-    service unit.
+9. **Call units**: `perm[-<launcher>]_call-<id>`, one transient user
+   unit per host command call (`systemd-run --pipe`), `BindsTo=` the
+   daemon's unit, `RuntimeMaxSec=` the command's timeout; runs the
+   command the config declares with the call on stdin. The instances
+   globs are read by the daemon itself.
+10. **Host targets**: what host commands and host sockets reach (a VM, a
+    host socket's server), reached only through a call unit or a
+    connection the daemon splices.
 
 Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 
@@ -97,8 +102,8 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
     attacker's.
 13. **The app** (Claude Desktop): in U2, N, M2, P2 at pid `APP_PID`.
 14. **Claude Code sessions** and what they spawn: shells, the local MCP
-    servers, `permissions-mcp` (a client of `request.sock`), anything Claude
-    runs.
+    servers, `permissions-broker mcp` (the `permissions` MCP server, a
+    client of `request.sock`), anything Claude runs.
 15. **Nested**: anything the above start in user, mount, pid or network
     namespaces of their own (`unshare -Urm`, bwrap, rootless containers),
     with maps from subid-broker.
@@ -132,9 +137,9 @@ joining needs CAP_SYS_ADMIN in init).
 
 | crossing | listener / actor | reachable from | checks |
 |---|---|---|---|
-| `request.sock` (`/run/permissions`, ro bind of `$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]`) | broker | M1, M2 and copies; the host | `SO_PEERPIDFD`, pid from fdinfo, peer alive after the read; 64 connections, 10 s, 64 KiB; `share` only from M1 (`sameNsAs` by pid); session from the peer's ancestors' environment and `/proc/<pid>/exe` |
+| `request.sock` (`/run/permissions`, ro bind of `$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]`) | broker | M1, M2 and copies; the host | `SO_PEERPIDFD`, pid from fdinfo, peer alive after the read; 64 connections, 10 s, 1 MiB; `share` only from M1 (`sameNsAs` by pid); a call's arguments against the command's schema before asking |
 | `control.sock` (`$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
-| `<grant>.sock` | service unit | the sandbox while the grant lives | none: a grant is the sandbox's, not a session's |
+| host socket addresses (`/run/permissions/sockets/<capability>[/<instance>]`) | broker, from its start or the instance's appearance | M1, M2 and copies | none of the peer: a grant is the sandbox's. Spliced to the host socket only while a live grant of that capability and instance covers it, closed at once otherwise and when the grant ends; bytes only, no fds; 64 connections per address |
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
 | netns-macvlan `<pid>` | netns-macvlan | the host (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
 | `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
@@ -173,12 +178,12 @@ The models give the attacker these moves:
 
 1. Run any code as uid 1000 in U1 (no capabilities), U2, or a namespace of
    its own; exec any binary it can write, including one named `claude`.
-2. Set any environment variable on its processes, `CLAUDE_CODE_SESSION_ID`
-   included, and run the real Claude Code binary.
+2. Set any environment variable on its processes, and run the real
+   Claude Code binary.
 3. Create nested user, mount, pid and network namespaces, with maps
    through subid-broker, and gain every capability there.
 4. Fork, exit, double-fork to reparent, kill its own processes at any
-   moment (a session's anchor, a request's client mid-request), and so
+   moment (a request's or call's client mid-request), and so
    recycle pids.
 5. Pass fds over Unix sockets: a connection made by one process used by
    another, so the peer the listener sees is the connecting process.
@@ -191,12 +196,13 @@ The models give the attacker these moves:
    as it checks only for mounts in the caller's own namespace.
 7. Re-bind a granted mount in a nested mount namespace, keep files and
    cwds open on it, map it.
-8. Connect to every socket it can reach, as often as it likes; hold
-   connections, send nothing, send oversized or malformed requests, ask
-   for `watch` streams and never read them.
+8. Connect to every socket it can reach, host socket addresses included,
+   as often as it likes; hold connections, send nothing, send oversized or
+   malformed requests, ask for `watch` streams and never read them.
 9. Post notifications with any app name, icon and buttons, timed to the
-   broker's; send anything as a request's `reason` and parameters.
-10. Request, release and status any grant by id; ask for any lease.
+   broker's; send anything as a request's or call's `reason`,
+   parameters and arguments.
+10. Request, call, release and status any grant by id; ask for any lease.
 11. Write its own Nix store (`/nix` is a rw bind with the closure bound
     read-only over it), persistent across launches.
 12. Act through udhcpc's `net_admin` and `net_raw` over N.
@@ -275,12 +281,13 @@ process whose principal is in the Sandbox domain, at any time.
   event adds one, none is of type attach, and lease `standing` is never a
   request's or an answer's.
 - P3. Never above the ceiling: a grant's parameters validate, match an
-  instance `list` prints (service, command), and its source passes S11
-  (attach), at grant time and again after a window narrows it.
-- P4. A grant that ended is dead: no further delivery (service socket gone
-  and unit stopped, attach detached in M1 and everywhere it propagated,
-  before anything else, the holders' scan included, command never run
-  again).
+  instance the instances glob finds (host commands, host sockets), and
+  its source passes S11 (attach), at grant time and again after a window
+  narrows it.
+- P4. A grant that ended is dead: no further delivery (its calls' units
+  stopped and no call started under it, its host socket connections
+  closed, attach detached in M1 and everywhere it propagated, before
+  anything else, the holders' scan included).
 - P5. After an attach grant ends, every sandbox process that still holds it
   where `/proc` shows it is listed as a holder: a thread's cwd, root or
   open file on the grant's mount or one propagated from it, known by the
@@ -305,16 +312,16 @@ process whose principal is in the Sandbox domain, at any time.
   parameters and the resolved source; the reason and string parameters
   appear only quoted, without markup or control characters, and opaque
   ones only as a digest.
-- P8. A session lease's anchors are processes inside the sandbox running a
-  binary named `claude`, not a pid namespace's init, not the sandbox's
-  pid; it ends when the last anchor exits, and never outlives the sandbox.
-  Forged session variables can't anchor it outside the sandbox.
+- P8. Retired with session leases (acbceda): a grant is the sandbox's,
+  and no lease ends with a process.
 - P9. A lock lease ends on Lock, LockedHint or PrepareForSleep, and none is
   granted while the lock isn't watched.
-- P10. The validity a command is given is at most the ceiling's
+- P10. The validity a call is given is at most the command's
   `maxValidity` and at most what's left of a duration lease.
-- P11. Every grant ends with the daemon (service by `BindsTo=`, attach by
-  `ExecStopPost` or the next start's cleanup) and with the sandbox.
+- P11. Every grant ends with the daemon (call units by `BindsTo=`,
+  connections with its process, attach by `ExecStopPost` or the next
+  start's cleanup), with the sandbox, and with its instance (on the
+  instance check's timer; no call starts on an instance that's gone).
 - P12. After the daemon starts, the live grants are exactly the
   configured standing grants that pass P3 and the exclusive lock: a
   restart brings back the ones the user ended, and nothing else survives.
@@ -322,12 +329,17 @@ process whose principal is in the Sandbox domain, at any time.
 - P14. The sandbox can't keep the user from answering: one pending request
   per capability, three refusals in a row block it for 2 minutes, and a
   full `request.sock` leaves `control.sock` its own budget.
-- P15. A release drops only the caller's hold: a grant ends on release
-  once no live session holds it and, but for a session lease, no caller
-  without a session was given it; a caller without a session ends it
-  outright. Every session a grant is delivered to holds it, whatever the
-  lease, until it releases it or ends; a session lease ends exactly when
-  its last holder ends.
+- P15. Retired with session leases (acbceda): a release from inside ends
+  the grant.
+- P16. A host command call runs only under a grant that covers it: one of
+  its capability with exactly its bounding values, never one whose
+  bounding values an answer changed. A `once` grant covers only the call
+  it was made for, no request gets one, and it ends when that call is
+  answered. A call's arguments are checked before the user is asked.
+- P17. A connection to a host socket's address is spliced to the host
+  socket only while a live grant of that capability and instance covers
+  it; otherwise it is closed at once, and a grant's end closes what was
+  spliced under it.
 
 ### Launch (`launch.als`)
 
@@ -354,7 +366,7 @@ process whose principal is in the Sandbox domain, at any time.
   redirected to a host process or a nested one.
 - L8. The broker exits when the sandbox's pidfd turns readable, and stops
   restarting when it never finds one; subid-broker when bwrap exits, or at
-  once when its parent is gone already; service units when the broker's
+  once when its parent is gone already; call units when the broker's
   unit stops.
 - L9. `share` runs before the FHS env's bwrap copies M1, or the launcher
   goes on without attach (which the broker then refuses, P3).
@@ -373,8 +385,9 @@ To confirm with Anders (plan Open 2):
 3. A compromised host user, host Claude Code included: it owns U1 and
    everything below it by the owner rule.
 
-Also left out: plugins' own code (trusted host code; a plugin's MCP tool
-descriptions reach Claude as text), the network beyond the macvlan
+Also left out: host commands' and host sockets' own code (trusted host
+code the config declares; a host command's description reaches Claude
+as text), what a host socket's server does with the bytes spliced to it, the network beyond the macvlan
 (LAN peers, DHCP spoofing other than through udhcpc), side channels,
 timing beyond the fake clock (plan decision 2026-10-31), and resource
 exhaustion of the host other than the broker's budgets. Taking back
@@ -394,8 +407,25 @@ check: that's the user's own mount and ceiling configuration.
 |---|---|---|
 | `sandbox.als` | 1 | shared base: signatures and kernel facts, no sandbox claims |
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
-| `protocol.als` | 3 | P1-P15 |
+| `protocol.als` | 3 | P1-P17 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
+
+The broker's Go tests run the protocol model's actions as `rapid` state
+machines against the broker (`cmd/permissions-broker/machine*_test.go`,
+and live against the work launcher's daemon in the VM test,
+`live*_test.go`), and compare it with a reference model
+(`machine_model_test.go`) after every step. They check P1, P2, P3, P4,
+P6, P7, P9, P10, P11 (the daemon's restart), P12, P13, P14, P16 and P17,
+and S6 and S9. Model actions without a machine action: `startCall` and
+`answerCall` apart (a machine's call runs to its answer in one step, so
+a call waiting for its slot or running across a revoke is left to
+`TestCallEndedBeforeStart`, `TestNoOutputAfterEnd` and `TestCallUnit`),
+`instanceGone` (the machines set `instanceEvery` to 1000 h;
+`TestInstanceGone`), `mature` and `forge` (`notify_test.go`), `env`'s
+renames (`attach_test.go`, `swap_test.go`), `stopPost` on its own
+(`Restart` runs the start's cleanup instead) and `sandboxEnd`. The live
+machine also has no `Advance` (`tick`, `expire`, `unblock`), `Instances`
+or `OtherLauncher`.
 
 `sandbox.als` has principals, processes (`var`: namespaces, ids,
 capabilities, parent and pid change), user namespaces with parent, owner
@@ -419,13 +449,9 @@ a model as a counterexample (`expect 1` until triaged in step 5).
    (`mounts.go:457-617`) don't see it: a revoke lists no holder for a
    `--shell` process with its cwd on the grant or with a re-bind in a
    nested mount namespace, and the window can't end it. Against P5.
-2. The same makes `sessionOf` (`sandbox.go:148`) walk past the sandbox
-   into the host: its stop condition is the sandbox's pid, which a
-   re-entry's ancestry never passes. When `claude-desktop --shell` was
-   started from a host Claude Code session, the walk finds that session's
-   `CLAUDE_CODE_SESSION_ID` on the host shell and anchors the lease at the
-   host `claude` process. The comment says "never into the host". Against
-   P8. Bounded by P11 (the grant still ends with the sandbox).
+2. Gone with session leases (acbceda): `sessionOf` walked past the
+   sandbox into the host for a re-entry. Fixed before that by stopping
+   at the first process outside the sandbox's user namespaces.
 3. `watch` is served before `handleControl`'s user-namespace check
    (`broker.go:292`), on both sockets. Harmless today (the events carry
    only kinds and ids, which `request.sock`'s `watch` gives too), but S6
