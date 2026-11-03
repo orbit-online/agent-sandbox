@@ -18,6 +18,7 @@ import (
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
@@ -164,7 +165,7 @@ func (w *world) close() {
 
 // inSandbox starts exe in the stand-in's user namespace, as nsenter starts a process there
 func (w *world) inSandbox(exe string, env ...string) (*exec.Cmd, *bufio.Reader) {
-	cmd := exec.Command(nsenter, fmt.Sprintf("--user=/proc/%d/ns/user", w.sb.pid), "--preserve-credentials", "--", exe)
+	cmd := exec.Command("nsenter", fmt.Sprintf("--user=/proc/%d/ns/user", w.sb.pid), "--preserve-credentials", "--", exe)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "BROKER_TEST=") {
 			cmd.Env = append(cmd.Env, kv)
@@ -245,7 +246,7 @@ func (w *world) capabilities() map[string]*capability {
 		}
 		caps[c.id()] = c
 	}
-	folder, err := foldersCap([]source{{Path: w.root}, {Path: w.root + "/w", RW: true}})
+	folder, err := foldersCap([]mounts.Source{{Path: w.root}, {Path: w.root + "/w", RW: true}})
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func (e *echoServer) stop() {
 
 // mounted lists the grants mounted in the stand-in's mount namespace, by their names in the grant directory
 func (w *world) mounted() map[string]bool {
-	lines, err := w.sb.mountinfo()
+	lines, err := w.sb.Mountinfo()
 	if err != nil {
 		w.t.Fatal(err)
 	}

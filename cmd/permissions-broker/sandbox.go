@@ -166,8 +166,8 @@ func sameFile(f *os.File, path string) bool {
 	return a.Dev == b.Dev && a.Ino == b.Ino
 }
 
-// check refuses when the sandbox ended or its pid is no longer in the namespaces pinned when it was found
-func (s *sandbox) check() error {
+// Check refuses when the sandbox ended or its pid is no longer in the namespaces pinned when it was found
+func (s *sandbox) Check() error {
 	if s.mnt == nil {
 		return errors.New("The sandbox's namespaces aren't known")
 	}
@@ -183,10 +183,10 @@ func (s *sandbox) check() error {
 	return nil
 }
 
-// mountinfo reads the mount table of the sandbox's pinned mount namespace: a /proc/<pid>/mountinfo opened while pid
+// Mountinfo reads the mount table of the sandbox's pinned mount namespace: a /proc/<pid>/mountinfo opened while pid
 // is checked to be in it, before and after (the file shows the namespace the task had at the open)
-func (s *sandbox) mountinfo() ([]mountinfo.Line, error) {
-	if err := s.check(); err != nil {
+func (s *sandbox) Mountinfo() ([]mountinfo.Line, error) {
+	if err := s.Check(); err != nil {
 		return nil, err
 	}
 	f, err := os.Open(fmt.Sprintf("/proc/%d/mountinfo", s.pid))
@@ -194,7 +194,7 @@ func (s *sandbox) mountinfo() ([]mountinfo.Line, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if err := s.check(); err != nil {
+	if err := s.Check(); err != nil {
 		return nil, err
 	}
 	return mountinfo.Parse(f)
@@ -208,6 +208,10 @@ func sameNs(pid int, kind string) bool {
 	}
 	return a.Ino == b.Ino && a.Dev == b.Dev
 }
+
+// Namespaces are the sandbox's pinned namespaces: the user namespace owning its mount namespace, the mount namespace
+// and its uts namespace
+func (s *sandbox) Namespaces() (user, mnt, uts *os.File) { return s.userns, s.mnt, s.uts }
 
 // alive reports whether the sandbox still runs: a pidfd turns readable when its process exits
 func (s *sandbox) alive() bool { return proc.Alive(s.pidfd) }

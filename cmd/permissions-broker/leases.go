@@ -10,6 +10,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 )
 
 func (b *broker) now() time.Time { return b.clock.now() }
@@ -106,7 +107,7 @@ func (b *broker) lockEvent(why string) {
 
 // revoke ends a grant for the user and returns what still held files on it (attach grants). A standing grant stays
 // ended until the daemon starts again
-func (b *broker) revoke(id string) ([]holder, error) {
+func (b *broker) revoke(id string) ([]mounts.Holder, error) {
 	b.mu.Lock()
 	g, ok := b.grants[id]
 	b.mu.Unlock()

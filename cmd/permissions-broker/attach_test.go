@@ -16,13 +16,14 @@ import (
 	"testing"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
 )
 
 // folders is the folders capability with sources, as JSON objects, as its ceiling
 func folders(t *testing.T, sources string) *capability {
 	t.Helper()
-	var src []source
+	var src []mounts.Source
 	if err := json.Unmarshal([]byte("["+sources+"]"), &src); err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +144,8 @@ func TestFolder(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, g.ID)); err == nil {
 		t.Error("The mountpoint is left")
 	}
-	start, _ := startTime(os.Getpid())
-	if err := b.endHolders([]holder{{Pid: os.Getpid(), Start: start}}); err == nil {
+	start, _ := mounts.StartTime(os.Getpid())
+	if err := b.endHolders([]mounts.Holder{{Pid: os.Getpid(), Start: start}}); err == nil {
 		t.Error("Ended a process outside the sandbox")
 	}
 	if err := b.endHeld(g.ID); err != nil {
@@ -283,13 +284,13 @@ func TestDetachFirst(t *testing.T) {
 	}
 	inside := fmt.Sprintf("/proc/%d/root%s/file", b.sb.pid, g.Path)
 	scanned := false
-	scanStarts = func() {
+	mounts.ScanStarts = func() {
 		scanned = true
 		if _, err := os.Stat(inside); err == nil {
 			t.Error("Still mounted when the holders' scan started")
 		}
 	}
-	t.Cleanup(func() { scanStarts = func() {} })
+	t.Cleanup(func() { mounts.ScanStarts = func() {} })
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}

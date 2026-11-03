@@ -1,4 +1,4 @@
-package main
+package mounts
 
 import (
 	"fmt"
@@ -8,16 +8,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// A source of permissions.folders, the folders ceiling: it, or a folder beneath it, may be granted
-type source struct {
+// Source is a source of permissions.folders, the folders ceiling: it, or a folder beneath it, may be granted
+type Source struct {
 	Path string `json:"path"`
 	RW   bool   `json:"rw"`
 }
 
-// checkSource finds the ceiling root src lies beneath, the longest that matches, and whether it may be read-write.
+// CheckSource finds the ceiling root src lies beneath, the longest that matches, and whether it may be read-write.
 // Lexical, as are the denied directories it refuses: clone-tree then opens the path without following links or
 // crossing mounts, so the path checked is the one cloned
-func checkSource(sources []source, denied []string, src string, ro bool) (root, rel string, err error) {
+func CheckSource(sources []Source, denied []string, src string, ro bool) (root, rel string, err error) {
 	if !filepath.IsAbs(src) {
 		return "", "", fmt.Errorf("Not an absolute path: %q", src)
 	}
@@ -27,7 +27,7 @@ func checkSource(sources []source, denied []string, src string, ro bool) (root, 
 			return "", "", fmt.Errorf("%s is never granted", src)
 		}
 	}
-	var best *source
+	var best *Source
 	for i, s := range sources {
 		r := filepath.Clean(s.Path)
 		if src != r && !strings.HasPrefix(src, strings.TrimSuffix(r, "/")+"/") {
@@ -48,10 +48,10 @@ func checkSource(sources []source, denied []string, src string, ro bool) (root, 
 	return root, rel, nil
 }
 
-// checkDenied validates the denied directories from the config: absolute, non-empty after the environment's
+// CheckDenied validates the denied directories from the config: absolute, non-empty after the environment's
 // expansion, and as the system resolves them: a source is opened without following links, so only a path without
 // any compares against them
-func checkDenied(denied []string) ([]string, error) {
+func CheckDenied(denied []string) ([]string, error) {
 	out := make([]string, 0, len(denied))
 	for _, d := range denied {
 		if !filepath.IsAbs(d) {

@@ -10,6 +10,7 @@ import (
 	"github.com/docopt/docopt-go"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mcpserver"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"golang.org/x/sys/unix"
@@ -65,7 +66,6 @@ tree.go and helpers.go). <dir> is the grant directory where the sandbox sees it,
 // From PATH: the package's wrapper puts util-linux first and the host system's profile, with its systemd, last.
 // Variables so tests can put fakes in their place
 var (
-	nsenter    = "nsenter"
 	systemdRun = "systemd-run"
 	systemctl  = "systemctl"
 )
@@ -93,22 +93,22 @@ func main() {
 	case opts["make-shared"] == true:
 		dir, _ := opts.String("<dir>")
 		id, _ := opts.String("<dirid>")
-		err = makeShared(dir, id)
+		err = mounts.MakeShared(dir, id)
 	case opts["clone-tree"] == true:
 		root, _ := opts.String("<root>")
 		rel, _ := opts.String("<rel>")
 		mode, _ := opts.String("<mode>")
-		err = cloneTree(root, rel, mode)
+		err = mounts.CloneTree(root, rel, mode)
 	case opts["move-tree"] == true:
 		dir, _ := opts.String("<dir>")
 		id, _ := opts.String("<dirid>")
 		name, _ := opts.String("<name>")
-		err = moveTree(dir, id, name)
+		err = mounts.MoveTree(dir, id, name)
 	case opts["detach"] == true:
 		dir, _ := opts.String("<dir>")
 		id, _ := opts.String("<dirid>")
 		names, _ := opts["<entry>"].([]string)
-		err = detachHelper(dir, id, names)
+		err = mounts.DetachHelper(dir, id, names)
 	}
 	if err != nil {
 		slog.Error(err.Error())
@@ -156,7 +156,7 @@ type config struct {
 	// directory
 	Denied []string `json:"denied"`
 	// What the folders capability may grant
-	Folders []source `json:"folders"`
+	Folders []mounts.Source `json:"folders"`
 	// Host command and host socket capabilities
 	Commands []commandConfig    `json:"commands"`
 	Sockets  []socketConfig     `json:"sockets"`
@@ -189,7 +189,7 @@ func readConfig(path string) (config, error) {
 	for i := range cfg.Denied {
 		cfg.Denied[i] = os.ExpandEnv(cfg.Denied[i])
 	}
-	if cfg.Denied, err = checkDenied(cfg.Denied); err != nil {
+	if cfg.Denied, err = mounts.CheckDenied(cfg.Denied); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

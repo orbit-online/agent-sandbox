@@ -1,4 +1,4 @@
-package main
+package mounts
 
 import (
 	"errors"
@@ -12,13 +12,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// attach clones root/rel and mounts it at name in the grant directory in M1.
+// Attach clones root/rel and mounts it at name in the grant directory in M1.
 // Returns the tree, which is the mount in M1 now, and the source as resolved
-func (s *sandbox) attach(root, rel string, ro bool, dir grantDir, name string) (*os.File, string, error) {
-	if err := s.check(); err != nil {
+func Attach(s Sandbox, root, rel string, ro bool, dir GrantDir, name string) (*os.File, string, error) {
+	if err := s.Check(); err != nil {
 		return nil, "", err
 	}
-	self, err := executable()
+	self, err := Executable()
 	if err != nil {
 		return nil, "", fmt.Errorf("Find own executable: %w", err)
 	}
@@ -37,7 +37,8 @@ func (s *sandbox) attach(root, rel string, ro bool, dir grantDir, name string) (
 	args := []string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5", "--preserve-credentials", "--keep-caps", "--",
 		self, "clone-tree"}
 	clone := exec.Command(nsenter, append(args, root, rel, mode)...)
-	clone.ExtraFiles = []*os.File{s.userns, theirs, s.uts}
+	user, _, uts := s.Namespaces()
+	clone.ExtraFiles = []*os.File{user, theirs, uts}
 	out, err := clone.CombinedOutput()
 	theirs.Close()
 	if err != nil {
@@ -47,7 +48,7 @@ func (s *sandbox) attach(root, rel string, ro bool, dir grantDir, name string) (
 	if err != nil {
 		return nil, "", err
 	}
-	if err := s.inM1(dir, []*os.File{tree}, "move-tree", name); err != nil {
+	if err := inM1(s, dir, []*os.File{tree}, "move-tree", name); err != nil {
 		tree.Close()
 		return nil, "", fmt.Errorf("Mount %s/%s: %w", dir.path, name, err)
 	}
@@ -73,12 +74,12 @@ func recvTree(sock int) (*os.File, string, error) {
 	return os.NewFile(uintptr(fds[0]), "tree"), string(buf[:n]), nil
 }
 
-// cloneTree is the clone-tree helper, run in the user namespace owning the sandbox's mount namespace. In a mount
+// CloneTree is the clone-tree helper, run in the user namespace owning the sandbox's mount namespace. In a mount
 // namespace of its own, copied from ours (open_tree only clones from the caller's own), it opens root without
 // following links, rel beneath it without following links or crossing mounts, and clones that one mount, read-only
 // if asked and without devices or setuid for a directory. Whatever is at the path then: a grant is of the path. It
 // sends the tree's fd and the path it resolved to on fd 4
-func cloneTree(root, rel, mode string) error {
+func CloneTree(root, rel, mode string) error {
 	// The new mount namespace is this thread's, so everything below stays on it; the process ends after
 	runtime.LockOSThread()
 	if err := unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err != nil {

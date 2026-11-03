@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
 )
 
@@ -119,7 +120,7 @@ func TestHoldersThreads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && !h.Possible }) {
+			if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid && !h.Possible }) {
 				t.Errorf("%d, holding the grant on a thread, isn't among the holders %+v", pid, holders)
 			}
 		})
@@ -152,7 +153,7 @@ func TestEndIgnoresTerm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+	if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid }) {
 		t.Fatalf("%d isn't among the holders %+v", pid, holders)
 	}
 	if err := b.endHeld(g.ID); err != nil {
@@ -160,7 +161,7 @@ func TestEndIgnoresTerm(t *testing.T) {
 	}
 	for range 100 {
 		// A zombie until the stand-in reaps it, which startTime doesn't count
-		if _, ok := startTime(pid); !ok {
+		if _, ok := mounts.StartTime(pid); !ok {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -187,7 +188,7 @@ func TestHoldersPossible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && h.Possible }) {
+	if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid && h.Possible }) {
 		t.Errorf("%d, holding a clone of a file of the grant, isn't a possible holder in %+v", pid, holders)
 	}
 }
@@ -221,7 +222,7 @@ func TestHoldersMapping(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid && h.Possible == deleted }) {
+			if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid && h.Possible == deleted }) {
 				t.Errorf("%d, mapping a file of the grant, isn't among the holders %+v", pid, holders)
 			}
 		})

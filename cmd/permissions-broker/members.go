@@ -91,8 +91,8 @@ func (s *sandbox) containsCached(pid int, seen map[nsKey]bool) bool {
 	return s.below(owner, seen)
 }
 
-// members lists the sandbox's processes, from /proc
-func (s *sandbox) members() []int {
+// Members lists the sandbox's processes, from /proc
+func (s *sandbox) Members() []int {
 	entries, _ := os.ReadDir("/proc")
 	seen := map[nsKey]bool{}
 	var pids []int
@@ -125,7 +125,7 @@ func (s *sandbox) copied() (bool, error) {
 		return false, err
 	}
 	seen := map[nsKey]bool{}
-	for _, pid := range s.members() {
+	for _, pid := range s.Members() {
 		mnt, err := unix.Open(fmt.Sprintf("/proc/%d/ns/mnt", pid), unix.O_RDONLY|unix.O_CLOEXEC, 0)
 		if err != nil {
 			continue

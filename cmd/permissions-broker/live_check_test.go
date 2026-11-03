@@ -106,7 +106,7 @@ func (mc *liveMachine) compareDelivery(t *rapid.T, folders []string) error {
 	if fi, err := os.Stat(lv.cfg.GrantDir + "/" + socketsDir + "/" + liveSock); err != nil || fi.Mode().Type() != os.ModeSocket {
 		return fmt.Errorf("No address for the echo socket: %v", err)
 	}
-	lines, err := lv.sb.mountinfo()
+	lines, err := lv.sb.Mountinfo()
 	if err != nil {
 		return err
 	}

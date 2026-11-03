@@ -1,4 +1,4 @@
-package main
+package mounts
 
 import (
 	"errors"
@@ -21,64 +21,80 @@ import (
 // itself (fd 4) on a thread of its own, and resolves nothing in it but the grant directory: without following links,
 // and checked to be the directory the host bound there, by device and inode
 
-// The grant directory: its path where the sandbox sees it, and the device and inode of the host's directory
-type grantDir struct{ path, id string }
+// GrantDir is the grant directory: its path where the sandbox sees it, and the device and inode of the host's directory
+type GrantDir struct{ path, id string }
 
-func grantDirOf(cfg config) (grantDir, error) {
+// GrantDirOf is the grant directory at host on the host, at inSandbox in the sandbox
+func GrantDirOf(host, inSandbox string) (GrantDir, error) {
 	var st unix.Stat_t
-	if err := unix.Lstat(cfg.GrantDir, &st); err != nil {
-		return grantDir{}, fmt.Errorf("The grant directory: %w", err)
+	if err := unix.Lstat(host, &st); err != nil {
+		return GrantDir{}, fmt.Errorf("The grant directory: %w", err)
 	}
-	return grantDir{path: cfg.SandboxGrantDir, id: fmt.Sprintf("%d:%d", st.Dev, st.Ino)}, nil
+	return GrantDir{path: inSandbox, id: fmt.Sprintf("%d:%d", st.Dev, st.Ino)}, nil
 }
 
-// Overridden by the tests, to run a copy of the test binary as the helper
-var executable = os.Executable
+// The daemon's own binary, which the helpers run. Overridden by the tests, to run a copy of the test binary as the
+// helper
+var Executable = os.Executable
+
+// nsenter from PATH: the package's wrapper puts util-linux first
+var nsenter = "nsenter"
+
+// Sandbox is the sandbox as the mounts need it: its namespaces, pinned when it was found, checked to still be its
+// process's; its mount table; and its processes
+type Sandbox interface {
+	Check() error
+	// Namespaces are the pinned user namespace owning its mount namespace, the mount namespace and its uts namespace
+	Namespaces() (user, mnt, uts *os.File)
+	Mountinfo() ([]mountinfo.Line, error)
+	Members() []int
+}
 
 // inM1 runs a helper in M1 with every capability in the user namespace owning it, the files extra from fd 6 on. With
 // --user alone, nsenter (util-linux 2.42.3) enters the user namespace in its first pass, which then leaves --keep-caps
 // without effect: hence the sandbox's uts namespace too, which the helpers have no use for
-func (s *sandbox) inM1(dir grantDir, extra []*os.File, helper string, args ...string) error {
-	if err := s.check(); err != nil {
+func inM1(s Sandbox, dir GrantDir, extra []*os.File, helper string, args ...string) error {
+	if err := s.Check(); err != nil {
 		return err
 	}
-	self, err := executable()
+	self, err := Executable()
 	if err != nil {
 		return fmt.Errorf("Find own executable: %w", err)
 	}
 	cmd := exec.Command(nsenter, append([]string{"--user=/proc/self/fd/3", "--uts=/proc/self/fd/5",
 		"--preserve-credentials", "--keep-caps", "--", self, helper, dir.path, dir.id}, args...)...)
-	cmd.ExtraFiles = append([]*os.File{s.userns, s.mnt, s.uts}, extra...)
+	user, mnt, uts := s.Namespaces()
+	cmd.ExtraFiles = append([]*os.File{user, mnt, uts}, extra...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return errors.New(strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// share makes the grant directory a shared mount in M1
-func (s *sandbox) share(dir grantDir) error {
-	if err := s.inM1(dir, nil, "make-shared"); err != nil {
+// Share makes the grant directory a shared mount in M1
+func Share(s Sandbox, dir GrantDir) error {
+	if err := inM1(s, dir, nil, "make-shared"); err != nil {
 		return fmt.Errorf("Make %s shared: %w", dir.path, err)
 	}
 	return nil
 }
 
-// detach unmounts grant mounts, by their names in the grant directory, in M1. The daemon reads which from the host:
+// Detach unmounts grant mounts, by their names in the grant directory, in M1. The daemon reads which from the host:
 // in there /proc is the sandbox's, where the helper isn't
-func (s *sandbox) detach(dir grantDir, names ...string) error {
+func Detach(s Sandbox, dir GrantDir, names ...string) error {
 	if len(names) == 0 {
 		return nil
 	}
-	if err := s.inM1(dir, nil, "detach", names...); err != nil {
+	if err := inM1(s, dir, nil, "detach", names...); err != nil {
 		return fmt.Errorf("Unmount %s: %w", strings.Join(names, ", "), err)
 	}
 	return nil
 }
 
-// detachBelow unmounts every mount in the grant directory in M1: what an earlier daemon left. Those on top of one go
+// DetachBelow unmounts every mount in the grant directory in M1: what an earlier daemon left. Those on top of one go
 // with it
-func (s *sandbox) detachBelow(dir grantDir) error {
-	lines, err := s.mountinfo()
+func DetachBelow(s Sandbox, dir GrantDir) error {
+	lines, err := s.Mountinfo()
 	if err != nil {
 		return err
 	}
@@ -89,7 +105,7 @@ func (s *sandbox) detachBelow(dir grantDir) error {
 			names = append(names, name)
 		}
 	}
-	return s.detach(dir, names...)
+	return Detach(s, dir, names...)
 }
 
 // enterM1 is the helpers' side: it joins the mount namespace on fd 4 on this thread alone (Go's threads share their
@@ -126,8 +142,8 @@ func checkName(name string) error {
 	return nil
 }
 
-// makeShared is the make-shared helper: the grant directory turns a shared mount
-func makeShared(path, id string) error {
+// MakeShared is the make-shared helper: the grant directory turns a shared mount
+func MakeShared(path, id string) error {
 	dir, err := enterM1(path, id)
 	if err != nil {
 		return err
@@ -135,8 +151,8 @@ func makeShared(path, id string) error {
 	return unix.MountSetattr(dir, "", unix.AT_EMPTY_PATH, &unix.MountAttr{Propagation: unix.MS_SHARED})
 }
 
-// moveTree is the move-tree helper: it attaches the tree on fd 6 at name in the grant directory
-func moveTree(path, id, name string) error {
+// MoveTree is the move-tree helper: it attaches the tree on fd 6 at name in the grant directory
+func MoveTree(path, id, name string) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
@@ -150,9 +166,9 @@ func moveTree(path, id, name string) error {
 	return nil
 }
 
-// detachHelper is the detach helper: it unmounts what's mounted at names in the grant directory, lazily (what's open
+// DetachHelper is the detach helper: it unmounts what's mounted at names in the grant directory, lazily (what's open
 // on them stays open)
-func detachHelper(path, id string, names []string) error {
+func DetachHelper(path, id string, names []string) error {
 	for _, n := range names {
 		if err := checkName(n); err != nil {
 			return err

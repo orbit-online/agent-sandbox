@@ -1,4 +1,4 @@
-package main
+package mounts
 
 import (
 	"fmt"
@@ -11,11 +11,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// An attach grant's mount in M1, found when it's attached by the tree's mount id, not by its path: the sandbox can
+// GrantMount is an attach grant's mount in M1, found when it's attached by the tree's mount id, not by its path: the sandbox can
 // rename the grant directory in M1 (models/README.md, Attacker 6). Its id, peer group, and device and root, by which
 // copies of it are found; the tree itself, which the daemon keeps open, and its device as stat gives it (srcDev) and
 // as mountinfo and maps give it (sbDev, the superblock's; btrfs's stat gives a subvolume's)
-type grantMount struct {
+type GrantMount struct {
 	id        uint64
 	group     string
 	dev, root string
@@ -24,8 +24,8 @@ type grantMount struct {
 	sbDev     uint64
 }
 
-// grantMountOf finds the mount the tree (attached in M1) is in M1's mountinfo, by its mount id
-func (s *sandbox) grantMountOf(tree *os.File) (*grantMount, error) {
+// GrantMountOf finds the mount the tree (attached in M1) is in M1's mountinfo, by its mount id
+func GrantMountOf(s Sandbox, tree *os.File) (*GrantMount, error) {
 	var stx unix.Statx_t
 	if err := unix.Statx(int(tree.Fd()), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &stx); err != nil ||
 		stx.Mask&unix.STATX_MNT_ID == 0 {
@@ -35,13 +35,13 @@ func (s *sandbox) grantMountOf(tree *os.File) (*grantMount, error) {
 	if err := unix.Fstat(int(tree.Fd()), &st); err != nil {
 		return nil, err
 	}
-	lines, err := s.mountinfo()
+	lines, err := s.Mountinfo()
 	if err != nil {
 		return nil, fmt.Errorf("The sandbox's mounts: %w", err)
 	}
 	for _, l := range lines {
 		if l.ID == stx.Mnt_id {
-			m := &grantMount{id: l.ID, dev: l.Dev, root: l.Root, tree: tree, srcDev: st.Dev, sbDev: parseDev(l.Dev)}
+			m := &GrantMount{id: l.ID, dev: l.Dev, root: l.Root, tree: tree, srcDev: st.Dev, sbDev: parseDev(l.Dev)}
 			for _, o := range l.Optional {
 				if g, ok := strings.CutPrefix(o, "shared:"); ok {
 					m.group = g
@@ -53,8 +53,11 @@ func (s *sandbox) grantMountOf(tree *os.File) (*grantMount, error) {
 	return nil, fmt.Errorf("The grant's mount (%d) isn't in the sandbox's mount namespace", stx.Mnt_id)
 }
 
+// Close closes the tree, once the grant is detached
+func (m *GrantMount) Close() error { return m.tree.Close() }
+
 // copyOf reports whether l is the grant's mount, or one propagated from it: in its peer group or its slave
-func (m *grantMount) copyOf(l mountinfo.Line) bool {
+func (m *GrantMount) copyOf(l mountinfo.Line) bool {
 	if l.ID == m.id {
 		return true
 	}
@@ -63,10 +66,10 @@ func (m *grantMount) copyOf(l mountinfo.Line) bool {
 	})
 }
 
-// isShared reports whether dir is a shared mount in the sandbox's mount namespace: a daemon started again finds the
+// IsShared reports whether dir is a shared mount in the sandbox's mount namespace: a daemon started again finds the
 // grant directory shared by the one before
-func (s *sandbox) isShared(dir string) bool {
-	lines, err := s.mountinfo()
+func IsShared(s Sandbox, dir string) bool {
+	lines, err := s.Mountinfo()
 	if err != nil {
 		return false
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
 )
 
@@ -53,17 +54,17 @@ func TestPinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sb.share(root); err != nil {
+	if err := mounts.Share(sb, root); err != nil {
 		t.Fatal(err)
 	}
 	move(t, stdin, out)
-	if err := sb.check(); err == nil {
+	if err := sb.Check(); err == nil {
 		t.Error("The sandbox's pid moved to other namespaces unnoticed")
 	}
-	if err := sb.share(root); err == nil {
+	if err := mounts.Share(sb, root); err == nil {
 		t.Error("share went on after the sandbox's pid moved")
 	}
-	if _, err := sb.mountinfo(); err == nil {
+	if _, err := sb.Mountinfo(); err == nil {
 		t.Error("Read the mount table of where the sandbox's pid moved")
 	}
 	// Found again now, it isn't the sandbox: its user namespace isn't a child of ours

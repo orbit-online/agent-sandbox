@@ -1,4 +1,4 @@
-package main
+package mounts
 
 import (
 	"bufio"
@@ -20,7 +20,7 @@ import (
 // A process in the sandbox holding files, mappings, its working directory or a mount of its own of a grant. Start
 // (its start time) tells it from a later process with the same pid. Possible: it holds a file of the grant's
 // filesystem on a mount no mountinfo shows, which the daemon can't tie to the grant's files
-type holder struct {
+type Holder struct {
 	Pid      int    `json:"pid"`
 	Comm     string `json:"comm"`
 	Start    uint64 `json:"start"`
@@ -31,7 +31,7 @@ type holder struct {
 var holdersTimeout = 10 * time.Second
 
 // Called as the scan starts, for the tests
-var scanStarts = func() {}
+var ScanStarts = func() {}
 
 // tasks lists the /proc directories of pid's threads. Each may have a working directory, root, file table and mount
 // namespace of its own (unshare with CLONE_FS, CLONE_FILES or CLONE_NEWNS on one thread), which the thread group
@@ -56,7 +56,7 @@ func mntNs(dir string) (uint64, bool) {
 
 // The mounts the sandbox's processes see, from every mount namespace one of their threads is in
 type mountView struct {
-	m        *grantMount
+	m        *GrantMount
 	deadline time.Time
 	// Every mount in a mountinfo read, the daemon's own included: a file on none of them is on a detached mount (a
 	// lazy unmount's, open_tree's), or in a namespace no process is in
@@ -69,7 +69,7 @@ type mountView struct {
 }
 
 // viewMounts reads the mountinfo of each mount namespace of the processes' threads once
-func viewMounts(pids []int, m *grantMount, deadline time.Time) *mountView {
+func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
 	v := &mountView{m: m, deadline: deadline, visible: map[uint64]bool{}, copies: map[uint64]bool{m.id: true},
 		rebinds: map[uint64]bool{}, tried: map[string]bool{}}
 	for _, l := range mountinfo.Read("/proc/self/mountinfo") {
@@ -98,17 +98,17 @@ func viewMounts(pids []int, m *grantMount, deadline time.Time) *mountView {
 	return v
 }
 
-// holdersAfter lists, after the detach, the processes in the sandbox still holding the grant: a working directory,
+// HoldersAfter lists, after the detach, the processes in the sandbox still holding the grant: a working directory,
 // root or open file on its mounts (by mount id, which an open file keeps) or on a detached mount of its files, a
 // mapping of one of its files, or a mount of their own of the same filesystem and root, which a process can make in a
 // mount namespace of its own and the detach doesn't reach. Every thread counts. Best effort: an fd in flight in an SCM_RIGHTS message or registered with
 // io_uring shows nowhere in /proc, and keeps the grant readable until it's closed or the sandbox ends
-func (s *sandbox) holdersAfter(m *grantMount) []holder {
-	scanStarts()
+func HoldersAfter(s Sandbox, m *GrantMount) []Holder {
+	ScanStarts()
 	deadline := time.Now().Add(holdersTimeout)
-	pids := s.members()
+	pids := s.Members()
 	v := viewMounts(pids, m, deadline)
-	var hs []holder
+	var hs []Holder
 	for _, pid := range pids {
 		if time.Now().After(deadline) {
 			slog.Warn("Holders' scan cut short", "after", holdersTimeout)
@@ -122,8 +122,8 @@ func (s *sandbox) holdersAfter(m *grantMount) []holder {
 		}
 		if held || possible {
 			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-			if start, ok := startTime(pid); ok {
-				hs = append(hs, holder{Pid: pid, Comm: strings.TrimSpace(string(comm)), Start: start, Possible: !held})
+			if start, ok := StartTime(pid); ok {
+				hs = append(hs, Holder{Pid: pid, Comm: strings.TrimSpace(string(comm)), Start: start, Possible: !held})
 			}
 		}
 	}
@@ -259,4 +259,24 @@ func parseMapsLine(line string) (dev, ino uint64, path string, ok bool) {
 		return 0, 0, "", false
 	}
 	return unix.Mkdev(uint32(maj), uint32(mn)), ino, strings.TrimLeft(rest, " "), true
+}
+
+// StartTime is a running process's start time, in clock ticks since boot (field 22 of /proc/<pid>/stat). Not for a
+// zombie: it holds nothing any more
+func StartTime(pid int) (uint64, bool) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, false
+	}
+	// The command name, in parentheses, may hold anything: the fields follow its last ')'
+	i := strings.LastIndexByte(string(data), ')')
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(string(data[i+1:]))
+	if len(f) < 20 || f[0] == "Z" || f[0] == "X" {
+		return 0, false
+	}
+	start, err := strconv.ParseUint(f[19], 10, 64)
+	return start, err == nil
 }

@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 )
 
 // A re-bind of a grant in a nested mount namespace outlives the revoke: reported as a holder
@@ -33,7 +35,7 @@ func TestAttackKeepBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+	if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid }) {
 		t.Errorf("The re-bind's process %d isn't among the holders %+v", pid, holders)
 	}
 }

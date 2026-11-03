@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
@@ -182,7 +183,7 @@ func (b *broker) shareFrom(p peer) error {
 	if err != nil {
 		return err
 	}
-	if err := b.sb.share(dir); err != nil {
+	if err := mounts.Share(b.sb, dir); err != nil {
 		return err
 	}
 	b.mu.Lock()
@@ -193,7 +194,7 @@ func (b *broker) shareFrom(p peer) error {
 
 // adoptShared takes over a grant directory an earlier daemon shared
 func (b *broker) adoptShared() {
-	if !b.sb.isShared(b.cfg.SandboxGrantDir) {
+	if !mounts.IsShared(b.sb, b.cfg.SandboxGrantDir) {
 		return
 	}
 	b.mu.Lock()

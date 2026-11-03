@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
@@ -54,7 +55,7 @@ func TestHoldersReentry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+	if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid }) {
 		t.Fatalf("The re-entry %d isn't among the holders %+v", pid, holders)
 	}
 	if err := b.endHeld(g.ID); err != nil {
@@ -124,18 +125,18 @@ func TestHoldersOnRelease(t *testing.T) {
 	// Recorded with another start time: a process that reused the pid isn't signalled
 	stale := res.Held[0].Holders[0]
 	stale.Start++
-	if err := b.endHolders([]holder{stale}); err != nil {
+	if err := b.endHolders([]mounts.Holder{stale}); err != nil {
 		t.Error(err)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if _, ok := startTime(pid); !ok {
+	if _, ok := mounts.StartTime(pid); !ok {
 		t.Error("Ended a process by a stale record")
 	}
 	if res := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "end", Grants: []string{g.ID}}); res.Error != "" {
 		t.Error(res.Error)
 	}
 	for range 50 {
-		if _, ok := startTime(pid); !ok {
+		if _, ok := mounts.StartTime(pid); !ok {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

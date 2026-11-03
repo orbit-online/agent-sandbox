@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
 )
 
@@ -73,7 +74,7 @@ func (s attachSource) path() string { return filepath.Join(s.root, s.rel) }
 // resolveAttach checks the folder a request names against the ceiling
 func (b *broker) resolveAttach(c *capability, params json.RawMessage) (attachSource, error) {
 	path, ro := folderOf(params)
-	root, rel, err := checkSource(c.Sources, b.cfg.Denied, path, ro)
+	root, rel, err := mounts.CheckSource(c.Sources, b.cfg.Denied, path, ro)
 	if err != nil {
 		return attachSource{}, err
 	}
@@ -104,16 +105,16 @@ func (b *broker) attachGrant(g *grant) error {
 		return err
 	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
-	tree, source, err := b.sb.attach(src.root, src.rel, src.ro, dir, g.ID)
+	tree, source, err := mounts.Attach(b.sb, src.root, src.rel, src.ro, dir, g.ID)
 	if err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
 		return err
 	}
 	g.Source = source
 	// Without it, neither the grant's mounts nor copies of them are found as holders: no grant then
-	if g.mnt, err = b.sb.grantMountOf(tree); err != nil {
+	if g.mnt, err = mounts.GrantMountOf(b.sb, tree); err != nil {
 		tree.Close()
-		if err := b.sb.detach(dir, g.ID); err != nil {
+		if err := mounts.Detach(b.sb, dir, g.ID); err != nil {
 			slog.Warn("Detach", "grant", g.ID, "err", err)
 		}
 		removeMountpoint(b.cfg.GrantDir, g.ID)
@@ -130,7 +131,7 @@ func (b *broker) detachGrant(g *grant) {
 		// Never attached
 		return
 	}
-	defer g.mnt.tree.Close()
+	defer g.mnt.Close()
 	if !b.sb.alive() {
 		// Its mounts went with the sandbox
 		removeMountpoint(b.cfg.GrantDir, g.ID)
@@ -138,13 +139,13 @@ func (b *broker) detachGrant(g *grant) {
 	}
 	dir, err := grantDirOf(b.cfg)
 	if err == nil {
-		err = b.sb.detach(dir, g.ID)
+		err = mounts.Detach(b.sb, dir, g.ID)
 	}
 	if err != nil {
 		slog.Warn("Detach", "grant", g.ID, "err", err)
 	}
 	removeMountpoint(b.cfg.GrantDir, g.ID)
-	g.Holders = b.sb.holdersAfter(g.mnt)
+	g.Holders = mounts.HoldersAfter(b.sb, g.mnt)
 	if len(g.Holders) > 0 {
 		slog.Info("Still held", "grant", g.ID, "holders", g.Holders)
 	}
@@ -158,8 +159,8 @@ func cleanup(cfg config, sb *sandbox) {
 	stopAllCalls(cfg.Launcher)
 	removeLocks(cfg.Launcher)
 	// Removing the mountpoints below ends their mounts in every namespace as well; this is in case that fails
-	if dir, err := grantDirOf(cfg); err == nil && sb != nil && sb.isShared(cfg.SandboxGrantDir) {
-		if err := sb.detachBelow(dir); err != nil {
+	if dir, err := grantDirOf(cfg); err == nil && sb != nil && mounts.IsShared(sb, cfg.SandboxGrantDir) {
+		if err := mounts.DetachBelow(sb, dir); err != nil {
 			slog.Warn("Detach leftover grants", "err", err)
 		}
 	}
@@ -202,4 +203,9 @@ func (attachKind) live(b *broker, g *grant) error { return b.attachGrant(g) }
 func (attachKind) end(b *broker, g *grant, why string) {
 	b.detachGrant(g)
 	b.recordHeld(g, why)
+}
+
+// grantDirOf is the config's grant directory, as the helpers check it in the sandbox
+func grantDirOf(cfg config) (mounts.GrantDir, error) {
+	return mounts.GrantDirOf(cfg.GrantDir, cfg.SandboxGrantDir)
 }

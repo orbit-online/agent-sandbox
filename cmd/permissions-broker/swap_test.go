@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
 )
 
@@ -127,8 +128,8 @@ func TestAttackStoreSwap(t *testing.T) {
 	if err := os.WriteFile(x+"/store/broker", data, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	executable = func() (string, error) { return x + "/store/broker", nil }
-	t.Cleanup(func() { executable = os.Executable })
+	mounts.Executable = func() (string, error) { return x + "/store/broker", nil }
+	t.Cleanup(func() { mounts.Executable = os.Executable })
 
 	b, _ := testBroker(t, "allow")
 	stdin, out := standIn(t, b)
@@ -194,7 +195,7 @@ func TestAttackGrantDirSwap(t *testing.T) {
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}
-	lines, err := b.sb.mountinfo()
+	lines, err := b.sb.Mountinfo()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +240,7 @@ func TestAttackGrantDirRenameHolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(holders, func(h holder) bool { return h.Pid == pid }) {
+	if !slices.ContainsFunc(holders, func(h mounts.Holder) bool { return h.Pid == pid }) {
 		t.Errorf("%d, its working directory on the grant, isn't among the holders %+v", pid, holders)
 	}
 }

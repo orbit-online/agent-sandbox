@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
@@ -26,7 +27,7 @@ type capability struct {
 	// Host commands: by name
 	Commands map[string]*hostCommand
 	// Folders: the ceiling, what may be granted at all
-	Sources []source
+	Sources []mounts.Source
 	// Host sockets: the host's socket, or none with an instances glob, whose matches are the sockets
 	Path string
 	// D-Bus: the bus and the rule set

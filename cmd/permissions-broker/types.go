@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
@@ -39,7 +40,7 @@ type response struct {
 	Grants       []*grant         `json:"grants,omitempty"`
 	Capabilities []capabilityInfo `json:"capabilities,omitempty"`
 	Pending      []*pending       `json:"pending,omitempty"`
-	Holders      []holder         `json:"holders,omitempty"`
+	Holders      []mounts.Holder  `json:"holders,omitempty"`
 	Log          []logEntry       `json:"log,omitempty"`
 	Standing     []standingGrant  `json:"standing,omitempty"`
 	Overview     json.RawMessage  `json:"overview,omitempty"`
@@ -77,9 +78,9 @@ type grant struct {
 	Source  string    `json:"source,omitempty"`
 	Granted time.Time `json:"granted"`
 	// Attach, once revoked: what still held files on it
-	Holders []holder `json:"holders,omitempty"`
+	Holders []mounts.Holder `json:"holders,omitempty"`
 	// Attach: its mount in M1, by which copies of it are found
-	mnt *grantMount
+	mnt *mounts.GrantMount
 
 	cap    *capability
 	over   bool              // ending: no more connections, under broker.mu

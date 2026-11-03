@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 )
 
 // Folders: the broker's own mount capability, a host folder beneath one of permissions.folders mounted into the
@@ -11,7 +13,7 @@ import (
 const foldersID = "folders/folder"
 
 // foldersCap is the folders capability with sources as its ceiling, none without sources
-func foldersCap(sources []source) (*capability, error) {
+func foldersCap(sources []mounts.Source) (*capability, error) {
 	if len(sources) == 0 {
 		return nil, nil
 	}
