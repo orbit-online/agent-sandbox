@@ -171,6 +171,51 @@
       out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect)}")
       assert out.strip() == "ping", f"the standing grant back after a restart: {out!r}"
 
+      # D-Bus grants, on the daemon started again: the system-bus proxy runs as a unit of its own, its socket at
+      # /run/dbus/system_bus_socket inside on a read-only bind, reaching nothing before a grant. A grant passes the next
+      # call, its revoke refuses the next one and closes the connection that used it
+      workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-system-bus", timeout=30)
+      in_work("test -S /run/dbus/system_bus_socket")
+      status, _ = workstation.execute(work_cmd("touch /run/dbus/x"))
+      assert status != 0, "the sandbox can write to /run/dbus"
+      run_dbus = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/dbus " in l]
+      assert len(run_dbus) == 1 and " ro," in run_dbus[0], f"/run/dbus where the app runs: {run_dbus}"
+      def hostname():
+          return workstation.execute(work_cmd(
+              f"{gdbus} call --system --dest org.freedesktop.hostname1 --object-path /org/freedesktop/hostname1"
+              " --method org.freedesktop.DBus.Properties.Get org.freedesktop.hostname1 Hostname"
+          ) + " 2>&1")
+      def clipboard():
+          return workstation.execute(work_cmd(
+              f"{gdbus} call --session --dest org.kde.klipper --object-path /klipper"
+              " --method org.kde.klipper.klipper.getClipboardContents"
+          ) + " 2>&1")
+      status, out = hostname()
+      assert status != 0 and "ServiceUnknown" in out, f"hostnamed before a grant: {status} {out}"
+      status, out = clipboard()
+      assert status != 0 and "secret" not in out, f"the clipboard before a grant: {status} {out}"
+      granted("hostname", "hostname", {}, "read the host name")
+      status, out = hostname()
+      assert status == 0 and "'workstation'" in out, f"hostnamed under a grant: {status} {out}"
+      granted("clipboard", "clipboard", {}, "read the clipboard")
+      status, out = clipboard()
+      assert status == 0 and "secret-clipboard" in out, f"the clipboard under a grant: {status} {out}"
+      # A connection that used the grant, held open: the revoke closes it
+      script = (f"{gdbus} monitor --system --dest org.freedesktop.hostname1 >/home/alice/monitor.out 2>&1;"
+                " echo $? >/home/alice/monitor.exit")
+      workstation.succeed(f"systemd-run --user -M alice@ --unit monitor --"
+                          f" /etc/profiles/per-user/alice/bin/claude-desktop-work --exec sh -c {shlex.quote(script)}")
+      # Once its GetNameOwner of the name, judged under the grant, is answered
+      workstation.wait_until_succeeds(f"grep -qE 'is owned by|does not have an owner' {work_home}/monitor.out", timeout=30)
+      dbus_grants = {g["capability"]: g["id"] for g in control({"op": "state"})["grants"]}
+      for cap in ["hostname", "clipboard"]:
+          control({"op": "revoke", "grant": dbus_grants[cap]})
+      workstation.wait_until_succeeds(f"test -s {work_home}/monitor.exit", timeout=30)
+      status, out = hostname()
+      assert status != 0 and "ServiceUnknown" in out, f"hostnamed after the revoke: {status} {out}"
+      status, out = clipboard()
+      assert status != 0 and "secret" not in out, f"the clipboard after the revoke: {status} {out}"
+
       # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
       # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds
       as_alice("/run/current-system/sw/bin/sh -c 'QT_QPA_PLATFORM=offscreen timeout 5 /etc/profiles/per-user/alice/bin/claude-desktop-work"
@@ -180,6 +225,8 @@
       workstation.wait_until_fails(f"test -e /proc/{work_pid}", timeout=30)
       # The daemon ends with its sandbox
       workstation.wait_until_fails("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=30)
+      # And the system-bus proxy
+      workstation.wait_until_fails("systemctl --user -M alice@ is-active claude-desktop-work-system-bus", timeout=30)
       # The default sandbox runs on
       assert in_sandbox("readlink /proc/self/ns/net").strip() == app_netns
 ''

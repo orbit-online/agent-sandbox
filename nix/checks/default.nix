@@ -184,6 +184,16 @@ let
                   description = "an agent";
                   path = "$XDG_RUNTIME_DIR/agent.sock";
                 };
+                dbus.settings = {
+                  description = "the settings";
+                  bus = "session";
+                  call."org.freedesktop.portal.Desktop" = [ "org.freedesktop.portal.Settings.Read@/org/freedesktop/portal/desktop" ];
+                };
+                dbus.timedate = {
+                  description = "the time zone";
+                  bus = "system";
+                  talk = [ "org.freedesktop.timedate1" ];
+                };
                 commands.vm = {
                   description = "a VM";
                   bounding.vm = {
@@ -441,7 +451,7 @@ let
         }
       ];
     };
-    # Standing grants only with the broker, of a host command or host socket capability it has, and never of folders
+    # Standing grants only with the broker, of a host command, host socket or D-Bus capability it has, never of folders
     testStandingGrants = {
       expr = map (a: a.message) (
         failedAssertions (
@@ -455,6 +465,11 @@ let
                   description = "an agent";
                   path = "/srv/agent.sock";
                 };
+                dbus.timedate = {
+                  description = "the time zone";
+                  bus = "system";
+                  talk = [ "org.freedesktop.timedate1" ];
+                };
                 grants = [
                   {
                     capability = "folders/folder";
@@ -462,6 +477,7 @@ let
                   }
                   { capability = "none"; }
                   { capability = "agent"; }
+                  { capability = "timedate"; }
                 ];
               };
             }
@@ -470,9 +486,9 @@ let
       );
       expected = [
         "agent-sandbox.claude-desktop: permissions.grants needs permissions.enable"
-        "agent-sandbox.claude-desktop: permissions.grants: no capability vm in permissions.commands or permissions.sockets"
+        "agent-sandbox.claude-desktop: permissions.grants: no capability vm in permissions.commands, permissions.sockets or permissions.dbus"
         "agent-sandbox.claude-desktop: launchers.work.permissions.grants: folders get no standing grants, a folder that should always be there is a bind (binds)"
-        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no capability none in permissions.commands or permissions.sockets"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no capability none in permissions.commands, permissions.sockets or permissions.dbus"
       ];
     };
     # Host sockets the broker would refuse, caught at eval: a bad name or one host commands have, neither or both of a
@@ -665,6 +681,93 @@ let
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.ok: a name of letters, digits and - (vm_ok at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.shot: a name of letters, digits and - (vm_shot at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
       ];
+    };
+    # D-Bus capabilities the broker would refuse, caught at eval: a bad name, no rules or ones the proxy doesn't take,
+    # names that undo the static guards, own and wildcards on the system bus
+    testDBusAssertions = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                sockets.taken = {
+                  description = "a socket";
+                  path = "/srv/agent.sock";
+                };
+                dbus = {
+                  a_b = {
+                    description = "bad name";
+                    bus = "session";
+                    talk = [ "org.test.A" ];
+                  };
+                  taken = {
+                    description = "a host socket's name";
+                    bus = "session";
+                    talk = [ "org.test.A" ];
+                  };
+                  bad = {
+                    description = "a rule the proxy doesn't take";
+                    bus = "session";
+                    call."org.test.A" = [ "x@bad" ];
+                  };
+                  empty = {
+                    description = "no rules";
+                    bus = "session";
+                  };
+                  notify = {
+                    description = "the notification server";
+                    bus = "session";
+                    talk = [
+                      "org.freedesktop.Notifications"
+                      "org.freedesktop.*"
+                      "org.test.Fine"
+                    ];
+                  };
+                  ok = {
+                    description = "the hostname";
+                    bus = "system";
+                    call."org.freedesktop.hostname1" = [ "org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1" ];
+                  };
+                  portal = {
+                    description = "a portal backend";
+                    bus = "session";
+                    see = [ "org.freedesktop.impl.portal.desktop.kde" ];
+                    broadcast."org.freedesktop.portal.Desktop" = [ "*@/*" ];
+                  };
+                  sys = {
+                    description = "wildcard and own";
+                    bus = "system";
+                    talk = [ "org.freedesktop.timedate1.*" ];
+                    own = [ "org.test.A" ];
+                  };
+                  sysbus = {
+                    description = "the bus driver";
+                    bus = "system";
+                    talk = [ "org.freedesktop.DBus" ];
+                  };
+                };
+              };
+            }
+          )
+        )
+      );
+      expected =
+        let
+          o = "agent-sandbox.claude-desktop: launchers.work.permissions.dbus";
+          guards = "refused: no rules reach the bus driver, nor on the session bus the notification server, the systemd user manager, org.freedesktop.Flatpak, the portals' backends or org.a11y.Bus";
+          rules = "from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]";
+        in
+        [
+          "${o}.a_b: a name of letters, digits and - that no host commands or host sockets have, and a description"
+          "${o}.bad: ${rules}"
+          "${o}.empty: ${rules}"
+          "${o}.notify: org.freedesktop.Notifications, org.freedesktop.* ${guards}"
+          "${o}.portal: org.freedesktop.impl.portal.desktop.kde ${guards}"
+          "${o}.sys: no own and no wildcards on the system bus"
+          "${o}.sysbus: org.freedesktop.DBus ${guards}"
+          "${o}.taken: a name of letters, digits and - that no host commands or host sockets have, and a description"
+        ];
     };
     testMcpServersHmTransform = {
       expr =
@@ -938,6 +1041,39 @@ in
             and (.overview.dbus.broadcast | has("org.freedesktop.portal.Desktop"))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
             and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+          # work's D-Bus capabilities: the session proxy's control socket in nixpak's dbus.args, the system-bus proxy
+          # started by its bwrap and bound read-only at /run/dbus, both control sockets in the broker's config; none
+          # of it for the default launcher
+          jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and $a[. + 2] == "/run/dbus")' "$workArgs" >/dev/null ||
+            { echo "work's bwrap args lack the read-only /run/dbus" >&2; exit 1; }
+          ! jq -e 'any(.[]; . == "/run/dbus")' "$args" >/dev/null || { echo "the default launcher binds /run/dbus" >&2; exit 1; }
+          workDbusArgs=$(grep -- '-xdg-dbus-proxy-args\.json$' "$workClosure/store-paths")
+          jq -e 'any(.[]; . == "--control=claude-desktop/dbus-control-work/session.sock")' "$workDbusArgs" >/dev/null ||
+            { echo "work's session proxy lacks --control: $(<"$workDbusArgs")" >&2; exit 1; }
+          ! jq -e 'any(.[] | strings; startswith("--control"))' "$(grep -- '-xdg-dbus-proxy-args\.json$' "$paths")" >/dev/null ||
+            { echo "the default launcher's session proxy has --control" >&2; exit 1; }
+          # nixpak's bwrap: the bwrap-subid.sh on the host, among the closure's bin/bwrap
+          hostBwrap() {
+            local p
+            for p in $(grep -- '-bwrap$' "$1"); do
+              [[ ! -f $p/bin/bwrap ]] || grep -l '^readonly SUBID_MAP=subid$' "$p/bin/bwrap" || true
+            done
+          }
+          workBwrap=$(hostBwrap "$workClosure/store-paths")
+          grep -qxF 'readonly SYSTEM_BUS_UNIT=claude-desktop-work-system-bus' "$workBwrap" &&
+            grep -qxF 'readonly SYSTEM_BUS_DIR=claude-desktop/system-bus-work' "$workBwrap" &&
+            grep -qxF 'readonly SYSTEM_BUS_CONTROL=claude-desktop/dbus-control-work/system.sock' "$workBwrap" ||
+            { echo "work's bwrap doesn't start the system-bus proxy" >&2; exit 1; }
+          grep -qxF "readonly SYSTEM_BUS_UNIT='''" "$(hostBwrap "$paths")" ||
+            { echo "the default launcher starts a system-bus proxy" >&2; exit 1; }
+          jq -e '.dbusControl == {session: "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/dbus-control-work/session.sock",
+              system: "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/dbus-control-work/system.sock"}
+            and .dbus == [{name: "settings", description: "the settings", bus: "session", see: [], talk: [],
+              own: [], call: {"org.freedesktop.portal.Desktop": ["org.freedesktop.portal.Settings.Read@/org/freedesktop/portal/desktop"]},
+              broadcast: {}}, {name: "timedate", description: "the time zone", bus: "system", see: [],
+              talk: ["org.freedesktop.timedate1"], own: [], call: {}, broadcast: {}}]
+            and any(.overview.implicit[]; startswith("/run/dbus: the system bus"))' "$pcfg" >/dev/null ||
+            { echo "work's broker config lacks its D-Bus capabilities: $(<"$pcfg")" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
             { echo "the default launcher starts the broker" >&2; exit 1; }
           ! grep -q '^Name=Permissions$' ${sandboxed}/share/applications/*.desktop ||

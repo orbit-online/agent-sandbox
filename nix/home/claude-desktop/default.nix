@@ -65,7 +65,7 @@ let
   # (docs/permissions.md, D-Bus), so the proxy comes in through the pkgs it gets. Only that attribute: nixpak's
   # callPackage and everything else still see nixpkgs as is
   nixpakPkgs = pkgs // {
-    xdg-dbus-proxy = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
+    xdg-dbus-proxy = dbusProxy;
   };
   # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
   commandsOf =
@@ -101,12 +101,23 @@ let
       }
       // vars;
     };
-  bwrapHost = bwrapSubid {
-    SUBID_MAP = "subid";
-    NEWUIDMAP = "${osConfig.security.wrapperDir}/newuidmap";
-    NEWGIDMAP = "${osConfig.security.wrapperDir}/newgidmap";
-    SUBID_BROKER = lib.getExe subidBroker;
-  };
+  dbusProxy = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
+  # nixpak's bwrap, per launcher: with D-Bus capabilities on the system bus, it starts the system-bus proxy
+  bwrapHostOf =
+    systemBus:
+    bwrapSubid {
+      SUBID_MAP = "subid";
+      NEWUIDMAP = "${osConfig.security.wrapperDir}/newuidmap";
+      NEWGIDMAP = "${osConfig.security.wrapperDir}/newgidmap";
+      SUBID_BROKER = lib.getExe subidBroker;
+      SYSTEM_BUS_UNIT = if systemBus == null then "" else systemBus.unit;
+      SYSTEM_BUS_DIR = if systemBus == null then "" else systemBus.dir;
+      SYSTEM_BUS_CONTROL = if systemBus == null then "" else systemBus.control;
+      SYSTEM_BUS_PROXY = lib.getExe dbusProxy;
+      SYSTEM_BUS_CLOSURE = "${pkgs.closureInfo { rootPaths = [ dbusProxy ]; }}/store-paths";
+      SYSTEMD_RUN = lib.getExe' osConfig.systemd.package "systemd-run";
+      SYSTEMCTL = lib.getExe' osConfig.systemd.package "systemctl";
+    };
   bwrapFhs = bwrapSubid {
     SUBID_MAP = "parent";
     NEWUIDMAP = lib.getExe' subidBroker "newuidmap";
@@ -547,13 +558,66 @@ let
           their peer. Never a D-Bus bus, `$XDG_RUNTIME_DIR` as a whole, or the launchers' own sockets.
         '';
       };
+      dbus = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              description = mkOption {
+                type = types.str;
+                description = "What a grant of the rule set lets Claude do, for the consent.";
+              };
+              bus = mkOption {
+                type = types.enum [
+                  "session"
+                  "system"
+                ];
+                description = "The bus whose proxy takes the rules.";
+              };
+              see = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                description = "Names the sandbox may see, as the proxy's `--see`.";
+              };
+              talk = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                description = "Names the sandbox may call any method of and get every signal from, as `--talk`.";
+              };
+              own = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                description = "Names the sandbox may own, as `--own`. Session bus only.";
+              };
+              call = mkOption {
+                type = types.attrsOf (types.listOf types.str);
+                default = { };
+                description = "Calls by name, each `[METHOD][@PATH]` as the proxy's `--call` (nixpak's `dbus.rules.call`).";
+              };
+              broadcast = mkOption {
+                type = types.attrsOf (types.listOf types.str);
+                default = { };
+                description = "Signals by name, each `[METHOD][@PATH]` as `--broadcast`.";
+              };
+            };
+          }
+        );
+        default = { };
+        example = lib.literalExpression ''{ timedate = { description = "Read and set the host's time zone"; bus = "system"; talk = [ "org.freedesktop.timedate1" ]; }; }'';
+        description = ''
+          D-Bus capabilities (`docs/permissions.md`, D-Bus): rule sets granted whole, added to the session-bus proxy
+          or the system-bus one while a grant lives. The system bus is at `/run/dbus/system_bus_socket` inside when
+          the launcher has one for it, and reaches nothing without a grant. A name may end in `.*` (not on the system
+          bus). Never the bus driver; on the session bus never the notification server, the systemd user manager,
+          `org.freedesktop.Flatpak`, the portals' backends or `org.a11y.Bus`; on the system bus no `own`.
+        '';
+      };
       grants = mkOption {
         type = types.listOf (
           types.submodule {
             options = {
               capability = mkOption {
                 type = types.str;
-                description = "A capability of `permissions.commands` or `permissions.sockets`.";
+                description = "A capability of `permissions.commands`, `permissions.sockets` or `permissions.dbus`.";
               };
               params = mkOption {
                 type = (pkgs.formats.json { }).type;
@@ -1027,6 +1091,8 @@ let
                 "org.freedesktop.DBus.Properties.Get@/StatusNotifierWatcher"
               ];
             };
+            # The session-bus proxy's control socket, for the broker's D-Bus grants
+            dbus.args = lib.optional (dbusOn "session") "--control=${dbusControlDir}/session.sock";
             dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
               "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
             ];
@@ -1045,7 +1111,7 @@ let
               args = lib.mkForce [ ];
             };
             bubblewrap = {
-              package = bwrapHost;
+              package = bwrapHostOf systemBus;
               bindEntireStore = false;
               extraStorePaths = [ storeRoots ];
               bind.rw = binds true;
@@ -1064,6 +1130,11 @@ let
                 ++ lib.optional lcfg.permissions.enable [
                   (sloth.concat' (sloth.env "XDG_RUNTIME_DIR") "/claude-desktop/${permissionsDir}")
                   "/run/permissions"
+                ]
+                # The system-bus proxy's listening socket only: every message through it passes its rules
+                ++ lib.optional (systemBus != null) [
+                  (sloth.concat' (sloth.env "XDG_RUNTIME_DIR") "/${systemBus.dir}")
+                  "/run/dbus"
                 ]
                 ++ etcBinds
                 ++ [
@@ -1085,6 +1156,23 @@ let
       };
 
       mcpServers = pkgs.writeText "mcp-servers.json" (builtins.toJSON lcfg.mcpServers);
+      # D-Bus capabilities, by bus: their proxies take live rules from the broker on control sockets relative to
+      # $XDG_RUNTIME_DIR (nixpak passes dbus.args unexpanded), in a directory of the launcher's that nothing binds.
+      # The system-bus proxy, which only runs for a launcher with capabilities on the system bus, listens in a
+      # directory of its own, bound read-only at /run/dbus. Launcher names can't hold _, and the prefixes differ, so no
+      # launcher's directory is another's
+      dbusOn =
+        bus: lcfg.permissions.enable && lib.any (d: d.bus == bus) (lib.attrValues lcfg.permissions.dbus);
+      dbusControlDir = "claude-desktop/dbus-control${suffix}";
+      systemBus =
+        if dbusOn "system" then
+          {
+            unit = "claude-desktop${suffix}-system-bus";
+            dir = "claude-desktop/system-bus${suffix}";
+            control = "${dbusControlDir}/system.sock";
+          }
+        else
+          null;
       # The permissions broker's, under $XDG_RUNTIME_DIR/claude-desktop: its grant directory, the sandbox's
       # /run/permissions, and its control socket next to it, which isn't bound
       permissionsDir = "permissions${suffix}";
@@ -1116,6 +1204,22 @@ let
             }
             // lib.optionalAttrs (sock.path != null) { inherit (sock) path; }
           ) lcfg.permissions.sockets;
+          dbus = lib.mapAttrsToList (name: d: {
+            inherit name;
+            inherit (d)
+              description
+              bus
+              see
+              talk
+              own
+              call
+              broadcast
+              ;
+          }) lcfg.permissions.dbus;
+          dbusControl = lib.genAttrs (lib.filter dbusOn [
+            "session"
+            "system"
+          ]) (bus: "\${XDG_RUNTIME_DIR}/${dbusControlDir}/${bus}.sock");
           grants = map (g: { inherit (g) capability params; }) lcfg.permissions.grants;
           # What the sandbox reaches from its start, for the window's read-only overview
           overview =
@@ -1150,7 +1254,8 @@ let
                   }"
                   "/tmp: a tmpfs, with /tmp/claude-<uid> from ${scratchpad}"
                   "/run/permissions: this broker's grant directory, read-only"
-                ];
+                ]
+                ++ lib.optional (systemBus != null) "/run/dbus: the system bus through a proxy of its own, which reaches nothing but what a D-Bus grant adds";
             };
         }
       );
@@ -1432,8 +1537,11 @@ in
               }
             else
               {
-                assertion = lcfg.permissions.commands ? ${g.capability} || lcfg.permissions.sockets ? ${g.capability};
-                message = "${opt}: no capability ${g.capability} in permissions.commands or permissions.sockets";
+                assertion =
+                  lcfg.permissions.commands ? ${g.capability}
+                  || lcfg.permissions.sockets ? ${g.capability}
+                  || lcfg.permissions.dbus ? ${g.capability};
+                message = "${opt}: no capability ${g.capability} in permissions.commands, permissions.sockets or permissions.dbus";
               }
           ) lcfg.permissions.grants
           # Host sockets the broker would refuse, caught at eval: a name of its own that makes a file name, a path or
@@ -1563,6 +1671,71 @@ in
                 message = "${copt}.commands.${n}: a name of letters, digits and - (${cname}_${n} at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*";
               }) c.commands
             ) lcfg.permissions.commands
+          )
+          # D-Bus capabilities the broker would refuse, caught at eval: rules the proxy takes, and none that would undo
+          # the proxies' static guards (the bus driver, and on the session bus what hands over more than its own
+          # service: the notification server, the systemd user manager, flatpak's HostCommand, the portals' backends,
+          # the accessibility bus), nor own or wildcards on the system bus
+          ++ lib.concatLists (
+            lib.mapAttrsToList (
+              dname: d:
+              let
+                dopt = "agent-sandbox.claude-desktop: ${
+                  lib.optionalString (name != "") "launchers.${name}."
+                }permissions.dbus.${dname}";
+                ruled = d.see ++ d.talk ++ d.own ++ lib.attrNames d.call ++ lib.attrNames d.broadcast;
+                rules = lib.attrValues d.call ++ lib.attrValues d.broadcast;
+                count = lib.length (d.see ++ d.talk ++ d.own) + lib.foldl' (n: rs: n + lib.length rs) 0 rules;
+                wild = lib.hasSuffix ".*";
+                bare = lib.removeSuffix ".*";
+                valid = n: builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" (bare n) != null;
+                ruleOk = r: builtins.match "(\\*|[A-Za-z0-9_.*-]*)(@(/\\*|(/[A-Za-z0-9_]+)+(/\\*)?|/))?" r != null;
+                refusedNames =
+                  {
+                    session = [
+                      "org.freedesktop.DBus"
+                      "org.freedesktop.Notifications"
+                      "org.freedesktop.systemd1"
+                      "org.freedesktop.Flatpak"
+                      "org.freedesktop.impl.portal"
+                      "org.a11y.Bus"
+                    ];
+                    system = [ "org.freedesktop.DBus" ];
+                  }
+                  .${d.bus};
+                reaches =
+                  n:
+                  lib.any (
+                    r: bare n == r || lib.hasPrefix "${r}." (bare n) || (wild n && lib.hasPrefix "${bare n}." r)
+                  ) refusedNames;
+              in
+              [
+                {
+                  assertion =
+                    builtins.match "[A-Za-z0-9-]+" dname != null
+                    && !(lcfg.permissions.commands ? ${dname})
+                    && !(lcfg.permissions.sockets ? ${dname})
+                    && d.description != "";
+                  message = "${dopt}: a name of letters, digits and - that no host commands or host sockets have, and a description";
+                }
+                {
+                  assertion =
+                    count >= 1
+                    && count <= 64
+                    && lib.all valid ruled
+                    && lib.all (rs: rs != [ ] && lib.all ruleOk rs) rules;
+                  message = "${dopt}: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]";
+                }
+                {
+                  assertion = !lib.any reaches ruled;
+                  message = "${dopt}: ${lib.concatStringsSep ", " (lib.filter reaches ruled)} refused: no rules reach the bus driver, nor on the session bus the notification server, the systemd user manager, org.freedesktop.Flatpak, the portals' backends or org.a11y.Bus";
+                }
+              ]
+              ++ lib.optional (d.bus == "system") {
+                assertion = d.own == [ ] && !lib.any wild ruled;
+                message = "${dopt}: no own and no wildcards on the system bus";
+              }
+            ) lcfg.permissions.dbus
           )
         )
         ++ lib.optional (name != "") {

@@ -55,7 +55,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `rules.go` (rule sets and xdg-dbus-proxy's matching), `names.go` (a client's
   unique names and what they owned), `client.go` (a connection's lifecycle),
   `fromclient.go` and `frombus.go` (the filtering each way), `busmsg.go` (the
-  messages the proxy makes up).
+  messages the proxy makes up), `control.go` (the control socket the
+  permissions broker adds and removes live rule sets on, `--control`, and its
+  peer check) and `livesets.go` (a set's names looked up, the connections that
+  used it ended). With D-Bus capabilities on the system bus, `bwrap-subid.sh`
+  starts a second instance for the system bus as a unit of its own.
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
@@ -73,7 +77,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `call.go` (a call: covered or asked, run as a transient unit, its output),
   `hostsockets.go` (host sockets: declarations, the addresses listened at), `refused.go` (what a host socket
   may not be, and reaching one without links) and `splice.go`
-  (connections to them, spliced under a grant),
+  (connections to them, spliced under a grant), `dbus.go` (D-Bus capabilities: declarations, what they may not
+  name, the consent's scope, pushing rule sets to the proxies' control sockets),
   `mcp.go` the MCP server and `mcp_commands.go` its host command tools, `sandbox.go` finding and pinning the sandbox,
   `members.go` its processes by user namespace.
   The attach type: `folders.go` (the folders capability), `ceiling.go` (the source ceiling, by path and identity), `tree.go`
@@ -157,7 +162,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
-  broker, of a host command or host socket capability it has, none of folders), the assertions on host sockets (a
+  broker, of a host command, host socket or D-Bus capability it has, none of folders), the assertions on D-Bus
+  capabilities (a name of their own, 1 to 64 rules the proxy takes, nothing reaching the bus driver, the notification
+  server, the systemd user manager, flatpak's HostCommand, the portals' backends or the accessibility bus, no own or
+  wildcards on the system bus), the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
   glob that could match one),
@@ -184,7 +192,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; none
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; its
+  D-Bus capabilities: `--control` in the session proxy's arguments, the system-bus proxy started by its bwrap and
+  bound read-only at `/run/dbus`, both control sockets and the capabilities in the broker's config; none
   of it for the default launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
   handler, `StartupWMClass` matching the `desktopName` its asar gets, which
@@ -230,7 +240,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   `RLIMIT_NOFILE`); state alone (`judge_test.go`): a peer's reply to a call to
   the bus dropped, a unique name that left forgotten, a reply only to its
   caller; and the rule parser, name lookup, the eavesdrop match, bus
-  addresses, the budget and the bounded name table.
+  addresses, the budget and the bounded name table. Live rule sets
+  (`control_test.go`, `control_args_test.go`): a set added applying to the
+  next message (by the owner's unique name too), a removal refusing the next
+  one and ending the connections that used it (their names dropped on the
+  bus) but not the others, the broker's disconnect dropping every set and a
+  next broker's applying, live call and broadcast rules passing only matching
+  broadcasts, sets refused (the bus driver or a wildcard over it, no rules,
+  too many, a bad id or name, an unknown op, past 32 sets, a line past 64
+  KiB), a peer of another uid and a second broker refused, and
+  `--control` and `--pid` as the module passes them (the socket 0600 in a 0700
+  directory, a path not clean or not relative refused, the exit with the pid).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), host commands (the schema subset's
@@ -313,14 +333,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   for its length, one of 80 reachable through a long grant directory; a sync that looked before a grant's not
   closing its listener; a revoke during the connect closing the host's end whole; a grant without an address
   refused; no address made through a link; a stale address taken over; the addresses closed when the daemon
-  ends. The MCP server: the nudge after 15
+  ends. D-Bus capabilities against a fake proxy (`dbus_test.go`): declarations refused (as the module's assertions,
+  plus a unique name), the consent's scope naming the bus and rules, a grant adding its set to its bus's proxy only and
+  a revoke removing it, a set the proxy refuses no grant, a standing grant's set pushed at start, a broken connection
+  to the proxy ending the bus's grants and the next grant dialling again. The MCP server: the nudge after 15
   minutes, not again right after, and in tool results; and the cleanup a stopped daemon's `ExecStopPost`
   runs (call units stopped, locks removed, folder grants detached, mountpoints and host socket addresses
   removed, also without the sandbox). Stateful property tests
   (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
   protocol model's actions against the broker on the stand-in sandbox, with
-  a fake clock, with standing grants of a host socket by instance, the exclusive host commands and another host
-  command in its config: requests of each type and host command calls (once leases
+  a fake clock, with standing grants of a host socket by instance, the exclusive host commands, another host
+  command and a D-Bus rule set in its config, the last pushed to a stand-in for the proxy's control socket: requests of each type and host command calls (once leases
   included) from an anonymous caller, floods and crafted requests, answers on the
   notification and in the window, releases, lock events,
   time passing, revoke, a restart (granting the standing grants whose instance is there and the locks, ended ones
@@ -328,7 +351,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   instances' consoles (echoed from the host under a live grant, closed at once otherwise, kept open and closed
   when their grant ends), another launcher's exclusive locks and control.sock from inside.
   After every step the broker's grants and gates, its
-  mounts, locks, host socket addresses and open connections and the window's view (the standing grants, ended
+  mounts, locks, host socket addresses and open connections, the proxy's live rule sets and the window's view (the standing grants, ended
   and live, included) match a reference model
   (P1-P4, P6, P7, P9-P14, P16, P17; `models/README.md` lists the model's actions they leave to other tests). `go test` runs 50
   sequences of about 30 steps (half a minute or less); more with
@@ -400,8 +423,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   server that the test answers on `control.sock`: the host socket again, a folder
   mounted read-only, nodev and nosuid where the app runs and one with a mount
   beneath it refused; a SIGKILL of the daemon closing its connections and ending its
-  folder grant, the standing grants alone back under new ids after its restart, the overview in its state, the Permissions window
-  staying up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
+  folder grant, the standing grants alone back under new ids after its restart, the overview in its state, D-Bus
+  grants on the restarted daemon (the system-bus proxy's unit, `/run/dbus/system_bus_socket` a socket on a read-only
+  bind, hostnamed's `Hostname` on the system bus and the fake Plasma's clipboard on the session bus refused before a
+  grant, passed under one and refused after the revoke, which closes a held `gdbus monitor`), the Permissions window
+  staying up against it, the state machine tests run live (below), the daemon and the system-bus proxy ending with the
+  sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`

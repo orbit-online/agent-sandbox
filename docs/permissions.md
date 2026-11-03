@@ -7,8 +7,8 @@ Permissions window (`nix/packages/permissions-window/`) and folder mounts (`perm
 grant covers and the window's redesign; the first half of step 3 (2026-11-03): plugins, their service units and tools
 and session leases removed, folders built into the broker, and host sockets at stable addresses
 (`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Then the Go D-Bus proxy with
-static rules (step 5), and the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03). Not built yet: live
-rules and the system-bus instance (step 7), device grants. Steps lists the order.
+static rules (step 5), the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03), and live rules with the
+system-bus instance (step 7, 2026-11-03: `permissions.dbus`). Not built yet: device grants. Steps lists the order.
 
 ## Why
 
@@ -489,7 +489,7 @@ replies through to calls it let through, and filters match rules. It refuses wha
 addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those are the static rules, the ones the
 Overview lists.
 
-Built as `cmd/dbus-proxy` (static rules only so far), and nixpak's session-bus proxy since step 6: the module passes
+Built as `cmd/dbus-proxy`, and nixpak's session-bus proxy since step 6: the module passes
 nixpak `pkgs // { xdg-dbus-proxy = <dbus-proxy>; }`, whose package links `bin/xdg-dbus-proxy` to `bin/dbus-proxy`, so
 only nixpak's wrapper changes. nixpak's argv works as it is: the bus address from `DBUS_SESSION_BUS_ADDRESS`, the
 outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on it. Where it differs from xdg-dbus-proxy 0.1.7, read from its source:
@@ -513,22 +513,49 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   over is disconnected. Out of file descriptors, the proxy waits and accepts again.
 
 Kept for compatibility: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a `--call` or
-`--broadcast` rule lets every broadcast of the name through (the module's rules rely on it). Live rule sets will
-want this tightened.
+`--broadcast` rule lets every broadcast of the name through (the module's rules rely on it). Live rule sets don't:
+their call and broadcast rules pass only the broadcasts a broadcast rule matches, and their see, talk and own what
+those static policies pass.
 
-The system bus: a second instance, which `bwrap-subid.sh` starts as a transient user unit next to the broker's, before
-it execs bwrap, and waits for on `--fd` as nixpak does. It runs in a bwrap of its own holding its closure, the host's
-system bus socket and its runtime directory. The host's socket is in that bwrap only, never in the sandbox. It listens
-in `$XDG_RUNTIME_DIR/claude-desktop[-<name>]/dbus/`, which the module binds read-only at `/run/dbus`, so the socket is
-at `/run/dbus/system_bus_socket` where clients look. It has no static rules beyond what any client needs to connect
-(`Hello`, its own name), so until a grant adds rules it reaches nothing. It ends with the sandbox. What the bind gives
+The system bus: a second instance, for a launcher with D-Bus capabilities on the system bus. `bwrap-subid.sh` starts
+it as the transient user unit `claude-desktop[-<name>]-system-bus` before it execs nixpak's bwrap, and waits up to five
+seconds for its socket (a unit can't be handed an `--fd`). It runs in a bwrap of its own holding its closure, the
+host's system bus socket and its two directories, in user, IPC, network, UTS and cgroup namespaces of its own but the
+host's pid namespace. The host's socket is in that bwrap only, never in the sandbox. It listens in
+`$XDG_RUNTIME_DIR/claude-desktop/system-bus[-<name>]/`, which the module binds read-only at `/run/dbus`, so the socket
+is at `/run/dbus/system_bus_socket` where clients look (sd-bus, libdbus and GLib as nixpkgs builds them). A socket on a
+read-only bind still takes connections: connect needs write permission on the socket, which a read-only mount refuses
+only for files, directories and links (verified in the VM test). It runs with `--filter` and no rules, so it passes
+`Hello` and a client's own name, and until a grant adds rules it reaches nothing. `--pid` names the script's pid, which
+bwrap's becomes: the proxy exits when the sandbox does. What the bind gives
 the sandbox is the proxy's listening socket, as nixpak's bind of the session proxy's socket does today: every message
 through it passes the proxy's rules.
 
-Live rules: each proxy listens on a control socket on the host side, mode 0600, which only the broker connects to. The
-proxy takes it as `--control=<path>` relative to its `XDG_RUNTIME_DIR` (`dbus.args` aren't expanded, verified 9), in the
-launcher's runtime directory, which nixpak's wrapper reaches through its `/run` bind. A D-Bus capability is a rule set,
-granted whole:
+Live rules: each proxy listens on a control socket on the host side, mode 0600 in a directory it makes 0700, which only
+the broker connects to. The proxy takes it as `--control=<path>` relative to its `XDG_RUNTIME_DIR` (`dbus.args` aren't
+expanded, verified 9): `claude-desktop/dbus-control[-<name>]/session.sock` and `system.sock`, which nothing binds into
+the sandbox and nixpak's wrapper reaches through its `/run` bind. The session proxy gets it only with D-Bus capabilities
+on the session bus. One JSON object a line each way:
+
+```
+{"op":"add","id":"<grant>","see":[NAME],"talk":[NAME],"own":[NAME],"call":["NAME=RULE"],"broadcast":["NAME=RULE"]}
+{"op":"remove","id":"<grant>"}
+{"ok":true,"closed":<connections ended>}   or   {"error":"..."}
+```
+
+The proxy checks the peer's uid (`SO_PEERCRED`, the proxy's own), and the socket's place does the rest: a 0700
+directory under `$XDG_RUNTIME_DIR/claude-desktop/`, which nothing binds into the sandbox (the module refuses binds
+there, and host sockets beneath it), so a peer is a host process of the user's, which reaches the bus without the proxy
+anyway. The proxy can't tell the sandbox's processes apart by more than that: they run as the user's uid too, the
+proxy has no `/proc` in nixpak's wrapper, and the kernel won't give it the peer's namespaces from its pidfd
+(`PIDFD_GET_PID_NAMESPACE` and the like need ptrace access, which commoncap refuses across user namespaces, and both
+proxies run in one of their own: `EACCES`, seen in the VM test and reproduced in this sandbox). One connection at a
+time: a second while the broker is connected is closed. Bounded: lines of 64 KiB, 32 live sets, 64 rules a set, ids of 64
+characters. A set may not name `org.freedesktop.DBus` nor a wildcard covering it, and the static guards come before
+any rule is looked at: no `BecomeMonitor`, no eavesdropping match rules, no call without a destination, bus calls only
+as the static rules allow.
+
+A D-Bus capability is a rule set, granted whole:
 
 ```nix
 permissions.dbus.timedate = {
@@ -538,11 +565,26 @@ permissions.dbus.timedate = {
 };
 ```
 
-A grant adds its rule set under the grant's id; a revoke removes it. Either applies from the next message the proxy
-reads. A revoke also closes every client connection that sent or received a message under the rule set: that drops
+`see`, `talk` and `own` are lists of names, `call` and `broadcast` attribute sets of rule lists by name, as nixpak's
+`dbus.rules`; a name may end in `.*`. A grant adds its rule set under the grant's id; a revoke removes it. Either
+applies from the next message the proxy reads: the client's reader first looks up who owns the names the set mentions
+(as after `Hello`) and holds that message until the bus answered, so a call by the owner's unique name passes too. A revoke also closes every client connection that sent or received a message under the rule set: that drops
 its names, match rules and exported objects on the bus, which a removed rule alone would leave. The client sees its
-connection close, as when a bus goes away. When the broker's connection closes, the proxy drops every live rule set,
-closing those connections the same way, and keeps its static rules.
+connection close, as when a bus goes away. "Under the rule set" is counted generously: a message for whose destination,
+sender or name argument the set has a filter, whatever the verdict. When the broker's connection closes, the proxy drops
+every live rule set, closing those connections the same way, and keeps its static rules. The broker, finding its
+connection to a proxy broken, ends that bus's grants, and dials again at the next one; a daemon that starts again
+pushes its standing grants anew.
+
+The consent names the bus and the rules: "Covers, for 1 h: On the system bus: call any method of
+org.freedesktop.timedate1 and get its signals (talk)." What a capability may hold is checked by the module at eval and
+the daemon at start: never the bus driver, nor a wildcard covering it; on the session bus nothing that hands over more
+than its own service: `org.freedesktop.Notifications` (the broker's consent: the sandbox could replace or close its
+notifications), `org.freedesktop.systemd1` (transient units run code on the host), `org.freedesktop.Flatpak`
+(`HostCommand`), `org.freedesktop.impl.portal.*` (the backends behind the portals' app ID checks) and `org.a11y.Bus`,
+each with the names below it and wildcards covering it; on the system bus no wildcards and no `own`, so every service
+reached is named. As for host sockets, that list guards against the known ones: what else a rule set gives is the
+config's responsibility.
 
 What a revoke can't take back: file descriptors a client received over the bus (a logind inhibitor, a portal's fd)
 stay valid until closed, as with mount grants. Every client's upstream connection is the proxy's, so services see one
@@ -719,7 +761,7 @@ settings and nixpak's, and the daemon passes it on unchanged as `overview` in co
 - `network`: its own network namespace with a macvlan on the LAN, which the module always sets up;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
-  `files`), `/tmp` with the scratchpad, and `/run/permissions`.
+  `files`), `/tmp` with the scratchpad, `/run/permissions`, and `/run/dbus` with the system-bus proxy.
 
 It carries no consent: nothing in it can be changed from the window. A config change and a rebuild change it.
 
@@ -757,7 +799,7 @@ The first design's steps are built (Status). The rewrite's:
 6. The sandbox on the new proxy: VM test that OpenURI, a portal notification and the tray still work, and a call
    outside the rules is refused. Built.
 7. Live rules: D-Bus capabilities as grants on the session proxy and the system-bus instance. Tests: a grant and a
-   revoke applied to the next message.
+   revoke applied to the next message. Built.
 8. Consumers: the home SSH and kubectl plugins ported to declared host commands; windows-vm's tools listed before any
    grant, a call asking once for the VM and later calls not, a revoke
    making the next call ask again; the portal, notifications and the tray still working.
@@ -818,7 +860,7 @@ Each can be revisited.
 10. Folders become part of the broker when plugin executables go. They were the last plugin with commands on the host
     (`list`, `resolve`), and the ceiling was the broker's already.
 11. The system bus gets a proxy instance with no rules at `/run/dbus/system_bus_socket`, so D-Bus capabilities on it
-    need no restart and the address is where clients look. It reaches nothing until a grant adds rules.
+    need no restart and the address is where clients look. It reaches nothing until a grant adds rules. Narrowed by 32.
 12. A call's free arguments stay out of the notification's summary (they can be anything the schema allows); the
     consent states what the schema allows, and the window shows the values.
 13. The new proxy reaches nixpak through the `pkgs` the module passes it, with `xdg-dbus-proxy` replaced. nixpak
@@ -870,3 +912,26 @@ Each can be revisited.
 31. With session leases gone, `release` ends the grant for the whole sandbox and `status` lists every live grant; a
     request without a lease proposes `PT1H`, as a call does. The nudge says what the sandbox, not the session, still
     holds.
+32. The system-bus proxy runs only for a launcher with D-Bus capabilities on the system bus, unlike decision 11's
+    instance for every launcher: a capability needs a rebuild and a restart of the app anyway, as its declaration is in
+    the store, so an instance without one would never get rules. No `/run/dbus` either then.
+33. The system-bus proxy listens in `$XDG_RUNTIME_DIR/claude-desktop/system-bus[-<name>]/` rather than
+    `claude-desktop[-<name>]/dbus/`, and the control sockets are in `claude-desktop/dbus-control[-<name>]/`: under
+    `claude-desktop/`, which host sockets and binds already refuse, and with different prefixes, so no launcher's
+    name makes its directory another's (launcher names can't hold `_`, and `dbus-control` would be a launcher `control`'s
+    `dbus-<name>`).
+34. The control socket's peer check is the proxy's uid, one connection at a time, and the socket's place out of the
+    sandbox's reach. A check of the peer's pid namespace through its pidfd was built first and dropped: the kernel
+    refuses it across user namespaces (D-Bus). It accepts any host process of the user's, which can reach the bus
+    directly anyway.
+35. A revoke closes a client that had a message judged with a filter of the set, whatever the verdict: more than the
+    messages the set alone let through, so a revoke never leaves a connection that profited from it.
+36. A live set's names are looked up on the client's reader before its next message, which waits for the answers,
+    rather than at once from the control socket: the proxy's calls then never overtake a client's `Hello`, and an idle
+    client costs nothing. Until then the client gets no broadcasts by an owner's unique name it hasn't learnt.
+37. Live sets' call and broadcast rules don't pass every broadcast of their name, as xdg-dbus-proxy's TALK does for the
+    static ones, which nixpak's configs rely on.
+38. The broker ends a bus's D-Bus grants when it finds its connection to the proxy broken, on its next use of it, rather
+    than watching the connection: the proxies end only with the sandbox, which ends the daemon's grants anyway.
+39. What D-Bus capabilities may not name (D-Bus) is a list of known escapes per bus, like host sockets' refused paths.
+    On the system bus `own` is refused outright: nothing in the sandbox needs to offer a system service.

@@ -132,6 +132,18 @@ let
                   maxValidity = "PT8H";
                 };
               };
+              # D-Bus rule sets: a property of hostnamed on the system bus, the fake Plasma's clipboard on the session
+              # bus, which the static rules refuse
+              dbus.hostname = {
+                description = "read the host name";
+                bus = "system";
+                call."org.freedesktop.hostname1" = [ "org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1" ];
+              };
+              dbus.clipboard = {
+                description = "read the clipboard";
+                bus = "session";
+                call."org.kde.klipper" = [ "org.kde.klipper.klipper.getClipboardContents@/klipper" ];
+              };
               grants = [
                 { capability = "test"; }
                 { capability = "echo"; }
