@@ -77,8 +77,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   paths to its own Qt's, Plasma's style and platform theme included: the
   host's may be another Qt.
 - `nix/checks/`: the flake checks, see Testing.
-- `docs/permissions.md`: design of the permissions broker. Built so far:
-  everything but device grants.
+- `docs/permissions.md`: design of the permissions broker, rewritten for
+  the broker as gateway (declared host tools, host sockets at stable
+  addresses, the Go D-Bus proxy). The code still follows the first design
+  until the doc's Steps land.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
 - `scripts/ns-inject-spike.py`: spike for binding host folders and device
   nodes into a running sandbox and detaching them, against two nested bwraps

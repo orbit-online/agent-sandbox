@@ -1,12 +1,11 @@
 # Permissions: granting the sandbox outside access while it runs
 
-Status: written 2026-10-31. Built: the daemon (`cmd/permissions-broker/`) with the service and command types, consent,
-leases, standing grants from the Nix config, the MCP server with plugin tools and nudges, the Permissions window
-(`nix/packages/permissions-window/`) and the attach type with the folders plugin (`nix/packages/permissions-folders/`,
-`permissions.folders`), behind a launcher's `permissions.enable`. Not yet: device grants.
-
-A daemon started again while the sandbox runs finds the grant directory shared by the one before (its mountinfo
-says so) and takes it over.
+Status: written 2026-10-31, rewritten 2026-11-03 for the broker as gateway. Built before the rewrite: the daemon
+(`cmd/permissions-broker/`) with consent, leases, standing grants from the Nix config and the MCP server, the
+Permissions window (`nix/packages/permissions-window/`) and folder mounts (`nix/packages/permissions-folders/`,
+`permissions.folders`), behind a launcher's `permissions.enable`. The code still has what the rewrite replaces:
+`service` and `command` plugins, plugin tools that come and go with `list_changed`, and session leases. Not built yet:
+declared host commands, host sockets at stable addresses, the Go D-Bus proxy, device grants. Steps lists the order.
 
 ## Why
 
@@ -16,19 +15,43 @@ access is only needed for a task: a folder for an afternoon, a VM while it runs,
 
 The permissions broker grants and revokes such access while the sandbox runs. The user answers each request in a
 notification drawn on the host, picks how long it lasts, and sees and revokes live grants in a Permissions window.
-What can be granted comes from plugins; the sandbox carries no plugin-specific code, and plugins carry no consent
-code.
+
+The first design had plugins run on the host per grant: a `service` grant started a socket-activated unit and created
+its socket, named after the grant, and the MCP server offered the plugin's tools while the grant lived. Three things
+went wrong with it:
+
+1. Access was the socket existing. Nothing had a stable address, so everything above it had to follow the grants.
+2. Tools that appear mid-session never reach Claude: Claude Code ignores `notifications/tools/list_changed` (What's
+   verified, 8). The interface has to be there from the start, with a refusal at call time for what isn't granted,
+   as other permission systems do.
+3. xdg-dbus-proxy takes its rules from argv only (verified, 7), so every change of scope needed a new process. It bent
+   three designs.
 
 ## Goal
 
-- A host-side daemon per launcher, outside bwrap, owned by this repository.
+- One host-side daemon per launcher, outside bwrap, owned by this repository. It is the only place that enforces
+  anything: what runs on the host for the sandbox carries no consent or grant checks of its own, so a bug there can't
+  leak access.
+- On the host, for the sandbox, run only the broker and declared host commands. A host command is a script, an argument
+  schema, a description and a capability, declared in the sandbox's Nix config. It runs only under a grant the user
+  gave, with its bounding arguments fixed by the grant and its free arguments named in the consent.
+- A static surface: the permissions MCP server lists every declared host command from its start, and host sockets sit at
+  addresses that don't change. Authorization happens at call or connection time.
+- Everything else runs inside the sandbox: ordinary MCP servers over granted primitives (a socket, a folder, a device,
+  a D-Bus name).
+- A Go D-Bus proxy with live rules replaces xdg-dbus-proxy, nixpak's session-bus proxy included: one D-Bus gate for
+  the session and system buses.
 - A notification for every request (reason, Allow, Deny, Options), and a Permissions window from the launcher's
   desktop actions, next to "New shell", listing what's granted and what can be.
-- Leases: this session, until the screen locks, for a duration. Grants end on their lease, on revoke, on release
-  from inside, and on plugin triggers. What should always be granted is declared in Nix as standing grants.
-- One plugin API with three delivery types, `service`, `command` and `attach` (below). Folder mounts are the first
-  plugin and live here; others, such as the Windows VM, live in secoya/agent-sandbox-plugins.
-- One MCP server inside the sandbox for every plugin.
+- Leases: once, until the screen locks, for a duration. Grants end on their lease, on revoke, on release from inside
+  and when their instance goes away. What should always be granted is declared in Nix as standing grants.
+
+What the broker guarantees: nothing runs without a grant; a grant covers exactly the values of the bounding arguments it
+names; arguments stay data, which the broker validates and never interprets; and the consent says what is really
+granted, free arguments included. The schema keeps a config tidy and guarantees nothing: a command may declare a free
+string with no pattern, and then the grant hands that string over whole. What a script does with its input is the
+config's responsibility, as with a sudoers entry. Whether a script leaves something running isn't a security property
+either: a script can start a server, and the program it drives (QEMU) may be resident anyway.
 
 ## What's verified
 
@@ -50,23 +73,35 @@ On kernel 6.18, bubblewrap 0.12.0, Claude Code 2.1.309 (`scripts/ns-inject-spike
 5. `SO_PEERCRED` and `SO_PEERPIDFD` give a peer's pid as seen by the daemon (and a pidfd) from three pid namespaces
    down; the daemon reads the peer's ancestors and environment in `/proc`.
 6. Claude Code sets `CLAUDE_CODE_SESSION_ID` in the environment of what it spawns (MCP servers, shells), not in its
-   own.
+   own. The app starts its MCP servers itself with only `HOME`, `PATH`, `SHELL` and `USER`, so a server it starts
+   finds no session above it (tested on the host, 2026-11-01). Session leases were dropped for this (Decisions).
 7. xdg-dbus-proxy takes its rules from its arguments only; there is no way to change them while it runs.
-8. Claude Code refreshes an MCP server's tool list on `notifications/tools/list_changed` in `-p` mode and in the
-   Agent SDK, which the app uses (documented, not yet tested live).
+8. Tested on the host on 2026-11-01, and failed: Claude Code doesn't pick up tools an MCP server adds mid-session
+   with `notifications/tools/list_changed`, in the app's Code tab or in `claude -p`. The documentation said it would.
+9. nixpak (as locked here) starts one D-Bus proxy, `XDG_DBUS_PROXY_EXE` with the argv from `XDG_DBUS_PROXY_ARGS`
+   (bus address, outside path, its `dbus.args`, `--filter`) plus `--fd=3`, and waits for a byte on that fd
+   (`launcher/dbus_proxy.go`). Its launcher wrapper sets `XDG_DBUS_PROXY_EXE` at build time (`makeWrapper --set`) to
+   a script of its own that runs `pkgs.xdg-dbus-proxy` in a bwrap with `/.flatpak-info`, because portals read
+   `/proc/<caller>/root/.flatpak-info` and the caller they see is the proxy (`modules/launch.nix`). `dbus.args` are
+   passed literally, without expanding variables.
+10. godbus/dbus v5 decodes and encodes single wire messages with their file descriptors
+    (`DecodeMessageWithFDs`, `Message.EncodeToWithFDs`, v5.2.4), which is what a filtering proxy needs.
 
 ## Components
 
 ```
 host (user, no capabilities)                       sandbox
-┌──────────────────────────────┐                   ┌──────────────────────────────────────────┐
+┌──────────────────────────────┐                   ┌───────────────────────────────────────────┐
 │ permissions-broker (daemon)  │  request.sock     │ /run/permissions/                         │
-│  consent, leases             ├──────────────────►│   request.sock   (core requests)          │
-│  plugins, mount helpers      │  grant dir bind   │   <grant>/       (attach mounts)          │
-│                              │                   │   <grant>.sock   (service sockets)        │
-│ control.sock (host only) ◄───┼─ Permissions      │                                          │
-│                              │  window           │ permissions MCP server (stdio, per session)│
-└──────────────────────────────┘                   └──────────────────────────────────────────┘
+│  consent, leases, grants     ├──────────────────►│   request.sock     (requests, calls)      │
+│  host command calls (units)  │  grant dir bind   │   <grant>/         (mounts)               │
+│  socket splicing             │                   │   sockets/<cap>[/<instance>]              │
+│  mount helpers               │                   │                                           │
+│ control.sock (host only) ◄───┼─ Permissions      │ permissions MCP server (stdio)            │
+│                              │  window           │                                           │
+│ D-Bus proxies (session,  ◄───┼─ live rules       │ session bus, system bus sockets           │
+│  system), in nixpak's bwrap  │                   │                                           │
+└──────────────────────────────┘                   └───────────────────────────────────────────┘
 ```
 
 - `permissions-broker`, Go, in `cmd/permissions-broker/`. One per launcher, as the transient user unit
@@ -76,20 +111,23 @@ host (user, no capabilities)                       sandbox
   - `control.sock` in the launcher's runtime directory on the host, mode 0600, for the window and the launcher. It
     answers only peers in the daemon's own user namespace, so nothing in the sandbox can use it even if a ceiling
     exposes the path.
+  - one socket per declared host socket under `sockets/` in the grant directory (Host sockets).
 - The grant directory: `$XDG_RUNTIME_DIR/claude-desktop[-<name>]/permissions/` on the host, bound **read-only** at
   `/run/permissions` in the sandbox. This is the one bind the feature adds. Connecting to a socket on a read-only
   bind works; creating, renaming or replacing anything in it doesn't, so the sandbox can't plant a symlink where a
   mountpoint or socket will go, or remove `request.sock`. The daemon creates every entry on the host side, through a
-  dirfd with `O_NOFOLLOW`, under names it picks at random, and refuses to start when the directory isn't its own
-  or is a link.
+  dirfd with `O_NOFOLLOW`, and refuses to start when the directory isn't its own or is a link. Mountpoints get names
+  it picks at random; sockets get the stable names their declarations give.
 - `permissions-mcp`, the same binary as an MCP server, run inside the sandbox from the module's MCP servers. A client
   of `request.sock`.
+- The D-Bus proxies, Go, the same module: the session-bus proxy nixpak starts, and a second instance for the system
+  bus that the launcher starts. The broker sets their live rules over a control socket each (D-Bus).
 - The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
   action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
   rest. It is a client only: all state lives in the daemon. Above the grants it shows, read-only, what the
-  configuration gives the sandbox from its start (Overview, below). It refreshes on every watch event, which the sandbox can
-  cause at will, so pending requests come in the order they arrived (a row doesn't move under the pointer) and what
-  the user set on a row (narrowed parameters, a lease) is kept by request id through the refresh.
+  configuration gives the sandbox from its start (Overview, below). It refreshes on every watch event, which the
+  sandbox can cause at will. So pending requests come in the order they arrived, and a row doesn't move under the
+  pointer. What the user set on a row (narrowed parameters, a lease) is kept by request id through the refresh.
 
 ### Handle on the sandbox, and restarts
 
@@ -102,16 +140,20 @@ or a nested namespace, doesn't pass. It then pins the sandbox's user, mount and 
 helper joins those. Code running as bwrap's init could move the pid into namespaces of its own (`unshare -Um`); the
 daemon refuses to act once the pid shows other namespaces than the pinned ones, and reads M1's mount table only while
 the pid is checked to be in it. The pidfd turning readable means the sandbox ended, upon which the daemon stops its
-plugin units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
+units and exits. At first start it waits for the sandbox to appear and creates `request.sock` only then.
 
 Started again after a crash, it finds the same sandbox the same way and reconciles before serving: it detaches
-everything mounted under `/run/permissions` in M1, stops leftover `perm-*` units of its launcher, and starts with its
-standing grants alone. Leases that ran while it was down are gone rather than extended; Claude asks again.
+everything mounted under `/run/permissions` in M1, stops leftover call units of its launcher (bound to the old daemon's
+unit, so normally gone already), and starts with its standing grants alone. Leases that ran while it was down are gone
+rather than extended; Claude asks again. It finds the grant directory shared by the daemon before it (its mountinfo says
+so) and takes it over.
 
-Grants end with the daemon, a crash included: service units are bound to its unit (`BindsTo=`), so systemd stops them
-when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd runs after a
-crash too) detaches the folder grants and removes their mountpoints. Credentials a command printed stay valid until
-they expire: they can't be taken back. A daemon starting runs the same cleanup first, in case it didn't happen.
+Grants end with the daemon, a crash included: the connections it splices close with it, the D-Bus proxies drop its rule
+sets when its connection to them closes, the units host command calls run in are bound to its unit (`BindsTo=`), so
+systemd stops them when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd
+runs after a crash too) detaches the folder grants and removes their mountpoints. Credentials a host command printed
+stay valid until they expire: they can't be taken back. A daemon starting runs the same cleanup first, in case it didn't
+happen.
 
 ### Sharing the grant directory
 
@@ -121,8 +163,8 @@ checks that the client is in M1 and makes
 `/run/permissions` shared there. In M1 that mount is a bind of the host directory, so it stays a slave of the host
 too; files the daemon creates on the host side (sockets) show up as before. The daemon serves `share` once per sandbox: a
 second one, from anything else in M1, would come after the FHS env's bwrap copied M1, where
-grants no longer reach the app. If `share` fails, the launcher goes on without attach grants rather than not
-starting; the daemon then refuses attach requests, and the window says why.
+grants no longer reach the app. If `share` fails, the launcher goes on without mount grants rather than not
+starting; the daemon then refuses mount requests, and the window says why.
 
 ### Privileged steps in a Go process
 
@@ -142,37 +184,170 @@ put one of its own in its place. nsenter joins only the user namespace (and the 
 it's a mount root with the device and inode of the host's directory. They act on single entries beneath it, which
 only the daemon creates.
 
-## Delivery types
+## What can be granted
 
-A plugin declares capabilities, each of one delivery type: `service`, `command` or `attach`.
+A grant is of a capability, with values for its bounding arguments where it has any. Four types, each named for what
+is granted and declared in the launcher's `permissions` options:
 
-**`service`: a host-side unit.** The daemon runs the plugin's `serve` command as a socket-activated transient unit:
-`systemd-run --user --unit=perm-<launcher>_<grant> --socket-property=ListenStream=<grant dir>/<grant>.sock`
-(`perm_<grant>` for the default launcher; launcher names can't contain `_`, so no launcher's units match another's
-pattern). The plugin gets the socket the standard way (`sd_listen_fds`, which needs `LISTEN_PID` to match, so the
-daemon can't hand the fd over itself). Revoking stops the unit, which kills its whole cgroup, double-forked children
-included, and removes the socket (`RemoveOnStop`), which cuts live connections. After a crash the units are found by
-name. `serve` exiting doesn't end the grant: the next connection starts it again. A plugin ends grants through
-`watch`. Fits: Windows VM, systemd
-(a filtered systemd1 proxy), BlueZ, TPM operations, UEFI variable reads, journal queries (the plugin runs the query
-and streams it), D-Bus services (an xdg-dbus-proxy instance per grant, since rules can't change in a running one),
-website logins (an HTTP proxy that adds cookies the sandbox never sees).
+- `command` (`permissions.commands`): host commands, scripts run on the host per call;
+- `socket` (`permissions.sockets`): host sockets, each reachable at a stable address inside (the first design's
+  `service`, which named what ran behind the socket rather than what was granted);
+- `mount` (`permissions.folders`, later devices): a folder or device node mounted in the sandbox's namespaces;
+- `dbus` (`permissions.dbus`): rules added to a D-Bus proxy.
 
-**`command`: run once on the host.** The daemon runs the plugin's `run` command with the request's parameters (the
-sandbox's public key or CSR among them) and the validity as JSON on stdin, and returns what it prints, as the answer's `output`. The validity
-is the shorter of the plugin's `maxValidity` (from its ceiling) and a duration lease. The lease decides only whether
-another `run` asks the user first. What a command printed can't be taken back: revoke means "won't run again". Fits:
-credentials (certs from a host CA, SSH certificates, Kubernetes client certs) and host actions.
+### Declared host commands
 
-**`attach`: into the sandbox's namespaces.** The daemon runs the plugin's `resolve` command, which answers with what
-to attach: `{"source": "/host/path", "ro": true}` for a folder or a device node. The daemon attaches it at
-`/run/permissions/<grant>`; the plugin never touches namespaces. The daemon, not the plugin, enforces the source
-ceiling (below), the same way for every attach plugin. Revoking detaches it. Like every grant
-it is the sandbox's (see Requests): a session lease's mount goes when the last session holding it ends. Fits: live folder
-mounts, single `/dev` nodes, block devices mounted on the host and handed over as a folder. Moving a network device
-(a wifi phy) into the sandbox's netns is also `attach`, with an attach kind of its own, left for later.
+A capability groups commands that one grant covers. It declares its bounding arguments; each command declares its free
+arguments, its result type and what it runs:
 
-Open files survive a revoke of an attach grant (verified item 3), and so does a copy of the mount a process in the
+```nix
+permissions.commands.windows-vm = {
+  description = "Control a running Windows VM";
+  bounding.vm = {
+    description = "the VM";
+    instances = "$XDG_RUNTIME_DIR/windows-vm/*/qmp-agent.sock";
+  };
+  exclusive = true;
+  commands = {
+    screenshot = {
+      description = "Take a screenshot of the VM's screen";
+      result = "image/png";
+      run = [ "${windows-vm}/bin/windows-vm" "screenshot" ];
+    };
+    click = {
+      description = "Click at a position on the screen";
+      arguments = {
+        x = { type = "integer"; minimum = 0; maximum = 7679; description = "column, in pixels"; };
+        y = { type = "integer"; minimum = 0; maximum = 4319; description = "row, in pixels"; };
+      };
+      run = [ "${windows-vm}/bin/windows-vm" "click" ];
+    };
+    exec = {
+      description = "Run PowerShell in the guest";
+      arguments.script = {
+        type = "string"; multiline = true; maxLength = 65536;
+        description = "any PowerShell, run as SYSTEM";
+      };
+      run = [ "${windows-vm}/bin/windows-vm" "exec" ];
+      timeout = "PT5M";
+    };
+  };
+};
+```
+
+- Bounding arguments belong to the capability, so every command of it takes them, and a grant fixes their values: one
+  grant of `windows-vm` with `vm = "win11"` covers every command's calls on that VM and no other. A capability without
+  bounding arguments is granted whole.
+- Free arguments belong to the command. A grant covers any value the schema allows, for the grant's lease.
+- The schemas are a subset of JSON Schema the broker validates itself: `string` (`maxLength`, `pattern`, `enum`),
+  `integer` and `number` (`minimum`, `maximum`), `boolean`, and arrays of those (`maxItems`). Strings carry no control
+  characters unless declared `multiline` (newlines and tabs then). A string marked `opaque` is data the user has nothing
+  to read in (a public key, a CSR), shown by its digest (Requests). Every argument needs a description; the consent is
+  built from them.
+- `result` is `text` (the default) or an image MIME type.
+- `maxValidity` (optional) caps the validity the command is told (below), for commands that issue credentials.
+- `exclusive` (optional): an instance may be granted to one launcher at a time. The daemons share lock files in
+  `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance, holding the launcher's name and linked into place
+  so only one daemon wins. A daemon removes its locks when the grant ends and in its cleanup after a crash; a
+  standing grant takes one like any other. A request for an instance another launcher holds is refused, naming it.
+
+The module checks at eval time what it can: names fit MCP's tool names (`<capability>_<command>`, at most 64 characters
+of `[A-Za-z0-9_-]`), every argument is described, no argument is named `reason` or `lease` (the broker adds those),
+`run` is a list. The daemon checks the rest at start and doesn't start on a config error.
+
+A plugin is now a Nix module that sets such a declaration with its package's scripts in `run`. Nothing of it runs on
+the host except those scripts, per call.
+
+### Running a call
+
+A call is a request: `call` on `request.sock`, which the MCP server sends for the command's MCP tool. The broker:
+
+1. validates the arguments against the schemas, and the bounding values against the instances (below);
+2. looks for a live grant of the capability with the same bounding values; without one, it asks the user with the
+   call's `reason` and proposed `lease`, and makes the grant on Allow. A `once` grant is tied to the call it was made
+   for and covers no other, queued or concurrent;
+3. runs the command's `run` as a transient user unit (`systemd-run --user --pipe --collect`, named
+   `perm-<launcher>_<call>`, or `perm_<call>` for the default launcher), bound to the
+   daemon's unit, with `RuntimeMaxSec=` its `timeout` (default one minute), in the user manager's environment and
+   nothing of the sandbox's. The arguments go on stdin as one JSON object, never on argv and never through a shell:
+
+   ```json
+   {"capability": "windows-vm", "command": "click", "grant": "g-3f2a91",
+    "bounding": {"vm": "win11"}, "arguments": {"x": 120, "y": 40}, "validity": "PT58M"}
+   ```
+
+   `validity` is the time the grant has left, capped by `maxValidity`; a lease without an end (lock, standing, once)
+   gives `maxValidity`, or none when the command declares none.
+4. answers with what the script printed: exit 0 gives its stdout as MCP text (UTF-8, or the call fails) or as image
+   content of the declared type. A non-zero exit, a timeout or more than 16 MiB on stdout is an MCP tool error
+   carrying the last 4 KiB of stderr.
+
+One call per capability instance runs at a time, and at most four at once, so a command that hangs holds up only its own
+instance until its timeout. A revoke stops the grant's running calls with their units.
+
+The daemon records every call, covered or not, with its grant: the command, the time, the exit status and the arguments
+(opaque ones by digest), the last 200 per grant, in memory. The window shows them under the grant, so a one-hour
+`exec` grant shows what ran under it.
+
+### Writing a host command
+
+The broker stops at the grant and the schema. The rest is the script's, and it runs as the user on the host. What
+keeps one safe:
+
+- Fix in the script, or in a bounding argument, everything that bounds access. Leave free only what the consent can
+  say plainly: "any text typed", "any PowerShell as SYSTEM".
+- Read arguments from stdin with a JSON parser and pass each as one argv element of what it runs. Never `eval`,
+  `sh -c` or string interpolation into a command line; put `--` before arguments that could start with `-`.
+- Prefer enums and bounded integers to strings, and a fixed set of operations to a general one. Raw protocol access
+  (QMP, a shell) is a capability of its own and gets a consent that says so: QMP can make QEMU open host files.
+- Take no paths. If a command must, resolve them under a fixed root without following links, as the broker's mounts
+  do.
+- Print only what the sandbox may see. Secrets stay on the host: a signing command reads its CA key, takes a public key
+  as an opaque argument, fixes the principals and the validity, and prints the certificate.
+- Exit when done. What a script leaves running is the config's to answer for.
+
+### Instances
+
+A bounding argument with `instances` takes only values the glob matches now: one `*` in one path segment, its match
+being the value (`$XDG_RUNTIME_DIR` and `~` expanded by the broker). For windows-vm, a VM is an instance while its
+runtime directory has `qmp-agent.sock`. The broker globs at each request and call, at the user's answer (an instance
+gone by then isn't granted), and every 30 seconds; a grant whose instance is gone ends. The window and the MCP `list`
+show the instances. Bounding arguments without `instances` take any value their schema allows.
+
+### Host sockets
+
+A declared host socket is reachable inside at a stable address while a grant covers it, for MCP servers and other
+clients in the sandbox:
+
+```nix
+permissions.sockets.ssh-agent = {
+  description = "Sign with the keys in the host's SSH agent";
+  path = "$XDG_RUNTIME_DIR/ssh-agent.sock";
+};
+```
+
+The broker listens at `/run/permissions/sockets/<capability>`, or `sockets/<capability>/<instance>` with a bounding
+`instances` glob whose matches are the sockets, from its start or from when the instance appears. On a connection it
+checks for a live grant; without one it closes the connection at once (the MCP `request` asks for the grant, since a
+connection carries no reason). With one, it connects to the host socket and copies bytes both ways. It parses nothing
+and passes no file descriptors. A revoke closes the grant's connections.
+
+The host service sees the broker as its peer: an unsandboxed process with no `/.flatpak-info`, whose pid and
+credentials are what `SO_PEERCRED` and polkit see. So a host socket must be one whose service authorizes nothing by
+its peer, or whose peer checks the grant is meant to pass. Never declare a D-Bus bus, a portal or a service that
+trusts `SO_PEERCRED`: that would hand the sandbox the host user's standing past every rule of the D-Bus proxies. The
+module refuses the session and system bus sockets, `$XDG_RUNTIME_DIR` as a whole and the launchers' own sockets; the
+rest is the config's, as with host commands. An SSH agent fits: it authorizes by holding the socket.
+
+### Mounts
+
+The broker mounts a host folder or device node into the sandbox's namespaces, at `/run/permissions/<grant>`. Folder
+mounts are built in, with `permissions.folders` as their source ceiling (below); nothing outside the broker resolves a
+path or touches a namespace. Revoking detaches the mount. Fits: live folder mounts, single `/dev` nodes, block devices
+mounted on the host and handed over as a folder. Moving a network device (a wifi phy) into the sandbox's netns is no
+mount and would be a type of its own, left for later.
+
+Open files survive a revoke of a mount grant (verified item 3), and so does a copy of the mount a process in the
 sandbox made in a mount namespace of its own (`unshare -Urm`, `mount --rbind`): the detach and the removal of the
 mountpoint end the grant's mounts in every namespace it propagated to, not copies made elsewhere. Neither can be
 taken back short of ending the processes. The daemon knows the grant's mount by the mount id of the tree it attached,
@@ -184,7 +359,7 @@ directory on bwrap's root tmpfs, nixpak passes bwrap no `--remount-ro`, and a re
 against everything that runs there, for a rename that no longer hides anything.
 The daemon detaches first: how many processes, namespaces and mounts the scan below reads is the sandbox's choice, so
 nothing of it comes before the detach. Then it lists the holders, within ten seconds, reading the mountinfo of each
-mount namespace in the sandbox once (of every process of the sandbox's, found by user namespace as for sessions below,
+mount namespace in the sandbox once (of every process of the sandbox's, found by its user namespace,
 re-entries included):
 - processes with a thread whose working directory, root or an open file is on the grant's mount or one propagated
   from it (its peer group, by `shared:` and `master:`), should the detach have left one, by `statx`'s mount id;
@@ -227,11 +402,9 @@ file, a detached `open_tree` clone, or a grant's mount propagated into a nested 
 private, so the unmount doesn't reach it, all keep their access until the processes holding them end. Ending those
 processes, at worst the whole sandbox, is the only way to take it back. Only mediating every access, a FUSE layer in
 front of each grant that the daemon controls, could cut access off at revoke, at a cost in speed and machinery this
-design doesn't pay.
+design doesn't pay. Only ending the sandbox ends every access to a grant for sure.
 
-Only ending the sandbox ends every access to a grant for sure.
-
-### Source ceiling and resolving paths
+#### Source ceiling and resolving paths
 
 The sandbox has rw binds of its own, which may lie under a ceiling root, and there it can plant links that point
 anywhere on the host, including at what only the daemon, with the host user's rights, can read. So a path check
@@ -263,97 +436,96 @@ approve its own requests. The daemon refuses to start when one of them expands t
 A ceiling over `$HOME` or `~/.config`, rw, would hand the sandbox code execution on the host (user units, autostart):
 that's the ceiling's choice, and one to avoid.
 
-### Plugin manifest
+### D-Bus
 
-A plugin is a package with `share/agent-sandbox/permissions/<plugin>.json`:
+A proxy written here replaces xdg-dbus-proxy. Like it, the proxy parses what the sandbox sends on the host, inside
+a bwrap. Unlike it, it is in Go and takes rule sets while it runs.
 
-```json
-{
-  "name": "windows-vm",
-  "capabilities": [
-    {
-      "name": "vm",
-      "type": "service",
-      "description": "Control a running Windows VM",
-      "params": { "vm": { "type": "string", "description": "the VM, as list names it" } },
-      "list": ["windows-vm-plugin", "list"],
-      "serve": ["windows-vm-plugin", "serve"],
-      "tools": true
-    }
-  ]
-}
+The session bus: the module keeps nixpak's `dbus.enable` and calls nixpak with a `pkgs` whose `xdg-dbus-proxy` is
+the new proxy (its binary under that name). Then nixpak's launcher still starts it in the wrapper that carries
+`/.flatpak-info` and waits on `--fd=3` (verified, 9); `XDG_DBUS_PROXY_EXE` can't be pointed elsewhere, since
+nixpak's wrapper sets it at build time.
+
+The proxy takes the argv subset nixpak passes: the bus address and the path to listen on, `--fd`, `--filter`, `--see`,
+`--talk`, `--own`, `--call` and `--broadcast`, with xdg-dbus-proxy's meaning (`[METHOD][@PATH]`, the path with an
+optional `/*`). It does SASL toward both sides, passes file descriptors, tracks unique and well-known names, lets
+replies through to calls it let through, and filters match rules. It refuses what would let a client read traffic not
+addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those are the static rules, the ones the
+Overview lists.
+
+The system bus: a second instance, which `bwrap-subid.sh` starts as a transient user unit next to the broker's, before
+it execs bwrap, and waits for on `--fd` as nixpak does. It runs in a bwrap of its own holding its closure, the host's
+system bus socket and its runtime directory. The host's socket is in that bwrap only, never in the sandbox. It listens
+in `$XDG_RUNTIME_DIR/claude-desktop[-<name>]/dbus/`, which the module binds read-only at `/run/dbus`, so the socket is
+at `/run/dbus/system_bus_socket` where clients look. It has no static rules beyond what any client needs to connect
+(`Hello`, its own name), so until a grant adds rules it reaches nothing. It ends with the sandbox. What the bind gives
+the sandbox is the proxy's listening socket, as nixpak's bind of the session proxy's socket does today: every message
+through it passes the proxy's rules.
+
+Live rules: each proxy listens on a control socket on the host side, mode 0600, which only the broker connects to. The
+proxy takes it as `--control=<path>` relative to its `XDG_RUNTIME_DIR` (`dbus.args` aren't expanded, verified 9), in the
+launcher's runtime directory, which nixpak's wrapper reaches through its `/run` bind. A D-Bus capability is a rule set,
+granted whole:
+
+```nix
+permissions.dbus.timedate = {
+  description = "Read and set the host's time zone";
+  bus = "system";
+  talk = [ "org.freedesktop.timedate1" ];
+};
 ```
 
-- `params` is a JSON Schema properties object; the daemon validates requests against it. A string parameter marked
-  `"opaque": true` is data for the plugin that the user has nothing to read in (a CSR): see Requests.
-- `list` (optional) prints the grantable instances (running VMs, folder roots) for the window and the MCP `list`, as
-  a JSON array of objects. Outside `attach`, a request must match one of them, or it is refused without asking the
-  user: an instance matches when each of its keys has the same value in the request's params. A `list` that fails
-  refuses every request. `list` runs again when the user answers, so an instance gone by then (a VM shut down)
-  isn't granted. Attach requests may name a folder below a listed root, so
-  `sources` decide there.
-- `exclusive` (optional): an instance may be granted to one launcher at a time (a VM's QMP connection takes one
-  client). The daemons share lock files in `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance `list`
-  prints that the request matches (per parameters without a `list`), so parameters `list` doesn't print (a mode) don't
-  make one VM two instances; a request for an instance
-  another launcher holds is refused, naming it.
-- `serve`, `run`, `resolve` per type as above.
-- `watch` (optional) runs for as long as a grant lives; its exit ends the grant (VM shut down, device unplugged).
-- `tools` (`service` only): the plugin speaks MCP on its socket, and its tools appear in the core MCP server while the
-  grant lives (see MCP).
+A grant adds its rule set under the grant's id; a revoke removes it. Either applies from the next message the proxy
+reads. A revoke also closes every client connection that sent or received a message under the rule set: that drops
+its names, match rules and exported objects on the bus, which a removed rule alone would leave. The client sees its
+connection close, as when a bus goes away. When the broker's connection closes, the proxy drops every live rule set,
+closing those connections the same way, and keeps its static rules.
 
-The module's option `permissions.plugins.<name>` enables a plugin and sets its ceiling. The ceiling is
-plugin-specific JSON the daemon passes to the plugin's commands, plus fields the daemon enforces itself: `sources`
-(path prefixes, devices, rw allowed or not) for `attach` and `maxValidity` for `command`. A request outside the ceiling
-is refused without asking the user.
+What a revoke can't take back: file descriptors a client received over the bus (a logind inhibitor, a portal's fd)
+stay valid until closed, as with mount grants. Every client's upstream connection is the proxy's, so services see one
+process for the whole sandbox: polkit's `auth_admin_keep` and the like, keyed on that process, carry an admin
+authorization across clients and grants for their keep time. Rule sets on services that authorize that way should
+say so in their description.
 
 ## Requests
 
-`request.sock` takes one JSON request per connection and answers with one JSON object, as windows-vm's broker does.
+`request.sock` takes one JSON request per connection and answers with one JSON object.
 
-| op        | parameters                              | answer                                      |
-|-----------|-----------------------------------------|---------------------------------------------|
-| `list`    |                                         | capabilities and instances, with live grants |
-| `request` | `capability`, `params`, `reason`, `lease` | the delivery: socket path, mount path or a command's `output` |
-| `release` | `grant`                                 | drops the caller's session's hold; ends the grant once nobody holds it |
-| `status`  |                                         | the grants the caller's session holds        |
-| `watch`   |                                         | a stream of grant events, one JSON per line |
-| `share`   |                                         | (from `bwrap-subid.sh` only, see above)     |
+| op        | parameters                                          | answer                                         |
+|-----------|-----------------------------------------------------|------------------------------------------------|
+| `list`    |                                                     | capabilities and instances, with live grants   |
+| `request` | `capability`, `params`, `reason`, `lease`           | the grant: its id, and a mount or socket path  |
+| `call`    | `capability`, `command`, `arguments`, `reason`, `lease` | the command's output                        |
+| `release` | `grant`                                             | ends the grant                                 |
+| `status`  |                                                     | the live grants                                |
+| `watch`   |                                                     | a stream of grant events, one JSON per line    |
+| `share`   |                                                     | (from `bwrap-subid.sh` only, see above)        |
+
+`request` grants ahead of use: a folder, a host socket, a D-Bus rule set, or a host command capability before its first
+call (`params` holds the bounding values). `call` asks only when no grant covers it.
 
 `reason` is required and goes into the notification as text: whitespace and control characters folded to single
 spaces, 300 characters, quoted, markup escaped. Parameter values are quoted in the summary, and a string value is at
 most 200 characters without control characters, so neither can pass itself off as more of the notification. An opaque
 one may be up to 8192 characters, still without control characters (a CSR goes as one line of base64 DER), and is shown
 as `sha256:<16 hex digits> (<n> characters)` in the summary and the log; the window shows it as opaque, with no field
-to narrow it, and passes it back unchanged. The plugin gets the value itself.
+to narrow it, and passes it back unchanged. A free argument of a call is never in the summary, whatever its
+declaration: the consent covers the values the schema allows, and the window shows the asking call's values with the
+same rules (a multiline one in a read-only text box). `lease` is the caller's proposal: `lock` or `PT<n>H` (`PT<n>M`
+too), and `once` for a call; a `request` with `once` is refused, since its grant would end at once. A call without
+one proposes `PT1H`.
 
-What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch
-streams included), so a full `request.sock` leaves `control.sock` to the window; a client has 10 seconds to send a
-request of at most 64 KiB; accept errors are waited out rather than ending the socket; at most four `run` and
-`resolve` commands run at once, one per capability, so a capability whose commands hang holds up only its own
-requests; `list` runs one per capability, outside those four, so the window's state isn't held up by them, and its
-output is kept for five seconds; and requests a grant already covers are answered one at a time
-per capability, without logging them. `lease` is the
-caller's proposal: `session`, `lock` or `PT<n>H`.
+What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch streams
+and spliced host socket connections counted per socket), so a full `request.sock` leaves `control.sock` to the window; a
+client has 10 seconds to send a request of at most 64 KiB, or 1 MiB for a `call`; accept errors are waited out rather
+than ending the socket; calls are limited as Running a call describes; instance globs are kept for five seconds; and
+requests a grant already covers are answered one at a time per capability, without logging them.
 
-The caller's session comes from its pidfd (`SO_PEERPIDFD`): the daemon walks its ancestors to the first with
-`CLAUDE_CODE_SESSION_ID` in its environment, and takes that process's parent as the session's anchor if it is the
-Claude Code binary (by `/proc/<pid>/exe`), in the sandbox and not a pid namespace's init. The walk never leaves the
-sandbox: a process is the sandbox's when its user namespace (or the one owning its mount namespace) is the sandbox's
-or below it. That counts re-entries (`claude-desktop --shell`), which nsenter starts from the host, and stops their
-walk at nsenter rather than at a host shell that may carry a host Claude Code session's variable. A caller without
-such an anchor gets no session leases.
-
-A grant belongs to the sandbox, not to the session that asked for it. Every process in the sandbox runs as the same
-user in the same namespaces, so nothing could keep one session from another's grant: any process in the sandbox can
-use any live grant (a folder is mounted in the mount namespace everyone shares, a service's socket sits in the grant
-directory everyone sees, a command's output is a string), and every session's MCP server offers every grant's tools. The
-session id only ties a "this session" lease's lifetime to that session's `claude` process, and records who still
-holds a grant for `release` and the nudge. Anything in the sandbox can set the variable; nothing relies on it to
-authenticate a caller. A request a live grant covers is answered without asking, from any session: a Claude Code
-subagent runs in its parent's `claude` process with the parent's session id, and a new Claude session in the app
-gets what the sandbox already has. The notification and the window say "until this Claude session ends", at most
-until the app quits.
+A grant belongs to the sandbox. Every process in the sandbox runs as the same user in the same namespaces, so nothing
+could keep one Claude session from another's grant: a folder is mounted in the mount namespace everyone shares, a host
+socket sits in the grant directory everyone sees, and every session's MCP server offers every tool. A request or call
+a live grant covers is answered without asking, from anywhere in the sandbox, and anything in the sandbox may release
+any grant. The sandbox is one trust domain toward the broker.
 
 ### Consent
 
@@ -361,7 +533,16 @@ The daemon asks with a notification on the host (`org.freedesktop.Notifications`
 built by the daemon from the validated, resolved request ("Claude wants read-write access to
 ~/Workspace/agent/notes"), and the reason follows below it, quoted and marked as Claude's. The reason never stands
 in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 hour"), Deny, and Options, which opens
-the window on the request to pick another lease or narrow it (read-only instead of rw).
+the window on the request to pick another lease or, for a folder, narrow it (read-only instead of rw). A host command
+grant has only its lease to change: its bounding values are what the call needs.
+
+A grant of a host command capability covers all its commands. The summary names the capability, its bounding values and
+the lease ("Claude wants to control the Windows VM win11 for 1 hour"). The body starts with what that covers, before
+the reason: unrestricted free arguments first, each said to be unrestricted, then the others with what their
+declaration allows, from the declaration's descriptions ("Any PowerShell, run as SYSTEM. Any text typed. Clicks
+anywhere, keys from a fixed set, screenshots."). Summaries are one line and servers may cut them, so nothing the user
+must see goes only there. A declaration with an undescribed free argument is a config error. The window shows the
+same, with the call that asked.
 
 The sandbox can post notifications too, through the notification portal (`org.freedesktop.portal.Notification`; the
 proxy doesn't let it reach `org.freedesktop.Notifications`), with any title, body and buttons. A look-alike's
@@ -370,109 +551,92 @@ click. The daemon ignores an action that arrives within a second of its notifica
 window turns Allow and Deny off for a second whenever another request takes a row's place: one moving up, one in
 the place of one that ended ([A] turning [B]), or one where there was no row, as the sandbox can time when its
 requests end and arrive. The portal keys notifications by app ID, so the sandbox can't replace or close the daemon's,
-which the notification server itself would let anyone do by id (Plasma's does). The daemon's guards from when it could stay: each of its
-buttons has a random action key, new for every notification, it counts only `ActionInvoked` and
+which the notification server itself would let anyone do by id (Plasma's does). The daemon guards against that
+anyway: each of its buttons has a random action key, new for every notification, it counts only `ActionInvoked` and
 `NotificationClosed` sent by the server's own connection (the current owner of its name), and an action key that
 isn't one of its own is a deny.
 
-Lifted from windows-vm:
+Limits on asking:
 
 - No answer in 2 minutes denies, and the notification is replaced by one without buttons. Once the user clicks
   Options, the window owns the request: the timeout pauses while it's open, for 10 minutes at most.
 - One open request per capability; three refusals in a row stop requests for that capability for 2 minutes.
 
-A live grant answers later requests with exactly the same parameters without asking, as does a standing grant (below). A read-only grant never covers a
-read-write request, and a folder never covers its subfolders or parent.
+A live grant answers later requests with exactly the same parameters without asking, as does a standing grant
+(below); a host command grant answers every call of its capability with the same bounding values. A read-only grant
+never covers a read-write request, and a folder never covers its subfolders or parent.
 
 The consent UI is only ever drawn on the host. Nothing the sandbox sends is shown other than as plain text.
 
 ## Leases and triggers
 
-| lease     | ends when                                                                  |
-|-----------|----------------------------------------------------------------------------|
-| `session` | the session's anchor process exits (pidfd); attach counts holding sessions |
-| `lock`    | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep` |
-| duration  | the time runs out; the window can extend it                                |
-| `standing` | revoked in the window or released from inside, until the daemon starts again; only from the config |
+| lease      | ends when                                                                                   |
+|------------|---------------------------------------------------------------------------------------------|
+| `once`     | the call or request it was given for is answered; host commands only                           |
+| `lock`     | the graphical session's `LockedHint` turns true, its `Lock` signal, or `PrepareForSleep`     |
+| duration   | the time runs out; the window can extend it                                                 |
+| `standing` | revoked in the window or released from inside; back when the daemon starts again; only from the config |
 
-Every grant also ends on revoke in the window, on its plugin's `watch` or `serve` exiting, and with the sandbox.
-`release` from inside drops only the releasing session's hold: the daemon records every session a grant was given to
-(asked for it, or covered by it), whatever its lease, and the grant ends on release once none of them holds it. So one
-session releasing a grant, after the nudge below say, doesn't cut off another that's using it. A session that ends
-drops its holds too: a session lease ends with its last holder, any other lease runs on until its own end or a release
-from any session finds nobody holding it. A caller without a
-session (nothing found above it) ends the grant on release: that only takes access away. The lease's own end (time,
-lock, the session lease's last anchor), revoke and the plugin's triggers end it for everyone. The daemon watches logind on the system bus from the host, where it has access. It runs in a
-user unit, outside any login session, so `session/self` doesn't resolve for it, and logind sends no signals on that
-alias anyway: it reads the `Display` property of `user/self` for the graphical session's object path and watches that
-one. It sets that watch up before it serves requests, so a lock lease asked for right after it starts isn't refused
-for a watch still being set up. `LockedHint` is set by the screen locker (whether Plasma's does is to be checked in step 1); the `Lock` signal,
-a request to lock, also ends `lock` leases.
+Every grant also ends on revoke in the window, on release from inside, when its instance goes away, and with the
+sandbox. What a host command printed under it stays with the sandbox: a certificate is valid for the validity the
+command was told, whenever the grant ends. A command issuing credentials should keep `maxValidity` short. The daemon
+watches logind on the system bus from the host, where it has access. It runs in a user unit, outside any login session,
+so `session/self` doesn't resolve for it, and logind sends no signals on that alias anyway: it reads the `Display`
+property of `user/self` for the graphical session's object path and watches that one. It sets that watch up before it
+serves requests, so a lock lease asked for right after it starts isn't refused for a watch still being set up. The
+`Lock` signal, a request to lock, also ends `lock` leases.
 
-Releasing voluntarily: once a session has held grants for 15 minutes, the core MCP server appends a line to its
-tool results listing them and asking Claude to release what it no longer needs, at most every 10 minutes. By age,
-not idleness: the daemon can't tell whether a socket-activated plugin's socket or a folder is still in use. Claude
-Code's channels could push this instead, but they need `--channels` at startup, which the app doesn't pass.
+Releasing voluntarily: the MCP server appends a line to its tool results listing the grants older than 15 minutes and
+asking Claude to release what it no longer needs, at most every 10 minutes. By age, not idleness: the daemon can't
+tell whether a folder or a host socket is still in use. Claude Code's channels could push this instead, but they need
+`--channels` at startup, which the app doesn't pass.
 
 ## Standing grants
 
-A launcher's `permissions.grants` lists grants the daemon makes whenever it starts, without asking: each a plugin's
-capability and its exact parameters, of the `service` and `command` types. Folders get none: what should always be
-there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
-config, and taken away by a rebuild, rather than widened for good by one click in a dialog the sandbox brought up.
+A launcher's `permissions.grants` lists grants the daemon makes whenever it starts, without asking: each a capability
+and the values of its bounding arguments, of host commands, host sockets and D-Bus. Folders get none: what should always
+be there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
+config, and taken away by a rebuild. One click in a dialog the sandbox brought up never widens access for good.
 
-The module writes them into the daemon's config. At start the daemon checks them against the plugins: a capability
-none has, an attach one, parameters it doesn't take or one listed twice is a config error, and the daemon doesn't
-start. The module catches what it can at eval time (no broker, a plugin not in `permissions.plugins`, folders).
-Then it grants each with lease `standing`, under the same checks as a request: one whose instance `list` doesn't
-print (a VM not running yet) or another launcher holds is left out with a warning, and a later request with exactly
-its parameters gets it without asking. A command's runs without asking, its output valid for the ceiling's
-`maxValidity`.
+The module writes them into the daemon's config. At start the daemon checks them against the declarations: a
+capability none has, a folder, bounding values it doesn't take or one listed twice is a config error, and the daemon
+doesn't start. The module catches what it can at eval time. Then it grants each with lease `standing`, under the same
+checks as a request: one whose instance isn't there (a VM not running yet) or another launcher holds is left out with
+a warning, and a later request or call with exactly its bounding values gets it without asking. A host command's calls
+under it are told `maxValidity`.
 
-Holds and release work as for any other grant. Revoke in the window, or a release that ends it, ends a standing grant
-for the daemon's life: later requests ask the user like any other. The next start brings it back. There is nothing
-to forget: the config is the only place they live.
+Revoke in the window, or a release, ends a standing grant for the daemon's life: later requests ask the user like any
+other. The next start brings it back. The config is the only place they live, so there is no stored grant to forget.
 
 The window lists them among the grants as "from config", with Revoke, and in its overview (below), each live or ended.
 
 ## MCP
 
-`permissions-mcp` runs per Claude Code session (an MCP server in the module's defaults when the broker is
-enabled). Tools:
+`permissions-mcp` is an MCP server in the module's defaults when the broker is enabled. Its tools are fixed when it
+starts, from the declarations the module writes into the store, the file the daemon reads too, given as an argument.
+So it lists them before the daemon answers (the app starts its MCP servers at once) and needs no `list` to do it; a
+call waits up to 30 seconds for `request.sock` to appear. The tools:
 
 - `list`: what can be granted, with instances, and what's granted.
-- `request(capability, params, reason, lease)`: blocks until the user answers, 2 minutes at most (10 with the
-  window open), well inside Claude Code's MCP tool timeouts (about 28 hours, 30 minutes idle for stdio servers).
-  Returns the socket path (service), the command's output (command) or the path under `/run/permissions` (attach).
+- `request(capability, params, reason, lease)`: blocks until the user answers, 2 minutes at most (10 with the window
+  open), well inside Claude Code's MCP tool timeouts. Returns the grant, with the mount path under `/run/permissions`
+  for a folder and the socket path for a host socket.
 - `release(grant)`, `status`.
+- `<capability>_<command>` for every declared host command, taking the capability's bounding arguments, the command's
+  free ones, `reason` and `lease`. A call goes to the daemon as `call` and blocks like `request` when it has to ask.
 
-Plugins with `tools`: while a grant of theirs lives, the core MCP server connects to the grant's socket as an MCP
-client, lists its tools and offers them as `<plugin>_<tool>` (a second grant of the plugin, a second VM, adds its
-grant's id), then sends `notifications/tools/list_changed`. When the grant ends they're gone with another
-`list_changed`. It learns about grants through `watch` and syncs every 30 seconds besides, and each call is a session
-of its own with the plugin, which socket activation may have started anew. Offering a grant's tools runs on its own,
-with a 10-second deadline, since socket activation accepts a connection whether or not the plugin answers: a plugin
-that hangs holds up nothing else, and its grant is tried again. Tools without an object schema are left out; two of a
-grant's tools that come out under one name (`a.b`, `a_b`) are told apart by the grant's id. So Claude only sees tools
-it can use, and the plugin's MCP code runs on the host behind the socket, with nothing to install inside.
+Claude Code defers MCP tools behind its tool search, so a declared command costs a tool name until it's used. Its tool's
+description says that a call may ask the user, and how its grant is scoped.
 
-Grants, and so their tools, are the sandbox's, not a session's: every session's MCP server offers them, and any
-process in the sandbox may release any grant it can name (for its own session's hold, or outright without a session).
-The sandbox is one trust domain; session ties only decide when session leases end, and who still holds a grant.
+## Host commands planned
 
-Fallback, if `list_changed` turns out not to work in the app: such a plugin also ships a stdio MCP server that is a
-plain client of its socket, with no consent code, which answers ungranted calls with the `request` to make.
+windows-vm, as a Nix module in secoya/agent-sandbox-plugins: `screenshot`, `click`, `keys` (an enum of key names),
+`type` and `exec`, each one QMP or guest agent command on the VM given by `vm`, with the instance glob above. Raw QMP
+never reaches the sandbox.
 
-## Plugins planned
-
-Built in, here: folder mounts (`attach`). Ceiling: path prefixes, rw allowed or not. `list` shows the prefixes.
-
-In secoya/agent-sandbox-plugins: the Windows VM (`service`, `tools`, `watch` on the VM's runtime directory). Its
-consent code (notification, refusal limit, allow and revoke signals) goes away from secoya/nixos-windows-vm, and the
-hosts drop the `windows-vm-claude` bind.
-
-Designed for, not planned: certs from a host CA, SSH and Kubernetes certs (`command`); systemd, journal, BlueZ, TPM,
-UEFI variables, host applications, website logins (`service`); devices and wifi (`attach`).
+Designed for: SSH and Kubernetes certificates signed with fixed principals, certs from a host CA. Host sockets and D-Bus
+rule sets cover systemd, the journal and BlueZ; host commands or device grants cover TPM operations and UEFI variables.
+Host applications through AT-SPI need their own design: the accessibility bus is neither proxy's.
 
 ## Overview
 
@@ -498,33 +662,110 @@ running sandbox: otherwise it would hand the flag to the running app through nse
 URLs. With no sandbox running, the window says so. The recent decisions it lists are the daemon's, kept in memory:
 a daemon started again starts them afresh.
 
+## Threat model
+
+`models/` holds the Alloy model of the sandbox and the broker's protocol, and the stateful property tests run its
+actions against the broker. Both describe the first design (plugins, `service` units, session leases) until the steps
+that remove those adjust them: host command calls, bounding values and instances, host socket connections, and the
+D-Bus proxies' rule sets come in as those land.
+
 ## Steps
 
-1. Daemon: request and control sockets, consent, refusal limit, leases with logind and session triggers, plugin
-   runner for `service` and `command`, `share`, tests in Go and in the VM test.
-2. Permissions window and the desktop action.
-3. Folder mounts as the first attach plugin, with the mount helpers and revoke reporting holders.
-4. Windows VM plugin in agent-sandbox-plugins; consent code out of windows-vm.
-5. Hosts switch over and drop the `windows-vm-claude` bind.
+The first design's steps are built (Status). The rewrite's:
+
+1. Declared host commands in the broker: the module's options, schema validation, consent per call or a covering grant,
+   the stdin JSON, results, instances, static tools in the MCP server; the first design's `command` delivery folded in.
+   Tests with revert checks for every validation, the stateful ones included.
+2. Consent that names what's granted, in the notification and the window, and the window's redesign: each section and
+   grant collapsible to one line (capability, bounding values, lease, time left), badges for the lease, "from config"
+   and free arguments (a warning for unrestricted ones), all text selectable. Tests in qmltestrunner.
+3. Remove what the rewrite replaces: per-grant service units, plugin tools and `list_changed`, plugin executables
+   (folders built into the broker), session leases. Host sockets at stable addresses. Tests and models adjusted.
+4. windows-vm as declared host commands, in secoya/agent-sandbox-plugins.
+5. The Go D-Bus proxy with static rules: the argv subset, SASL, fd passing, name tracking, replies, match rules.
+   Tests against a real `dbus-daemon`, a revert check per rule kind, `-race`.
+6. The sandbox on the new proxy: VM test that OpenURI, a portal notification and the tray still work, and a call
+   outside the rules is refused.
+7. Live rules: D-Bus capabilities as grants on the session proxy and the system-bus instance. Tests: a grant and a
+   revoke applied to the next message.
+8. Consumers: the home SSH and kubectl plugins ported to declared host commands; windows-vm's tools listed before any
+   grant, a call asking once for the VM and later calls not, a revoke
+   making the next call ask again; the portal, notifications and the tray still working.
+
+## Decisions
+
+Decided with Anders, 2026-11-02 and 2026-11-03:
+
+1. The surface is static and authorization happens at call or connection time; enforcement lives only in the broker; on
+   the host run only the broker and declared host commands; everything else runs inside over granted primitives.
+2. Declared host commands replace the first design's `command` delivery and plugins' `service` backends, rather than
+   signing and the like built into the broker.
+3. A schema keeps a config tidy and guarantees nothing. The broker guarantees grants, bounding values, arguments as data
+   and a consent that names free arguments, and doesn't pretend to more. "Nothing stays resident" is no requirement: it
+   can't be enforced.
+4. A grant names a capability and its bounding values, and covers all the capability's commands with any free
+   arguments; a capability without bounding arguments is granted whole.
+5. Arguments reach a script as JSON on stdin, with the validity and the bounding values; never argv, never a shell.
+6. A command declares its result type, text or an image type; a non-zero exit is an MCP tool error with stderr.
+7. Instances are a glob over paths; a list command waits until a command needs one.
+8. A Go D-Bus proxy replaces xdg-dbus-proxy, nixpak's session-bus proxy included, swapped in so that nixpak keeps
+   its launch sync and the `.flatpak-info` wrapper. (Agreed as "through `XDG_DBUS_PROXY_EXE`"; that variable turned
+   out to be fixed at build time, see the decisions below.)
+9. Session leases are dropped. They worked only with Claude Code starting the server, which the app doesn't do (What's
+   verified, 6), and the session id they rest on is one anything in the sandbox can set. A duration does the job.
+10. Grants die with the daemon: its call units are bound to its unit, its connections and live rule sets end with it,
+    and its `ExecStopPost=` detaches the folder grants.
+11. The window is Qt with QML in Go (miqt), after a PySide6 start whose closure came to 2.4 GB. miqt is young (v0.15,
+    since 2024-08); the window uses only the QML engine and a property map.
+12. The grant types are named for what's granted: `command` for host commands, `socket` for host sockets (the first
+    design's `service`), `mount` (its `attach`), `dbus`; the options follow (`permissions.commands`,
+    `permissions.sockets`).
 
 ## Decisions made without the user
 
-These were open when the design was written and decided while the user was away. Each can be revisited.
+Each can be revisited.
 
 1. The grant directory is made shared in M1 on a `share` request from the FHS env's launcher script, before the FHS
    env's bwrap starts. The alternative, injecting into M2 directly, would need the daemon to find the app's mount
    namespace and wouldn't reach namespaces nested in it.
-2. Revoking an attach grant detaches and reports the holders; ending them is the user's choice in the window.
-3. The window is Qt with QML: first PySide6, then ported to Go with miqt at Anders' word (one language, and the
-   PySide6 closure came to 2.4 GB). miqt is young (v0.15, since 2024-08); the window uses only the QML engine
-   and a property map.
-4. Plugins are executables with a JSON manifest, run per grant or per request, rather than long-running services
-   with an RPC API: nothing to supervise when no grant is live, and socket activation for `service` is a convention
-   plugin authors know.
-5. Nudges ride on the core MCP server's tool results, since channels aren't available to the app's sessions.
-6. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with
-   a pidfd handed over: a crash ends its grants (bound units, `ExecStopPost`), and started again it has its standing
-   grants alone (Claude asks again for the rest).
-7. Service plugins run as socket-activated transient user units: real socket activation and a cgroup to kill.
-8. Grants die with the daemon (Anders): service units `BindsTo=` its unit, folder grants detached by its
-   `ExecStopPost=`.
+2. Revoking a mount grant detaches and reports the holders; ending them is the user's choice in the window.
+3. Nudges ride on the MCP server's tool results, since channels aren't available to the app's sessions.
+4. The daemon is a restartable user unit that finds the sandbox by app ID, rather than a child of the launcher with a
+   pidfd handed over: a crash ends its grants, and started again it has its standing grants alone (Claude asks again for
+   the rest).
+5. Refining decision 4: bounding arguments are declared on the capability and free ones on the command, so one grant
+   covers all of a capability's commands by construction. Per-argument marking on each command would allow commands of
+   one capability to disagree on what bounds them.
+6. A call proposes a `PT1H` lease unless it names one, and `once` exists for per-call consent: windows-vm makes many
+   calls in a row, and Claude can ask for less.
+7. A call runs as a transient user unit with a timeout, bound to the daemon's unit: the same cleanup as the old
+   service units, a cgroup to kill on revoke, and nothing of the sandbox's environment.
+8. A host socket is spliced by the broker at a stable address rather than created per grant: the address is fixed,
+   the check happens at connect, a revoke closes the connections. It passes no file descriptors; a service that needs
+   them is a host command or a D-Bus rule set instead.
+9. A connection to a host socket without a grant is closed, not held while the user is asked: a connection carries
+   no reason to show.
+10. Folders become part of the broker when plugin executables go. They were the last plugin with commands on the host
+    (`list`, `resolve`), and the ceiling was the broker's already.
+11. The system bus gets a proxy instance with no rules at `/run/dbus/system_bus_socket`, so D-Bus capabilities on it
+    need no restart and the address is where clients look. It reaches nothing until a grant adds rules.
+12. A call's free arguments stay out of the notification's summary (they can be anything the schema allows); the
+    consent states what the schema allows, and the window shows the values.
+13. The new proxy reaches nixpak through the `pkgs` the module passes it, with `xdg-dbus-proxy` replaced. nixpak
+    sets `XDG_DBUS_PROXY_EXE` to its own wrapper at build time (verified, 9), so pointing the variable elsewhere
+    can't work, and a wrapper of our own would have to copy nixpak's `.flatpak-info` handling. The override keeps
+    both of nixpak's.
+14. The system-bus proxy is started by `bwrap-subid.sh`, like the broker, since nixpak's launcher starts only one
+    proxy. It runs in a bwrap of its own: the system bus has no portals to read `/.flatpak-info`.
+15. A D-Bus revoke closes the client connections that used the rule set, rather than only removing the rules: that
+    is the one way to drop the names, match rules and exported objects the grant let a client set up.
+16. A host socket of a D-Bus bus or of `$XDG_RUNTIME_DIR` as a whole is refused by the module: splicing hands over the
+    broker's identity, which would get around the D-Bus proxies.
+17. Every call is recorded with its arguments, the last 200 per grant: covered calls ran without anyone seeing them
+    otherwise.
+18. The MCP server reads the declarations from the store rather than asking the daemon, since the app starts it before
+    the daemon may have found the sandbox. The rejected build-time copies were schemas routed to host backends; here
+    the daemon still validates every call against the same file.
+19. The consent's scope goes in the notification body ahead of the reason, unrestricted arguments first, because
+    servers may cut a long summary.
+
