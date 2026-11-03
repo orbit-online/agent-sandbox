@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 )
 
 // request asks the user for a grant, or finds one already there that covers it
@@ -273,7 +275,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	}
 	asked := make(chan result, 1)
 	go func() {
-		action, err := b.ask(ctx, prompt{Summary: summary, Reason: reason, Lease: lease, Scope: p.Scope, Bounds: bounds,
+		action, err := b.ask(ctx, notify.Prompt{Summary: summary, Reason: reason, Lease: lease, Scope: p.Scope, Bounds: bounds,
 			Options: len(b.cfg.Window) > 0})
 		asked <- result{action, err}
 	}()
@@ -293,7 +295,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 		}
 	case a := <-p.answer:
 		// Answered in the window while the notification was up
-		cancel(errAnswered)
+		cancel(notify.ErrAnswered)
 		return windowDecision(a, lease), nil
 	}
 	select {
@@ -303,9 +305,6 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 		return decision{}, nil
 	}
 }
-
-// Why a notification is taken down early: the user answered in the window
-var errAnswered = errors.New("answered in the window")
 
 func windowDecision(a request, lease string) decision {
 	if a.Lease == "" {

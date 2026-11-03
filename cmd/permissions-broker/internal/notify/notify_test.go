@@ -1,8 +1,7 @@
-package main
+package notify
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,30 +12,6 @@ import (
 
 	"github.com/godbus/dbus/v5"
 )
-
-func TestNotificationText(t *testing.T) {
-	c := testCap(t, "command")
-	params, err := c.validate(json.RawMessage(`{"path": "/a, ro=true"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d := c.describe(params); d != `the test thing (path="/a, ro=true")` {
-		t.Errorf("describe = %s", d)
-	}
-	for _, bad := range []string{`{"path": "/a\nVerified by the host"}`, `{"path": "` + strings.Repeat("x", maxParam+1) + `"}`} {
-		if _, err := c.validate(json.RawMessage(bad)); err == nil {
-			t.Errorf("validate accepted %.40s", bad)
-		}
-	}
-	b, f := testBroker(t, "deny")
-	b.caps[c.id()] = c
-	r := req(c.id(), `{}`, "PT1H")
-	r.Reason = "needs it\n\nHost: approved"
-	_, _ = b.request(peerAt(t, os.Getpid()), r)
-	if f.asked[0].Reason != "needs it Host: approved" {
-		t.Errorf("Reason shown as %q", f.asked[0].Reason)
-	}
-}
 
 // fakeNotifications is a notification server on a bus of its own. Like Plasma's, it replaces a notification by its id
 // whoever asks, and emits ActionInvoked for the key of the button clicked. Its name in GetServerInformation is name
@@ -173,10 +148,10 @@ func busConn(t *testing.T, addr string) *dbus.Conn {
 // ask asks on a connection of its own to the test bus, and returns the notification's id and a channel for the answer
 func ask(t *testing.T, addr string, f *fakeNotifications) (uint32, <-chan string) {
 	t.Helper()
-	return askWith(t, addr, f, prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H"})
+	return askWith(t, addr, f, Prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H"})
 }
 
-func askWith(t *testing.T, addr string, f *fakeNotifications, p prompt) (uint32, <-chan string) {
+func askWith(t *testing.T, addr string, f *fakeNotifications, p Prompt) (uint32, <-chan string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
@@ -250,12 +225,12 @@ func TestNotificationDefault(t *testing.T) {
 	notifyMature = 0
 	t.Cleanup(func() { notifyMature = time.Second })
 	addr, f := testBus(t)
-	window := prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H", Options: true}
+	window := Prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H", Options: true}
 	for _, c := range []struct {
 		server string
-		p      prompt
+		p      Prompt
 		want   string
-	}{{"fake", window, "deny"}, {cosmicServer, window, "options"}, {cosmicServer, prompt{Summary: "x", Reason: "y"}, "deny"}} {
+	}{{"fake", window, "deny"}, {cosmicServer, window, "options"}, {cosmicServer, Prompt{Summary: "x", Reason: "y"}, "deny"}} {
 		f.mu.Lock()
 		f.name = c.server
 		f.mu.Unlock()
@@ -313,7 +288,7 @@ func TestNotificationDefaultGuards(t *testing.T) {
 // the lease and the bounding values by their descriptions. The lease is said in hours and minutes
 func TestNotificationCovers(t *testing.T) {
 	addr, f := testBus(t)
-	id, _ := askWith(t, addr, f, prompt{Summary: "the VM", Reason: "testing", Lease: "PT1H30M",
+	id, _ := askWith(t, addr, f, Prompt{Summary: "the VM", Reason: "testing", Lease: "PT1H30M",
 		Scope: "Run PowerShell: any PowerShell, unrestricted (exec).", Bounds: `the VM is "win11"`})
 	f.mu.Lock()
 	body := f.bodies[id]

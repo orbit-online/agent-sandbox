@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 )
 
 const (
@@ -134,16 +136,7 @@ type logEntry struct {
 	Decision string    `json:"decision"`
 }
 
-// The notification's question and the user's answer: allow, deny or options
-type prompt struct {
-	Summary, Reason, Lease string
-	// Host commands: what the grant covers, shown before the reason, and the bounding values it's for
-	Scope, Bounds string
-	// Whether to offer Options, which needs the window
-	Options bool
-}
-
-type asker func(ctx context.Context, p prompt) (string, error)
+type asker func(ctx context.Context, p notify.Prompt) (string, error)
 
 type gate struct {
 	asking       bool

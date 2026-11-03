@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"pgregory.net/rapid"
 )
 
@@ -221,7 +222,7 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response, call boo
 	s, _ := strings.CutPrefix(strings.TrimSpace(res.Output), "issued-PT")
 	n, err := strconv.Atoi(strings.TrimSuffix(s, "S"))
 	if d := time.Duration(n)*time.Second - want; err != nil || d < -5*time.Second || d > time.Second {
-		mc.fatalf(t, "Command run with %q, want about %s", res.Output, formatDuration(want))
+		mc.fatalf(t, "Command run with %q, want about %s", res.Output, duration.Format(want))
 	}
 }
 

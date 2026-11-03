@@ -1,25 +1,31 @@
-package main
+// Package notify asks the user about a request with a desktop notification
+package notify
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 )
 
-// openWindow opens the Permissions window on the host, as a unit of its own
-func (b *broker) openWindow() error {
-	if len(b.cfg.Window) == 0 {
-		return errors.New("No window configured")
-	}
-	args := append([]string{"--user", "--collect", "--quiet", "--"}, b.cfg.Window...)
-	return exec.Command(systemdRun, args...).Run()
+// The notification's question and the user's answer: allow, deny or options
+type Prompt struct {
+	Summary, Reason, Lease string
+	// Host commands: what the grant covers, shown before the reason, and the bounding values it's for
+	Scope, Bounds string
+	// Whether to offer Options, which needs the window
+	Options bool
 }
+
+// Why a notification is taken down early: the user answered in the window
+var ErrAnswered = errors.New("answered in the window")
 
 const (
 	notifyName  = "org.freedesktop.Notifications"
@@ -30,8 +36,8 @@ const (
 // An action within this long of the notification appearing is ignored, and the question asked again
 var notifyMature = time.Second
 
-// notifyAsk asks with a notification on the session bus, as askOn describes
-func notifyAsk(ctx context.Context, p prompt) (string, error) {
+// Ask asks with a notification on the session bus, as askOn describes
+func Ask(ctx context.Context, p Prompt) (string, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		return "", fmt.Errorf("Connect to the session bus: %w", err)
@@ -48,7 +54,7 @@ func notifyAsk(ctx context.Context, p prompt) (string, error) {
 // notification can still be clicked, but its keys aren't the broker's: that's a deny. An answer within a second of
 // the notification appearing is ignored and the question asked again, against look-alikes timed to sit where the user
 // is about to click. Not answering in time denies, and the notification is replaced by one without buttons
-func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
+func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 	summary := "Claude asks for " + escapeMarkup(p.Summary)
 	reason := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
 	match := []dbus.MatchOption{dbus.WithMatchObjectPath(notifyPath), dbus.WithMatchInterface(notifyIface)}
@@ -75,7 +81,7 @@ func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 			lines = append(lines, hint)
 		}
 		body := strings.Join(append(lines, reason), "\n")
-		allow, deny, options := randomID(), randomID(), randomID()
+		allow, deny, options := randomKey(), randomKey(), randomKey()
 		keys := map[string]string{"default": click, allow: "allow", deny: "deny"}
 		// The default action goes first: a server that draws no buttons and finds none named default may take the first
 		actions := []string{"default", label, allow, "Allow " + leaseLabel(p.Lease), deny, "Deny"}
@@ -99,7 +105,7 @@ func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 		}
 		if ctx.Err() != nil {
 			title, text := "Claude's request timed out", "Not granted: "+escapeMarkup(p.Summary)
-			if errors.Is(context.Cause(ctx), errAnswered) {
+			if errors.Is(context.Cause(ctx), ErrAnswered) {
 				title, text = "Answered in the Permissions window", escapeMarkup(p.Summary)
 			}
 			_ = server.Call(notifyIface+".Notify", 0, "Claude permissions", id, "security-medium", title, text,
@@ -120,7 +126,7 @@ const cosmicServer = "cosmic-notifications"
 // saying so. It denies, as closing the notification does. cosmic-notifications draws no buttons, so there it opens the
 // window with the request still pending, when there is one. Only the server's name picks it: a wrong match costs the
 // window, and a failed GetServerInformation denies
-func bodyClick(ctx context.Context, server dbus.BusObject, p prompt) (string, string, string) {
+func bodyClick(ctx context.Context, server dbus.BusObject, p Prompt) (string, string, string) {
 	var name, vendor, version, spec string
 	if err := server.CallWithContext(ctx, notifyIface+".GetServerInformation", 0).
 		Store(&name, &vendor, &version, &spec); err == nil && name == cosmicServer && p.Options {
@@ -167,7 +173,7 @@ func escapeMarkup(s string) string {
 
 // coversLine says what a host command grant covers, for how long and on which bounding values: "Covers, for 1 h,
 // where the VM is "win11": Run PowerShell in the guest: any PowerShell, run as SYSTEM, unrestricted (exec). ..."
-func coversLine(p prompt) string {
+func coversLine(p Prompt) string {
 	head := "Covers, " + leaseLabel(p.Lease)
 	if p.Bounds != "" {
 		head += ", where " + p.Bounds
@@ -182,7 +188,7 @@ func leaseLabel(lease string) string {
 	case "once":
 		return "for this call only"
 	}
-	if d, err := parseDuration(lease); err == nil {
+	if d, err := duration.Parse(lease); err == nil {
 		return "for " + spokenDuration(d)
 	}
 	return lease
@@ -201,4 +207,11 @@ func spokenDuration(d time.Duration) string {
 		return fmt.Sprintf("%d h", h)
 	}
 	return fmt.Sprintf("%d h %d min", h, m)
+}
+
+// randomKey is an action key the sandbox can't guess
+func randomKey() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

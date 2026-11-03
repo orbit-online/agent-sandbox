@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 )
 
 // The reference the state machine tests check the broker against: a small model of its grants, leases, gates, standing
@@ -127,7 +129,7 @@ func validLease(lease string) bool {
 	if lease == "lock" || lease == "once" {
 		return true
 	}
-	_, err := parseDuration(lease)
+	_, err := duration.Parse(lease)
 	return err == nil
 }
 
@@ -181,7 +183,7 @@ func (m *model) grant(id, cap, p, lease string) (*refGrant, bool) {
 	}
 	m.made++
 	g := &refGrant{id: id, cap: cap, params: p, lease: lease, seq: m.made}
-	if d, err := parseDuration(lease); err == nil {
+	if d, err := duration.Parse(lease); err == nil {
 		g.expires = m.now.Add(d)
 	}
 	m.grants[id] = g

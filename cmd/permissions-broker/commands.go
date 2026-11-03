@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
@@ -97,11 +98,11 @@ func (c *capability) checkCommands() error {
 		if cmd.Timeout == "" {
 			cmd.Timeout = defaultTimeout
 		}
-		if _, err := parseDuration(cmd.Timeout); err != nil {
+		if _, err := duration.Parse(cmd.Timeout); err != nil {
 			return fmt.Errorf("command %s: timeout: %w", name, err)
 		}
 		if cmd.MaxValidity != "" {
-			if _, err := parseDuration(cmd.MaxValidity); err != nil {
+			if _, err := duration.Parse(cmd.MaxValidity); err != nil {
 				return fmt.Errorf("command %s: maxValidity: %w", name, err)
 			}
 		}

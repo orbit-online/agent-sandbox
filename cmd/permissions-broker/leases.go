@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 )
 
 func (b *broker) now() time.Time { return b.clock.now() }
@@ -28,7 +27,7 @@ func (b *broker) checkLease(lease string) error {
 			return errors.New("Screen lock isn't watched, so no lock lease: ask for a duration")
 		}
 	default:
-		if _, err := parseDuration(lease); err != nil {
+		if _, err := duration.Parse(lease); err != nil {
 			return fmt.Errorf("Lease %q: lock, a duration such as PT1H, or once for a call", lease)
 		}
 	}
@@ -44,7 +43,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	}
 	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock}
-	if d, err := parseDuration(lease); err == nil {
+	if d, err := duration.Parse(lease); err == nil {
 		g.Expires = g.Granted.Add(d)
 	}
 	switch c.Type {
@@ -160,34 +159,6 @@ func (b *broker) endAll(why string) {
 	for _, g := range b.liveGrants() {
 		g.end(why)
 	}
-}
-
-var durationRe = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
-
-// parseDuration reads the ISO 8601 durations leases use: PT1H, PT30M, PT1H30M
-func parseDuration(s string) (time.Duration, error) {
-	m := durationRe.FindStringSubmatch(s)
-	if m == nil || s == "PT" {
-		return 0, fmt.Errorf("Not a duration such as PT1H: %q", s)
-	}
-	var d time.Duration
-	for i, unit := range []time.Duration{time.Hour, time.Minute, time.Second} {
-		if m[i+1] != "" {
-			n, _ := strconv.Atoi(m[i+1])
-			d += time.Duration(n) * unit
-		}
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("Not a positive duration: %q", s)
-	}
-	return d, nil
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("PT%dS", int(d.Round(time.Second)/time.Second))
 }
 
 // watchLogind ends lock leases when the graphical session locks or the machine sleeps. The watch is set up before it

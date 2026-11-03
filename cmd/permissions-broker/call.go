@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
@@ -127,7 +128,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 		}
 	}()
 
-	timeout, _ := parseDuration(cmd.Timeout)
+	timeout, _ := duration.Parse(cmd.Timeout)
 	runArgs := []string{"--user", "--quiet", "--pipe", "--collect", "--unit=" + unit,
 		"--property=RuntimeMaxSec=" + strconv.Itoa(int(timeout.Seconds()))}
 	if b.cfg.Unit != "" {
@@ -135,7 +136,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 	}
 	runArgs = append(append(runArgs, "--"), cmd.Run...)
 	in, _ := json.Marshal(callInput{Capability: c.id(), Command: name, Grant: g.ID, Bounding: g.Params, Arguments: args,
-		Validity: formatDuration(validity)})
+		Validity: duration.Format(validity)})
 	// systemd ends the unit at RuntimeMaxSec; this ends the wait should systemd-run itself hang
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+runSlack)
 	defer cancel()
@@ -182,7 +183,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 // callValidity is what a call is told its output may be valid for: the time g has left, at most cmd's maxValidity.
 // None when neither bounds it
 func (b *broker) callValidity(g *grant, cmd *hostCommand) (time.Duration, error) {
-	v, _ := parseDuration(cmd.MaxValidity)
+	v, _ := duration.Parse(cmd.MaxValidity)
 	if !g.Expires.IsZero() {
 		left := g.Expires.Sub(b.now())
 		if left <= 0 {

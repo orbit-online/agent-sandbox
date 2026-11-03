@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"os/exec"
 	"slices"
 	"sort"
 )
@@ -75,4 +77,13 @@ func (b *broker) grantViews() []*grant {
 		gs[i] = snapshot(g)
 	}
 	return gs
+}
+
+// openWindow opens the Permissions window on the host, as a unit of its own
+func (b *broker) openWindow() error {
+	if len(b.cfg.Window) == 0 {
+		return errors.New("No window configured")
+	}
+	args := append([]string{"--user", "--collect", "--quiet", "--"}, b.cfg.Window...)
+	return exec.Command(systemdRun, args...).Run()
 }

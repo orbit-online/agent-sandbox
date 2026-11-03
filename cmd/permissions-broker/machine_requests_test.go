@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 	"pgregory.net/rapid"
 )
@@ -222,7 +223,7 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool) {
 	if err := json.Unmarshal([]byte(res.Output), &in); err != nil {
 		mc.fatalf(t, "Call output %q: %v", res.Output, err)
 	}
-	if want := formatDuration(mc.m.validity(g)); in.Validity != want || string(in.Bounding) != g.params ||
+	if want := duration.Format(mc.m.validity(g)); in.Validity != want || string(in.Bounding) != g.params ||
 		in.Grant != g.id {
 		mc.fatalf(t, "Call run with %s %s under %s, want %s %s", in.Bounding, in.Validity, in.Grant, g.params, want)
 	}

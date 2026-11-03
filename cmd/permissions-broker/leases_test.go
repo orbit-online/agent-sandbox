@@ -8,21 +8,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 )
-
-func TestParseDuration(t *testing.T) {
-	for s, want := range map[string]time.Duration{"PT1H": time.Hour, "PT30M": 30 * time.Minute, "PT1H30M": 90 * time.Minute,
-		"PT2S": 2 * time.Second} {
-		if got, err := parseDuration(s); err != nil || got != want {
-			t.Errorf("parseDuration(%q) = %v, %v; want %v", s, got, err, want)
-		}
-	}
-	for _, s := range []string{"", "PT", "1H", "PT0H", "P1D", "PT1h", "session"} {
-		if _, err := parseDuration(s); err == nil {
-			t.Errorf("parseDuration(%q) accepted", s)
-		}
-	}
-}
 
 func TestDurationLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
@@ -140,7 +127,7 @@ func TestLockWatchedOnReturn(t *testing.T) {
 func TestLockLostWhileAsking(t *testing.T) {
 	b, _ := testBroker(t)
 	b.lockOK = true
-	b.ask = func(context.Context, prompt) (string, error) {
+	b.ask = func(context.Context, notify.Prompt) (string, error) {
 		b.mu.Lock()
 		b.lockOK = false
 		b.mu.Unlock()

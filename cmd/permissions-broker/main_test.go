@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"golang.org/x/sys/unix"
 )
 
@@ -131,10 +132,10 @@ func testCap(t *testing.T, typ string) *capability {
 type fakeAsker struct {
 	mu      sync.Mutex
 	answers []string
-	asked   []prompt
+	asked   []notify.Prompt
 }
 
-func (f *fakeAsker) ask(_ context.Context, p prompt) (string, error) {
+func (f *fakeAsker) ask(_ context.Context, p notify.Prompt) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, p)

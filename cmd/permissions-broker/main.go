@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"golang.org/x/sys/unix"
 )
 
@@ -196,7 +197,7 @@ func serve(path string) error {
 	if err != nil {
 		return err
 	}
-	b, err := newBroker(cfg, caps, sb, notifyAsk)
+	b, err := newBroker(cfg, caps, sb, notify.Ask)
 	if err != nil {
 		return err
 	}

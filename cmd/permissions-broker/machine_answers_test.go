@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"pgregory.net/rapid"
 )
 
@@ -146,13 +147,13 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res 
 
 // The user's notification server: each question waits for the test's answer, or for the broker to take it down
 type askCall struct {
-	p      prompt
+	p      notify.Prompt
 	answer chan string
 }
 
 type notifier struct{ calls chan *askCall }
 
-func (n *notifier) ask(ctx context.Context, p prompt) (string, error) {
+func (n *notifier) ask(ctx context.Context, p notify.Prompt) (string, error) {
 	c := &askCall{p: p, answer: make(chan string, 1)}
 	select {
 	case n.calls <- c:
