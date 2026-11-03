@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,12 +24,11 @@ import (
 //
 // live-agent <socket>: a caller. Each line on stdin is a tag and a request, sent on a connection of its own; each
 // answer is printed as the tag and the response, as it comes. The op mounts answers with the grant directory's mounts
-// where the agent runs, one per line in Output. Prints the tag ready first, and exits once stdin ends and every request
-// is answered.
+// where the agent runs, one per line in Output; connect and probe are connections to a host socket's address
+// (agentConnect). Prints the tag ready first, and exits once stdin ends and every request is answered.
 //
-// live-anchor <socket> <session>: a Claude Code session's anchor (when the binary is named claude): a live-agent child
-// carrying CLAUDE_CODE_SESSION_ID, to which it passes stdin on. The line end, or the end of stdin, makes it exit, which
-// ends the session; the agent goes on until its requests are answered
+// live-connect <path>: connects to the socket at path, sends it stdin and prints what comes back, until the connection
+// ends: nc -U, which the sandbox lacks
 func liveHelper() {
 	if len(os.Args) < 3 {
 		return
@@ -36,28 +36,17 @@ func liveHelper() {
 	switch os.Args[1] {
 	case "live-agent":
 		liveAgent(os.Args[2])
-	case "live-anchor":
-		if len(os.Args) < 4 {
-			os.Exit(2)
-		}
-		cmd := exec.Command("/proc/self/exe", "live-agent", os.Args[2])
-		cmd.Env = append(os.Environ(), "CLAUDE_CODE_SESSION_ID="+os.Args[3])
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		in, err := cmd.StdinPipe()
+	case "live-connect":
+		conn, err := net.Dial("unix", os.Args[2])
 		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if err := cmd.Start(); err != nil {
-			os.Exit(1)
-		}
-		sc := bufio.NewScanner(os.Stdin)
-		sc.Buffer(make([]byte, 1<<20), 1<<20)
-		for sc.Scan() && sc.Text() != "end" {
-			if _, err := fmt.Fprintln(in, sc.Text()); err != nil {
-				break
-			}
-		}
-		os.Exit(0)
+		go func() {
+			_, _ = io.Copy(conn, os.Stdin)
+			_ = conn.(*net.UnixConn).CloseWrite()
+		}()
+		_, _ = io.Copy(os.Stdout, conn)
 	default:
 		return
 	}
@@ -75,6 +64,7 @@ func liveAgent(socket string) {
 		_ = out.Encode(res)
 	}
 	answer("ready", response{})
+	held := &heldConns{conns: map[string]net.Conn{}, in: map[string]*bufio.Reader{}}
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
@@ -87,14 +77,57 @@ func liveAgent(socket string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if req.Op == "mounts" {
+			switch req.Op {
+			case "mounts":
 				answer(tag, agentMounts(socket))
+				return
+			case "connect", "probe":
+				answer(tag, held.do(socket, req))
 				return
 			}
 			answer(tag, rawCall(socket, req))
 		}()
 	}
 	wg.Wait()
+}
+
+// The connections an agent keeps open to host sockets, by key
+type heldConns struct {
+	mu    sync.Mutex
+	conns map[string]net.Conn
+	in    map[string]*bufio.Reader
+}
+
+// do serves connect and probe, keyed by the request's Grant. connect connects to the address Capability names in the
+// grant directory, sends a line (the request's Reason) and reads it back, and keeps the connection; probe sends a line
+// on it again. Output is the line read back; Error says the connection was closed, and a closed one is forgotten
+func (h *heldConns) do(socket string, req request) response {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if req.Op == "connect" {
+		conn, err := net.Dial("unix", socket[:strings.LastIndex(socket, "/")+1]+req.Capability)
+		if err != nil {
+			return response{Error: "dial: " + err.Error()}
+		}
+		h.conns[req.Grant], h.in[req.Grant] = conn, bufio.NewReader(conn)
+	}
+	conn := h.conns[req.Grant]
+	if conn == nil {
+		return response{Error: "closed: no such connection"}
+	}
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(conn, req.Reason+"\n")
+	line, err := h.in[req.Grant].ReadString('\n')
+	_ = conn.SetDeadline(time.Time{})
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return response{Error: "no answer: " + err.Error()}
+	}
+	if err != nil {
+		conn.Close()
+		delete(h.conns, req.Grant)
+		return response{Error: "closed: " + err.Error()}
+	}
+	return response{Output: strings.TrimSuffix(line, "\n")}
 }
 
 // agentMounts lists the mountpoints beneath the grant directory where the agent runs
@@ -139,7 +172,6 @@ func rawCall(socket string, req request) response {
 // requests sent by tag
 type liveProc struct {
 	name string
-	sess string // its session, "" for none
 	cmd  *exec.Cmd
 	in   io.WriteCloser
 	mu   sync.Mutex
@@ -222,12 +254,7 @@ func (p *liveProc) do(t *rapid.T, req request) response {
 	}
 }
 
-// end ends an anchor, which ends its session; its agent ends once its requests are answered
-func (p *liveProc) end() {
-	_, _ = fmt.Fprintln(p.in, "end")
-}
-
-// kill ends the process and what it started in the sandbox: its stdin closes, which ends an agent and an anchor
+// kill ends the process and what it started in the sandbox: its stdin closes, which ends an agent
 func (p *liveProc) kill() {
 	p.in.Close()
 	select {

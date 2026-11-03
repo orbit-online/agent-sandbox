@@ -7,7 +7,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The cloned tree the clone helper sends is close-on-exec once received: a plugin command or helper the daemon starts
+// The cloned tree the clone helper sends is close-on-exec once received: a host command or helper the daemon starts
 // meanwhile doesn't inherit a clone of the source
 func TestTreeCloseOnExec(t *testing.T) {
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)

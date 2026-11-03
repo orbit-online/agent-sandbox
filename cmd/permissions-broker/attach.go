@@ -1,16 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,12 +23,6 @@ import (
 // under a ceiling root, can point at what only the daemon can read. Hence no links followed at all. The denied
 // directories are a check on the path (checkSource), which then holds for what's opened; a ceiling root on a host
 // mount that aliases a denied directory is the user's own configuration.
-
-// resolved is what an attach plugin's resolve command prints
-type resolved struct {
-	Source string `json:"source"`
-	RO     bool   `json:"ro"`
-}
 
 // makeMountpoint creates a grant's mountpoint in the grant directory on the host, through a dirfd that doesn't
 // follow links: a directory for a directory, an empty file for anything else
@@ -72,7 +61,7 @@ func isDir(path string) bool {
 	return unix.Stat(path, &st) == nil && st.Mode&unix.S_IFMT == unix.S_IFDIR
 }
 
-// An attach request's source, resolved by its plugin and checked against its ceiling
+// An attach request's source, checked against the ceiling
 type attachSource struct {
 	root, rel string
 	ro        bool
@@ -80,33 +69,14 @@ type attachSource struct {
 
 func (s attachSource) path() string { return filepath.Join(s.root, s.rel) }
 
-// resolveAttach runs an attach plugin's resolve command and checks what it names against the ceiling
+// resolveAttach checks the folder a request names against the ceiling
 func (b *broker) resolveAttach(c *capability, params json.RawMessage) (attachSource, error) {
-	in, _ := json.Marshal(pluginInput{Params: params, Ceiling: c.Ceiling.Raw})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, c.Resolve[0], c.Resolve[1:]...)
-	cmd.Stdin = bytes.NewReader(in)
-	var out, errOut bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	if err := c.runPlugin(cmd); err != nil {
-		return attachSource{}, fmt.Errorf("%s couldn't resolve: %s", c.id(), strings.TrimSpace(errOut.String()))
-	}
-	var r resolved
-	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
-		return attachSource{}, fmt.Errorf("%s resolved to something other than JSON: %w", c.id(), err)
-	}
-	var ceil attachCeiling
-	if len(c.Ceiling.Raw) > 0 {
-		if err := json.Unmarshal(c.Ceiling.Raw, &ceil); err != nil {
-			return attachSource{}, fmt.Errorf("The ceiling of %s: %w", c.id(), err)
-		}
-	}
-	root, rel, err := checkSource(ceil, b.cfg.Denied, r.Source, r.RO)
+	path, ro := folderOf(params)
+	root, rel, err := checkSource(c.Sources, b.cfg.Denied, path, ro)
 	if err != nil {
 		return attachSource{}, err
 	}
-	return attachSource{root: root, rel: rel, ro: r.RO}, nil
+	return attachSource{root: root, rel: rel, ro: ro}, nil
 }
 
 // describeAttach adds what an attach grant attaches to its summary, as the daemon checked it
@@ -180,11 +150,11 @@ func (b *broker) detachGrant(g *grant) {
 }
 
 // cleanup ends the grants a daemon leaves when it stops, a crash included (the unit's ExecStopPost runs it, and a
-// daemon starting runs it too): its service units stopped, its locks removed, its folder grants detached in the sandbox
-// if it got as far as sharing the grant directory, and their mountpoints removed. sb is nil when the sandbox is gone,
-// and with it their mounts
+// daemon starting runs it too): its call units stopped, its locks removed, its folder grants detached in the sandbox
+// if it got as far as sharing the grant directory, their mountpoints removed, and its host sockets. sb is nil when the
+// sandbox is gone, and with it their mounts
 func cleanup(cfg config, sb *sandbox) {
-	stopAllServes(cfg.Launcher)
+	stopAllCalls(cfg.Launcher)
 	removeLocks(cfg.Launcher)
 	// Removing the mountpoints below ends their mounts in every namespace as well; this is in case that fails
 	if dir, err := grantDirOf(cfg); err == nil && sb != nil && sb.isShared(cfg.SandboxGrantDir) {
@@ -192,6 +162,7 @@ func cleanup(cfg config, sb *sandbox) {
 			slog.Warn("Detach leftover grants", "err", err)
 		}
 	}
+	_ = os.RemoveAll(filepath.Join(cfg.GrantDir, socketsDir))
 	entries, _ := os.ReadDir(cfg.GrantDir)
 	for _, e := range entries {
 		if e.Name() != "request.sock" {

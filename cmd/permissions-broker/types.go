@@ -20,8 +20,8 @@ const (
 	blockFor    = 2 * time.Minute
 	maxReason   = 300
 	maxLog      = 200
-	// Bounds on what a client can hold or send: open connections per socket (watch streams included), and a
-	// request's size
+	// Bounds on what a client can hold or send: open connections per socket (watch streams and spliced connections
+	// included), and a request's size
 	maxConns   = 64
 	maxRequest = 1 << 20
 )
@@ -72,8 +72,6 @@ type capabilityInfo struct {
 	Params      map[string]json.RawMessage `json:"params,omitempty"`
 	Instances   json.RawMessage            `json:"instances,omitempty"`
 	Error       string                     `json:"error,omitempty"`
-	// Service: whether the plugin speaks MCP on its grant socket, whose tools the MCP server offers
-	Tools bool `json:"tools,omitempty"`
 	// Host commands: each command's description and free arguments, and what a grant covers, as the consent says it
 	Commands map[string]*hostCommand `json:"commands,omitempty"`
 	Scope    []scopeItem             `json:"scope,omitempty"`
@@ -88,9 +86,8 @@ type grant struct {
 	Reason  string    `json:"reason,omitempty"`
 	Lease   string    `json:"lease"`
 	Expires time.Time `json:"expires,omitzero"`
-	// The sessions it was given to, which hold it until they release it or end. A session lease ends with the last
-	Sessions []string `json:"sessions,omitempty"`
-	Socket   string   `json:"socket,omitempty"`
+	// Host sockets: the address in the sandbox
+	Socket string `json:"socket,omitempty"`
 	// Attach: where it's mounted in the sandbox, and what, as resolved
 	Path    string    `json:"path,omitempty"`
 	Source  string    `json:"source,omitempty"`
@@ -100,14 +97,12 @@ type grant struct {
 	// Attach: its mount in M1, by which copies of it are found
 	mnt *grantMount
 
-	cap      *capability
-	sessions map[string]*session // the holding sessions' anchors, under broker.mu
-	anon     bool                // given to a caller without a session, under broker.mu
-	sessGone chan struct{}       // a session lease's: closed when the last session leaves
-	over     bool                // ending: no more holds, under broker.mu
-	ended    chan struct{}
-	end      func(why string)
-	unlock   func()
+	cap    *capability
+	over   bool              // ending: no more connections, under broker.mu
+	conns  map[*spliced]bool // host sockets: the connections spliced under it, under broker.mu
+	ended  chan struct{}
+	end    func(why string)
+	unlock func()
 }
 
 // A request waiting for the user, which the window can answer once they pick Options
@@ -180,6 +175,9 @@ type broker struct {
 	calls []callRecord
 	// The time and the timers of leases and answers, which tests fake
 	clock clock
+	// Listening at the host sockets' addresses, by address relative to the grant directory
+	socketsMu sync.Mutex
+	listeners map[string]*hostListener
 }
 
 func randomID() string {

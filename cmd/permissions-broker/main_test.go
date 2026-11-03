@@ -14,12 +14,12 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// Re-executed as the processes the broker inspects. wait: blocks until stdin closes. anchor: starts a wait child with
-// CLAUDE_CODE_SESSION_ID set, prints its pid and waits. mount: in a user and mount namespace of its own, mounts a
+// Re-executed as the processes the broker inspects. wait: blocks until stdin closes. mount: in a user and mount namespace of its own, mounts a
 // tmpfs on $MOUNT_AT, prints "ready" and waits. swap: see swap_test.go. threadhold: see holders_test.go. live-agent and
 // live-anchor (arguments, not BROKER_TEST, which the launcher's re-entry drops): see live_procs_test.go
 func TestMain(m *testing.M) {
@@ -31,62 +31,6 @@ func TestMain(m *testing.M) {
 	switch os.Getenv("BROKER_TEST") {
 	case "wait":
 		io.Copy(io.Discard, os.Stdin)
-		os.Exit(0)
-	case "anchor", "anchor-deep":
-		child := "wait"
-		if os.Getenv("BROKER_TEST") == "anchor-deep" {
-			child = "middle"
-		}
-		cmd := exec.Command("/proc/self/exe")
-		id := os.Getenv("SESSION_ID")
-		if id == "" {
-			id = "session-1"
-		}
-		cmd.Env = append(os.Environ(), "BROKER_TEST="+child, "CLAUDE_CODE_SESSION_ID="+id)
-		stdin, _ := cmd.StdinPipe()
-		// middle prints the pids itself
-		cmd.Stdout = os.Stdout
-		if err := cmd.Start(); err != nil {
-			os.Exit(1)
-		}
-		if child == "wait" {
-			fmt.Println(cmd.Process.Pid)
-		}
-		io.Copy(io.Discard, os.Stdin)
-		stdin.Close()
-		cmd.Wait()
-		os.Exit(0)
-	case "reenter":
-		// A host shell carrying a session, below a claude, running $REENTER: a re-entry into the sandbox
-		cmd := exec.Command("sh", "-c", os.Getenv("REENTER"))
-		cmd.Env = append(os.Environ(), "CLAUDE_CODE_SESSION_ID=session-1")
-		cmd.Stdout = os.Stdout
-		if err := cmd.Start(); err != nil {
-			os.Exit(1)
-		}
-		io.Copy(io.Discard, os.Stdin)
-		cmd.Process.Kill()
-		cmd.Wait()
-		os.Exit(0)
-	case "middle":
-		// Below a session's carrier, a process without the variable: the sandbox's init, started from a host
-		// Claude Code shell, and something in the sandbox
-		cmd := exec.Command("/proc/self/exe")
-		env := []string{"BROKER_TEST=wait"}
-		for _, kv := range os.Environ() {
-			if !strings.HasPrefix(kv, "CLAUDE_CODE_SESSION_ID=") && !strings.HasPrefix(kv, "BROKER_TEST=") {
-				env = append(env, kv)
-			}
-		}
-		cmd.Env = env
-		stdin, _ := cmd.StdinPipe()
-		if err := cmd.Start(); err != nil {
-			os.Exit(1)
-		}
-		fmt.Println(os.Getpid(), cmd.Process.Pid)
-		io.Copy(io.Discard, os.Stdin)
-		stdin.Close()
-		cmd.Wait()
 		os.Exit(0)
 	case "bind":
 		// The sandbox's outer mount namespace: the grant directory bound in from outside. Then, for each "hold
@@ -166,17 +110,13 @@ func testCap(t *testing.T, typ string) *capability {
 		}
 		return []string{path}
 	}
-	c := &capability{Plugin: "test", Name: "thing", Type: typ, Description: "the test thing",
+	c := &capability{Name: "thing", Type: typ, Description: "the test thing",
 		Params: map[string]json.RawMessage{
 			"path": json.RawMessage(`{"type": "string", "description": "a path"}`),
 			"ro":   json.RawMessage(`{"type": "boolean", "description": "read-only"}`),
 		}}
-	switch typ {
-	case "service":
-		c.Serve = []string{"/bin/true"}
-	case "command":
+	if typ == "command" {
 		// A host command printing its input, so tests see the validity it was given
-		c.Plugin = ""
 		fakeSystemd(t)
 		c.Commands = map[string]*hostCommand{"run": {Description: "print the input", Run: script("run", "cat"),
 			MaxValidity: "PT8H"}}
@@ -210,6 +150,28 @@ func (f *fakeAsker) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.asked)
+}
+
+// instancesIn gives c an instances glob on its bounding argument path, over a directory of the test's, and makes the
+// instances names there: entries of the directory, the others removed
+func instancesIn(t *testing.T, c *capability, names ...string) {
+	t.Helper()
+	if c.glob == "" {
+		c.glob, c.globArg = filepath.Join(t.TempDir(), "*"), "path"
+	}
+	dir := filepath.Dir(c.glob)
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		os.Remove(filepath.Join(dir, e.Name()))
+	}
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.listMu.Lock()
+	c.listedAt = time.Time{}
+	c.listMu.Unlock()
 }
 
 // fakeSystemd replaces systemd-run and systemctl with scripts that log their arguments. systemd-run --pipe, a host
@@ -267,41 +229,6 @@ func calledWith(t *testing.T, res response) callInput {
 
 func req(capID, params, lease string) request {
 	return request{Op: "request", Capability: capID, Params: json.RawMessage(params), Reason: "testing", Lease: lease}
-}
-
-// startAnchor starts a copy of the test binary named claude, which starts a child carrying a session id. Returns the
-// anchor and the child's pid
-func startAnchor(t *testing.T, name string) (*exec.Cmd, int) {
-	cmd, pids := startAnchorMode(t, name, "anchor", 1)
-	return cmd, pids[0]
-}
-
-func startAnchorMode(t *testing.T, name, mode string, n int) (*exec.Cmd, []int) {
-	t.Helper()
-	self, _ := os.Executable()
-	exe := filepath.Join(t.TempDir(), name)
-	data, err := os.ReadFile(self)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(exe, data, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(exe)
-	cmd.Env = append(os.Environ(), "BROKER_TEST="+mode)
-	stdin, _ := cmd.StdinPipe()
-	out, _ := cmd.StdoutPipe()
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { stdin.Close(); cmd.Process.Kill(); cmd.Wait() })
-	pids := make([]int, n)
-	for i := range pids {
-		if _, err := fmt.Fscan(out, &pids[i]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return cmd, pids
 }
 
 // ownNs starts the test binary as a mount process in a user, mount and uts namespace of its own, root there

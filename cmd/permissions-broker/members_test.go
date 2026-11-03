@@ -37,22 +37,6 @@ func reenter(t *testing.T, sb *sandbox, mnt bool, env []string, script string) i
 	return pid
 }
 
-// P8: a re-entry whose host parent carries a session (claude-desktop --shell run from a host Claude Code session's
-// shell, its parent a claude) gets none: the walk stops where the sandbox does
-func TestSessionReentry(t *testing.T) {
-	b, _, _ := sandboxC(t)
-	t.Setenv("REENTER", fmt.Sprintf(`env -u CLAUDE_CODE_SESSION_ID nsenter --user=/proc/%d/ns/user `+
-		`--preserve-credentials sh -c 'echo $$; exec sleep 60'; :`, b.sb.pid))
-	_, pids := startAnchorMode(t, "claude", "reenter", 1)
-	pid := pids[0]
-	if !b.sb.contains(pid) {
-		t.Fatal("The re-entry isn't in the sandbox")
-	}
-	if s, err := b.sb.sessionOf(pid); err != nil || s != nil {
-		t.Errorf("Anchored a re-entry's session outside the sandbox: %+v, %v", s, err)
-	}
-}
-
 // P5: a re-entry with its working directory on a folder grant is listed as a holder, and can be ended
 func TestHoldersReentry(t *testing.T) {
 	src := t.TempDir()
@@ -128,7 +112,7 @@ func TestHoldersOnRelease(t *testing.T) {
 	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
 		t.Fatal(pid, err)
 	}
-	if err := b.release(g.ID, nil, "released from inside"); err != nil {
+	if err := b.release(g.ID, "released from inside"); err != nil {
 		t.Fatal(err)
 	}
 	res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"})

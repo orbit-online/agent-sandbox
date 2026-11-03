@@ -47,7 +47,6 @@ func TestCommandsRefused(t *testing.T) {
 		"glob class": func(c *capability) {
 			c.Params["a"] = json.RawMessage(`{"type": "string", ` + desc + `, "instances": "/run/*/[ab]"}`)
 		},
-		"plugin": func(c *capability) { c.Plugin = "test" },
 	} {
 		c := testCap(t, "command")
 		if err := c.check(); err != nil {
@@ -104,11 +103,11 @@ func TestGlobInstances(t *testing.T) {
 	if err != nil || string(got) != `[{"vm":"win10"},{"vm":"win11"}]` {
 		t.Errorf("Instances %s, %v", got, err)
 	}
-	if err := c.inList(t.Context(), json.RawMessage(`{"vm":"win11"}`)); err != nil {
+	if err := c.inList(json.RawMessage(`{"vm":"win11"}`)); err != nil {
 		t.Errorf("win11: %v", err)
 	}
 	for _, p := range []string{`{"vm":"off"}`, `{}`, `{"vm":"win1"}`} {
-		if err := c.inList(t.Context(), json.RawMessage(p)); err == nil {
+		if err := c.inList(json.RawMessage(p)); err == nil {
 			t.Errorf("%s in the list", p)
 		}
 	}

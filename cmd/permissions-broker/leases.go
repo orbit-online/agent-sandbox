@@ -1,30 +1,23 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"golang.org/x/sys/unix"
 )
 
 func (b *broker) now() time.Time { return b.clock.now() }
 
-func (b *broker) checkLease(lease string, sess *session) error {
+func (b *broker) checkLease(lease string) error {
 	switch lease {
-	case "session":
-		if sess == nil {
-			return errors.New("No Claude Code session found above the caller, so no session lease: ask for a duration")
-		}
 	case "once":
 		// obtain lets only calls ask for it
 	case "lock":
@@ -36,51 +29,37 @@ func (b *broker) checkLease(lease string, sess *session) error {
 		}
 	default:
 		if _, err := parseDuration(lease); err != nil {
-			return fmt.Errorf("Lease %q: session, lock, a duration such as PT1H, or once for a call", lease)
+			return fmt.Errorf("Lease %q: lock, a duration such as PT1H, or once for a call", lease)
 		}
 	}
 	return nil
 }
 
-// grant makes a grant live: starts a service's unit and ties it to its lease
-func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string, sess *session) (*grant, error) {
-	unlock, err := c.exclusiveLock(context.Background(), b.cfg.Launcher, params)
+// grant makes a grant live: mounts a folder, gives a host socket its address, and ties it to its lease
+func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string) (*grant, error) {
+	unlock, err := c.exclusiveLock(b.cfg.Launcher, params)
 	if err != nil {
 		return nil, err
 	}
 	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
-		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock, sessions: map[string]*session{},
-		sessGone: make(chan struct{})}
-	if lease == "session" {
-		g.sessions[sess.id], g.Sessions = sess, []string{sess.id}
-	}
+		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock}
 	if d, err := parseDuration(lease); err == nil {
 		g.Expires = g.Granted.Add(d)
 	}
-	if c.Type == "service" {
-		host := filepath.Join(b.cfg.GrantDir, g.ID+".sock")
-		if err := c.startServe(b.cfg.Launcher, g.ID, host, b.cfg.Unit, params); err != nil {
+	switch c.Type {
+	case "socket":
+		b.syncSockets(c)
+		addr := socketAddr(c, params)
+		if !b.listening(addr) {
 			unlock()
-			return nil, err
+			return nil, fmt.Errorf("Can't listen at %s for %s", addr, c.id())
 		}
-		g.Socket = filepath.Join(b.cfg.SandboxGrantDir, g.ID+".sock")
-	}
-	if c.Type == "attach" {
+		g.Socket = filepath.Join(b.cfg.SandboxGrantDir, addr)
+	case "attach":
 		if err := b.attachGrant(g); err != nil {
 			unlock()
 			return nil, err
 		}
-	}
-	stopWatch, watchDone, err := c.startWatch(params)
-	if err != nil {
-		switch c.Type {
-		case "service":
-			_ = stopServe(b.cfg.Launcher, g.ID)
-		case "attach":
-			b.detachGrant(g)
-		}
-		unlock()
-		return nil, err
 	}
 	var once sync.Once
 	g.end = func(why string) {
@@ -89,22 +68,11 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 			delete(b.grants, g.ID)
 			g.over = true
 			b.mu.Unlock()
-			stopWatch()
-			switch c.Type {
-			case "service":
-				if err := stopServe(b.cfg.Launcher, g.ID); err != nil {
-					slog.Warn("Revoke", "grant", g.ID, "err", err)
-				}
-			case "attach":
+			b.closeConns(g)
+			if c.Type == "attach" {
 				b.detachGrant(g)
 				b.recordHeld(g, why)
 			}
-			b.mu.Lock()
-			for id, s := range g.sessions {
-				unix.Close(s.pidfd)
-				delete(g.sessions, id)
-			}
-			b.mu.Unlock()
 			g.unlock()
 			close(g.ended)
 			slog.Info("Grant ended", "grant", g.ID, "capability", g.Capability, "why", why)
@@ -120,12 +88,8 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 		return nil, errors.New("Screen lock isn't watched any more, so no lock lease: ask for a duration")
 	}
 	b.grants[g.ID] = g
-	// Under b.mu, before anyone can find the grant: a session hold adds later watches its own
-	for _, s := range g.sessions {
-		go b.watchSession(g, s)
-	}
 	b.mu.Unlock()
-	go b.lease(g, watchDone)
+	go b.lease(g)
 	if c.glob != "" {
 		go b.watchInstance(g)
 	}
@@ -134,84 +98,21 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	return g, nil
 }
 
-// lease ends g when its time runs out, its session's anchor exits, or its plugin's watch exits. Lock leases end
-// through lockEvent
-func (b *broker) lease(g *grant, watchDone <-chan struct{}) {
-	var timeout <-chan time.Time
-	if !g.Expires.IsZero() {
-		timeout = b.clock.after(g.Expires.Sub(b.now()))
-	}
-	select {
-	case <-timeout:
-		g.end("its time ran out")
-	case <-g.sessGone:
-		g.end("its sessions ended")
-	case <-watchDone:
-		g.end("its plugin's watch ended")
-	case <-g.ended:
-	}
-}
-
-// hold records that a caller of sess (nil: no session found) was given g: a release from a session drops its hold
-// only, and the grant ends on release once nobody holds it. The hold lasts until the session releases g or its anchor
-// exits, so g takes sess's pidfd: returns whether it did
-func (b *broker) hold(g *grant, sess *session) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if sess == nil {
-		g.anon = true
-		return false
-	}
-	if _, ok := g.sessions[sess.id]; ok || g.over || g.Lease == "session" && len(g.sessions) == 0 {
-		// Known, or the grant is ending: a session lease's last session left
-		return false
-	}
-	g.sessions[sess.id] = sess
-	g.Sessions = append(g.Sessions, sess.id)
-	go b.watchSession(g, sess)
-	return true
-}
-
-// watchSession drops s's hold on g when its anchor exits, and closes g.sessGone when it was a session lease's last
-func (b *broker) watchSession(g *grant, s *session) {
-	fds := []unix.PollFd{{Fd: int32(s.pidfd), Events: unix.POLLIN}}
-	for {
-		// Wakes every few seconds to notice the grant ending otherwise
-		n, err := unix.Poll(fds, 5000)
-		select {
-		case <-s.dropped:
-			unix.Close(s.pidfd)
-			return
-		default:
-		}
-		select {
-		case <-g.ended:
-			return
-		default:
-		}
-		if n > 0 {
-			break
-		}
-		if err != nil && !errors.Is(err, unix.EINTR) {
-			return
-		}
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if g.sessions[s.id] != s {
+// lease ends g when its time runs out. Lock leases end through lockEvent
+func (b *broker) lease(g *grant) {
+	if g.Expires.IsZero() {
 		return
 	}
-	unix.Close(s.pidfd)
-	delete(g.sessions, s.id)
-	g.Sessions = slices.DeleteFunc(g.Sessions, func(id string) bool { return id == s.id })
-	if g.Lease == "session" && len(g.sessions) == 0 {
-		close(g.sessGone)
+	select {
+	case <-b.clock.after(g.Expires.Sub(b.now())):
+		g.end("its time ran out")
+	case <-g.ended:
 	}
 }
 
 // lockEvent ends every lock lease: the screen locked or the machine went to sleep
 func (b *broker) lockEvent(why string) {
-	for _, g := range b.liveGrants("") {
+	for _, g := range b.liveGrants() {
 		if g.Lease == "lock" {
 			g.end(why)
 		}
@@ -232,37 +133,22 @@ func (b *broker) revoke(id string) ([]holder, error) {
 	return g.Holders, nil
 }
 
-// release drops sess's hold on a grant, and ends it once nobody holds it: no session, nor (but for a session lease) a
-// caller without one. A caller without a session ends it outright: that only takes access away. A standing grant
-// released so stays ended until the daemon starts again
-func (b *broker) release(id string, sess *session, why string) error {
+// release ends a grant from inside: that only takes access away. A standing grant released so stays ended until the
+// daemon starts again
+func (b *broker) release(id, why string) error {
 	b.mu.Lock()
 	g, ok := b.grants[id]
+	b.mu.Unlock()
 	if !ok {
-		b.mu.Unlock()
 		return fmt.Errorf("No grant %q", id)
 	}
-	if sess != nil {
-		g.Sessions = slices.DeleteFunc(g.Sessions, func(id string) bool { return id == sess.id })
-		if s, ok := g.sessions[sess.id]; ok {
-			delete(g.sessions, sess.id)
-			close(s.dropped)
-		}
-		if len(g.sessions) > 0 || g.anon && g.Lease != "session" {
-			b.mu.Unlock()
-			slog.Info("Released by a session", "grant", g.ID, "session", sess.id)
-			b.event("released", g.ID)
-			return nil
-		}
-	}
-	b.mu.Unlock()
 	b.endStanding(g)
 	g.end(why)
 	return nil
 }
 
 func (b *broker) endAll(why string) {
-	for _, g := range b.liveGrants("") {
+	for _, g := range b.liveGrants() {
 		g.end(why)
 	}
 }

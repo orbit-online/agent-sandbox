@@ -3,14 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"golang.org/x/sys/unix"
 )
 
 func TestParseDuration(t *testing.T) {
@@ -62,64 +59,6 @@ func TestLockLease(t *testing.T) {
 	}
 }
 
-func TestSession(t *testing.T) {
-	anchor, child := startAnchor(t, "claude")
-	s, err := ownSandbox(t, os.Getpid()).sessionOf(child)
-	if err != nil || s == nil {
-		t.Fatalf("sessionOf = %v, %v", s, err)
-	}
-	if s.id != "session-1" || s.anchor != anchor.Process.Pid {
-		t.Errorf("Session %q anchored at %d, want session-1 at %d", s.id, s.anchor, anchor.Process.Pid)
-	}
-	unix.Close(s.pidfd)
-
-	// The session lease ends with the anchor
-	b, _ := testBroker(t, "allow")
-	c := testCap(t, "command")
-	b.caps[c.id()] = c
-	g, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sessions := b.view(g).Sessions; !slices.Equal(sessions, []string{"session-1"}) {
-		t.Errorf("Grant tied to %q", sessions)
-	}
-	anchor.Process.Kill()
-	select {
-	case <-g.ended:
-	case <-time.After(10 * time.Second):
-		t.Error("The session lease outlived its anchor")
-	}
-}
-
-func TestSessionNeedsClaude(t *testing.T) {
-	_, child := startAnchor(t, "not-claude")
-	if s, err := ownSandbox(t, os.Getpid()).sessionOf(child); err != nil || s != nil {
-		t.Errorf("Anchored at a process that isn't Claude Code: %v, %v", s, err)
-	}
-	b, _ := testBroker(t, "allow")
-	c := testCap(t, "command")
-	b.caps[c.id()] = c
-	if _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session")); err == nil {
-		t.Error("Session lease granted without a session")
-	}
-}
-
-func TestSessionStopsAtSandbox(t *testing.T) {
-	anchor, child := startAnchor(t, "claude")
-	// With the anchor as the sandbox's pid, the walk stops below it: nothing above the sandbox anchors a session
-	if s, err := ownSandbox(t, anchor.Process.Pid).sessionOf(child); err != nil || s != nil {
-		t.Errorf("Anchored at the sandbox: %v, %v", s, err)
-	}
-	// A carrier of the variable above the sandbox (the launcher started from a host Claude Code shell) doesn't
-	// count for a caller in the sandbox without one
-	_, pids := startAnchorMode(t, "claude", "anchor-deep", 2)
-	sandboxInit, caller := pids[0], pids[1]
-	if s, err := ownSandbox(t, sandboxInit).sessionOf(caller); err != nil || s != nil {
-		t.Errorf("Anchored above the sandbox: %v, %v", s, err)
-	}
-}
-
 func TestRanOut(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	clk := newFakeClock()
@@ -136,7 +75,7 @@ func TestRanOut(t *testing.T) {
 	}
 }
 
-// P4: a call a live grant covers waits for a plugin slot; the grant is revoked meanwhile. No output
+// P4: a call a live grant covers waits for a call slot; the grant is revoked meanwhile. No output
 func TestNoOutputAfterEnd(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
@@ -145,8 +84,8 @@ func TestNoOutputAfterEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range cap(pluginSlots) {
-		pluginSlots <- struct{}{}
+	for range cap(callSlots) {
+		callSlots <- struct{}{}
 	}
 	type result struct {
 		cred string
@@ -161,11 +100,11 @@ func TestNoOutputAfterEnd(t *testing.T) {
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}
-	for range cap(pluginSlots) {
-		<-pluginSlots
+	for range cap(callSlots) {
+		<-callSlots
 	}
 	if r := <-done; r.err == nil || r.cred != "" {
-		t.Errorf("Issued %q for a grant revoked while waiting for a plugin slot", r.cred)
+		t.Errorf("Issued %q for a grant revoked while waiting for a call slot", r.cred)
 	}
 }
 
@@ -213,69 +152,11 @@ func TestLockLostWhileAsking(t *testing.T) {
 	if g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
 		t.Errorf("Granted a lock lease nothing watches: %+v", g)
 	}
-	if gs := b.liveGrants(""); len(gs) != 0 {
+	if gs := b.liveGrants(); len(gs) != 0 {
 		t.Errorf("Live: %+v", gs)
 	}
 	// Made live after the bus went, it is refused there too
-	if g, err := b.grant(c, json.RawMessage(`{}`), "x", "", "lock", nil); err == nil {
+	if g, err := b.grant(c, json.RawMessage(`{}`), "x", "", "lock"); err == nil {
 		t.Errorf("grant made a lock lease nothing watches: %+v", g)
-	}
-}
-
-// slowGranted is a log handler that holds up whoever logs "Granted" until the grant has ended, then opens decoy files,
-// which take the lowest free fds
-type slowGranted struct {
-	slog.Handler
-	b      *broker
-	decoys *[]int
-}
-
-func (h slowGranted) Handle(ctx context.Context, r slog.Record) error {
-	if r.Message == "Granted" {
-		r.Attrs(func(a slog.Attr) bool {
-			for deadline := time.Now().Add(10 * time.Second); a.Key == "grant" && time.Now().Before(deadline); {
-				h.b.mu.Lock()
-				live := h.b.grants[a.Value.String()] != nil
-				h.b.mu.Unlock()
-				if !live {
-					for range 64 {
-						fd, _ := unix.Open("/dev/null", unix.O_RDONLY|unix.O_CLOEXEC, 0)
-						*h.decoys = append(*h.decoys, fd)
-					}
-					break
-				}
-				time.Sleep(time.Millisecond)
-			}
-			return true
-		})
-	}
-	return h.Handler.Handle(ctx, r)
-}
-
-// P8: a session lease allowed after its anchor exited ends at once, and its request closes no file of the daemon's:
-// the session's pidfd is the grant's, closed when the anchor's exit ended it, its number another file's by then
-func TestSessionGoneWhileAsked(t *testing.T) {
-	b, _ := testBroker(t)
-	c := testCap(t, "command")
-	b.caps[c.id()] = c
-	anchor, child := startAnchor(t, "claude")
-	b.ask = func(context.Context, prompt) (string, error) {
-		anchor.Process.Kill()
-		anchor.Wait()
-		return "allow", nil
-	}
-	var decoys []int
-	old := slog.Default()
-	slog.SetDefault(slog.New(slowGranted{slog.NewTextHandler(os.Stderr, nil), b, &decoys}))
-	t.Cleanup(func() { slog.SetDefault(old) })
-	_, _ = b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
-	if len(decoys) == 0 {
-		t.Fatal("The session lease didn't end with its anchor gone")
-	}
-	for _, fd := range decoys {
-		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil {
-			t.Errorf("The request closed a file it didn't own: %d, %v", fd, err)
-		}
-		unix.Close(fd)
 	}
 }

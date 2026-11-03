@@ -61,7 +61,6 @@ let
   subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   permissionsWindow = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-window;
-  permissionsFolders = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-folders;
   # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
   commandsOf =
     withRun: lcfg:
@@ -442,25 +441,6 @@ let
           requests go to, and adds the `permissions` MCP server.
         '';
       };
-      plugins = mkOption {
-        type = types.attrsOf (
-          types.submodule {
-            options = {
-              package = mkOption {
-                type = types.package;
-                description = "The plugin, with its manifest at `share/agent-sandbox/permissions/<name>.json`.";
-              };
-              ceiling = mkOption {
-                type = (pkgs.formats.json { }).type;
-                default = { };
-                description = "What the plugin may grant at all: `sources` for an attach, and the plugin's own fields.";
-              };
-            };
-          }
-        );
-        default = { };
-        description = "Plugins whose capabilities the broker grants, by name.";
-      };
       commands = mkOption {
         type = types.attrsOf (
           types.submodule {
@@ -528,34 +508,62 @@ let
           that the user gives or a standing grant. The `permissions` MCP server lists them from its start.
         '';
       };
+      sockets = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              description = mkOption {
+                type = types.str;
+                description = "What a grant of the socket lets Claude do, for the consent.";
+              };
+              path = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = "The socket on the host (`$XDG_RUNTIME_DIR` and a leading `~` expanded); null with an instances glob.";
+              };
+              bounding = mkOption {
+                type = types.attrsOf (pkgs.formats.json { }).type;
+                default = { };
+                description = ''
+                  Without `path`, one bounding argument, a described string with `instances`: a glob with one `*`
+                  whose matches are the sockets, each an instance reachable at its own address.
+                '';
+              };
+            };
+          }
+        );
+        default = { };
+        example = lib.literalExpression ''{ ssh-agent = { description = "Sign with the keys in the host's SSH agent"; path = "$XDG_RUNTIME_DIR/ssh-agent.sock"; }; }'';
+        description = ''
+          Host sockets (`docs/permissions.md`): each reachable inside at `/run/permissions/sockets/<name>` (or
+          `sockets/<name>/<instance>`) while a grant covers it, the broker copying bytes to the host socket. The
+          service sees the broker as its peer, the host user unsandboxed: declare only sockets that authorize nothing by
+          their peer. Never a D-Bus bus, `$XDG_RUNTIME_DIR` as a whole, or the launchers' own sockets.
+        '';
+      };
       grants = mkOption {
         type = types.listOf (
           types.submodule {
             options = {
-              plugin = mkOption {
-                type = types.nullOr types.str;
-                default = null;
-                description = "The plugin, by its name in `permissions.plugins`; null for host commands.";
-              };
               capability = mkOption {
                 type = types.str;
-                description = "The plugin's capability, by name, a `service` one, or a capability of `permissions.commands`.";
+                description = "A capability of `permissions.commands` or `permissions.sockets`.";
               };
               params = mkOption {
                 type = (pkgs.formats.json { }).type;
                 default = { };
-                description = "Its parameters, as a request names them (for host commands, the bounding arguments). A request or call with exactly these gets the grant.";
+                description = "Its bounding arguments' values, as a request names them. A request or call with exactly these gets the grant.";
               };
             };
           }
         );
         default = [ ];
-        example = lib.literalExpression ''[ { plugin = "windows-vm"; capability = "vm"; params.vm = "win11"; } ]'';
+        example = lib.literalExpression ''[ { capability = "windows-vm"; params.vm = "win11"; } ]'';
         description = ''
           Standing grants: the broker grants them at every start, without asking, still within the capability's
-          ceiling and instances (one its capability doesn't take stops the broker). Revoked or released, one stays ended
-          until the broker starts again. Host command calls under it run without asking, told their `maxValidity`. No
-          folders: what should always be there is a bind (`binds`).
+          instances (one its capability doesn't take stops the broker). Revoked or released, one stays ended until the
+          broker starts again. Host command calls under it run without asking, told their `maxValidity`. No folders:
+          what should always be there is a bind (`binds`).
         '';
       };
       folders = mkOption {
@@ -576,7 +584,7 @@ let
         );
         default = [ ];
         description = ''
-          Host folders the sandbox may ask for while it runs, through the built-in `folders` plugin: each is
+          Host folders the sandbox may ask for while it runs, as the broker's `folders/folder` capability: each is
           mounted under `/run/permissions` once the user allows it. Never the launchers' state directories or
           `$XDG_RUNTIME_DIR`, nor a folder holding one.
         '';
@@ -1089,20 +1097,17 @@ let
           ];
           # Every launcher's state directory and runtime directory, and anything holding one
           denied = map stateDirOf ([ null ] ++ lib.attrNames cfg.launchers) ++ [ "\${XDG_RUNTIME_DIR}" ];
-          plugins =
-            lib.mapAttrsToList (pname: p: {
-              manifest = "${p.package}/share/agent-sandbox/permissions/${pname}.json";
-              inherit (p) ceiling;
-            }) lcfg.permissions.plugins
-            ++ lib.optional (lcfg.permissions.folders != [ ]) {
-              manifest = "${permissionsFolders}/share/agent-sandbox/permissions/folders.json";
-              ceiling.sources = lcfg.permissions.folders;
-            };
+          inherit (lcfg.permissions) folders;
           commands = commandsOf true lcfg;
-          grants = map (g: {
-            capability = if g.plugin == null then g.capability else "${g.plugin}/${g.capability}";
-            inherit (g) params;
-          }) lcfg.permissions.grants;
+          sockets = lib.mapAttrsToList (
+            name: sock:
+            {
+              inherit name;
+              inherit (sock) description bounding;
+            }
+            // lib.optionalAttrs (sock.path != null) { inherit (sock) path; }
+          ) lcfg.permissions.sockets;
+          grants = map (g: { inherit (g) capability params; }) lcfg.permissions.grants;
           # What the sandbox reaches from its start, for the window's read-only overview
           overview =
             let
@@ -1409,23 +1414,70 @@ in
             assertion = lcfg.permissions.enable;
             message = "${opt} needs permissions.enable";
           }
-          ++ map (g: {
-            assertion = g.plugin != "folders";
-            message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
-          }) lcfg.permissions.grants
           ++ map (
             g:
-            if g.plugin == null then
+            if g.capability == "folders/folder" then
               {
-                assertion = lcfg.permissions.commands ? ${g.capability};
-                message = "${opt}: no host commands ${g.capability} in permissions.commands";
+                assertion = false;
+                message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
               }
             else
               {
-                assertion = g.plugin == "folders" || lcfg.permissions.plugins ? ${g.plugin};
-                message = "${opt}: no plugin ${g.plugin} in permissions.plugins";
+                assertion = lcfg.permissions.commands ? ${g.capability} || lcfg.permissions.sockets ? ${g.capability};
+                message = "${opt}: no capability ${g.capability} in permissions.commands or permissions.sockets";
               }
           ) lcfg.permissions.grants
+          # Host sockets the broker would refuse, caught at eval: a name of its own that makes a file name, a path or
+          # one instances glob, and nothing that would hand the sandbox the host user's standing (a D-Bus bus,
+          # $XDG_RUNTIME_DIR as a whole, the launchers' own sockets)
+          ++ lib.concatLists (
+            lib.mapAttrsToList (
+              sname: sock:
+              let
+                sopt = "agent-sandbox.claude-desktop: ${
+                  lib.optionalString (name != "") "launchers.${name}."
+                }permissions.sockets.${sname}";
+                args = lib.attrValues sock.bounding;
+                globbed =
+                  sock.path == null
+                  && lib.length args == 1
+                  && (lib.head args).type or "" == "string"
+                  && (lib.head args).description or "" != ""
+                  && (lib.head args) ? instances;
+                where = lib.replaceStrings [ "\${XDG_RUNTIME_DIR}" ] [ "$XDG_RUNTIME_DIR" ] (
+                  if sock.path != null then
+                    sock.path
+                  else if args == [ ] then
+                    ""
+                  else
+                    (lib.head args).instances or ""
+                );
+                runtime = "(\\$XDG_RUNTIME_DIR|/run/user/[^/]+)";
+                refused = lib.any (re: builtins.match re where != null) [
+                  "${runtime}/?"
+                  "${runtime}/\\*(/.*)?"
+                  "${runtime}/bus"
+                  "(/var)?/run/dbus/system_bus_socket"
+                  "/|/run|/run/user/?"
+                  "${runtime}/(claude-desktop|\\.flatpak|agent-sandbox-permissions)(/.*)?"
+                  "${runtime}/nixpak-.*"
+                ];
+              in
+              [
+                {
+                  assertion =
+                    builtins.match "[A-Za-z0-9-]+" sname != null
+                    && !(lcfg.permissions.commands ? ${sname})
+                    && (sock.path != null && sock.bounding == { } || globbed);
+                  message = "${sopt}: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances";
+                }
+                {
+                  assertion = !refused;
+                  message = "${sopt}: ${where} would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets";
+                }
+              ]
+            ) lcfg.permissions.sockets
+          )
           # What the broker would refuse at start, caught at eval: MCP tool names, every argument described for the
           # consent, none named as the broker's own, a result it can wrap
           ++ lib.concatLists (

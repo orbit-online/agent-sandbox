@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"slices"
@@ -27,56 +26,33 @@ func listen(path string) (*net.UnixListener, error) {
 	return ln, nil
 }
 
-// serveOn serves a socket until it's closed. Each socket has its own connection budget, so the sandbox filling
-// request.sock leaves control.sock to the window; accept errors (out of fds) are waited out, not fatal
+// serveOn serves request.sock or control.sock until it's closed, within acceptLoop's budget
 func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, peer, request) response) {
-	slots := make(chan struct{}, maxConns)
-	backoff := 10 * time.Millisecond
-	for {
-		conn, err := ln.AcceptUnix()
-		if errors.Is(err, net.ErrClosed) {
+	acceptLoop(ln, func(conn *net.UnixConn) {
+		defer conn.Close()
+		p, err := peerOf(conn)
+		if err != nil {
 			return
 		}
-		if err != nil {
-			slog.Warn("Accept", "err", err)
-			time.Sleep(backoff)
-			backoff = min(2*backoff, time.Second)
-			continue
+		defer unix.Close(p.pidfd)
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+		var req request
+		if err := json.NewDecoder(io.LimitReader(conn, maxRequest)).Decode(&req); err != nil {
+			_ = json.NewEncoder(conn).Encode(response{Error: "Not a JSON request"})
+			return
 		}
-		backoff = 10 * time.Millisecond
-		select {
-		case slots <- struct{}{}:
-		default:
-			conn.Close()
-			continue
+		_ = conn.SetReadDeadline(time.Time{})
+		// A peer gone by now gets nothing. The checks below read its /proc entries by pid and check again after
+		// each read, since the pid could be another process's by then
+		if p.gone() {
+			return
 		}
-		go func() {
-			defer func() { <-slots }()
-			defer conn.Close()
-			p, err := peerOf(conn)
-			if err != nil {
-				return
-			}
-			defer unix.Close(p.pidfd)
-			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-			var req request
-			if err := json.NewDecoder(io.LimitReader(conn, maxRequest)).Decode(&req); err != nil {
-				_ = json.NewEncoder(conn).Encode(response{Error: "Not a JSON request"})
-				return
-			}
-			_ = conn.SetReadDeadline(time.Time{})
-			// A peer gone by now gets nothing. The checks below read its /proc entries by pid and check again after
-			// each read, since the pid could be another process's by then
-			if p.gone() {
-				return
-			}
-			if req.Op == "watch" {
-				b.streamEvents(conn)
-				return
-			}
-			_ = json.NewEncoder(conn).Encode(handle(conn, p, req))
-		}()
-	}
+		if req.Op == "watch" {
+			b.streamEvents(conn)
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(handle(conn, p, req))
+	})
 }
 
 // A client: its pid in our pid namespace and a pidfd for it (SO_PEERPIDFD), which tells whether the pid still names
@@ -114,7 +90,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 	switch req.Op {
 	case "list":
 		res.Capabilities = b.listCapabilities()
-		res.Grants = b.grantViews("")
+		res.Grants = b.grantViews()
 	case "request":
 		var g *grant
 		g, err = b.request(p, req)
@@ -122,26 +98,9 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 	case "call":
 		res, err = b.call(p, req)
 	case "release":
-		// The caller's session drops its hold; without one, the grant ends
-		sess, _ := b.sb.sessionOf(p.pid)
-		if p.gone() {
-			return response{Error: "Gone"}
-		}
-		err = b.release(req.Grant, sess, "released from inside")
-		if sess != nil {
-			unix.Close(sess.pidfd)
-		}
+		err = b.release(req.Grant, "released from inside")
 	case "status":
-		sess, _ := b.sb.sessionOf(p.pid)
-		id := ""
-		if sess != nil {
-			id = sess.id
-			unix.Close(sess.pidfd)
-		}
-		if p.gone() {
-			return response{Error: "Gone"}
-		}
-		res.Grants = b.grantViews(id)
+		res.Grants = b.grantViews()
 	case "share":
 		err = b.shareFrom(p)
 	default:
@@ -171,7 +130,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 		slices.SortFunc(res.Pending, func(x, y *pending) int { return cmp.Compare(x.seq, y.seq) })
 		res.Log = slices.Clone(b.log)
 		b.mu.Unlock()
-		res.Grants = b.grantViews("")
+		res.Grants = b.grantViews()
 		res.Capabilities = b.listCapabilities()
 		res.Held = b.heldViews()
 		b.mu.Lock()
@@ -241,7 +200,7 @@ func (b *broker) adoptShared() {
 	b.mu.Unlock()
 }
 
-// event tells watch streams (the MCP servers, the window) that something changed; they ask for the state
+// event tells watch streams (the window) that something changed; they ask for the state
 func (b *broker) event(kind, id string) {
 	line, _ := json.Marshal(map[string]string{"event": kind, "id": id})
 	b.mu.Lock()

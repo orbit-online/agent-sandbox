@@ -22,8 +22,7 @@ func TestCheckDenied(t *testing.T) {
 }
 
 func TestCheckSource(t *testing.T) {
-	ceil := attachCeiling{Sources: []source{{Path: "/srv/notes"}, {Path: "/srv/work", RW: true}, {Path: "/srv/work/keep-ro"},
-		{Path: "/dev/kvm"}}}
+	ceil := []source{{Path: "/srv/notes"}, {Path: "/srv/work", RW: true}, {Path: "/srv/work/keep-ro"}, {Path: "/dev/kvm"}}
 	denied := []string{"/srv/work/state"}
 	for _, ok := range []struct {
 		src       string

@@ -2,24 +2,26 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
 )
 
-// Instances: what a capability's list prints, which requests must match, and the host-wide locks on an exclusive
-// capability's instances
+// Instances: what a capability's instances glob matches, which requests must match, and the host-wide locks on an
+// exclusive capability's instances
 
-// listInstances runs a plugin's list command, which prints a JSON array of instances
-func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error) {
-	if len(c.List) == 0 && c.glob == "" {
+// listInstances is what can be asked for: the instances glob's matches, as a JSON array of objects each naming the
+// value of the bounding argument; for folders, the ceiling's sources
+func (c *capability) listInstances() (json.RawMessage, error) {
+	if c.Type == "attach" {
+		return json.Marshal(c.Sources)
+	}
+	if c.glob == "" {
 		return nil, nil
 	}
 	c.listMu.Lock()
@@ -27,38 +29,19 @@ func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error)
 	if time.Since(c.listedAt) < 5*time.Second {
 		return c.listed, c.listErr
 	}
-	if c.glob != "" {
-		c.listed, c.listErr = c.globInstances()
-		c.listedAt = time.Now()
-		return c.listed, c.listErr
-	}
-	in, _ := json.Marshal(pluginInput{Ceiling: c.Ceiling.Raw})
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, c.List[0], c.List[1:]...)
-	cmd.Stdin = bytes.NewReader(in)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	c.listed, c.listErr = nil, nil
-	if err := cmd.Run(); err != nil {
-		c.listErr = fmt.Errorf("List %s: %w", c.id(), err)
-	} else if !json.Valid(out.Bytes()) {
-		c.listErr = fmt.Errorf("List %s: not JSON", c.id())
-	} else {
-		c.listed = out.Bytes()
-	}
+	c.listed, c.listErr = c.globInstances()
 	c.listedAt = time.Now()
 	return c.listed, c.listErr
 }
 
-// instancesOf returns the instances list prints that params match: an instance matches when each of its keys has the
-// same value in params. Without a list, and for attach capabilities (whose requests may name a folder below a listed
-// root, so its sources decide), none and no error
-func (c *capability) instancesOf(ctx context.Context, params json.RawMessage) ([]map[string]any, error) {
-	if len(c.List) == 0 && c.glob == "" || c.Type == "attach" {
+// instancesOf returns the instances params match: an instance matches when each of its keys has the same value in
+// params. Without an instances glob, and for folders (whose requests may name a folder below a source, so the ceiling
+// decides), none and no error
+func (c *capability) instancesOf(params json.RawMessage) ([]map[string]any, error) {
+	if c.glob == "" || c.Type == "attach" {
 		return nil, nil
 	}
-	listed, err := c.listInstances(ctx)
+	listed, err := c.listInstances()
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +49,7 @@ func (c *capability) instancesOf(ctx context.Context, params json.RawMessage) ([
 	dec := json.NewDecoder(bytes.NewReader(listed))
 	dec.UseNumber()
 	if err := dec.Decode(&instances); err != nil {
-		return nil, fmt.Errorf("List %s: not an array of objects: %w", c.id(), err)
+		return nil, fmt.Errorf("Instances of %s: not an array of objects: %w", c.id(), err)
 	}
 	var p map[string]any
 	dec = json.NewDecoder(bytes.NewReader(params))
@@ -91,20 +74,20 @@ func (c *capability) instancesOf(ctx context.Context, params json.RawMessage) ([
 	return matched, nil
 }
 
-// inList refuses params that match none of the instances list prints
-func (c *capability) inList(ctx context.Context, params json.RawMessage) error {
-	_, err := c.instancesOf(ctx, params)
+// inList refuses params that match none of the instances
+func (c *capability) inList(params json.RawMessage) error {
+	_, err := c.instancesOf(params)
 	return err
 }
 
 // exclusiveLock takes the host-wide locks on the instances of an exclusive capability params match, so two launchers'
-// daemons don't grant one at once, whatever other parameters (a mode, read-only) their requests carry. Without a list
-// the parameters are the instance. Returns the release, or the holder's launcher
-func (c *capability) exclusiveLock(ctx context.Context, launcher string, params json.RawMessage) (func(), error) {
+// daemons don't grant one at once, whatever other parameters (a mode, read-only) their requests carry. Without an
+// instances glob the parameters are the instance. Returns the release, or the holder's launcher
+func (c *capability) exclusiveLock(launcher string, params json.RawMessage) (func(), error) {
 	if !c.Exclusive {
 		return func() {}, nil
 	}
-	instances, err := c.instancesOf(ctx, params)
+	instances, err := c.instancesOf(params)
 	if err != nil {
 		return nil, err
 	}

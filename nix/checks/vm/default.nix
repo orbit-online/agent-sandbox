@@ -9,56 +9,30 @@
 }:
 let
   inherit (pkgs) lib;
-  # A service plugin's serve: MCP on the socket systemd hands it, one tool, echo
-  echoServe = pkgs.writers.writePython3 "echo-serve" { flakeIgnore = [ "E501" ]; } ''
-    import json
+  # A host socket for the work launcher's broker: alice's, sending back what it reads
+  echoServe = pkgs.writers.writePython3 "echo-serve" { } ''
+    import os
     import socket
+    import threading
 
-    listener = socket.socket(fileno=3)
+    path = os.environ["XDG_RUNTIME_DIR"] + "/test-echo.sock"
+    if os.path.exists(path):
+        os.remove(path)
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(path)
+    listener.listen()
 
 
-    def handle(conn):
-        with conn, conn.makefile("rw") as f:
-            for line in f:
-                msg = json.loads(line)
-                if "id" not in msg:
-                    continue
-                method, params = msg.get("method"), msg.get("params") or {}
-                if method == "initialize":
-                    result = {"protocolVersion": params.get("protocolVersion"), "capabilities": {"tools": {}},
-                              "serverInfo": {"name": "echo", "version": "0"}}
-                elif method == "tools/list":
-                    result = {"tools": [{"name": "echo", "description": "Echoes.",
-                                         "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}
-                elif method == "tools/call":
-                    text = (params.get("arguments") or {}).get("text", "")
-                    result = {"content": [{"type": "text", "text": "echo: " + text}]}
-                else:
-                    f.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": method}}) + "\n")
-                    f.flush()
-                    continue
-                f.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}) + "\n")
-                f.flush()
+    def echo(conn):
+        with conn:
+            while data := conn.recv(4096):
+                conn.sendall(data)
 
 
     while True:
-        handle(listener.accept()[0])
+        conn = listener.accept()[0]
+        threading.Thread(target=echo, args=(conn,), daemon=True).start()
   '';
-  # A plugin for the permissions broker: a service with tools
-  testPlugin = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" (
-    builtins.toJSON {
-      name = "test";
-      capabilities = [
-        {
-          name = "echo";
-          type = "service";
-          description = "a test service";
-          serve = [ "${echoServe}" ];
-          tools = true;
-        }
-      ];
-    }
-  );
   # The broker's test binary, for TestLiveMachine (cmd/permissions-broker/live_test.go): the state machine tests
   # against the live daemon and sandbox
   brokerLive = broker.overrideAttrs {
@@ -74,7 +48,7 @@ let
       install -Dm755 permissions-broker-live $out/bin/permissions-broker-live
       runHook postInstall
     '';
-    # The broker's wraps bin/permissions-broker, which this lacks. Unwrapped: the test runs copies named claude and node
+    # The broker's wraps bin/permissions-broker, which this lacks. Unwrapped: the test runs a copy of it in the sandbox
     postInstall = "";
   };
   stateDir = "/home/alice/.local/share/claude-desktop";
@@ -143,7 +117,11 @@ let
                 { path = "/srv/notes"; }
                 { path = "/srv/mounted"; }
               ];
-              plugins.test.package = testPlugin;
+              # The host's echo socket, which the test starts as a unit of alice's
+              sockets.echo = {
+                description = "a test socket";
+                path = "$XDG_RUNTIME_DIR/test-echo.sock";
+              };
               # A host command printing the validity it was given
               commands.test = {
                 description = "a test command";
@@ -155,10 +133,7 @@ let
               };
               grants = [
                 { capability = "test"; }
-                {
-                  plugin = "test";
-                  capability = "echo";
-                }
+                { capability = "echo"; }
               ];
             };
           };
@@ -269,6 +244,11 @@ let
         )
         workstation.wait_until_succeeds(f"test -s {home}/stub-app.log", timeout=300)
         return workstation.succeed(f"cat {home}/stub-app.log").split()
+
+    # The host socket the work launcher's broker may grant: an echo server of alice's
+    def start_echo():
+        workstation.succeed("systemd-run --user -M alice@ --unit test-echo -- ${echoServe}")
+        workstation.wait_until_succeeds("test -S /run/user/1000/test-echo.sock", timeout=30)
 
     # The folders the work launcher's broker may grant: one with a file, one with a mount beneath it
     def make_folders():

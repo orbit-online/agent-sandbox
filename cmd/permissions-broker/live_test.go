@@ -6,23 +6,21 @@ import (
 	"os/exec"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"pgregory.net/rapid"
 )
 
-// The state machine tests (machine_test.go) live, in the VM test (nix/checks/vm.nix): a smaller set of the same
-// actions against the work launcher's daemon under systemd, its real sandbox and plugins. Requests come from this
-// binary run inside the sandbox through the launcher's re-entry (live_procs_test.go), as a session's agent below an
-// anchor named claude, a forged session below one named node, or a caller without one; the user's answers and revoke
-// come through control.sock from the host. After every step the window's state, the service units, the grant directory and the mounts in the sandbox's outer mount namespace and where the app runs match the
-// reference model (machine_model_test.go).
+// The state machine tests (machine_test.go) live, in the VM test (nix/checks/vm/live.nix): a smaller set of the same
+// actions against the work launcher's daemon under systemd, its real sandbox and the host's echo socket. Requests and
+// connections come from this binary run inside the sandbox through the launcher's re-entry (live_procs_test.go); the
+// user's answers and revoke come through control.sock from the host. After every step the window's state, the grant
+// directory, the connections to the host socket and the mounts in the sandbox's outer mount namespace and where the
+// app runs match the reference model (machine_model_test.go).
 //
 // Without LIVE_CONFIG it skips. The VM test sets: LIVE_CONFIG (the daemon's config), LIVE_LAUNCHER (the launcher,
-// whose --exec runs a command in the sandbox), LIVE_BIN (a copy of this binary named claude where the sandbox sees it,
-// with a copy named node next to it), LIVE_ROOT (a folder the ceiling allows, read-only, with a folder sub beneath),
+// whose --exec runs a command in the sandbox), LIVE_BIN (this binary where the sandbox sees it), LIVE_ROOT (a folder the ceiling allows, read-only, with a folder sub beneath),
 // LIVE_OUTSIDE (one outside it) and LIVE_LOCK_SESSION (alice's graphical logind session, which the Lock action locks).
 // It runs a few sequences with a fixed seed; more by hand, with -rapid.checks, -rapid.steps and -rapid.seed=0 (see
 // CLAUDE.md)
@@ -54,19 +52,19 @@ const liveSettle = 15 * time.Second
 
 const (
 	liveCmd    = "test"
-	liveSvc    = "test/echo"
-	liveFolder = "folders/folder"
+	liveSock   = "echo"
+	liveFolder = foldersID
 	// The host command's maxValidity
 	liveMaxValidity = 8 * time.Hour
 )
 
 type liveEnv struct {
-	cfg                 config
-	launcher, bin, node string
-	root, outside       string
-	lockSess            string
-	sb                  *sandbox
-	desc                map[string]string // the capabilities' descriptions
+	cfg           config
+	launcher, bin string
+	root, outside string
+	lockSess      string
+	sb            *sandbox
+	desc          map[string]string // the capabilities' descriptions
 }
 
 func newLiveEnv(t *testing.T) *liveEnv {
@@ -75,8 +73,7 @@ func newLiveEnv(t *testing.T) *liveEnv {
 		t.Fatal(err)
 	}
 	bin := os.Getenv("LIVE_BIN")
-	lv := &liveEnv{cfg: cfg, launcher: os.Getenv("LIVE_LAUNCHER"), bin: bin,
-		node: bin[:strings.LastIndex(bin, "/")+1] + "node", root: os.Getenv("LIVE_ROOT"),
+	lv := &liveEnv{cfg: cfg, launcher: os.Getenv("LIVE_LAUNCHER"), bin: bin, root: os.Getenv("LIVE_ROOT"),
 		outside: os.Getenv("LIVE_OUTSIDE"), lockSess: os.Getenv("LIVE_LOCK_SESSION"), desc: map[string]string{}}
 	if lv.sb, err = lookupSandbox(os.Getenv("XDG_RUNTIME_DIR"), cfg.AppID); err != nil {
 		t.Fatal(err)
@@ -88,7 +85,7 @@ func newLiveEnv(t *testing.T) *liveEnv {
 	for _, c := range res.Capabilities {
 		lv.desc[c.ID] = c.Description
 	}
-	for _, c := range []string{liveCmd, liveSvc, liveFolder} {
+	for _, c := range []string{liveCmd, liveSock, liveFolder} {
 		if lv.desc[c] == "" {
 			t.Fatalf("No capability %s: %+v", c, res.Capabilities)
 		}
@@ -105,20 +102,20 @@ func (lv *liveEnv) systemctl(args ...string) (string, error) {
 }
 
 type liveMachine struct {
-	lv           *liveEnv
-	m            *model
-	ev           *liveEvents
-	anon, forged *liveProc
-	sessions     map[string]*liveProc
-	sessionsMade int
-	procs        []*liveProc
-	tags         int
+	lv    *liveEnv
+	m     *model
+	ev    *liveEvents
+	anon  *liveProc
+	procs []*liveProc
+	tags  int
+	// The connections to the echo socket the agent keeps open, by key: the grant each was spliced under
+	conns map[string]string
 }
 
 // newLiveMachine starts an iteration from a clean daemon: restarted, so no grants but the standing ones, no gates or
 // pending requests are left from the last
 func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
-	mc := &liveMachine{lv: lv, sessions: map[string]*liveProc{}}
+	mc := &liveMachine{lv: lv, conns: map[string]string{}}
 	t.Cleanup(func() {
 		// Questions left are denied, so their callers end
 		for _, p := range mc.pendingNow() {
@@ -138,8 +135,8 @@ func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 	return mc
 }
 
-// started finds the standing grants a daemon that just started granted: every one, as the test plugins have no list
-// and no exclusive instances (P12)
+// started finds the standing grants a daemon that just started granted: every one, as the test capabilities have no
+// instances (P12)
 func (mc *liveMachine) started(t *rapid.T) {
 	m := mc.m
 	found := map[storeKey]string{}
@@ -155,7 +152,7 @@ func (mc *liveMachine) started(t *rapid.T) {
 		if found[k] == "" {
 			mc.fatalf(t, "Standing grant %v not granted at start: %v", k, found)
 		}
-		m.grant(found[k], k.cap, k.params, "standing", "")
+		m.grant(found[k], k.cap, k.params, "standing")
 	}
 }
 
@@ -194,25 +191,9 @@ func (mc *liveMachine) anonymous(t *rapid.T) *liveProc {
 	return mc.anon
 }
 
-func (mc *liveMachine) forgedSession(t *rapid.T) *liveProc {
-	if mc.forged == nil {
-		mc.forged = mc.start(t, "forged", mc.lv.node, "live-anchor", "s1")
-	}
-	return mc.forged
-}
-
-func (mc *liveMachine) session(t *rapid.T) *liveProc {
-	mc.sessionsMade++
-	id := "s" + strconv.Itoa(mc.sessionsMade)
-	p := mc.start(t, id, mc.lv.bin, "live-anchor", id)
-	p.sess = id
-	mc.sessions[id] = p
-	return p
-}
-
-func (mc *liveMachine) start(t *rapid.T, name, exe, mode string, args ...string) *liveProc {
+func (mc *liveMachine) start(t *rapid.T, name, exe, mode string) *liveProc {
 	sock := mc.lv.cfg.SandboxGrantDir + "/request.sock"
-	p := mc.lv.startProc(t, name, exe, append([]string{mode, sock}, args...)...)
+	p := mc.lv.startProc(t, name, exe, mode, sock)
 	mc.procs = append(mc.procs, p)
 	return p
 }

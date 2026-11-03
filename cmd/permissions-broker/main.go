@@ -29,16 +29,17 @@ the grant directory for the sandbox and on control.sock for the Permissions
 window, asks the user about each request with a notification, and ends grants
 on their lease. Exits when the sandbox does. <config> is the JSON the module
 writes: appId, launcher, grantDir, controlSocket, sandboxGrantDir,
-window (the command opening the Permissions window), plugins (each a
-manifest path and a ceiling), commands (the host command capabilities), grants
-(the standing grants, each a capability and its parameters, granted at start
-without asking) and overview
+window (the command opening the Permissions window), folders (the folders
+that may be granted, each a path and rw), commands (the host command
+capabilities), sockets (the host socket capabilities), grants (the standing
+grants, each a capability and its parameters, granted at start without
+asking) and overview
 (what the sandbox reaches from its start, which control.sock's state passes
 on to the window as is). Environment variables in the paths and the window
 command are expanded.
 
 cleanup ends the grants of a daemon that stopped, as its unit's ExecStopPost:
-service units stopped, folder grants detached. A daemon that starts does it too.
+call units stopped, folder grants detached. A daemon that starts does it too.
 
 mcp is the MCP server inside the sandbox, a client of <socket>
 (/run/permissions/request.sock by default). --commands names the host
@@ -134,19 +135,18 @@ type config struct {
 	Launcher      string `json:"launcher"`
 	GrantDir      string `json:"grantDir"`
 	ControlSocket string `json:"controlSocket"`
-	// The daemon's systemd unit, which service units are bound to
+	// The daemon's systemd unit, which call units are bound to
 	Unit            string   `json:"unit"`
 	SandboxGrantDir string   `json:"sandboxGrantDir"`
 	Window          []string `json:"window"`
 	// Never granted as an attach source, whatever a ceiling says: every launcher's state directory and runtime
 	// directory
-	Denied  []string `json:"denied"`
-	Plugins []struct {
-		Manifest string          `json:"manifest"`
-		Ceiling  json.RawMessage `json:"ceiling"`
-	} `json:"plugins"`
-	// Host command capabilities
+	Denied []string `json:"denied"`
+	// What the folders capability may grant
+	Folders []source `json:"folders"`
+	// Host command and host socket capabilities
 	Commands []commandConfig  `json:"commands"`
+	Sockets  []socketConfig   `json:"sockets"`
 	Grants   []standingConfig `json:"grants"`
 	// The launcher's static access (binds, devices, D-Bus rules, the network, what the module adds), for the window
 	Overview json.RawMessage `json:"overview,omitempty"`
@@ -181,11 +181,8 @@ func serve(path string) error {
 	if err != nil {
 		return err
 	}
-	caps, err := loadPlugins(cfg)
+	caps, err := loadCapabilities(cfg)
 	if err != nil {
-		return err
-	}
-	if err := loadCommands(cfg.Commands, caps); err != nil {
 		return err
 	}
 	unix.Umask(0o077)
@@ -199,4 +196,23 @@ func serve(path string) error {
 	}
 	watchLogind(b, logindSignals)
 	return b.run()
+}
+
+// loadCapabilities makes the config's capabilities: folders, host commands and host sockets
+func loadCapabilities(cfg config) (map[string]*capability, error) {
+	caps := map[string]*capability{}
+	folders, err := foldersCap(cfg.Folders)
+	if err != nil {
+		return nil, err
+	}
+	if folders != nil {
+		caps[folders.id()] = folders
+	}
+	if err := loadCommands(cfg.Commands, caps); err != nil {
+		return nil, err
+	}
+	if err := loadSockets(cfg.Sockets, caps); err != nil {
+		return nil, err
+	}
+	return caps, nil
 }

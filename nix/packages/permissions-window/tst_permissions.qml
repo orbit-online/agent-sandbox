@@ -15,9 +15,10 @@ TestCase {
         property string state: JSON.stringify({
             pending: [{ id: "p1", capability: "folders/folder", params: { path: "/srv/notes", ro: true },
                         summary: 'a folder (path="/srv/notes", ro=true)', reason: "read the notes", lease: "PT1H" }],
-            grants: [{ id: "g1", capability: "test/thing", params: {}, summary: "the test thing", lease: "session",
-                       sessions: ["s1", "s2"], reason: "testing" },
-                     { id: "g2", capability: "test/echo", params: {}, summary: "the echo", lease: "standing" },
+            grants: [{ id: "g1", capability: "test-thing", params: {}, summary: "the test thing", lease: "lock",
+                       reason: "testing" },
+                     { id: "g2", capability: "echo", params: {}, summary: "the echo", lease: "standing",
+                       socket: "/run/permissions/sockets/echo" },
                      { id: "g3", capability: "windows-vm", params: { vm: "win11" },
                        summary: 'Control a Windows VM (vm="win11")', lease: "PT1H30M", reason: "check the VM",
                        expires: new Date(Date.now() + 90 * 60000).toISOString() }],
@@ -26,8 +27,8 @@ TestCase {
                     { grant: "g0", capability: "windows-vm", time: "2026-11-03T10:05:00Z", command: "click",
                       arguments: { x: 5 }, exit: 1, error: "no VM" }],
             log: [],
-            standing: [{ capability: "test/echo", params: {}, summary: "the echo", grant: "g2" },
-                       { capability: "test/thing", params: {}, summary: "the test thing", ended: true }],
+            standing: [{ capability: "echo", params: {}, summary: "the echo", grant: "g2" },
+                       { capability: "test-thing", params: {}, summary: "the test thing", ended: true }],
             overview: {
                 binds: [{ path: "/home/alice", src: "/srv/home", rw: true, optional: false },
                         { path: "/srv/notes", src: "/srv/notes", rw: false, optional: true }],
@@ -110,7 +111,7 @@ TestCase {
         // Another request arrives: it comes after this one, as the broker sorts them
         const st = JSON.parse(mock.state)
         const before = JSON.stringify(st)
-        st.pending.push({ id: "p2", capability: "test/thing", params: {}, summary: "the test thing", reason: "more",
+        st.pending.push({ id: "p2", capability: "test-thing", params: {}, summary: "the test thing", reason: "more",
                           lease: "PT1H" })
         mock.state = JSON.stringify(st)
         tryVerify(() => findChild(view, "param-ro") !== ro, 1000, "the list wasn't rebuilt")
@@ -118,7 +119,7 @@ TestCase {
         mouseClick(findChild(view, "allow"))
         const c = sent()
         compare(c.params, { path: "/srv/notes", ro: false })
-        compare(c.lease, "session")
+        compare(c.lease, "lock")
         mock.state = before
     }
 
@@ -160,7 +161,7 @@ TestCase {
         verify(details.visible, "not expanded by a click")
         const before = mock.state
         const st = JSON.parse(before)
-        st.grants.push({ id: "g4", capability: "test/thing", params: {}, summary: "another", lease: "PT1H" })
+        st.grants.push({ id: "g4", capability: "test-thing", params: {}, summary: "another", lease: "PT1H" })
         mock.state = JSON.stringify(st)
         tryVerify(() => findChild(view, "details-g3") !== details, 1000, "the list wasn't rebuilt")
         verify(findChild(view, "details-g3").visible, "a refresh collapsed it")
@@ -175,11 +176,9 @@ TestCase {
         mock.state = before
     }
 
-    // Badges: the lease, the sessions holding a grant, a host command capability's free arguments with a warning for
-    // each unrestricted one
+    // Badges: the lease, a host command capability's free arguments with a warning for each unrestricted one
     function test_badges() {
-        compare(findChild(view, "badge-lease-g1").text, "session")
-        compare(findChild(view, "badge-holders-g1").text, "held by 2 sessions")
+        compare(findChild(view, "badge-lease-g1").text, "until lock")
         compare(findChild(view, "badge-lease-g3").text, "1 h 30 min")
         compare(findChild(view, "left-g3").text, "1 h 30 min left")
         verify(!findChild(view, "badge-holders-g3"))
@@ -231,6 +230,8 @@ TestCase {
         compare(call.text, "The call asking: exec\nscript: Get-Date\nGet-Item")
         verify(call.readOnly && call.selectByMouse)
         const lease = findChild(view, "lease")
+        // Session leases are gone: no session holds a grant
+        compare(lease.indexOfValue("session"), -1)
         compare(lease.currentValue, "PT2H")
         compare(lease.currentText, "For 2 h")
         lease.currentIndex = lease.indexOfValue("once")
@@ -306,9 +307,9 @@ TestCase {
         const before = mock.state
         const st = JSON.parse(before)
         const csr = "MIIBQUFBQUFBQUFB".repeat(40)
-        st.capabilities.push({ id: "certs/kube", type: "service",
+        st.capabilities.push({ id: "certs-kube", type: "socket",
                                params: { csr: { type: "string", opaque: true } } })
-        st.pending = [{ id: "p3", capability: "certs/kube", params: { csr: csr },
+        st.pending = [{ id: "p3", capability: "certs-kube", params: { csr: csr },
                         summary: "a kube cert (csr=sha256:0123456789abcdef (640 characters))",
                         reason: "kubectl", lease: "PT1H" }]
         mock.state = JSON.stringify(st)

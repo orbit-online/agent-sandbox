@@ -19,21 +19,26 @@ import (
 // Stateful property tests: rapid runs random sequences of the protocol model's actions (models/protocol_events.als,
 // protocol_system.als) against the real broker in a sandbox stand-in, and Check (machine_check_test.go) compares the
 // broker's state, its store file and the window's view with the reference (machine_model_test.go) after every step.
-// The actions are in machine_requests_test.go, machine_answers_test.go and machine_actions_test.go, the world they run
-// in in machine_world_test.go. Not here: the notification's own checks (forge, mature: notify_test.go), commands
-// waiting for a plugin slot (TestNoOutputAfterEnd), renames beneath a ceiling (attach_test.go, swap_test.go) and the
-// sandbox's end.
+// The actions are in machine_requests_test.go, machine_answers_test.go, machine_actions_test.go and
+// machine_connect_test.go, the world they run in in machine_world_test.go. Not here: the notification's own checks
+// (forge, mature: notify_test.go), commands waiting for a call slot (TestNoOutputAfterEnd), instances looked for again
+// on a timer (TestInstanceGone, TestSocketInstances), the connection budget (TestSpliceBudget), renames beneath a
+// ceiling (attach_test.go, swap_test.go) and the sandbox's end.
 //
 // The package build runs 50 sequences; more with -rapid.checks=1000 -rapid.steps=100 (or RAPID_CHECKS and
 // RAPID_STEPS), a failure again with -rapid.seed or -rapid.failfile as rapid prints them.
 func TestBrokerMachine(t *testing.T) {
 	f := newFixture(t)
 	rapidDefault(t, "rapid.checks", "50")
+	// Instances are looked for at requests, answers and grants only: the model has no timers of their own
+	old := instanceEvery
+	instanceEvery = 1000 * time.Hour
+	t.Cleanup(func() { instanceEvery = old })
 	rapid.Check(t, func(rt *rapid.T) {
 		actions := rapid.StateMachineActions(newMachine(rt, f))
 		// Weights: Repeat picks actions evenly
 		for _, a := range []string{"Request", "Request", "Request", "NotifyAllow", "WindowAnswer", "Share", "LockWatched",
-			"Restart", "Instances"} {
+			"Restart", "Instances", "Connect", "Connect"} {
 			actions[a+strconv.Itoa(len(actions))] = actions[a]
 		}
 		rt.Repeat(actions)
@@ -64,6 +69,8 @@ type machine struct {
 	tags int
 	// The other launcher's exclusive locks
 	otherLocks map[string]func()
+	// Connections to the consoles the sandbox keeps open
+	conns []*openConn
 }
 
 func newMachine(t *rapid.T, f *fixture) *machine {
@@ -73,12 +80,19 @@ func newMachine(t *rapid.T, f *fixture) *machine {
 	mc.m = newModel(mc.clk.now(), w.cfg.Grants)
 	mc.setListed([]string{"a", "b"})
 	mc.startBroker(t)
-	t.Cleanup(func() { mc.b.endAll("test over") })
+	t.Cleanup(func() {
+		for _, c := range mc.conns {
+			c.conn.Close()
+		}
+		mc.b.endAll("test over")
+		mc.b.closeSockets()
+	})
 	return mc
 }
 
-// startBroker starts a daemon as run does, without serving the sockets: requests come straight to the handlers. It
-// grants the standing grants that pass the ceiling and the exclusive locks, in the config's order (P12)
+// startBroker starts a daemon as run does, without serving request.sock and control.sock: requests come straight to the
+// handlers. It listens at the consoles of the instances there are, and grants the standing grants that pass the
+// ceiling and the exclusive locks, in the config's order (P12)
 func (mc *machine) startBroker(t *rapid.T) {
 	mc.n = &notifier{calls: make(chan *askCall, 8)}
 	b, err := newBroker(mc.w.cfg, mc.caps, mc.w.sb, mc.n.ask)
@@ -97,6 +111,7 @@ func (mc *machine) startBroker(t *rapid.T) {
 	reqLn.Close()
 	ctlLn.Close()
 	made, m := mc.grantedSince(before), mc.m
+	m.listen()
 	n := 0
 	for _, k := range m.standing {
 		if !m.passes(k.cap, k.params, mc.w.root) || !m.lockFree(k.cap, k.params) {
@@ -105,7 +120,7 @@ func (mc *machine) startBroker(t *rapid.T) {
 		if n == len(made) {
 			mc.fatalf(t, "Standing grant %v not granted at start: made %v", k, made)
 		}
-		m.grant(made[n], k.cap, k.params, "standing", "")
+		m.grant(made[n], k.cap, k.params, "standing")
 		n++
 	}
 	if n != len(made) {
@@ -194,7 +209,7 @@ func (mc *machine) waitFor(t *rapid.T, what string, cond func() bool) {
 	}
 }
 
-// waitEnded waits until the grants ended: gone from the broker, their units stopped and mounts detached
+// waitEnded waits until the grants ended: gone from the broker, their connections closed and mounts detached
 func (mc *machine) waitEnded(t *rapid.T, ids ...string) {
 	for _, id := range ids {
 		mc.waitFor(t, "the end of grant "+id, func() bool {

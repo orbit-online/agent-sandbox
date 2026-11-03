@@ -23,7 +23,7 @@ func (mc *machine) drawPending(t *rapid.T, notification bool) *refPending {
 		t.Skip("Nothing pending")
 	}
 	p := ps[rapid.IntRange(0, len(ps)-1).Draw(t, "pending")]
-	t.Logf("Pending %s: %s %s for %s, %s", p.tag, p.cap, p.params, p.lease, p.sess)
+	t.Logf("Pending %s: %s %s for %s", p.tag, p.cap, p.params, p.lease)
 	return p
 }
 
@@ -108,57 +108,39 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res 
 		}
 	}
 	switch {
-	case !m.leaseOK(lease, p.sess), lease == "once" && !p.isCall:
+	case !m.leaseOK(lease), lease == "once" && !p.isCall:
 		refuse("no such lease now")
 		return
-	case p.cap == capToken && params != p.params:
+	case (p.cap == capToken || p.cap == capVM) && params != p.params:
 		refuse("a host command grant's bounding values changed")
 		return
 	case !m.passes(p.cap, params, mc.w.root):
 		refuse("above the ceiling")
 		return
 	}
-	// A session gone while the user was asked: what it's given is let go of at once (P8)
-	_, alive := mc.w.sessions[p.sess]
-	gone := p.sess != "" && !alive
 	g := m.matching(p.cap, params)
 	if g != nil {
 		m.consented[storeKey{p.cap, params}] = true
-		m.hold(g, p.sess)
 		mc.delivered(t, g, res, p.isCall)
-	} else {
-		made := mc.grantedSince(before)
-		if !m.lockFree(p.cap, params) {
-			refuse("its instance is granted")
-			if len(made) > 0 {
-				mc.fatalf(t, "Allowed %s %s granted with its instance granted", p.cap, params)
-			}
-			return
-		}
-		if len(made) != 1 {
-			mc.fatalf(t, "Allowed %s %s %s made grants %v: %s", p.cap, params, lease, made, res.Error)
-		}
-		m.consented[storeKey{p.cap, params}] = true
-		g, _ = m.grant(made[0], p.cap, params, lease, p.sess)
-		if lease != "session" {
-			m.hold(g, p.sess)
-		}
-		if !gone || lease != "session" {
-			mc.delivered(t, g, res, p.isCall)
-		}
-		if lease == "once" {
-			// Made for the call, ended once it's answered
-			mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
-			return
-		}
+		return
 	}
-	if gone {
-		mc.waitFor(t, "the gone session's hold dropped", func() bool {
-			mc.b.mu.Lock()
-			defer mc.b.mu.Unlock()
-			return mc.b.grants[g.id] == nil || mc.b.grants[g.id].sessions[p.sess] == nil
-		})
-		mc.waitEnded(t, m.sessionEnd(p.sess)...)
+	made := mc.grantedSince(before)
+	if !m.lockFree(p.cap, params) {
+		refuse("its instance is granted")
+		if len(made) > 0 {
+			mc.fatalf(t, "Allowed %s %s granted with its instance granted", p.cap, params)
+		}
+		return
+	}
+	if len(made) != 1 {
+		mc.fatalf(t, "Allowed %s %s %s made grants %v: %s", p.cap, params, lease, made, res.Error)
+	}
+	m.consented[storeKey{p.cap, params}] = true
+	g, _ = m.grant(made[0], p.cap, params, lease)
+	mc.delivered(t, g, res, p.isCall)
+	if lease == "once" {
+		// Made for the call, ended once it's answered
+		mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
 	}
 }
 

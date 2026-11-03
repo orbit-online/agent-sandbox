@@ -2,11 +2,12 @@
 
 Status: written 2026-10-31, rewritten 2026-11-03 for the broker as gateway. Built before the rewrite: the daemon
 (`cmd/permissions-broker/`) with consent, leases, standing grants from the Nix config and the MCP server, the
-Permissions window (`nix/packages/permissions-window/`) and folder mounts (`nix/packages/permissions-folders/`,
-`permissions.folders`), behind a launcher's `permissions.enable`. Built since: declared host commands
-(`permissions.commands`), with a consent that names what a grant covers and the window's redesign. The code still has what the
-rewrite replaces: `service` plugins, plugin tools that come and go with `list_changed`, and session leases. Not built
-yet: host sockets at stable addresses, the Go D-Bus proxy, device grants. Steps lists the order.
+Permissions window (`nix/packages/permissions-window/`) and folder mounts (`permissions.folders`), behind a launcher's
+`permissions.enable`. Built since: declared host commands (`permissions.commands`), with a consent that names what a
+grant covers and the window's redesign; the first half of step 3 (2026-11-03): plugins, their service units and tools
+and session leases removed, folders built into the broker, and host sockets at stable addresses
+(`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Not built yet: the Go D-Bus
+proxy, device grants. Steps lists the order.
 
 ## Why
 
@@ -134,9 +135,8 @@ host (user, no capabilities)                       sandbox
   Its sections (waiting requests, what's still open in ended folder grants, the configuration, the grants, host
   command calls, recent decisions) each collapse to their header. A grant is one line: its summary (capability and
   bounding values), its badges and the time it has left, with Revoke; expanded, it shows its parameters by their
-  declarations' descriptions, who holds it (the Claude sessions, or the sandbox as a whole, and what still has it
-  open), Claude's reason, and for a host command capability what it covers and the calls made under it. Badges: the
-  lease (or "from config" for a standing grant), the sessions and processes holding it, and a host command
+  declarations' descriptions, who may use it (the sandbox as a whole), Claude's reason, and for a host command capability what it covers and the calls made under it. Badges: the
+  lease (or "from config" for a standing grant) and a host command
   capability's free arguments, with a warning badge for each unrestricted one. A waiting request shows its summary,
   the same badges for free arguments, for a host command its bounding values, what a grant covers and the call
   asking (its command and free arguments, opaque ones by digest, the rest whole), and Claude's reason. Fields narrow a
@@ -535,8 +535,8 @@ as `sha256:<16 hex digits> (<n> characters)` in the summary and the log; the win
 to narrow it, and passes it back unchanged. A free argument of a call is never in the summary, whatever its
 declaration: the consent covers the values the schema allows, and the window shows the asking call's values with the
 same rules (a multiline one in a read-only text box). `lease` is the caller's proposal: `lock` or `PT<n>H` (`PT<n>M`
-too), and `once` for a call; a `request` with `once` is refused, since its grant would end at once. A call without
-one proposes `PT1H`.
+too), and `once` for a call; a `request` with `once` is refused, since its grant would end at once. A request or call
+without one proposes `PT1H`.
 
 What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch streams
 and spliced host socket connections counted per socket), so a full `request.sock` leaves `control.sock` to the window; a
@@ -693,8 +693,9 @@ a daemon started again starts them afresh.
 ## Threat model
 
 `models/` holds the Alloy model of the sandbox and the broker's protocol, and the stateful property tests run its
-actions against the broker. Both describe the first design (plugins, `service` units, session leases) until the steps
-that remove those adjust them: host command calls, bounding values and instances, host socket connections, and the
+actions against the broker. The property tests follow the rewrite since step 3's first half (no sessions, host socket
+requests, connections and revokes); the models still describe the first design (plugins, `service` units, session
+leases) until step 3's second half adjusts them: host command calls, bounding values and instances, host socket connections, and the
 D-Bus proxies' rule sets come in as those land.
 
 ## Steps
@@ -709,6 +710,7 @@ The first design's steps are built (Status). The rewrite's:
    and free arguments (a warning for unrestricted ones), all text selectable. Tests in qmltestrunner.
 3. Remove what the rewrite replaces: per-grant service units, plugin tools and `list_changed`, plugin executables
    (folders built into the broker), session leases. Host sockets at stable addresses. Tests and models adjusted.
+   Built but for the models.
 4. windows-vm as declared host commands, in secoya/agent-sandbox-plugins.
 5. The Go D-Bus proxy with static rules: the argv subset, SASL, fd passing, name tracking, replies, match rules.
    Tests against a real `dbus-daemon`, a revert check per rule kind, `-race`.
@@ -804,3 +806,27 @@ Each can be revisited.
     call log's, cut at 200 characters: a script is read before it's allowed.
 23. An enum of more than 8 values reads as a count in the consent: windows-vm's 161 key names would bury the rest of
     the notification. The window lists the values in a grant's details.
+24. The folders capability keeps the id it had as a plugin's, `folders/folder`, so requests, tests and consumers that
+    name it are unchanged. It is the one id with a `/`; declared capabilities can't take one.
+25. A host socket is declared with either `path` or no path and one bounding argument with `instances`, whose glob
+    matches are the sockets; the instance's value names its address, `sockets/<capability>/<value>`. One socket per
+    instance leaves nothing else to bound, so no other bounding arguments. No `exclusive`: an SSH agent or a console
+    can take clients from two launchers.
+26. "`$XDG_RUNTIME_DIR` as a whole" covers the directory itself, anything holding it, and a glob whose `*` is a whole
+    segment right beneath it. The launchers' own sockets are everything under `$XDG_RUNTIME_DIR/claude-desktop`,
+    `.flatpak`, `agent-sandbox-permissions` and `nixpak-*` (nixpak's bus and Wayland proxies), and the buses are
+    `$XDG_RUNTIME_DIR/bus`, `/run/dbus/system_bus_socket` and the paths `DBUS_SESSION_BUS_ADDRESS` and
+    `DBUS_SYSTEM_BUS_ADDRESS` name. The module checks the literal path at eval, the daemon the expanded one at start
+    (an unset variable is a config error), and a glob match it would refuse is no instance.
+27. Every host socket address has a budget of its own, 64 connections like `request.sock`'s, so a full one leaves
+    the others and `request.sock` alone. Past it a connection is closed at once.
+28. The broker listens at a host socket's addresses from its start, at every grant of it and every 30 seconds (as it
+    looks for instances), and stops listening at an instance's address once the glob no longer matches it. A
+    connection's peer isn't checked: the address is only reachable from the sandbox and the host user.
+29. A splice passes half-closes on: the host closing its end ends the sandbox's reading, and the other way round. A
+    connection closed with bytes it hasn't read reaches the client as a reset rather than an end of file.
+30. The broker binds an address and connects to a host socket through its directory's `/proc/self/fd` path, so
+    neither is held to a socket path's 108 bytes.
+31. With session leases gone, `release` ends the grant for the whole sandbox and `status` lists every live grant; a
+    request without a lease proposes `PT1H`, as a call does. The nudge says what the sandbox, not the session, still
+    holds.

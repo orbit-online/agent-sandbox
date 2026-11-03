@@ -49,8 +49,8 @@ Item {
             c[cap.id] = cap
         return c
     }
-    // Each capability's parameter types, for the fields that narrow a request. An opaque parameter (data for the
-    // plugin, such as a CSR) gets no field: there's nothing to narrow, and the summary shows its digest
+    // Each capability's parameter types, for the fields that narrow a request. An opaque parameter (data for a
+    // host command, such as a CSR) gets no field: there's nothing to narrow, and the summary shows its digest
     readonly property var types: {
         const t = {}
         for (const c of st.capabilities || []) {
@@ -63,7 +63,6 @@ Item {
 
     // Leases the user can pick
     readonly property var leases: [
-        { value: "session", text: "Until this Claude session ends" },
         { value: "lock", text: "Until the screen locks" },
         { value: "PT1H", text: "For 1 h" },
         { value: "PT8H", text: "For 8 h" }
@@ -212,8 +211,7 @@ Item {
                         + (c.error ? ", " + c.error : "") + argumentLines(c.arguments)).join("\n\n")
     }
     function holdersText(g) {
-        const lines = [(g.sessions || []).length > 0 ? "Given to Claude sessions: " + g.sessions.join(", ")
-                                                     : "Given to the sandbox: anything in it may use it"]
+        const lines = ["Given to the sandbox: anything in it may use it"]
         if ((g.holders || []).length > 0)
             lines.push("Open in: " + g.holders.map(h => h.comm + " (" + h.pid + (h.possible ? ", possibly" : "")
                                                      + ")").join(", "))
@@ -238,12 +236,7 @@ Item {
             out.push({ name: "badge-config-" + g.id, text: "from config" })
         else
             out.push({ name: "badge-lease-" + g.id,
-                       text: { session: "session", lock: "until lock", once: "once" }[g.lease] || spoken(g.lease) || g.lease })
-        const sessions = (g.sessions || []).length, procs = (g.holders || []).length
-        if (sessions + procs > 0)
-            out.push({ name: "badge-holders-" + g.id, text: "held by " + [
-                sessions ? sessions + (sessions === 1 ? " session" : " sessions") : "",
-                procs ? procs + (procs === 1 ? " process" : " processes") : ""].filter(s => s).join(", ") })
+                       text: { lock: "until lock", once: "once" }[g.lease] || spoken(g.lease) || g.lease })
         return out.concat(freeBadges(g.capability, g.id))
     }
 

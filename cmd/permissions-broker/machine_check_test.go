@@ -15,14 +15,10 @@ import (
 func (mc *machine) Check(t *rapid.T) {
 	m, b := mc.m, mc.b
 	b.mu.Lock()
-	type seen struct {
-		g       grant
-		anon    bool
-		anchors []string
-	}
+	type seen struct{ g grant }
 	got := map[string]seen{}
 	for id, g := range b.grants {
-		got[id] = seen{*snapshot(g), g.anon, slices.Sorted(maps.Keys(g.sessions))}
+		got[id] = seen{*snapshot(g)}
 	}
 	lockOK := b.lockOK
 	gates := map[string]gate{}
@@ -32,7 +28,7 @@ func (mc *machine) Check(t *rapid.T) {
 	pendingIDs := slices.Sorted(maps.Keys(b.pending))
 	b.mu.Unlock()
 
-	// P1, P4, release holds: the broker's grants are the reference's, with their holders, leases and expiry
+	// P1, P4: the broker's grants are the reference's, with their leases and expiry
 	if !slices.Equal(slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(m.grants))) {
 		mc.fatalf(t, "Live grants %v, want %v", describeGrants(got, func(s seen) grant { return s.g }), describeRef(m.grants))
 	}
@@ -42,11 +38,6 @@ func (mc *machine) Check(t *rapid.T) {
 			!s.g.Expires.Equal(r.expires) {
 			mc.fatalf(t, "Grant %s is %s %s %s until %v, want %s %s %s until %v", id, s.g.Capability, s.g.Params, s.g.Lease,
 				s.g.Expires, r.cap, r.params, r.lease, r.expires)
-		}
-		if !slices.Equal(s.g.Sessions, r.holders) || s.anon != r.anon ||
-			!slices.Equal(s.anchors, slices.Sorted(slices.Values(r.holders))) {
-			mc.fatalf(t, "Grant %s held by %v (anonymous %v, anchors %v), want %v (%v)", id, s.g.Sessions, s.anon,
-				s.anchors, r.holders, r.anon)
 		}
 		// P1: only after an Allow, or a standing grant from the config the user hasn't ended
 		if r.lease == "standing" && !m.isStanding(r.cap, r.params) ||
@@ -66,6 +57,7 @@ func (mc *machine) Check(t *rapid.T) {
 		mc.fatalf(t, "Lock watched: %v, want %v", lockOK, m.lockOK)
 	}
 	mc.checkDelivery(t)
+	mc.checkConns(t)
 	mc.checkWindow(t)
 	// P14: one question per capability, and the refusal block
 	for _, c := range caps {
@@ -83,18 +75,15 @@ func (mc *machine) Check(t *rapid.T) {
 	}
 }
 
-// checkDelivery: P4, P11, P13. Units up for live service grants only, mounts and mountpoints for live folder grants
-// only, and exclusive locks for what's granted here or at the other launcher
+// checkDelivery: P4, P11, P13. Mounts and mountpoints for live folder grants only, exclusive locks for what's granted
+// here or at the other launcher, and the consoles' addresses where the broker listens
 func (mc *machine) checkDelivery(t *rapid.T) {
-	var units, folders []string
+	var folders []string
 	locks := map[string]string{}
 	for id, g := range mc.m.grants {
 		switch g.cap {
 		case capVM:
-			units = append(units, id)
 			locks[decode(g.params)["name"].(string)] = "test"
-		case capConsole:
-			units = append(units, id)
 		case capFolder:
 			folders = append(folders, id)
 		}
@@ -105,18 +94,14 @@ func (mc *machine) checkDelivery(t *rapid.T) {
 		}
 		locks[n] = "other"
 	}
-	slices.Sort(units)
 	slices.Sort(folders)
-	if up := slices.Sorted(maps.Keys(mc.w.unitsUp())); !slices.Equal(up, units) {
-		mc.fatalf(t, "Units up %v, want %v", up, units)
-	}
 	if mounted := slices.Sorted(maps.Keys(mc.w.mounted())); !slices.Equal(mounted, folders) {
 		mc.fatalf(t, "Mounted in the sandbox %v, want %v", mounted, folders)
 	}
 	entries, _ := os.ReadDir(mc.w.cfg.GrantDir)
 	var points []string
 	for _, e := range entries {
-		if e.Name() != "request.sock" {
+		if e.Name() != "request.sock" && e.Name() != socketsDir {
 			points = append(points, e.Name())
 		}
 	}
@@ -125,6 +110,9 @@ func (mc *machine) checkDelivery(t *rapid.T) {
 	}
 	if held := lockHolders(); !maps.Equal(held, locks) {
 		mc.fatalf(t, "Exclusive locks %v, want %v", held, locks)
+	}
+	if got := mc.w.listening(); !maps.Equal(got, mc.m.listening) {
+		mc.fatalf(t, "Listening at the consoles of %v, want %v", got, mc.m.listening)
 	}
 }
 

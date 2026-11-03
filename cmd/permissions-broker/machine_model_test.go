@@ -9,24 +9,21 @@ import (
 	"unicode"
 )
 
-// The reference the state machine tests check the broker against: a small model of its grants, holders, leases, gates,
-// standing grants and pending requests, following models/protocol_state.als and protocol_events.als
+// The reference the state machine tests check the broker against: a small model of its grants, leases, gates, standing
+// grants, pending requests and the host sockets' addresses, following models/protocol_state.als and
+// protocol_events.als
 
 type refGrant struct {
 	id, cap, params, lease string
 	expires                time.Time
-	// The sessions holding it, in order (grant.Sessions): those it was given to, until they release it or end
-	holders []string
-	// Given to a caller without a session
-	anon bool
 	// Its place in the order grants were made, which draws go by: ids are random
 	seq int
 }
 
 type refPending struct {
 	tag, cap, params string
-	// The lease the notification offers, and the caller's session ("" for none) as found when it asked
-	lease, sess string
+	// The lease the notification offers
+	lease string
 	// A host command's call, not a request
 	isCall    bool
 	asked     time.Time
@@ -56,8 +53,11 @@ type model struct {
 	// The grant directory shared in the sandbox; share asked once
 	shared, shareAsked bool
 	lockOK             bool
-	// The instances the service's list prints, and those the other launcher holds
+	// The instances there are, and those the other launcher holds
 	listed, other map[string]bool
+	// The instances whose console the broker listens at: those there were at its start or when a console grant was
+	// last made
+	listening map[string]bool
 	// What the user allowed, by capability and parameters (P1)
 	consented map[storeKey]bool
 	made      int
@@ -65,7 +65,7 @@ type model struct {
 
 func newModel(now time.Time, standing []standingConfig) *model {
 	m := &model{now: now, grants: map[string]*refGrant{}, gates: map[string]*refGate{}, listed: map[string]bool{},
-		other: map[string]bool{}, consented: map[storeKey]bool{}, ended: map[storeKey]bool{}}
+		other: map[string]bool{}, consented: map[storeKey]bool{}, ended: map[storeKey]bool{}, listening: map[string]bool{}}
 	for _, s := range standing {
 		m.standing = append(m.standing, storeKey{s.Capability, string(s.Params)})
 	}
@@ -78,7 +78,7 @@ func (m *model) isStanding(cap, p string) bool {
 	return slices.Contains(m.standing, k) && !m.ended[k]
 }
 
-// endedByUser records a standing grant the user ended (revoke, or a release that ends it)
+// endedByUser records a standing grant the user ended (revoke, or release)
 func (m *model) endedByUser(g *refGrant) {
 	if g.lease == "standing" {
 		m.ended[storeKey{g.cap, g.params}] = true
@@ -104,7 +104,7 @@ func decode(p string) map[string]any {
 	return m
 }
 
-// passes is the ceiling (P3): the service's instance listed, the folder beneath the ceiling root, read-write only
+// passes is the ceiling (P3): the instance there, the folder beneath the ceiling root, read-write only
 // beneath its rw root
 func (m *model) passes(cap, p, root string) bool {
 	kv := decode(p)
@@ -124,19 +124,16 @@ func (m *model) passes(cap, p, root string) bool {
 }
 
 func validLease(lease string) bool {
-	if lease == "session" || lease == "lock" || lease == "once" {
+	if lease == "lock" || lease == "once" {
 		return true
 	}
 	_, err := parseDuration(lease)
 	return err == nil
 }
 
-// leaseOK is checkLease: a session lease needs a session, a lock lease the lock watched
-func (m *model) leaseOK(lease, sess string) bool {
-	switch lease {
-	case "session":
-		return sess != ""
-	case "lock":
+// leaseOK is checkLease: a lock lease needs the lock watched
+func (m *model) leaseOK(lease string) bool {
+	if lease == "lock" {
 		return m.lockOK
 	}
 	return validLease(lease)
@@ -173,16 +170,17 @@ func (m *model) lockFree(cap, p string) bool {
 	return !m.other[n]
 }
 
-// grant makes a grant live, as the broker's grant: false when the lock is held
-func (m *model) grant(id, cap, p, lease, sess string) (*refGrant, bool) {
+// grant makes a grant live, as the broker's grant: false when the lock is held. A console grant listens at the
+// instances' consoles there are
+func (m *model) grant(id, cap, p, lease string) (*refGrant, bool) {
 	if !m.lockFree(cap, p) || lease == "lock" && !m.lockOK {
 		return nil, false
 	}
+	if cap == capConsole {
+		m.listen()
+	}
 	m.made++
 	g := &refGrant{id: id, cap: cap, params: p, lease: lease, seq: m.made}
-	if lease == "session" {
-		g.holders = []string{sess}
-	}
 	if d, err := parseDuration(lease); err == nil {
 		g.expires = m.now.Add(d)
 	}
@@ -190,44 +188,12 @@ func (m *model) grant(id, cap, p, lease, sess string) (*refGrant, bool) {
 	return g, true
 }
 
-// hold records that a caller of sess was given g (hold)
-func (m *model) hold(g *refGrant, sess string) {
-	switch {
-	case sess == "":
-		g.anon = true
-	case !slices.Contains(g.holders, sess):
-		g.holders = append(g.holders, sess)
+// listen: the broker listens at the console of every instance there is, and no other
+func (m *model) listen() {
+	clear(m.listening)
+	for n := range m.listed {
+		m.listening[n] = true
 	}
-}
-
-// release drops sess's hold, and ends g once nobody holds it: no session, nor but for a session lease a caller
-// without one. Returns whether it ended
-func (m *model) release(g *refGrant, sess string) bool {
-	if sess != "" {
-		g.holders = slices.DeleteFunc(g.holders, func(s string) bool { return s == sess })
-		if len(g.holders) > 0 || g.anon && g.lease != "session" {
-			return false
-		}
-	}
-	delete(m.grants, g.id)
-	return true
-}
-
-// sessionEnd: the session's anchor exited, dropping its holds. Returns the grants that ended: session leases it was the
-// last holder of. Other leases stay until their own end, or a release finding nobody holding them
-func (m *model) sessionEnd(sess string) []string {
-	var ended []string
-	for id, g := range m.grants {
-		if !slices.Contains(g.holders, sess) {
-			continue
-		}
-		g.holders = slices.DeleteFunc(g.holders, func(s string) bool { return s == sess })
-		if g.lease == "session" && len(g.holders) == 0 {
-			delete(m.grants, id)
-			ended = append(ended, id)
-		}
-	}
-	return ended
 }
 
 // endWhere ends the grants f picks, and returns them

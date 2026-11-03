@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // A live grant: one line (what's granted, its badges, the time it has left, Revoke) that expands to its parameters,
-// who holds it, Claude's reason, and for a host command capability what it covers and the calls made under it
+// who may use it, Claude's reason, and for a host command capability what it covers and the calls made under it
 ColumnLayout {
     id: grant
     required property var modelData

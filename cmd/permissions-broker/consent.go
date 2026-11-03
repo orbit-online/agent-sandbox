@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"golang.org/x/sys/unix"
 )
 
 // request asks the user for a grant, or finds one already there that covers it
@@ -29,6 +27,9 @@ func (b *broker) request(p peer, req request) (*grant, error) {
 	}
 	return b.obtain(p, c, params, reason, req.Lease, nil)
 }
+
+// A request or a call that names no lease proposes this one
+const defaultLease = "PT1H"
 
 // foldReason folds whitespace and control characters to single spaces and cuts the reason to maxReason
 func foldReason(r string) (string, error) {
@@ -63,24 +64,13 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 				"failed when it started: restart the app")
 		}
 	}
-	sess, err := b.sb.sessionOf(p.pid)
-	if err != nil {
-		return nil, err
-	}
-	keepSess := false
-	defer func() {
-		if sess != nil && !keepSess {
-			unix.Close(sess.pidfd)
-		}
-	}()
-	// The session was read by pid: it's the caller's only if the caller still runs
 	if p.gone() {
 		return nil, errors.New("The caller is gone")
 	}
 	if lease == "" {
-		lease = "session"
+		lease = defaultLease
 	}
-	if err := b.checkLease(lease, sess); err != nil {
+	if err := b.checkLease(lease); err != nil {
 		return nil, err
 	}
 	summary := c.describe(params)
@@ -92,7 +82,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 			return nil, err
 		}
 		summary = describeAttach(summary, src)
-	} else if err := c.inList(context.Background(), params); err != nil {
+	} else if err := c.inList(params); err != nil {
 		return nil, err
 	}
 
@@ -101,15 +91,12 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	// of each making one
 	c.covered.Lock()
 	g := b.matching(c, params)
+	var err error
 	if g == nil && b.isStanding(c, params) {
-		if g, err = b.grant(c, params, summary, "", "standing", nil); err != nil {
+		if g, err = b.grant(c, params, summary, "", "standing"); err != nil {
 			c.covered.Unlock()
 			return nil, err
 		}
-	}
-	if g != nil {
-		// Another session wants it too: it holds it now, and a session lease lasts until the last of them ends
-		keepSess = b.hold(g, sess)
 	}
 	c.covered.Unlock()
 	if g != nil {
@@ -134,7 +121,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	if answer.Lease == "once" && call == nil {
 		return nil, errors.New("A once lease is for host command calls")
 	}
-	if err := b.checkLease(answer.Lease, sess); err != nil {
+	if err := b.checkLease(answer.Lease); err != nil {
 		return nil, err
 	}
 	lease = answer.Lease
@@ -156,23 +143,19 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 			summary = describeAttach(summary, src)
 		}
 	}
-	// What list prints may have changed while the user was asked (a VM shut down): checked at grant time. An attach
+	// The instances may have changed while the user was asked (a VM shut down): checked at grant time. An attach
 	// grant's source is checked again when it's mounted
-	if err := c.inList(context.Background(), params); err != nil {
+	if err := c.inList(params); err != nil {
 		return nil, err
 	}
 	// A grant of the same may have appeared while the user was asked (the window narrowing to what's granted): that
 	// one serves, rather than a second of the same
 	c.covered.Lock()
-	if g = b.matching(c, params); g != nil {
-		keepSess = b.hold(g, sess)
-	} else if g, err = b.grant(c, params, summary, reason, lease, sess); err != nil {
-		c.covered.Unlock()
-		return nil, err
-	} else if keepSess = lease == "session"; !keepSess {
-		// A session lease took the session's pidfd, any other takes it here: its watch closes it, already if the
-		// anchor is gone
-		keepSess = b.hold(g, sess)
+	if g = b.matching(c, params); g == nil {
+		if g, err = b.grant(c, params, summary, reason, lease); err != nil {
+			c.covered.Unlock()
+			return nil, err
+		}
 	}
 	c.covered.Unlock()
 	b.logDecision(summary, reason, "allowed ("+lease+")")

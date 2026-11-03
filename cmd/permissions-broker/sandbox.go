@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -208,3 +210,23 @@ func sameNs(pid int, kind string) bool {
 
 // alive reports whether the sandbox still runs: a pidfd turns readable when its process exits
 func (s *sandbox) alive() bool { return proc.Alive(s.pidfd) }
+
+// parent returns pid's parent and whether pid is the init of its pid namespace (its innermost NSpid is 1)
+func parent(pid int) (int, bool, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, false, fmt.Errorf("Read status of %d: %w", pid, err)
+	}
+	ppid, nsInit := 0, false
+	for _, line := range strings.Split(string(data), "\n") {
+		k, v, _ := strings.Cut(line, ":")
+		f := strings.Fields(v)
+		switch {
+		case k == "PPid" && len(f) == 1:
+			ppid, _ = strconv.Atoi(f[0])
+		case k == "NSpid" && len(f) > 0:
+			nsInit = f[len(f)-1] == "1"
+		}
+	}
+	return ppid, nsInit, nil
+}

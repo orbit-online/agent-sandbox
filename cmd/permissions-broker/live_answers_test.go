@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"slices"
 	"time"
 
 	"pgregory.net/rapid"
@@ -58,54 +57,30 @@ func (mc *liveMachine) allowed(t *rapid.T, p *refPending, lease, params string, 
 	m := mc.m
 	m.dropPending(p)
 	m.closeGate(p.cap, true)
-	if !m.leaseOK(lease, p.sess) || !mc.passes(p.cap, params) || lease == "once" && !p.isCall ||
+	if !m.leaseOK(lease) || !mc.passes(p.cap, params) || lease == "once" && !p.isCall ||
 		p.cap == liveCmd && params != p.params {
 		if res.Error == "" {
 			mc.fatalf(t, "Allowed %s %s %s served: %+v", p.cap, params, lease, res.Grant)
 		}
 		return
 	}
-	// A session gone while the user was asked: what it's given is let go of at once (P8)
-	_, alive := mc.sessions[p.sess]
-	gone := p.sess != "" && !alive
 	g := m.matching(p.cap, params)
 	if g != nil {
 		m.consented[storeKey{p.cap, params}] = true
-		m.hold(g, p.sess)
 		mc.delivered(t, g, res, p.isCall)
-	} else {
-		// The event comes on a connection of its own, and may come after the answer
-		mc.waitFor(t, "the grant's event", func() bool { return len(mc.grantedSince(before)) > 0 })
-		made := mc.grantedSince(before)
-		if len(made) != 1 || res.Grant != nil && res.Grant.ID != made[0] {
-			mc.fatalf(t, "Allowed %s %s %s made grants %v: %s", p.cap, params, lease, made, res.Error)
-		}
-		m.consented[storeKey{p.cap, params}] = true
-		g, _ = m.grant(made[0], p.cap, params, lease, p.sess)
-		if lease != "session" {
-			m.hold(g, p.sess)
-		}
-		if !gone || lease != "session" {
-			mc.delivered(t, g, res, p.isCall)
-		}
-		if lease == "once" {
-			// Made for the call, ended once it's answered
-			mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
-			return
-		}
+		return
 	}
-	if gone {
-		mc.waitFor(t, "the gone session's hold dropped", func() bool { return !mc.holds(g.id, p.sess) })
-		mc.waitEnded(t, m.sessionEnd(p.sess)...)
+	// The event comes on a connection of its own, and may come after the answer
+	mc.waitFor(t, "the grant's event", func() bool { return len(mc.grantedSince(before)) > 0 })
+	made := mc.grantedSince(before)
+	if len(made) != 1 || res.Grant != nil && res.Grant.ID != made[0] {
+		mc.fatalf(t, "Allowed %s %s %s made grants %v: %s", p.cap, params, lease, made, res.Error)
 	}
-}
-
-// holds reports whether the window shows sess holding grant id
-func (mc *liveMachine) holds(id, sess string) bool {
-	for _, g := range mc.lv.control(request{Op: "state"}).Grants {
-		if g.ID == id && slices.Contains(g.Sessions, sess) {
-			return true
-		}
+	m.consented[storeKey{p.cap, params}] = true
+	g, _ = m.grant(made[0], p.cap, params, lease)
+	mc.delivered(t, g, res, p.isCall)
+	if lease == "once" {
+		// Made for the call, ended once it's answered
+		mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
 	}
-	return false
 }

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// How long a call to control.sock may take: state runs the plugins' list commands
+// How long a call to control.sock may take: state globs the capabilities' instances
 const callTimeout = 15 * time.Second
 
 // window is what the QML shows and does, without Qt: the broker's state as JSON (what still holds ended folder grants

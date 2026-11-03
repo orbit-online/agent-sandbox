@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -11,8 +10,8 @@ import (
 )
 
 // The state machine's other actions: ends of grants (release, revoke, leases), the daemon's life (crash, start,
-// share), the environment (sessions, instances, the other launcher) and the attacker's reach for
-// control.sock. protocol_events.als and protocol_system.als
+// share), the environment (instances, the other launcher) and the attacker's reach for control.sock.
+// protocol_events.als and protocol_system.als. Connections to host sockets are in machine_connect_test.go
 
 // drawGrant picks a live grant's id, or one that isn't
 func (mc *machine) drawGrant(t *rapid.T) string {
@@ -23,12 +22,10 @@ func (mc *machine) drawGrant(t *rapid.T) string {
 	return ids[rapid.IntRange(0, len(ids)-1).Draw(t, "grant")]
 }
 
-// Release: release from inside, by a session or a caller without one. A release drops only the caller's hold; the
-// grant ends once nobody holds it
+// Release: release from inside, which ends the grant
 func (mc *machine) Release(t *rapid.T) {
 	id := mc.drawGrant(t)
-	who := mc.drawCaller(t)
-	pr, done := mc.w.peerOfPid(who.pid)
+	pr, done := mc.w.peerOfPid(mc.w.anonymous().pid)
 	res := mc.b.handleRequest(nil, pr, request{Op: "release", Grant: id})
 	done()
 	g := mc.m.grants[id]
@@ -41,39 +38,9 @@ func (mc *machine) Release(t *rapid.T) {
 	if res.Error != "" {
 		mc.fatalf(t, "Release %s: %s", id, res.Error)
 	}
-	if mc.m.release(g, who.sess) {
-		mc.m.endedByUser(g)
-		mc.waitEnded(t, id)
-	}
-}
-
-// NewSession: a Claude Code session starts in the sandbox
-func (mc *machine) NewSession(t *rapid.T) {
-	if len(mc.w.sessions) >= 3 {
-		t.Skip("Sessions enough")
-	}
-	mc.w.session()
-}
-
-// EndSession: a session's anchor exits, dropping its holds; the session leases it was the last holder of end (P8)
-func (mc *machine) EndSession(t *rapid.T) {
-	if len(mc.w.sessions) == 0 {
-		t.Skip("No session")
-	}
-	id := rapid.SampledFrom(slices.Sorted(maps.Keys(mc.w.sessions))).Draw(t, "session")
-	mc.w.endSession(id)
-	mc.waitEnded(t, mc.m.sessionEnd(id)...)
-	// The grants that go on drop it too
-	mc.waitFor(t, "the session's holds dropped", func() bool {
-		mc.b.mu.Lock()
-		defer mc.b.mu.Unlock()
-		for _, g := range mc.b.grants {
-			if g.sessions[id] != nil {
-				return false
-			}
-		}
-		return true
-	})
+	mc.m.endedByUser(g)
+	delete(mc.m.grants, id)
+	mc.waitEnded(t, id)
 }
 
 // Lock: the screen locks or the machine sleeps; lock leases end (P9)
@@ -134,18 +101,15 @@ func (mc *machine) Revoke(t *rapid.T) {
 	mc.waitEnded(t, id)
 }
 
-// Restart: the daemon dies and systemd starts it again. What it had dies with it: its grants, timers and session
-// watches, its questions. The new one cleans up and starts from its standing grants alone, the ended ones too (P12)
+// Restart: the daemon dies and systemd starts it again. What it had dies with it: its grants, timers, listeners and
+// spliced connections, its questions. The new one cleans up and starts from its standing grants alone, the ended ones
+// too (P12)
 func (mc *machine) Restart(t *rapid.T) {
 	old := mc.b
-	old.mu.Lock()
-	for _, g := range old.grants {
-		for _, s := range g.sessions {
-			close(s.dropped)
-		}
-		clear(g.sessions)
+	old.closeSockets()
+	for _, g := range old.liveGrants() {
+		old.closeConns(g)
 	}
-	old.mu.Unlock()
 	mc.view.die()
 	m := mc.m
 	clear(m.grants)
@@ -181,7 +145,8 @@ func (mc *machine) ShareFromElsewhere(t *rapid.T) {
 	}
 }
 
-// Instances: what the service's list prints changes (a VM started or shut down)
+// Instances: the instances there are change (a VM started or shut down). One gone takes its console's connections
+// along
 func (mc *machine) Instances(t *rapid.T) {
 	var names []string
 	for _, n := range []string{"a", "b", "c"} {
@@ -190,9 +155,10 @@ func (mc *machine) Instances(t *rapid.T) {
 		}
 	}
 	mc.setListed(names)
+	mc.hungUp(t, func(c *openConn) bool { return !mc.m.listed[c.name] })
 }
 
-// OtherLauncher: another launcher's daemon takes or lets go of an instance of the exclusive service (P13)
+// OtherLauncher: another launcher's daemon takes or lets go of an instance of the exclusive host commands (P13)
 func (mc *machine) OtherLauncher(t *rapid.T) {
 	n := rapid.SampledFrom([]string{"a", "b", "c"}).Draw(t, "instance")
 	if mc.m.other[n] {
@@ -201,7 +167,7 @@ func (mc *machine) OtherLauncher(t *rapid.T) {
 		delete(mc.m.other, n)
 		return
 	}
-	unlock, err := mc.caps[capVM].exclusiveLock(context.Background(), "other", json.RawMessage(params(map[string]any{"name": n})))
+	unlock, err := mc.caps[capVM].exclusiveLock("other", json.RawMessage(params(map[string]any{"name": n})))
 	free := mc.m.lockFree(capVM, params(map[string]any{"name": n})) && mc.m.listed[n]
 	if free != (err == nil) {
 		mc.fatalf(t, "The other launcher took %s: %v, want it free %v", n, err, free)

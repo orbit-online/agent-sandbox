@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -9,13 +8,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
 
 // Host commands (docs/permissions.md): scripts the module declares, run on the host per call under a grant of their
-// capability. A capability fixes its bounding arguments in the grant; each command takes free arguments of its own
+// capability. A capability fixes its bounding arguments in the grant; each command takes free arguments of its own.
+// Bounding arguments and instances serve host sockets too
 
 // A capability of host commands, as the config declares it. The MCP server reads the same without run
 type commandConfig struct {
@@ -76,22 +75,8 @@ func (c *capability) checkCommands() error {
 	if len(c.Commands) == 0 {
 		return fmt.Errorf("no commands")
 	}
-	for name, s := range c.schemas {
-		if s.Description == "" {
-			return fmt.Errorf("bounding argument %s has no description: the consent names it", name)
-		}
-		if slices.Contains(reservedArgs, name) {
-			return fmt.Errorf("bounding argument %s: the broker uses that name", name)
-		}
-		if s.Instances != "" {
-			if c.globArg != "" {
-				return fmt.Errorf("instances on %s and %s: one bounding argument at most", c.globArg, name)
-			}
-			if strings.Count(s.Instances, "*") != 1 || strings.ContainsAny(s.Instances, "?[") || s.Type != "string" {
-				return fmt.Errorf("instances of %s: a glob with one * and nothing else, on a string", name)
-			}
-			c.glob, c.globArg = s.Instances, name
-		}
+	if err := c.checkBounding(); err != nil {
+		return err
 	}
 	for name, cmd := range c.Commands {
 		if !commandName.MatchString(name) || len(c.Name)+1+len(name) > maxToolName {
@@ -138,6 +123,29 @@ func (c *capability) checkCommands() error {
 	return nil
 }
 
+// checkBounding checks a capability's bounding arguments: each described, none named as the broker's own, and at most
+// one with an instances glob
+func (c *capability) checkBounding() error {
+	for name, s := range c.schemas {
+		if s.Description == "" {
+			return fmt.Errorf("bounding argument %s has no description: the consent names it", name)
+		}
+		if slices.Contains(reservedArgs, name) {
+			return fmt.Errorf("bounding argument %s: the broker uses that name", name)
+		}
+		if s.Instances != "" {
+			if c.globArg != "" {
+				return fmt.Errorf("instances on %s and %s: one bounding argument at most", c.globArg, name)
+			}
+			if strings.Count(s.Instances, "*") != 1 || strings.ContainsAny(s.Instances, "?[") || s.Type != "string" {
+				return fmt.Errorf("instances of %s: a glob with one * and nothing else, on a string", name)
+			}
+			c.glob, c.globArg = s.Instances, name
+		}
+	}
+	return nil
+}
+
 // validateArgs checks a call's free arguments: each declared one, of its schema, and no other. Returns them re-encoded
 // with sorted keys
 func (cmd *hostCommand) validateArgs(raw json.RawMessage) (json.RawMessage, error) {
@@ -162,13 +170,20 @@ func (cmd *hostCommand) validateArgs(raw json.RawMessage) (json.RawMessage, erro
 	return json.Marshal(args)
 }
 
-// globInstances is what a capability's instances glob matches now, as list prints instances: each a bounding value,
-// the part of its path segment the * matched
-func (c *capability) globInstances() (json.RawMessage, error) {
-	pattern := os.ExpandEnv(c.glob)
-	if rest, ok := strings.CutPrefix(pattern, "~/"); ok {
-		pattern = filepath.Join(os.Getenv("HOME"), rest)
+// expandPath expands the environment's variables in a declared path, and a leading ~
+func expandPath(path string) string {
+	path = os.ExpandEnv(path)
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		path = filepath.Join(os.Getenv("HOME"), rest)
 	}
+	return path
+}
+
+// globMatches is what a capability's instances glob matches now: each bounding value, the part of its path segment
+// the * matched, with the path it matched (for a host socket, the socket). A host socket's match the broker refuses
+// isn't one
+func (c *capability) globMatches() (map[string]string, error) {
+	pattern := expandPath(c.glob)
 	segs := strings.Split(pattern, "/")
 	i := slices.IndexFunc(segs, func(s string) bool { return strings.Contains(s, "*") })
 	if i < 0 {
@@ -179,22 +194,31 @@ func (c *capability) globInstances() (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Instances of %s: %w", c.id(), err)
 	}
-	seen := map[string]bool{}
+	found := map[string]string{}
 	for _, m := range matches {
 		ms := strings.Split(m, "/")
 		if len(ms) != len(segs) {
 			continue
 		}
 		v := strings.TrimSuffix(strings.TrimPrefix(ms[i], prefix), suffix)
-		if s := c.schemas[c.globArg]; v != "" && s.checkValue(v, maxParam) == nil {
-			seen[v] = true
+		if c.Type == "socket" && refusedSocket(m) != nil {
+			continue
+		}
+		if s := c.schemas[c.globArg]; v != "" && found[v] == "" && s.checkValue(v, maxParam) == nil {
+			found[v] = m
 		}
 	}
-	values := make([]string, 0, len(seen))
-	for v := range seen {
-		values = append(values, v)
+	return found, nil
+}
+
+// globInstances is what a capability's instances glob matches now, as list shows instances: objects naming each
+// bounding value
+func (c *capability) globInstances() (json.RawMessage, error) {
+	found, err := c.globMatches()
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(values)
+	values := slices.Sorted(maps.Keys(found))
 	inst := make([]map[string]string, len(values))
 	for i, v := range values {
 		inst[i] = map[string]string{c.globArg: v}
@@ -288,7 +312,7 @@ func (b *broker) watchInstance(g *grant) {
 		case <-g.ended:
 			return
 		}
-		if err := g.cap.inList(context.Background(), g.Params); err != nil {
+		if err := g.cap.inList(g.Params); err != nil {
 			g.end("its instance went away")
 			return
 		}

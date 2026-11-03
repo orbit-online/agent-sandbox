@@ -177,8 +177,6 @@ func coversLine(p prompt) string {
 
 func leaseLabel(lease string) string {
 	switch lease {
-	case "session":
-		return "until this Claude session ends"
 	case "lock":
 		return "until the screen locks"
 	case "once":

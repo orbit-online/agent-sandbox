@@ -29,6 +29,7 @@ func (b *broker) run() error {
 	}
 	go b.serveOn(reqLn, b.handleRequest)
 	go b.serveOn(ctlLn, b.handleControl)
+	go b.syncSocketsEvery()
 	slog.Info("Serving", "launcher", b.cfg.Launcher, "sandbox", b.sb.pid)
 	fds := []unix.PollFd{{Fd: int32(b.sb.pidfd), Events: unix.POLLIN}}
 	for {
@@ -38,13 +39,14 @@ func (b *broker) run() error {
 	}
 	slog.Info("Sandbox ended")
 	b.endAll("the sandbox ended")
+	b.closeSockets()
 	reqLn.Close()
 	ctlLn.Close()
 	return nil
 }
 
-// start reconciles what a previous daemon left, grants the standing grants and listens on both sockets: served, the
-// daemon has its standing grants
+// start reconciles what a previous daemon left, listens at the host sockets' addresses, grants the standing grants and
+// listens on both sockets: served, the daemon has its standing grants
 func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	// What an earlier daemon left, if its ExecStopPost didn't get to it
 	cleanup(b.cfg, b.sb)
@@ -55,6 +57,11 @@ func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	// ours and a directory, not a link to elsewhere
 	if fi, err := os.Lstat(b.cfg.GrantDir); err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
 		return nil, nil, fmt.Errorf("The grant directory %s isn't a directory of ours", b.cfg.GrantDir)
+	}
+	for _, c := range b.caps {
+		if c.Type == "socket" {
+			b.syncSockets(c)
+		}
 	}
 	b.grantStanding()
 	if reqLn, err = listen(filepath.Join(b.cfg.GrantDir, "request.sock")); err != nil {

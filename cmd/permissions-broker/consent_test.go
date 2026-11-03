@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -55,27 +54,23 @@ func TestConsent(t *testing.T) {
 	}
 }
 
-// With a list, a request matching none of its instances is refused without asking; one matches when it has each of
-// the instance's keys at the same value
+// With instances, a request matching none of them is refused without asking; one matches when it has the instance's
+// value
 func TestListed(t *testing.T) {
 	b, f := testBroker(t, "allow")
 	c := testCap(t, "command")
-	list := filepath.Join(t.TempDir(), "list")
-	if err := os.WriteFile(list, []byte("#!/bin/sh\necho '[{\"path\": \"/a\"}, {\"path\": \"/b\", \"ro\": true}]'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	c.List = []string{list}
+	instancesIn(t, c, "a", "b")
 	b.caps[c.id()] = c
-	for _, params := range []string{`{"path": "/c"}`, `{"path": "/b"}`, `{"ro": true}`} {
+	for _, params := range []string{`{"path": "c"}`, `{"ro": true}`} {
 		if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), params, "PT1H")); err == nil {
-			t.Errorf("Granted %s, which list doesn't name", params)
+			t.Errorf("Granted %s, which isn't an instance", params)
 		}
 	}
 	if f.count() != 0 {
-		t.Errorf("Asked about an instance list doesn't name: %+v", f.asked)
+		t.Errorf("Asked about something that isn't an instance: %+v", f.asked)
 	}
-	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a", "ro": true}`, "PT1H")); err != nil {
-		t.Errorf("Refused an instance list names: %v", err)
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "a", "ro": true}`, "PT1H")); err != nil {
+		t.Errorf("Refused an instance: %v", err)
 	}
 	// The window's answer can't name another instance either
 	b, _ = testBroker(t, "options")
@@ -91,27 +86,24 @@ func TestListed(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT1H", Params: json.RawMessage(`{"path": "/c"}`)})
+				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT1H", Params: json.RawMessage(`{"path": "c"}`)})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/b", "ro": true}`, "PT1H")); err == nil {
-		t.Error("Granted the window's answer of an instance list doesn't name")
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "b", "ro": true}`, "PT1H")); err == nil {
+		t.Error("Granted the window's answer of something that isn't an instance")
 	}
 
-	// A list that fails refuses, and an attach capability's sources decide instead of its list
-	if err := os.WriteFile(list, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
+	// A glob that fails refuses, and the folders capability's sources decide instead of its instances
+	c.glob, c.listedAt = "[", time.Time{}
+	if err := c.inList(json.RawMessage(`{"path":"a"}`)); err == nil {
+		t.Error("A failed glob let a request through")
 	}
-	c.listedAt = time.Time{}
-	if err := c.inList(context.Background(), json.RawMessage(`{"path":"/a"}`)); err == nil {
-		t.Error("A failed list let a request through")
-	}
-	c.Type, c.listedAt = "attach", time.Time{}
-	if err := c.inList(context.Background(), json.RawMessage(`{"path":"/c"}`)); err != nil {
-		t.Errorf("Attach capability checked against its list: %v", err)
+	fc := folders(t, `{"path": "/srv"}`)
+	if err := fc.inList(json.RawMessage(`{"path":"/srv/c"}`)); err != nil {
+		t.Errorf("Folders checked against their instances: %v", err)
 	}
 }
 
@@ -139,9 +131,7 @@ func TestRefusalLimit(t *testing.T) {
 
 func TestWindowAnswer(t *testing.T) {
 	b, _ := testBroker(t, "options")
-	fakeSystemd(t)
-	c := testCap(t, "service")
-	b.caps[c.id()] = c
+	c := testSocket(t, b, "a", "b")
 	go func() {
 		for {
 			b.mu.Lock()
@@ -153,17 +143,17 @@ func TestWindowAnswer(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"path": "/a", "ro": true}`)})
+				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"vm": "b"}`)})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"vm": "a"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Lease != "PT8H" || string(g.Params) != `{"path":"/a","ro":true}` {
+	if g.Lease != "PT8H" || string(g.Params) != `{"vm":"b"}` {
 		t.Errorf("Window's answer gave %+v", g)
 	}
 }
@@ -211,14 +201,14 @@ func TestAnsweredInWindow(t *testing.T) {
 func TestListChangedWhileAsking(t *testing.T) {
 	b, _ := testBroker(t)
 	c := testCap(t, "command")
-	writeList(t, c, `[{"path": "/a"}]`)
+	instancesIn(t, c, "a")
 	b.caps[c.id()] = c
 	b.ask = func(context.Context, prompt) (string, error) {
-		writeList(t, c, `[]`)
+		instancesIn(t, c)
 		return "allow", nil
 	}
-	if g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
-		t.Errorf("Granted an instance list no longer prints: %+v", g)
+	if g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "a"}`, "PT1H")); err == nil {
+		t.Errorf("Granted an instance that's gone: %+v", g)
 	}
 }
 

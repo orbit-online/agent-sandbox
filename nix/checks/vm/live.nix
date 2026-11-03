@@ -10,20 +10,19 @@
   work_home = "${workStateDir}/home"
   start_portal()
   make_folders()
+  start_echo()
   launch("claude-desktop-work", work_home)
   workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=60)
 
   with subtest("the broker's state machine tests, live"):
-      # The state machine tests live (TestLiveMachine): rapid's sequences of requests from processes in the sandbox
-      # (sessions anchored at a copy of the test binary named claude, a forged one below a copy named node, a caller
-      # without one), answers and revoke through control.sock, releases, sessions ending, restarts and lock events,
-      # the live state checked against the reference model after every step. A fixed seed;
+      # The state machine tests live (TestLiveMachine): rapid's sequences of requests and connections to the echo
+      # socket from a copy of the test binary in the sandbox, answers and revoke through control.sock, releases,
+      # restarts and lock events, the live state checked against the reference model after every step. A fixed seed;
       # LIVE_RAPID replaces the rapid flags in the interactive driver, -rapid.seed=0 for a random one, and LIVE_TIMEOUT its
       # 15 minutes
       workstation.succeed("mkdir -p /srv/notes/sub /srv/outside && chown alice /srv/notes/sub /srv/outside")
       workstation.succeed(
-          f"install -D -m755 -o alice ${brokerLive}/bin/permissions-broker-live {work_home}/live/claude"
-          f" && cp -p {work_home}/live/claude {work_home}/live/node"
+          f"install -D -m755 -o alice ${brokerLive}/bin/permissions-broker-live {work_home}/live/agent"
       )
       # A graphical session of alice's, whose Lock the daemon watches from its start
       workstation.succeed(
@@ -39,7 +38,7 @@
       status, out = workstation.execute(alice_cmd(
           "/run/current-system/sw/bin/env PATH=/run/current-system/sw/bin"
           f" LIVE_CONFIG={live_config} LIVE_LAUNCHER=/etc/profiles/per-user/alice/bin/claude-desktop-work"
-          f" LIVE_BIN=/home/alice/live/claude LIVE_ROOT=/srv/notes LIVE_OUTSIDE=/srv/outside LIVE_LOCK_SESSION={lock_session}"
+          f" LIVE_BIN=/home/alice/live/agent LIVE_ROOT=/srv/notes LIVE_OUTSIDE=/srv/outside LIVE_LOCK_SESSION={lock_session}"
           f" ${brokerLive}/bin/permissions-broker-live -test.run '^TestLiveMachine$' -test.v -rapid.nofailfile {rapid_flags}"
       ) + " 2>&1", timeout=int(os.environ.get("LIVE_TIMEOUT", "900")))
       print(out)

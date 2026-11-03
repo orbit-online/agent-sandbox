@@ -8,21 +8,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// A source an attach grant may attach: a path beneath one of the ceiling's roots
+// A source of permissions.folders, the folders ceiling: it, or a folder beneath it, may be granted
 type source struct {
 	Path string `json:"path"`
 	RW   bool   `json:"rw"`
 }
 
-// attachCeiling is what an attach plugin's ceiling says the daemon may attach at all
-type attachCeiling struct {
-	Sources []source `json:"sources"`
-}
-
 // checkSource finds the ceiling root src lies beneath, the longest that matches, and whether it may be read-write.
 // Lexical, as are the denied directories it refuses: clone-tree then opens the path without following links or
 // crossing mounts, so the path checked is the one cloned
-func checkSource(ceil attachCeiling, denied []string, src string, ro bool) (root, rel string, err error) {
+func checkSource(sources []source, denied []string, src string, ro bool) (root, rel string, err error) {
 	if !filepath.IsAbs(src) {
 		return "", "", fmt.Errorf("Not an absolute path: %q", src)
 	}
@@ -33,13 +28,13 @@ func checkSource(ceil attachCeiling, denied []string, src string, ro bool) (root
 		}
 	}
 	var best *source
-	for i, s := range ceil.Sources {
+	for i, s := range sources {
 		r := filepath.Clean(s.Path)
 		if src != r && !strings.HasPrefix(src, strings.TrimSuffix(r, "/")+"/") {
 			continue
 		}
 		if best == nil || len(r) > len(filepath.Clean(best.Path)) {
-			best = &ceil.Sources[i]
+			best = &sources[i]
 		}
 	}
 	if best == nil {

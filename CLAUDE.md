@@ -53,23 +53,21 @@ single-user Nix store, and an environment doc for the Claude running inside.
   logind), `standing.go` (the standing grants from the config), `notify.go`,
   `views.go`, `types.go`,
   `clock.go` (the time and timers of leases and answers, which tests fake) and
-  `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
-  locks) and `plugintools.go` for plugins and their MCP tools,
-  `commands.go` (host commands: declarations, instance globs, the consent's
+  `run.go`; `capability.go` (a capability, its parameters and summary), `instances.go` (instances, the instance
+  check and exclusive locks), `commands.go` (host commands: declarations, instance globs, the consent's
   scope), `schema.go` (the JSON Schema subset arguments are checked against),
   `call.go` (a call: covered or asked, run as a transient unit, its output),
-  `mcp.go` the MCP server and `mcp_commands.go` its host command tools, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
-  user namespace, `session.go` sessions.
-  The attach type: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
+  `hostsockets.go` (host sockets: declarations, what's refused, the addresses listened at) and `splice.go`
+  (connections to them, spliced under a grant),
+  `mcp.go` the MCP server and `mcp_commands.go` its host command tools, `sandbox.go` finding and pinning the sandbox,
+  `members.go` its processes by user namespace.
+  The attach type: `folders.go` (the folders capability), `ceiling.go` (the source ceiling, by path and identity), `tree.go`
   (the clone helper it runs through `nsenter` to clone a host path),
   `helpers.go` (the helpers that join the sandbox's mount namespace only after
   their exec on the host's mounts, to share the grant directory and mount and
   unmount grants there), `mountinfo.go` (mount tables, the grant's mount), `scan.go` (the holders' scan) and `attach.go`
   (mounting, unmounting, cleanup). Each `*_test.go` follows its file;
   `main_test.go` has `TestMain` and the shared fakes.
-- `nix/packages/permissions-folders/`: the broker's built-in attach plugin,
-  a manifest and two jq scripts. `permissions.folders` lists what it may
-  grant.
 - `nix/packages/permissions-window/`: the Permissions window (Go with miqt's
   Qt 6 bindings, and QML), a client of the broker's `control.sock`. miqt has
   no moc, so the QML talks to Go through a `QQmlPropertyMap`: state as JSON
@@ -84,8 +82,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker, rewritten for
   the broker as gateway (declared host tools, host sockets at stable
-  addresses, the Go D-Bus proxy). The code still follows the first design
-  until the doc's Steps land.
+  addresses, the Go D-Bus proxy). Its Status says which Steps have landed.
 - `scripts/nettest.sh`: reachability check, run inside the sandbox.
 - `scripts/ns-inject-spike.py`: spike for binding host folders and device
   nodes into a running sandbox and detaching them, against two nested bwraps
@@ -94,8 +91,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
-`packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
-`packages.<system>.permissions-folders`. Consumers import both modules and enable
+`packages.<system>.permissions-broker`, `packages.<system>.permissions-window`. Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
@@ -145,7 +141,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
-  broker, of a plugin it has, none of folders), and the assertion on binds that reach a launcher's
+  broker, of a host command or host socket capability it has, none of folders), the assertions on host sockets (a
+  name of their own, a path or one instances glob, no D-Bus bus, `$XDG_RUNTIME_DIR` as a whole or launcher socket),
+  and the assertion on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
@@ -167,7 +165,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; none
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; none
   of it for the default launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
   handler, `StartupWMClass` matching the `desktopName` its asar gets, which
@@ -197,21 +195,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   the validity; a grant ending with its instance; the MCP tools listed from
   the declarations and a call through them, also before the daemon
   listens), a request or window answer naming no instance
-  a capability's `list` prints refused without asking (and with a failing
-  `list`; not for attach capabilities), and an Allow refused when the instance went away
+  refused without asking (and with a failing glob; not for folders), and an Allow refused when the instance went away
   while the user was asked, the refusal limit, a window answer with its
   narrowed parameters, standing grants (a config error refused: no such
-  capability, attach, parameters it doesn't take, one twice; granted at start
-  when `list` prints them, once however many ask at once; a host command's
+  capability, folders, parameters it doesn't take, one twice; granted at start
+  when their instance is there, once however many ask at once; a host command's
   calls without asking, told `maxValidity`; revoked or released, asked for until the
   daemon starts again), duration, lock (granted right after the watch is set up, which
   happens before the daemon serves; none granted when the lock stops being
-  watched while the user is asked) and session
-  leases (a session anchored at a copy of the test binary named `claude`, none
-  at another name; one allowed after its anchor exited ends, closing no file of
-  the daemon's; a session holding one before its lease started watched once; a session that ended dropping its hold on a duration
-  grant, which a release with nobody else holding it ends), service units in systemd (faked), exclusive instances across
-  launchers (locked by the instance `list` prints, whatever other parameters
+  watched while the user is asked) leases, call units in systemd (faked), exclusive instances across
+  launchers (locked by the instance, whatever other parameters
   a request carries; the default launcher's cleanup leaving a lock without content alone), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace, a second time, and once a process of
   the sandbox is in a copy of its mount namespace), `control.sock` refusing a peer in
@@ -225,11 +218,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   parameter or reason in the notification, make a click on its replacement of
   the broker's notification or an `ActionInvoked` of its own allow or
   `default` (a fake notification server on a `dbus-daemon` of the test's),
-  or get a body click answered within a second, anchor a session at or above the
-  sandbox or, from a re-entry (`--shell`), at a host session above nsenter, get `share` served twice, get a call's output after
+  or get a body click answered within a second, get `share` served twice, get a call's output after
   its lease ran out or for a grant revoked while it waited for a
-  plugin slot, or hold every plugin slot with one capability whose commands hang (another's run, and its own
-  `list` for the window); plus a window answer while the notification is up, pending requests
+  call slot; plus a window answer while the notification is up, pending requests
   in arrival order, a click on the notification's body (the `default`
   action, first: a deny, on cosmic-notifications the window's options and a
   deny without a window), and unit
@@ -244,9 +235,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
   record), detached before the holders' scan starts, with its mountpoint
-  gone on revoke, a session lease two sessions hold, a release dropping only the releasing
-  session's hold (the grant ends with the last, or at once for a caller
-  without a session), a daemon started again
+  gone on revoke, a daemon started again
   taking over the shared grant directory and mounting a folder there, and
   the sandbox's attacks: a link out of the ceiling, a ceiling root swapped for
   a link, a link to a denied directory, a denied directory under another name
@@ -256,31 +245,33 @@ modules and a user alice (the `home-manager` input exists only for it).
   mountpoint in the stand-in's mount namespace from a nested one (pivot_root,
   the old root detached, then a rename): the store directory holding the
   helpers' binary (they still run the daemon's) and the grant directory for a
-  link to another mount (not unmounted by a revoke). The MCP server: a service plugin's
-  tools (a fake plugin speaking MCP on a socket) offered while its grant
-  lives, a call forwarded, a second grant's under names of their own, each
-  withdrawn with its grant and every change sent as `list_changed`, also
-  for a plugin answering bare JSON-RPC; a hanging plugin holding up only its
-  own grant, which is tried again once it answers; a failed offer tried
-  again; two tools of a grant under one name told apart; the nudge after 15
-  minutes, not again right after, and in tool results; service units bound
-  to the daemon's unit, and the cleanup a stopped daemon's `ExecStopPost`
-  runs (units stopped, locks removed, folder grants detached, mountpoints
+  link to another mount (not unmounted by a revoke). Host sockets: declarations refused (a D-Bus bus, by
+  path or by the bus address variables, `$XDG_RUNTIME_DIR`, a path holding it or a glob over it, the launchers'
+  control sockets, nixpak's proxies, `.flatpak` and the lock directory, a relative path or an unset variable,
+  neither or both of a path and an instances glob, another bounding argument, a bad name, no description, a
+  name twice) and a glob match among the refused no instance; the address there before any grant, a connection
+  without a grant closed at once, one under a grant spliced to the host (the grant at
+  `/run/permissions/sockets/<capability>/<instance>` with the default `PT1H` lease), a revoke closing every
+  connection; an instance's address appearing and going with it on the timer, its grant ending with it; 64
+  connections per address and the next closed at once until one ends; an address and a host socket past 108
+  bytes. The MCP server: the nudge after 15
+  minutes, not again right after, and in tool results; and the cleanup a stopped daemon's `ExecStopPost`
+  runs (call units stopped, locks removed, folder grants detached, mountpoints and host socket addresses
   removed, also without the sandbox). Stateful property tests
   (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
   protocol model's actions against the broker on the stand-in sandbox, with
-  a fake clock, with standing grants of both services and the host command in its
-  config: requests of each type and host command calls (once leases
-  included) from sessions, a forged session and a
-  caller without one, floods and crafted requests, answers on the
-  notification and in the window, releases, sessions ending, lock events,
-  time passing, revoke, a restart (granting the standing grants that pass
-  `list` and the locks, ended ones too), `share`, `list`
-  changing, another launcher's exclusive locks and control.sock from inside.
-  After every step the broker's grants, holders and gates, its
-  units, mounts and locks and the window's view (the standing grants, ended
+  a fake clock, with standing grants of a host socket by instance, the exclusive host commands and another host
+  command in its config: requests of each type and host command calls (once leases
+  included) from an anonymous caller, floods and crafted requests, answers on the
+  notification and in the window, releases, lock events,
+  time passing, revoke, a restart (granting the standing grants whose instance is there and the locks, ended ones
+  too), `share`, the instances changing (an instance gone closing its console's connections), connections to the
+  instances' consoles (echoed from the host under a live grant, closed at once otherwise, kept open and closed
+  when their grant ends), another launcher's exclusive locks and control.sock from inside.
+  After every step the broker's grants and gates, its
+  mounts, locks, host socket addresses and open connections and the window's view (the standing grants, ended
   and live, included) match a reference model
-  (P1, P3, P4, P9, P10, P12, P13, P14, release holds). `go test` runs 50
+  (P1, P3, P4, P9, P10, P12, P13, P14). `go test` runs 50
   sequences of about 30 steps (half a minute or less); more with
   `-rapid.checks=1000 -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`),
   a failure again with the `-rapid.seed` it prints.
@@ -294,10 +285,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   a standing grant shown as from the config, the overview of the configuration (binds, devices, D-Bus, the
   network, the standing grants live and ended, the implicit lines), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
   replaced in place, a grant expanded and collapsed (kept through a refresh) and a section collapsed, the
-  badges (lease, from config, holders, free arguments with a warning for an unrestricted one), a host command
+  badges (lease, from config, free arguments with a warning for an unrestricted one), a host command
   grant's parameters, holders, reason, scope (a long enum listed) and calls, the calls of ended grants, a host
   command request with no editable bounding value, its scope and the call asking, its lease still editable (once
-  and Claude's proposal offered) and Allow sending no parameters, and the text read-only and selectable.
+  and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
@@ -342,12 +333,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, the standing grants from the config: the host command, a tool of
-  the MCP server's from its start, called without asking, the test plugin's service
-  socket-activated by systemd whose tool the MCP server inside offers and
-  forwards a call to, and revoked, asked for again; grants through the MCP
-  server that the test answers on `control.sock`: the service again, a folder
+  the MCP server's from its start, called without asking, and the host socket: an echo server of alice's
+  reached at `/run/permissions/sockets/echo` (the test binary's `live-connect` as the client), a held connection
+  closed by the revoke, one without a grant closed at once; grants through the MCP
+  server that the test answers on `control.sock`: the host socket again, a folder
   mounted read-only, nodev and nosuid where the app runs and one with a mount
-  beneath it refused; a SIGKILL of the daemon ending its service unit and its
+  beneath it refused; a SIGKILL of the daemon closing its connections and ending its
   folder grant, the standing grants alone back under new ids after its restart, the overview in its state, the Permissions window
   staying up against it, the state machine tests run live (below), the daemon ending with the sandbox), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
@@ -368,17 +359,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   The broker's state machine tests also run live there (`TestLiveMachine`,
   `live*_test.go`, skipped elsewhere): the test binary, built with `go test
   -c`, drives the work launcher's daemon under systemd from the host as
-  alice, with copies of itself inside the sandbox (through the launcher's
-  re-entry) as callers on `request.sock`: sessions anchored at a copy named
-  `claude`, a forged one below a copy named `node`, one without a session.
-  The daemon has standing grants of the test host command and the test plugin's service.
-  The actions: requests of each type (the host command and the service, calls of the host command,
+  alice, with a copy of itself inside the sandbox (through the launcher's
+  re-entry) as the caller on `request.sock` and the client of the echo socket.
+  The daemon has standing grants of the test host command and the echo socket.
+  The actions: requests of each type (the host command and the host socket, calls of the host command,
   folders beneath `/srv/notes` and outside it) and lease, floods, crafted
-  requests and `share` from inside, the user's answers and revoke
-  through `control.sock`, releases, sessions ending, `systemctl restart`
+  requests and `share` from inside, connections to the echo socket (kept open while their grant lives), the
+  user's answers and revoke through `control.sock`, releases, `systemctl restart`
   (the standing grants back),
   and logind's Lock of a graphical session of alice's made for
-  it. After every step the window's state, the socket units,
+  it. After every step the window's state, the open connections,
   the grant directory and the mounts in the outer mount namespace and where
   the app runs match the reference model. 15 sequences with seed 1 (about a
   minute); by hand, `LIVE_RAPID` replaces the flags, for example

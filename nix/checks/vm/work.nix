@@ -2,6 +2,7 @@
 {
   pkgs,
   broker,
+  brokerLive,
   workStateDir,
   mcpArgs,
   routerIP,
@@ -107,23 +108,38 @@
           workstation.wait_until_succeeds(f"grep -q {shlex.quote(want)} ${workStateDir}/home/{name}.out", timeout=60)
 
       # The standing grants from the config, there since the daemon started: the host command, a tool of the MCP
-      # server's from its start, called without asking and told its maxValidity
+      # server's from its start, called without asking and told its maxValidity, and the host socket
       make_folders()
+      start_echo()
       standing = {g["capability"]: g["id"] for g in control({"op": "state"}, tries=30)["grants"] if g["lease"] == "standing"}
-      assert sorted(standing) == ["test", "test/echo"], f"standing grants {standing}"
+      assert sorted(standing) == ["echo", "test"], f"standing grants {standing}"
       mcp_until(mcp_script({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
           "name": "test_thing", "arguments": {"reason": "the VM test"}}}), "issued-PT28800S")
-      # The service: its plugin runs socket-activated by systemd, on a socket in the grant directory, and the MCP
-      # server offers its tool and forwards a call to it
-      workstation.succeed(f"systemctl --user -M alice@ is-active -q perm-work_{standing['test/echo']}.socket")
-      call = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-          "name": "test_echo", "arguments": {"text": "from the sandbox"}}}
-      mcp_until(mcp_script(call), "echo: from the sandbox")
-      # Revoked, a standing grant is asked for like any other
-      control({"op": "revoke", "grant": standing["test/echo"]})
-      workstation.wait_until_fails(f"systemctl --user -M alice@ is-active -q perm-work_{standing['test/echo']}.socket",
-                                   timeout=30)
-      granted("echo", "test/echo", {}, ".sock")
+      # The host socket at its stable address: the broker copies bytes to and from alice's echo server. The test
+      # binary's live-connect is the client, as the sandbox has no nc
+      workstation.succeed(f"install -D -m755 -o alice ${brokerLive}/bin/permissions-broker-live {work_home}/connect")
+      connect = "/home/alice/connect live-connect /run/permissions/sockets/echo"
+      out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect)}")
+      assert out.strip() == "ping", f"through the host socket: {out!r}"
+
+      # A connection held open: it ends when the grant does. The shell feeding it doesn't wait for its input
+      def hold(name):
+          script = (f"mkfifo /tmp/{name}.in; (echo first; exec sleep 600) >/tmp/{name}.in & {connect} </tmp/{name}.in"
+                    f" >/home/alice/{name}.out; echo $? >/home/alice/{name}.exit")
+          workstation.succeed(f"systemd-run --user -M alice@ --unit {name} --"
+                              f" /etc/profiles/per-user/alice/bin/claude-desktop-work --exec sh -c {shlex.quote(script)}")
+          workstation.wait_until_succeeds(f"grep -qx first {work_home}/{name}.out", timeout=60)
+
+      # Revoked, the standing grant's connection is closed, a new one is closed at once, and the grant is asked for
+      # like any other
+      hold("held")
+      control({"op": "revoke", "grant": standing["echo"]})
+      workstation.wait_until_succeeds(f"test -s {work_home}/held.exit", timeout=30)
+      out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect + '; echo exit=$?')}")
+      assert out.strip() == "exit=0", f"without a grant: {out!r}"
+      granted("echo", "echo", {}, "/run/permissions/sockets/echo")
+      out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect)}")
+      assert out.strip() == "ping", f"granted again: {out!r}"
       # A folder, mounted read-only, nodev and nosuid where the app runs; /srv/mounted has a mount beneath it, which
       # would come along unchecked: never mounted
       granted("notes", "folders/folder", {"path": "/srv/notes"}, "/run/permissions/")
@@ -136,27 +152,24 @@
       opts = grants[0].split()[5].split(",")
       assert {"ro", "nodev", "nosuid"} <= set(opts), grants[0]
 
-      # A crash ends the daemon's grants: ExecStopPost detaches the folder, and the service units are bound to it.
+      # A crash ends the daemon's grants: ExecStopPost detaches the folder, and its connections close with it.
       # Started again, it has its standing grants alone, the revoked one too, under new ids
-      socket_unit = workstation.succeed(
-          "systemctl --user -M alice@ list-units --plain --no-legend 'perm-work_*.socket' | cut -d' ' -f1"
-      ).strip()
       folder = grants[0].split()[4]
-      bound = workstation.succeed(f"systemctl --user -M alice@ show -P BindsTo {socket_unit}")
-      assert "claude-desktop-work-permissions.service" in bound, f"{socket_unit} bound to {bound!r}"
+      hold("crashed")
       stop_post = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-work-permissions")
       assert " cleanup " in stop_post, f"ExecStopPost {stop_post!r}"
       workstation.succeed("systemctl --user -M alice@ kill --signal=SIGKILL claude-desktop-work-permissions")
-      workstation.wait_until_fails(f"systemctl --user -M alice@ is-active -q {socket_unit}", timeout=30)
+      workstation.wait_until_succeeds(f"test -s {work_home}/crashed.exit", timeout=30)
       workstation.wait_until_succeeds(work_cmd(f"sh -c '! grep -q \" {folder} \" /proc/self/mountinfo'"), timeout=30)
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
       state = control({"op": "state"}, tries=30)
       again = {g["capability"]: g["id"] for g in state["grants"] if g["lease"] == "standing"}
-      assert sorted(again) == ["test", "test/echo"] and len(state["grants"]) == 2, f"grants after a restart: {state}"
+      assert sorted(again) == ["echo", "test"] and len(state["grants"]) == 2, f"grants after a restart: {state}"
       assert not set(again.values()) & set(standing.values()), f"the same ids after a restart: {again}"
       # The window's overview of the configuration
       assert state["overview"]["network"] and any(b["path"] == "/home/alice" for b in state["overview"]["binds"]), state["overview"]
-      workstation.succeed(f"systemctl --user -M alice@ is-active -q perm-work_{again['test/echo']}.socket")
+      out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect)}")
+      assert out.strip() == "ping", f"the standing grant back after a restart: {out!r}"
 
       # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
       # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds

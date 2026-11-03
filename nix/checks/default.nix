@@ -179,7 +179,10 @@ let
               permissions = {
                 enable = true;
                 folders = [ { path = "/srv/notes"; } ];
-                plugins.test.package = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" "{}";
+                sockets.agent = {
+                  description = "an agent";
+                  path = "$XDG_RUNTIME_DIR/agent.sock";
+                };
                 commands.vm = {
                   description = "a VM";
                   bounding.vm = {
@@ -193,11 +196,7 @@ let
                   };
                 };
                 grants = [
-                  {
-                    plugin = "test";
-                    capability = "thing";
-                    params.scope = "read";
-                  }
+                  { capability = "agent"; }
                   {
                     capability = "vm";
                     params.vm = "win11";
@@ -441,32 +440,27 @@ let
         }
       ];
     };
-    # Standing grants only with the broker, of a plugin it has, and never of folders
+    # Standing grants only with the broker, of a host command or host socket capability it has, and never of folders
     testStandingGrants = {
       expr = map (a: a.message) (
         failedAssertions (
           nixos (
             lib.recursiveUpdate enabled {
-              permissions.grants = [
-                {
-                  plugin = "test";
-                  capability = "thing";
-                }
-                { capability = "vm"; }
-              ];
+              permissions.grants = [ { capability = "vm"; } ];
               launchers.work.permissions = {
                 enable = true;
                 folders = [ { path = "/srv/notes"; } ];
+                sockets.agent = {
+                  description = "an agent";
+                  path = "/srv/agent.sock";
+                };
                 grants = [
                   {
-                    plugin = "folders";
-                    capability = "folder";
+                    capability = "folders/folder";
                     params.path = "/srv/notes";
                   }
-                  {
-                    plugin = "none";
-                    capability = "thing";
-                  }
+                  { capability = "none"; }
+                  { capability = "agent"; }
                 ];
               };
             }
@@ -475,10 +469,98 @@ let
       );
       expected = [
         "agent-sandbox.claude-desktop: permissions.grants needs permissions.enable"
-        "agent-sandbox.claude-desktop: permissions.grants: no plugin test in permissions.plugins"
-        "agent-sandbox.claude-desktop: permissions.grants: no host commands vm in permissions.commands"
+        "agent-sandbox.claude-desktop: permissions.grants: no capability vm in permissions.commands or permissions.sockets"
         "agent-sandbox.claude-desktop: launchers.work.permissions.grants: folders get no standing grants, a folder that should always be there is a bind (binds)"
-        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no plugin none in permissions.plugins"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no capability none in permissions.commands or permissions.sockets"
+      ];
+    };
+    # Host sockets the broker would refuse, caught at eval: a bad name or one host commands have, neither or both of a
+    # path and an instances glob, a D-Bus bus, $XDG_RUNTIME_DIR as a whole and the launchers' own sockets
+    testSocketAssertions = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                commands.vm = {
+                  description = "a VM";
+                  commands.shot = {
+                    description = "a screenshot";
+                    run = [ "/srv/shot" ];
+                  };
+                };
+                sockets = {
+                  ok = {
+                    description = "fine";
+                    path = "$XDG_RUNTIME_DIR/ssh-agent.sock";
+                  };
+                  vms = {
+                    description = "fine, by instance";
+                    bounding.vm = {
+                      type = "string";
+                      description = "the VM";
+                      instances = "\${XDG_RUNTIME_DIR}/vms/*/console.sock";
+                    };
+                  };
+                  a_b = {
+                    description = "bad name";
+                    path = "/srv/a.sock";
+                  };
+                  vm = {
+                    description = "a host commands' name";
+                    path = "/srv/vm.sock";
+                  };
+                  neither.description = "no path, no glob";
+                  both = {
+                    description = "a path and a glob";
+                    path = "/srv/a.sock";
+                    bounding.vm = {
+                      type = "string";
+                      description = "the VM";
+                      instances = "/srv/*.sock";
+                    };
+                  };
+                  bus = {
+                    description = "the session bus";
+                    path = "$XDG_RUNTIME_DIR/bus";
+                  };
+                  system = {
+                    description = "the system bus";
+                    path = "/run/dbus/system_bus_socket";
+                  };
+                  all = {
+                    description = "all of the runtime dir";
+                    bounding.s = {
+                      type = "string";
+                      description = "a socket";
+                      instances = "\${XDG_RUNTIME_DIR}/*";
+                    };
+                  };
+                  control = {
+                    description = "a launcher's control socket";
+                    path = "/run/user/1000/claude-desktop/permissions-control.sock";
+                  };
+                  proxy = {
+                    description = "nixpak's D-Bus proxy";
+                    path = "$XDG_RUNTIME_DIR/nixpak-bus-1";
+                  };
+                };
+              };
+            }
+          )
+        )
+      );
+      expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.sockets.${m}") [
+        "a_b: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "all: $XDG_RUNTIME_DIR/* would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "both: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "bus: $XDG_RUNTIME_DIR/bus would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "control: /run/user/1000/claude-desktop/permissions-control.sock would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "neither: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "proxy: $XDG_RUNTIME_DIR/nixpak-bus-1 would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "system: /run/dbus/system_bus_socket would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "vm: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
       ];
     };
     # Host commands the broker would refuse, caught at eval
@@ -774,10 +856,9 @@ in
             and .window[2] == "Claude permissions (work)"
             and .denied == ["/home/alice/.local/share/claude-desktop", "/home/alice/.local/share/claude-desktop-work",
               "${"$"}{XDG_RUNTIME_DIR}"]
-            and (.plugins | length) == 2 and .plugins[1].ceiling == {sources: [{path: "/srv/notes", rw: false}]}
-            and (.plugins[1].manifest | endswith("/share/agent-sandbox/permissions/folders.json"))
-            and (.plugins[0].manifest | endswith("/share/agent-sandbox/permissions/test.json"))
-            and .grants == [{capability: "test/thing", params: {scope: "read"}}, {capability: "vm", params: {vm: "win11"}}]
+            and .folders == [{path: "/srv/notes", rw: false}] and (has("plugins") | not)
+            and .sockets == [{name: "agent", description: "an agent", path: "$XDG_RUNTIME_DIR/agent.sock", bounding: {}}]
+            and .grants == [{capability: "agent", params: {}}, {capability: "vm", params: {vm: "win11"}}]
             and .commands == [{name: "vm", description: "a VM", exclusive: false,
               bounding: {vm: {type: "string", description: "the VM"}}, commands: {shot: {description: "a screenshot",
               arguments: {}, result: "image/png", timeout: "PT1M", run: ["/srv/shot"]}}}]

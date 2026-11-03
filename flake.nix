@@ -47,7 +47,6 @@
         subid-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/subid-broker { };
         permissions-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-broker { };
         permissions-window = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-window { };
-        permissions-folders = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-folders { };
       });
       checks = forAllSystems (system: (checksFor system).checks);
       # nix-unit's, run by checks.claude-desktop-eval

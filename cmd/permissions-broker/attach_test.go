@@ -14,25 +14,19 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// folders is an attach capability like the folders plugin: resolve takes path and ro (read-only unless false)
+// folders is the folders capability with sources, as JSON objects, as its ceiling
 func folders(t *testing.T, sources string) *capability {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "resolve")
-	if err := os.WriteFile(path, []byte(`#!/bin/sh
-exec sed -n 's/.*"params":{"path":"\([^"]*\)"\(,"ro":false\)\{0,1\}}.*/{"source":"\1","ro":RO\2}/p' |
-  sed 's/RO,"ro":false/false/; s/RO/true/'
-`), 0o755); err != nil {
+	var src []source
+	if err := json.Unmarshal([]byte("["+sources+"]"), &src); err != nil {
 		t.Fatal(err)
 	}
-	c := &capability{Plugin: "folders", Name: "folder", Type: "attach", Description: "a folder",
-		Params:  map[string]json.RawMessage{"path": json.RawMessage(`{"type": "string"}`), "ro": json.RawMessage(`{"type": "boolean"}`)},
-		Resolve: []string{path}, Ceiling: ceiling{Raw: json.RawMessage(`{"sources": [` + sources + `]}`)}}
-	if err := c.check(); err != nil {
+	c, err := foldersCap(src)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -186,41 +180,6 @@ func TestFolderOutsideCeiling(t *testing.T) {
 	}
 }
 
-// A session lease two sessions hold lasts until both end
-func TestSessionsShare(t *testing.T) {
-	b, _ := testBroker(t, "allow")
-	c := testCap(t, "command")
-	b.caps[c.id()] = c
-	anchor1, child1 := startAnchor(t, "claude")
-	g, err := b.request(peerAt(t, child1), req(c.id(), `{}`, "session"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The second session's id differs: its anchor sets the same variable, so give it another
-	anchor2, child2 := startAnchor(t, "claude")
-	s2, err := ownSandbox(t, os.Getpid()).sessionOf(child2)
-	if err != nil || s2 == nil {
-		t.Fatal(s2, err)
-	}
-	s2.id = "session-2"
-	if !b.hold(g, s2) {
-		t.Fatal("Second session not added")
-	}
-	anchor1.Process.Kill()
-	time.Sleep(6 * time.Second)
-	select {
-	case <-g.ended:
-		t.Fatal("Ended with the first of two sessions")
-	default:
-	}
-	anchor2.Process.Kill()
-	select {
-	case <-g.ended:
-	case <-time.After(10 * time.Second):
-		t.Error("Outlived both sessions")
-	}
-}
-
 // A daemon started again while the sandbox runs takes over the shared grant directory: folders are granted into it
 func TestAdoptShared(t *testing.T) {
 	src := t.TempDir()
@@ -242,7 +201,8 @@ func TestAdoptShared(t *testing.T) {
 	}
 }
 
-// What a daemon leaves when it stops, a crash included, ExecStopPost ends: its units, its locks, its folder grants
+// What a daemon leaves when it stops, a crash included, ExecStopPost ends: its units, its locks, its folder grants,
+// its host sockets' addresses
 func TestCleanup(t *testing.T) {
 	log := fakeSystemd(t)
 	src := t.TempDir()
@@ -268,6 +228,9 @@ func TestCleanup(t *testing.T) {
 	if err := os.WriteFile(lock, []byte("work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := listenIn(b.cfg.GrantDir, socketsDir+"/echo"); err != nil {
+		t.Fatal(err)
+	}
 	// The daemon is gone (its grants still in its memory): cleanup knows them only from the sandbox and the host
 	cleanup(b.cfg, b.sb)
 	if _, err := os.Stat(inside); err == nil {
@@ -280,7 +243,10 @@ func TestCleanup(t *testing.T) {
 		t.Error("The launcher's lock is left")
 	}
 	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "systemctl --user stop perm-work_*") {
-		t.Errorf("Service units not stopped:\n%s", data)
+		t.Errorf("Call units not stopped:\n%s", data)
+	}
+	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, socketsDir)); err == nil {
+		t.Error("The host sockets' addresses are left")
 	}
 	// Without the sandbox, what's left on the host goes all the same
 	if err := os.Mkdir(filepath.Join(b.cfg.GrantDir, "stale"), 0o700); err != nil {

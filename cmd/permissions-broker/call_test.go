@@ -60,7 +60,7 @@ func TestCallChecksFirst(t *testing.T) {
 		t.Errorf("A valid call: %v, asked %d times", err, f.count())
 	}
 	// The user was told what the grant covers
-	if f.asked[0].Scope != c.scope() || f.asked[0].Lease != callLease {
+	if f.asked[0].Scope != c.scope() || f.asked[0].Lease != defaultLease {
 		t.Errorf("Asked %+v", f.asked[0])
 	}
 }
@@ -75,7 +75,7 @@ func TestCallOnce(t *testing.T) {
 		first <- err
 	}()
 	time.Sleep(200 * time.Millisecond)
-	if gs := b.liveGrants(""); len(gs) != 1 || gs[0].Lease != "once" {
+	if gs := b.liveGrants(); len(gs) != 1 || gs[0].Lease != "once" {
 		t.Fatalf("Grants while the first call runs: %v", gs)
 	}
 	if _, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "once"); err != nil || f.count() != 2 {
@@ -84,7 +84,7 @@ func TestCallOnce(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Error(err)
 	}
-	if gs := b.liveGrants(""); len(gs) != 0 {
+	if gs := b.liveGrants(); len(gs) != 0 {
 		t.Errorf("Once grants left: %v", gs)
 	}
 	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "once")); err == nil || f.count() != 2 {
@@ -106,7 +106,7 @@ func TestCallFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exit 3") || !strings.Contains(err.Error(), "broken") {
 		t.Errorf("Failed call: %v", err)
 	}
-	gs := b.grantViews("")
+	gs := b.grantViews()
 	calls := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}).Calls
 	if len(gs) != 1 || len(calls) != 1 {
 		t.Fatalf("Grants %+v, calls %+v", gs, calls)
@@ -153,7 +153,7 @@ func TestCallUnit(t *testing.T) {
 		done <- err
 	}()
 	time.Sleep(300 * time.Millisecond)
-	gs := b.liveGrants("")
+	gs := b.liveGrants()
 	if len(gs) != 1 {
 		t.Fatalf("Grants %v", gs)
 	}
@@ -216,7 +216,7 @@ func TestInstanceGone(t *testing.T) {
 	if _, err := callRun(b, peerAt(t, os.Getpid()), `{"vm": "win11"}`, ""); err != nil {
 		t.Fatal(err)
 	}
-	g := b.liveGrants("")[0]
+	g := b.liveGrants()[0]
 	if err := os.Remove(filepath.Join(dir, "win11.sock")); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestCommandTools(t *testing.T) {
 	defer ln.Close()
 	go b.serveOn(ln, b.handleRequest)
 	cfg := commandConfig{Name: c.Name, Description: c.Description, Bounding: c.Params, Commands: c.Commands}
-	server := newMCPServer(sock, nil, func() {})
+	server := newMCPServer(sock, nil)
 	addCommandTools(server, sock, nil, []commandConfig{cfg})
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
@@ -332,8 +332,8 @@ func TestCallEndedBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range cap(pluginSlots) {
-		pluginSlots <- struct{}{}
+	for range cap(callSlots) {
+		callSlots <- struct{}{}
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -344,8 +344,8 @@ func TestCallEndedBeforeStart(t *testing.T) {
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}
-	for range cap(pluginSlots) {
-		<-pluginSlots
+	for range cap(callSlots) {
+		<-callSlots
 	}
 	if err := <-done; err == nil {
 		t.Error("Ran after the grant ended")

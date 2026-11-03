@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -16,12 +15,12 @@ import (
 // The live state machine's actions (live_test.go), as machine_requests_test.go, machine_answers_test.go and
 // machine_actions_test.go have them, on the real sockets. Not live: notification clicks and Options (the VM's
 // notification server is a fake that never answers), time passing (no fake clock: leases are long enough not to run
-// out), list and other launchers (the test plugins have neither)
+// out), instances and other launchers (the test capabilities have neither)
 
 // Folders more often: more of their requests are refused
-var liveCaps = []string{liveCmd, liveSvc, liveFolder, liveFolder}
+var liveCaps = []string{liveCmd, liveSock, liveFolder, liveFolder}
 
-var liveLeases = []string{"", "session", "lock", "PT1H", "standing"}
+var liveLeases = []string{"", "lock", "PT1H", "standing"}
 
 // A call's: once only there
 var liveCallLeases = []string{"", "once", "once", "PT1H"}
@@ -51,39 +50,18 @@ func (mc *liveMachine) passes(c, p string) bool {
 	return (path == mc.lv.root || path == mc.lv.root+"/sub") && (!set || ro)
 }
 
-func (mc *liveMachine) drawCaller(t *rapid.T) *liveProc {
-	choices := []string{"anonymous", "forged"}
-	if len(mc.sessions) < 3 {
-		choices = append(choices, "new")
-	}
-	// The sessions there are, more often: most leases need one
-	for _, s := range slices.Sorted(maps.Keys(mc.sessions)) {
-		choices = append(choices, s, s, s, s)
-	}
-	switch who := rapid.SampledFrom(choices).Draw(t, "caller"); who {
-	case "anonymous":
-		return mc.anonymous(t)
-	case "forged":
-		return mc.forgedSession(t)
-	case "new":
-		return mc.session(t)
-	default:
-		return mc.sessions[who]
-	}
-}
-
 // Request: one request from inside, of any type and lease
 func (mc *liveMachine) Request(t *rapid.T) {
 	c := rapid.SampledFrom(liveCaps).Draw(t, "capability")
 	p := mc.drawParams(t, c)
 	lease := rapid.SampledFrom(liveLeases).Draw(t, "lease")
-	mc.request(t, mc.drawCaller(t), c, p, lease, 1, false)
+	mc.request(t, mc.anonymous(t), c, p, lease, 1, false)
 }
 
 // Call: the host command's call, under a grant that covers it or asking for one
 func (mc *liveMachine) Call(t *rapid.T) {
 	lease := rapid.SampledFrom(liveCallLeases).Draw(t, "lease")
-	mc.request(t, mc.drawCaller(t), liveCmd, "{}", lease, 1, true)
+	mc.request(t, mc.anonymous(t), liveCmd, "{}", lease, 1, true)
 }
 
 // Flood: the same request several times at once from one process (P14: one question)
@@ -122,10 +100,10 @@ func (mc *liveMachine) ShareInside(t *rapid.T) {
 	}
 }
 
-func (mc *liveMachine) predict(c, p, lease, sess string, call bool) (string, *refGrant) {
+func (mc *liveMachine) predict(c, p, lease string, call bool) (string, *refGrant) {
 	m := mc.m
-	lease = defaultLease(lease, call)
-	if !m.leaseOK(lease, sess) || !mc.passes(c, p) || lease == "once" && !call {
+	lease = leaseOf(lease)
+	if !m.leaseOK(lease) || !mc.passes(c, p) || lease == "once" && !call {
 		return "refused", nil
 	}
 	if g := m.matching(c, p); g != nil {
@@ -159,7 +137,7 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 		req.Op, req.Command, req.Arguments = "call", "thing", json.RawMessage(`{}`)
 	}
 	mc.clearOfBlocks()
-	kind, live := mc.predict(c, p, lease, who.sess, call)
+	kind, live := mc.predict(c, p, lease, call)
 	dones := make([]chan response, copies)
 	for i := range dones {
 		dones[i] = who.send(req)
@@ -205,16 +183,14 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 		}
 	case "live":
 		for _, res := range results {
-			mc.m.hold(live, who.sess)
 			mc.delivered(t, live, res, call)
 		}
 	case "standing":
 		if results[0].Grant == nil {
 			mc.fatalf(t, "Standing grant %s %s not granted: %s", c, p, results[0].Error)
 		}
-		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "standing", "")
+		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "standing")
 		for _, res := range results {
-			mc.m.hold(g, who.sess)
 			mc.delivered(t, g, res, call)
 		}
 	case "ask":
@@ -223,7 +199,7 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 				mc.fatalf(t, "A second request of %s %s served while the first waits", c, p)
 			}
 		}
-		mc.asked(t, asked, req, who.sess, dones[slices.Index(answered, false)])
+		mc.asked(t, asked, req, dones[slices.Index(answered, false)])
 	}
 }
 
@@ -233,6 +209,9 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response, call boo
 		mc.fatalf(t, "Grant %s %s not delivered: %s %+v", g.cap, g.params, res.Error, res.Grant)
 	}
 	if !call {
+		if want := mc.lv.cfg.SandboxGrantDir + "/" + socketsDir + "/" + liveSock; g.cap == liveSock && res.Grant.Socket != want {
+			mc.fatalf(t, "Host socket grant at %q, want %q", res.Grant.Socket, want)
+		}
 		return
 	}
 	want := liveMaxValidity
@@ -247,15 +226,15 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response, call boo
 }
 
 // asked checks the question as the window shows it (P7: the daemon's summary, the reason cleaned) and notes it pending
-func (mc *liveMachine) asked(t *rapid.T, q *pending, req request, sess string, done chan response) {
-	lease := defaultLease(req.Lease, req.Op == "call")
+func (mc *liveMachine) asked(t *rapid.T, q *pending, req request, done chan response) {
+	lease := leaseOf(req.Lease)
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	if !strings.HasPrefix(q.Summary, mc.lv.desc[req.Capability]) || strings.Contains(q.Summary, tag) ||
 		q.Lease != lease || q.Capability != req.Capability || string(q.Params) != string(req.Params) {
 		mc.fatalf(t, "Asked %+v for %+v", q, req)
 	}
 	mc.m.pending = append(mc.m.pending, &refPending{tag: tag, cap: req.Capability, params: string(req.Params),
-		lease: lease, sess: sess, asked: time.Now(), done: done, id: q.ID, isCall: req.Op == "call"})
+		lease: lease, asked: time.Now(), done: done, id: q.ID, isCall: req.Op == "call"})
 	mc.m.gate(req.Capability).asking = true
 }
 
@@ -267,11 +246,10 @@ func (mc *liveMachine) drawGrant(t *rapid.T) string {
 	return ids[rapid.IntRange(0, len(ids)-1).Draw(t, "grant")]
 }
 
-// Release: release from inside; it drops only the caller's hold, and the grant ends once nobody holds it
+// Release: release from inside, which ends the grant
 func (mc *liveMachine) Release(t *rapid.T) {
 	id := mc.drawGrant(t)
-	who := mc.drawCaller(t)
-	res := who.do(t, request{Op: "release", Grant: id})
+	res := mc.anonymous(t).do(t, request{Op: "release", Grant: id})
 	g := mc.m.grants[id]
 	if g == nil {
 		if res.Error == "" {
@@ -282,37 +260,27 @@ func (mc *liveMachine) Release(t *rapid.T) {
 	if res.Error != "" {
 		mc.fatalf(t, "Release %s: %s", id, res.Error)
 	}
-	if mc.m.release(g, who.sess) {
-		mc.m.endedByUser(g)
-		mc.waitEnded(t, id)
-	}
+	mc.m.endedByUser(g)
+	delete(mc.m.grants, id)
+	mc.waitEnded(t, id)
 }
 
-// NewSession: a Claude Code session starts in the sandbox
-func (mc *liveMachine) NewSession(t *rapid.T) {
-	if len(mc.sessions) >= 3 {
-		t.Skip("Sessions enough")
+// Connect: the sandbox connects to the echo socket's address. Under a live grant what it sends comes back from the
+// host, and the connection stays open (checked after every step); without one it's closed at once
+func (mc *liveMachine) Connect(t *rapid.T) {
+	mc.tags++
+	key := "c" + strconv.Itoa(mc.tags)
+	res := mc.anonymous(t).do(t, request{Op: "connect", Capability: socketsDir + "/" + liveSock, Grant: key,
+		Reason: "ping " + key})
+	g := mc.m.matching(liveSock, "{}")
+	switch {
+	case g == nil && !strings.HasPrefix(res.Error, "closed: "):
+		mc.fatalf(t, "Connected to the echo socket without a grant: %+v", res)
+	case g != nil && (res.Error != "" || res.Output != "ping "+key):
+		mc.fatalf(t, "The echo socket under %s: %+v", g.id, res)
+	case g != nil:
+		mc.conns[key] = g.id
 	}
-	mc.session(t)
-}
-
-// EndSession: a session's anchor exits, dropping its holds; the session leases it was the last holder of end (P8)
-func (mc *liveMachine) EndSession(t *rapid.T) {
-	if len(mc.sessions) == 0 {
-		t.Skip("No session")
-	}
-	id := rapid.SampledFrom(slices.Sorted(maps.Keys(mc.sessions))).Draw(t, "session")
-	mc.sessions[id].end()
-	delete(mc.sessions, id)
-	mc.waitEnded(t, mc.m.sessionEnd(id)...)
-	mc.waitFor(t, "the session's holds dropped", func() bool {
-		for _, g := range mc.lv.control(request{Op: "state"}).Grants {
-			if slices.Contains(g.Sessions, id) {
-				return false
-			}
-		}
-		return true
-	})
 }
 
 // Lock: logind locks alice's graphical session; lock leases end (P9)
@@ -342,8 +310,8 @@ func (mc *liveMachine) Revoke(t *rapid.T) {
 	mc.waitEnded(t, id)
 }
 
-// Restart: systemctl restarts the daemon. Its grants end with it (ExecStopPost, units bound to it), its questions go
-// unanswered; the new one starts from its standing grants alone, the ended ones too (P12)
+// Restart: systemctl restarts the daemon. Its grants end with it (ExecStopPost, call units bound to it, its
+// connections), its questions go unanswered; the new one starts from its standing grants alone, the ended ones too (P12)
 func (mc *liveMachine) Restart(t *rapid.T) {
 	m := mc.m
 	pending := m.pending

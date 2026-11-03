@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"slices"
 	"sort"
 )
@@ -15,8 +14,7 @@ func (b *broker) listCapabilities() []capabilityInfo {
 	infos := make([]capabilityInfo, len(ids))
 	for i, id := range ids {
 		c := b.caps[id]
-		infos[i] = capabilityInfo{ID: id, Type: c.Type, Description: c.Description, Params: c.Params,
-			Tools: c.Type == "service" && c.Tools}
+		infos[i] = capabilityInfo{ID: id, Type: c.Type, Description: c.Description, Params: c.Params}
 		if c.Type == "command" {
 			// What the sandbox may call, not what runs on the host
 			infos[i].Commands = map[string]*hostCommand{}
@@ -27,7 +25,7 @@ func (b *broker) listCapabilities() []capabilityInfo {
 			}
 			infos[i].Scope = c.scopeItems()
 		}
-		if inst, err := c.listInstances(context.Background()); err != nil {
+		if inst, err := c.listInstances(); err != nil {
 			infos[i].Error = err.Error()
 		} else {
 			infos[i].Instances = inst
@@ -36,21 +34,19 @@ func (b *broker) listCapabilities() []capabilityInfo {
 	return infos
 }
 
-func (b *broker) liveGrants(session string) []*grant {
+func (b *broker) liveGrants() []*grant {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var gs []*grant
 	for _, g := range b.grants {
-		if session == "" || slices.Contains(g.Sessions, session) {
-			gs = append(gs, g)
-		}
+		gs = append(gs, g)
 	}
 	sort.Slice(gs, func(i, j int) bool { return gs[i].Granted.Before(gs[j].Granted) })
 	return gs
 }
 
 // view is a copy of g for a response, taken under b.mu: the response is encoded outside it, while the grant's
-// sessions may change
+// holders may change
 func (b *broker) view(g *grant) *grant {
 	if g == nil {
 		return nil
@@ -62,14 +58,14 @@ func (b *broker) view(g *grant) *grant {
 
 func snapshot(g *grant) *grant {
 	c := *g
-	c.Sessions = slices.Clone(g.Sessions)
+	c.conns = nil
 	c.Holders = slices.Clone(g.Holders)
 	return &c
 }
 
 // grantViews is liveGrants as copies, for responses
-func (b *broker) grantViews(session string) []*grant {
-	gs := b.liveGrants(session)
+func (b *broker) grantViews() []*grant {
+	gs := b.liveGrants()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for i, g := range gs {

@@ -1,14 +1,13 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 )
 
-// Standing grants: what the launcher's Nix config grants for as long as the daemon runs (permissions.grants), of service
-// and command capabilities only. The daemon grants them when it starts, and again without asking on a request with
+// Standing grants: what the launcher's Nix config grants for as long as the daemon runs (permissions.grants), of host
+// command and host socket capabilities only. The daemon grants them when it starts, and again without asking on a request with
 // exactly their parameters, until the user ends one (revoke, or a release that ends it): then it's asked for like any
 // other until the daemon starts again. What should always be there is declared and reviewed in Nix, not granted with
 // one click in a dialog the sandbox brought up
@@ -29,8 +28,8 @@ type standingGrant struct {
 	cap        *capability
 }
 
-// checkStanding checks the config's standing grants against the plugins: a capability there, not of the attach type,
-// its parameters valid, none twice. Their list and exclusive lock are checked when they're granted
+// checkStanding checks the config's standing grants against the capabilities: one there, not of the attach type, its
+// parameters valid, none twice. Their instances and exclusive lock are checked when they're granted
 func checkStanding(grants []standingConfig, caps map[string]*capability) ([]*standingGrant, error) {
 	var out []*standingGrant
 	for _, s := range grants {
@@ -39,7 +38,7 @@ func checkStanding(grants []standingConfig, caps map[string]*capability) ([]*sta
 			return nil, fmt.Errorf("Standing grant of %s: no such capability", s.Capability)
 		}
 		if c.Type == "attach" {
-			return nil, fmt.Errorf("Standing grant of %s: attach capabilities get none, bind what should always be there",
+			return nil, fmt.Errorf("Standing grant of %s: folders get none, bind what should always be there",
 				s.Capability)
 		}
 		params, err := c.validate(s.Params)
@@ -56,17 +55,17 @@ func checkStanding(grants []standingConfig, caps map[string]*capability) ([]*sta
 	return out, nil
 }
 
-// grantStanding grants the standing grants at start. One whose instance list doesn't print, or another launcher holds,
-// is left out: a request for it once it's there gets it without asking
+// grantStanding grants the standing grants at start. One whose instance isn't there, or another launcher holds, is
+// left out: a request for it once it's there gets it without asking
 func (b *broker) grantStanding() {
 	for _, s := range b.standing {
-		if err := s.cap.inList(context.Background(), s.Params); err != nil {
+		if err := s.cap.inList(s.Params); err != nil {
 			slog.Warn("Standing grant", "capability", s.Capability, "err", err)
 			continue
 		}
 		s.cap.covered.Lock()
 		if b.matching(s.cap, s.Params) == nil {
-			if _, err := b.grant(s.cap, s.Params, s.Summary, "", "standing", nil); err != nil {
+			if _, err := b.grant(s.cap, s.Params, s.Summary, "", "standing"); err != nil {
 				slog.Warn("Standing grant", "capability", s.Capability, "err", err)
 			}
 		}

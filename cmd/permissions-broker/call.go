@@ -24,8 +24,6 @@ const (
 	// Calls kept for the window, and how much of a string argument each keeps
 	maxCalls    = 200
 	maxRecorded = 200
-	// A call that names no lease proposes this one
-	callLease = "PT1H"
 )
 
 // What a host command reads on stdin
@@ -75,7 +73,7 @@ func (b *broker) call(p peer, req request) (response, error) {
 	}
 	lease := req.Lease
 	if lease == "" {
-		lease = callLease
+		lease = defaultLease
 	}
 	g, err := b.obtain(p, c, params, reason, lease, &askingCall{Command: req.Command, Arguments: cmd.shown(args, 0)})
 	if err != nil {
@@ -88,7 +86,7 @@ func (b *broker) call(p peer, req request) (response, error) {
 	return b.runCall(c, req.Command, cmd, g, args)
 }
 
-// runCall runs cmd under g, once the instance's slot and a plugin slot are free. The grant must still be live then
+// runCall runs cmd under g, once the instance's slot and a call slot are free. The grant must still be live then
 // and when the output is handed out: a call may wait for a slot while the grant is revoked or runs out
 func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant, args json.RawMessage) (response, error) {
 	release, err := c.callSlot(string(g.Params))
@@ -100,7 +98,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 	if err != nil {
 		return response{}, err
 	}
-	if err := c.inList(context.Background(), g.Params); err != nil {
+	if err := c.inList(g.Params); err != nil {
 		return response{}, err
 	}
 	if !b.isLive(g) {
@@ -201,7 +199,7 @@ var (
 	runSlack = 15 * time.Second
 )
 
-// callSlot waits until no other call with the same bounding values runs, and a plugin slot is free, callWait at most
+// callSlot waits until no other call with the same bounding values runs, and a call slot is free, callWait at most
 func (c *capability) callSlot(instance string) (func(), error) {
 	c.slotsMu.Lock()
 	if c.slots == nil {
@@ -220,13 +218,13 @@ func (c *capability) callSlot(instance string) (func(), error) {
 		return nil, errors.New("Other calls on this instance are still running: try again later")
 	}
 	select {
-	case pluginSlots <- struct{}{}:
+	case callSlots <- struct{}{}:
 	case <-timeout:
 		<-slot
 		return nil, errors.New("Too many calls are running: try again later")
 	}
 	return func() {
-		<-pluginSlots
+		<-callSlots
 		<-slot
 	}, nil
 }
