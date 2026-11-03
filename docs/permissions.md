@@ -580,7 +580,10 @@ connection to a proxy broken, ends that bus's grants, and dials again at the nex
 pushes its standing grants anew.
 
 The consent names the bus and the rules as the proxy reads them: "Covers, for 1 h: On the system bus: call any method
-of org.freedesktop.timedate1 and get its signals (talk); the service may be started on demand and may ask polkit." A
+of org.freedesktop.timedate1 and get its signals (talk); the service may be started on demand (polkit treats these
+calls as yours at the desktop: actions an active session may take run without asking)." On the system bus the talk
+line and every call rule's line carry that sentence, as polkit judges the proxy's calls as the user's graphical
+session (below); on the session bus the talk line says the service may ask polkit. A
 call or broadcast rule reads "any method", "any method of org.foo.Iface" or "org.foo.Iface.Get", with "on /path" or
 "on /path and the objects below it". A METHOD starting with `*` matches every method whatever follows, as in
 xdg-dbus-proxy (`filter_new_from_rule`: "Both interface and method wildcarded"), so a rule set may hold `*` alone,

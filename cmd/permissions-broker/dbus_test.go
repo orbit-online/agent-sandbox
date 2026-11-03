@@ -153,8 +153,15 @@ func TestDBusDeclarations(t *testing.T) {
 	if err := loadDBus([]dbusConfig{{Name: "portal", Description: "d", Bus: "session", Talk: []string{"org.test.A"}}}, caps, testAppID); err == nil {
 		t.Error("A capability declared twice")
 	}
+	// On the system bus, what polkit makes of the calls: the user's at the desktop
 	if got := caps["hostname"].dbusScope(); got != "On the system bus: call org.freedesktop.hostname1: "+
-		"org.freedesktop.DBus.Properties.Get on /org/freedesktop/hostname1." {
+		"org.freedesktop.DBus.Properties.Get on /org/freedesktop/hostname1 (polkit treats these calls as yours at the "+
+		"desktop: actions an active session may take run without asking)." {
+		t.Errorf("The scope: %q", got)
+	}
+	if got := caps["timedate"].dbusScope(); got != "On the system bus: call any method of org.freedesktop.timedate1 and "+
+		"get its signals (talk); the service may be started on demand (polkit treats these calls as yours at the desktop: "+
+		"actions an active session may take run without asking)." {
 		t.Errorf("The scope: %q", got)
 	}
 	// The portal's call rules said as the proxy reads them, own and talk with what they bring
