@@ -81,6 +81,7 @@ func TestSocketDeclarations(t *testing.T) {
 		"both":              {Path: "/srv/a.sock", Bounding: map[string]json.RawMessage{"vm": json.RawMessage(strings.ReplaceAll(glob, "%s", "/srv/*.sock"))}},
 		"no glob":           {Bounding: map[string]json.RawMessage{"vm": json.RawMessage(`{"type": "string", "description": "d"}`)}},
 		"glob over all":     {Bounding: map[string]json.RawMessage{"vm": json.RawMessage(strings.ReplaceAll(glob, "%s", "$XDG_RUNTIME_DIR/*"))}},
+		"launchers' glob":   {Bounding: map[string]json.RawMessage{"bus": json.RawMessage(strings.ReplaceAll(glob, "%s", "$XDG_RUNTIME_DIR/nixpak-*"))}},
 		"glob and another": {Bounding: map[string]json.RawMessage{"vm": json.RawMessage(strings.ReplaceAll(glob, "%s", "/srv/*.sock")),
 			"mode": json.RawMessage(`{"type": "string", "description": "d"}`)}},
 	} {
@@ -101,16 +102,19 @@ func TestSocketDeclarations(t *testing.T) {
 	if err := loadSockets([]socketConfig{
 		{Name: "ssh-agent", Description: "d", Path: "$XDG_RUNTIME_DIR/ssh-agent.sock"},
 		{Name: "vms", Description: "d", Bounding: map[string]json.RawMessage{"vm": json.RawMessage(strings.ReplaceAll(glob, "%s", "$XDG_RUNTIME_DIR/vms/*/console.sock"))}},
-		{Name: "nixpak", Description: "d", Bounding: map[string]json.RawMessage{"bus": json.RawMessage(strings.ReplaceAll(glob, "%s", "$XDG_RUNTIME_DIR/nixpak-*"))}},
+		{Name: "nixpak", Description: "d", Bounding: map[string]json.RawMessage{"bus": json.RawMessage(strings.ReplaceAll(glob, "%s", "$XDG_RUNTIME_DIR/vms/nixpak-*"))}},
 	}, caps); err != nil {
 		t.Fatal(err)
 	}
-	// A match the broker refuses is no instance
-	if err := os.WriteFile(filepath.Join(run, "nixpak-bus-1"), nil, 0o600); err != nil {
+	// A match that isn't a socket is no instance
+	if err := os.MkdirAll(filepath.Join(run, "vms"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run, "vms", "nixpak-bus-1"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if found, err := caps["nixpak"].globMatches(); err != nil || len(found) != 0 {
-		t.Errorf("Instances among the launchers' sockets: %v, %v", found, err)
+		t.Errorf("A file that isn't a socket as an instance: %v, %v", found, err)
 	}
 	if err := loadSockets([]socketConfig{{Name: "ssh-agent", Description: "d", Path: "/srv/a.sock"}}, caps); err == nil {
 		t.Error("A capability declared twice")

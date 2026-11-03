@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -65,17 +64,34 @@ func (c *capability) checkSocket() error {
 			return fmt.Errorf("%s: $%s isn't set", p, v)
 		}
 	}
+	if len(c.Name) > maxAddrName {
+		return fmt.Errorf("name %q: %d characters at most, the length an address may have", c.Name, maxAddrName)
+	}
 	if c.Path != "" {
 		return refusedSocket(expandPath(c.Path))
 	}
-	// A glob over $XDG_RUNTIME_DIR as a whole: its * a whole segment right beneath it
-	if run := os.Getenv("XDG_RUNTIME_DIR"); run != "" {
-		if rest, ok := strings.CutPrefix(expandPath(c.glob), filepath.Clean(run)+"/"); ok && strings.Split(rest, "/")[0] == "*" {
-			return errors.New("instances: a glob over $XDG_RUNTIME_DIR as a whole")
+	// An instance names its address: a value too long for one isn't an instance
+	if s := c.schemas[c.globArg]; s.MaxLength == nil || *s.MaxLength > maxAddrName {
+		n := maxAddrName
+		if s.MaxLength != nil && *s.MaxLength < n {
+			n = *s.MaxLength
 		}
+		s.MaxLength = &n
 	}
-	return nil
+	return refusedGlob(expandPath(c.glob))
 }
+
+// Tests' hooks: after syncSockets looked for instances, before splice connects to the host, between dialHost's check
+// and its connect
+var (
+	globbed    = func() {}
+	beforeDial = func() {}
+	hostOpened = func() {}
+)
+
+// An address's file name is at most this long: bound through /proc/self/fd/<fd>/, it must fit a socket path's 108
+// bytes
+const maxAddrName = 80
 
 // unsetVariable is a variable path names that isn't set, if any
 func unsetVariable(path string) string {
@@ -87,47 +103,6 @@ func unsetVariable(path string) string {
 		return ""
 	})
 	return unset
-}
-
-// refusedSocket refuses a host socket that would hand the sandbox the broker's standing as the host user: a D-Bus bus,
-// past every rule of the D-Bus proxies, $XDG_RUNTIME_DIR as a whole, and what the launchers keep there (their grant
-// directories and control sockets, nixpak's instances and proxy sockets)
-func refusedSocket(path string) error {
-	if !filepath.IsAbs(path) {
-		return fmt.Errorf("%q isn't an absolute path (an unset variable?)", path)
-	}
-	path = filepath.Clean(path)
-	buses := []string{"/run/dbus/system_bus_socket", "/var/run/dbus/system_bus_socket"}
-	for _, env := range []string{"DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS"} {
-		for _, part := range strings.Split(os.Getenv(env), ";") {
-			if _, p, ok := strings.Cut(part, "path="); ok {
-				buses = append(buses, filepath.Clean(strings.Split(p, ",")[0]))
-			}
-		}
-	}
-	if slices.Contains(buses, path) {
-		return fmt.Errorf("%s is a D-Bus bus: the D-Bus proxies give that access", path)
-	}
-	run := os.Getenv("XDG_RUNTIME_DIR")
-	if run == "" {
-		return nil
-	}
-	run = filepath.Clean(run)
-	rest, ok := strings.CutPrefix(path, run+"/")
-	switch {
-	case path == run || strings.HasPrefix(run, path+"/"):
-		return fmt.Errorf("%s holds $XDG_RUNTIME_DIR", path)
-	case !ok:
-		return nil
-	case rest == "bus":
-		return fmt.Errorf("%s is the session bus: the D-Bus proxy gives that access", path)
-	}
-	top := strings.Split(rest, "/")[0]
-	if slices.Contains([]string{"claude-desktop", ".flatpak", "agent-sandbox-permissions"}, top) ||
-		strings.HasPrefix(top, "nixpak-") {
-		return fmt.Errorf("%s is the launchers' own", path)
-	}
-	return nil
 }
 
 // A listener at a host socket's address, and the host socket it leads to
@@ -150,11 +125,16 @@ func socketAddr(c *capability, params json.RawMessage) string {
 // syncSockets listens at the address of each of c's host sockets there is, and stops listening at those of instances
 // gone
 func (b *broker) syncSockets(c *capability) {
+	// The whole sync under socketsMu: one that looked for instances before a grant's did mustn't close the listener
+	// the grant's opened
+	b.socketsMu.Lock()
+	defer b.socketsMu.Unlock()
 	want := map[string]string{}
 	if c.glob == "" {
 		want[socketAddr(c, nil)] = expandPath(c.Path)
 	} else {
 		found, err := c.globMatches()
+		globbed()
 		if err != nil {
 			slog.Warn("Host socket instances", "capability", c.id(), "err", err)
 		}
@@ -163,8 +143,6 @@ func (b *broker) syncSockets(c *capability) {
 			want[socketAddr(c, params)] = host
 		}
 	}
-	b.socketsMu.Lock()
-	defer b.socketsMu.Unlock()
 	if b.listeners == nil {
 		b.listeners = map[string]*hostListener{}
 	}

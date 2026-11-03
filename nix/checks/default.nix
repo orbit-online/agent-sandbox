@@ -545,6 +545,54 @@ let
                     description = "nixpak's D-Bus proxy";
                     path = "$XDG_RUNTIME_DIR/nixpak-bus-1";
                   };
+                  manager = {
+                    description = "the systemd user manager";
+                    path = "$XDG_RUNTIME_DIR/systemd/private";
+                  };
+                  managers = {
+                    description = "the systemd user manager, by glob";
+                    bounding.s = {
+                      type = "string";
+                      description = "a socket";
+                      instances = "$XDG_RUNTIME_DIR/systemd/*";
+                    };
+                  };
+                  atspi = {
+                    description = "the accessibility bus";
+                    path = "$XDG_RUNTIME_DIR/at-spi/bus_0";
+                  };
+                  procalias = {
+                    description = "a /proc alias of the session bus";
+                    path = "/proc/self/root/run/user/1000/bus";
+                  };
+                  varrun = {
+                    description = "/var/run's alias of the session bus";
+                    path = "/var/run/user/1000/bus";
+                  };
+                  dotted = {
+                    description = "not clean";
+                    path = "$XDG_RUNTIME_DIR/vms/../bus";
+                  };
+                  lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll = {
+                    description = "a name too long for an address";
+                    path = "/srv/l.sock";
+                  };
+                  anyvar = {
+                    description = "a glob that could match /var/run";
+                    bounding.s = {
+                      type = "string";
+                      description = "a socket";
+                      instances = "/var/*/bus";
+                    };
+                  };
+                  anyrun = {
+                    description = "a glob that could match /run/dbus";
+                    bounding.s = {
+                      type = "string";
+                      description = "a socket";
+                      instances = "/run/*/x.sock";
+                    };
+                  };
                 };
               };
             }
@@ -552,15 +600,25 @@ let
         )
       );
       expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.sockets.${m}") [
-        "a_b: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
-        "all: $XDG_RUNTIME_DIR/* would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
-        "both: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
-        "bus: $XDG_RUNTIME_DIR/bus would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
-        "control: /run/user/1000/claude-desktop/permissions-control.sock would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
-        "neither: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
-        "proxy: $XDG_RUNTIME_DIR/nixpak-bus-1 would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
-        "system: /run/dbus/system_bus_socket would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
-        "vm: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "a_b: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "all: $XDG_RUNTIME_DIR/* is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "anyrun: /run/*/x.sock is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "anyvar: /var/*/bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "atspi: $XDG_RUNTIME_DIR/at-spi/bus_0 is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "both: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "bus: $XDG_RUNTIME_DIR/bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "control: /run/user/1000/claude-desktop/permissions-control.sock is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "dotted: $XDG_RUNTIME_DIR/vms/../bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "manager: $XDG_RUNTIME_DIR/systemd/private is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "managers: $XDG_RUNTIME_DIR/systemd/* is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "neither: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
+        "neither:  is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "procalias: /proc/self/root/run/user/1000/bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "proxy: $XDG_RUNTIME_DIR/nixpak-bus-1 is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "system: /run/dbus/system_bus_socket is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "varrun: /var/run/user/1000/bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "vm: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
       ];
     };
     # Host commands the broker would refuse, caught at eval

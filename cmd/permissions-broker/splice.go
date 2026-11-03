@@ -85,7 +85,8 @@ func (b *broker) splice(conn *net.UnixConn, c *capability, params json.RawMessag
 	}
 	defer b.dropConn(g, s)
 	defer s.close()
-	up, err := dialPath(host, dialTimeout)
+	beforeDial()
+	up, err := dialHost(host, dialTimeout)
 	if err != nil {
 		slog.Warn("Connect to a host socket", "capability", c.id(), "grant", g.ID, "err", err)
 		return
@@ -115,7 +116,8 @@ func (b *broker) connectUnder(c *capability, params json.RawMessage, s *spliced)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, g := range b.grants {
-		if g.cap == c && string(g.Params) == string(params) && !g.over {
+		// b.grants holds no grant that's ending: end deletes it under b.mu before it closes the connections
+		if g.cap == c && string(g.Params) == string(params) {
 			if g.conns == nil {
 				g.conns = map[*spliced]bool{}
 			}

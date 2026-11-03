@@ -1452,28 +1452,67 @@ in
                   else
                     (lib.head args).instances or ""
                 );
-                runtime = "(\\$XDG_RUNTIME_DIR|/run/user/[^/]+)";
-                refused = lib.any (re: builtins.match re where != null) [
-                  "${runtime}/?"
-                  "${runtime}/\\*(/.*)?"
-                  "${runtime}/bus"
-                  "(/var)?/run/dbus/system_bus_socket"
-                  "/|/run|/run/user/?"
-                  "${runtime}/(claude-desktop|\\.flatpak|agent-sandbox-permissions)(/.*)?"
-                  "${runtime}/nixpak-.*"
+                # As the daemon's refusedSocket and refusedGlob: a clean path, nothing beneath a refused root
+                # (/proc, /run/dbus, /var/run, the buses and launchers' entries in the runtime dir), nor the runtime
+                # dir or what holds it, and a glob's * not within the depth of any of those
+                segs = lib.splitString "/" where;
+                normal =
+                  segs != [ "" ]
+                  && lib.elem (lib.head segs) [
+                    ""
+                    "$XDG_RUNTIME_DIR"
+                    "~"
+                  ]
+                  && !lib.any (seg: lib.elem seg [ "" "." ".." ]) (lib.tail segs);
+                runtimes = [
+                  [ "\\$XDG_RUNTIME_DIR" ]
+                  [ "" "run" "user" "[^/]+" ]
                 ];
+                own = [
+                  "bus"
+                  "systemd"
+                  "at-spi"
+                  "\\.dbus-proxy"
+                  "dbus-.*"
+                  "claude-desktop"
+                  "\\.flatpak"
+                  "agent-sandbox-permissions"
+                  "nixpak-.*"
+                ];
+                roots = [
+                  [ "" "proc" ]
+                  [ "" "run" "dbus" ]
+                  [ "" "var" "run" ]
+                ]
+                ++ lib.concatMap (rt: map (o: rt ++ [ o ]) own) runtimes;
+                starAt = lib.findFirst (i: lib.hasInfix "*" (lib.elemAt segs i)) (lib.length segs) (
+                  lib.range 0 (lib.length segs - 1)
+                );
+                literal = lib.take starAt segs;
+                # p's first segments match root's, root's as regexes
+                matches =
+                  p: root: lib.all (i: builtins.match (lib.elemAt root i) (lib.elemAt p i) != null) (lib.range 0 (lib.length root - 1));
+                beneath = p: root: lib.length p >= lib.length root && matches p root;
+                within = root: lib.length literal < lib.length root && matches literal (lib.take (lib.length literal) root);
+                refused =
+                  !normal
+                  || lib.any (root: beneath literal root || within root) roots
+                  || lib.any (
+                    rt: lib.length literal <= lib.length rt && matches literal (lib.take (lib.length literal) rt)
+                  ) runtimes;
               in
               [
                 {
                   assertion =
                     builtins.match "[A-Za-z0-9-]+" sname != null
+                    && lib.stringLength sname <= 80
                     && !(lcfg.permissions.commands ? ${sname})
                     && (sock.path != null && sock.bounding == { } || globbed);
-                  message = "${sopt}: a name of letters, digits and - that no host commands have, and a path or one described string bounding argument with instances";
+                  message = "${sopt}: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances";
                 }
                 {
                   assertion = !refused;
-                  message = "${sopt}: ${where} would hand the sandbox the broker's standing: no D-Bus bus, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets";
+                  message = "${sopt}: ${where} is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets";
                 }
               ]
             ) lcfg.permissions.sockets

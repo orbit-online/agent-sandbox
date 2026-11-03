@@ -57,7 +57,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   check and exclusive locks), `commands.go` (host commands: declarations, instance globs, the consent's
   scope), `schema.go` (the JSON Schema subset arguments are checked against),
   `call.go` (a call: covered or asked, run as a transient unit, its output),
-  `hostsockets.go` (host sockets: declarations, what's refused, the addresses listened at) and `splice.go`
+  `hostsockets.go` (host sockets: declarations, the addresses listened at), `refused.go` (what a host socket
+  may not be, and reaching one without links) and `splice.go`
   (connections to them, spliced under a grant),
   `mcp.go` the MCP server and `mcp_commands.go` its host command tools, `sandbox.go` finding and pinning the sandbox,
   `members.go` its processes by user namespace.
@@ -142,7 +143,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
   broker, of a host command or host socket capability it has, none of folders), the assertions on host sockets (a
-  name of their own, a path or one instances glob, no D-Bus bus, `$XDG_RUNTIME_DIR` as a whole or launcher socket),
+  name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
+  user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
+  glob that could match one),
   and the assertion on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.
@@ -254,7 +257,15 @@ modules and a user alice (the `home-manager` input exists only for it).
   `/run/permissions/sockets/<capability>/<instance>` with the default `PT1H` lease), a revoke closing every
   connection; an instance's address appearing and going with it on the timer, its grant ending with it; 64
   connections per address and the next closed at once until one ends; an address and a host socket past 108
-  bytes. The MCP server: the nudge after 15
+  bytes; what's refused beyond (the systemd user manager, the accessibility bus, `.dbus-proxy`, `dbus-*`, `/proc`
+  aliases, `/var/run`, `/run/dbus`, paths that aren't clean, globs whose `*` could fall within those, anything
+  without `$XDG_RUNTIME_DIR`); a glob match that is a link, lies through a linked directory or isn't a socket no
+  instance; a declared socket swapped for a link after the grant, also between the check and the connect, a
+  `/proc/self/root` alias and a file not connected to; an instance name past 80 characters no instance and refused
+  for its length, one of 80 reachable through a long grant directory; a sync that looked before a grant's not
+  closing its listener; a revoke during the connect closing the host's end whole; a grant without an address
+  refused; no address made through a link; a stale address taken over; the addresses closed when the daemon
+  ends. The MCP server: the nudge after 15
   minutes, not again right after, and in tool results; and the cleanup a stopped daemon's `ExecStopPost`
   runs (call units stopped, locks removed, folder grants detached, mountpoints and host socket addresses
   removed, also without the sandbox). Stateful property tests

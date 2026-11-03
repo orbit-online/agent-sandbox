@@ -180,8 +180,8 @@ func expandPath(path string) string {
 }
 
 // globMatches is what a capability's instances glob matches now: each bounding value, the part of its path segment
-// the * matched, with the path it matched (for a host socket, the socket). A host socket's match the broker refuses
-// isn't one
+// the * matched, with the path it matched (for a host socket, the socket). A host socket's match the broker refuses, or
+// that isn't a socket reached without links, isn't one
 func (c *capability) globMatches() (map[string]string, error) {
 	pattern := expandPath(c.glob)
 	segs := strings.Split(pattern, "/")
@@ -201,7 +201,7 @@ func (c *capability) globMatches() (map[string]string, error) {
 			continue
 		}
 		v := strings.TrimSuffix(strings.TrimPrefix(ms[i], prefix), suffix)
-		if c.Type == "socket" && refusedSocket(m) != nil {
+		if c.Type == "socket" && !isHostSocket(m) {
 			continue
 		}
 		if s := c.schemas[c.globArg]; v != "" && found[v] == "" && s.checkValue(v, maxParam) == nil {

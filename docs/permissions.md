@@ -358,9 +358,21 @@ and passes no file descriptors. A revoke closes the grant's connections.
 The host service sees the broker as its peer: an unsandboxed process with no `/.flatpak-info`, whose pid and
 credentials are what `SO_PEERCRED` and polkit see. So a host socket must be one whose service authorizes nothing by
 its peer, or whose peer checks the grant is meant to pass. Never declare a D-Bus bus, a portal or a service that
-trusts `SO_PEERCRED`: that would hand the sandbox the host user's standing past every rule of the D-Bus proxies. The
-module refuses the session and system bus sockets, `$XDG_RUNTIME_DIR` as a whole and the launchers' own sockets; the
-rest is the config's, as with host commands. An SSH agent fits: it authorizes by holding the socket.
+trusts `SO_PEERCRED`: that would hand the sandbox the host user's standing past every rule of the D-Bus proxies. An SSH
+agent fits: it authorizes by holding the socket.
+
+The module (at eval, on the literal path) and the daemon (at start, on the expanded one, and again at every
+connection) refuse what's known to hand over more than its own service: anything beneath `/proc` (aliases of any path),
+`/run/dbus`, `/var/run` (an alias of `/run`), and in `$XDG_RUNTIME_DIR` its `bus`, `systemd/` (the user manager's
+private bus: a transient unit runs code on the host), `at-spi/`, `.dbus-proxy/`, `dbus-*`, `claude-desktop/`,
+`.flatpak/`, `agent-sandbox-permissions/` and `nixpak-*`; the paths the D-Bus address variables name; and
+`$XDG_RUNTIME_DIR` itself or what holds it. A path must be clean (no `.`, `..` or empty segments). A glob is refused
+when its `*` could fall within one of those: when the segments before it lead to or into one. Without
+`$XDG_RUNTIME_DIR` the daemon refuses every host socket. The broker reaches a socket without following a link anywhere
+on its path (`openat2` with `RESOLVE_NO_SYMLINKS`), requires it to be a socket, and connects through that fd, so a link
+planted in a glob's directory or swapped in for a declared socket leads nowhere, and a glob match that is a link isn't
+an instance. This list is a guard against the known buses, not a proof: what any other socket gives the sandbox is the
+config's responsibility, as with host commands.
 
 ### Mounts
 
@@ -812,12 +824,12 @@ Each can be revisited.
     matches are the sockets; the instance's value names its address, `sockets/<capability>/<value>`. One socket per
     instance leaves nothing else to bound, so no other bounding arguments. No `exclusive`: an SSH agent or a console
     can take clients from two launchers.
-26. "`$XDG_RUNTIME_DIR` as a whole" covers the directory itself, anything holding it, and a glob whose `*` is a whole
-    segment right beneath it. The launchers' own sockets are everything under `$XDG_RUNTIME_DIR/claude-desktop`,
-    `.flatpak`, `agent-sandbox-permissions` and `nixpak-*` (nixpak's bus and Wayland proxies), and the buses are
-    `$XDG_RUNTIME_DIR/bus`, `/run/dbus/system_bus_socket` and the paths `DBUS_SESSION_BUS_ADDRESS` and
-    `DBUS_SYSTEM_BUS_ADDRESS` name. The module checks the literal path at eval, the daemon the expanded one at start
-    (an unset variable is a config error), and a glob match it would refuse is no instance.
+26. What host sockets are refused is a list of known buses and the launchers' own (Host sockets), checked on clean
+    paths reached without links; a glob is refused when its `*` could fall within one of them, more than its matches
+    would need, so that the module can check it on the literal string as the daemon does. The list guards against the
+    known ones and doesn't claim more: the rest is the config's. An instance's value is its address's file name, which
+    is bound through `/proc/self/fd/<fd>/`, so it may have 80 characters at most (an instances argument's `maxLength`
+    is capped there), as may a host socket capability's name.
 27. Every host socket address has a budget of its own, 64 connections like `request.sock`'s, so a full one leaves
     the others and `request.sock` alone. Past it a connection is closed at once.
 28. The broker listens at a host socket's addresses from its start, at every grant of it and every 30 seconds (as it
