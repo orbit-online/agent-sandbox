@@ -47,7 +47,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   passes (`dbus-proxy --help`); not wired into the module yet. `main.go`
   (arguments, listening, `--fd`), `address.go` (bus addresses), `sasl.go`
   (SASL toward both sides), `wire.go` (reading messages and their file
-  descriptors, bounded, and encoding), `sender.go` (each side's write queue),
+  descriptors, bounded), `header.go` (parsing the header, decoding a body
+  where needed, encoding), `budget.go` (each client's share of bytes and file
+  descriptors and the whole proxy's), `sender.go` (each side's write queue),
   `rules.go` (rule sets and xdg-dbus-proxy's matching), `names.go` (a client's
   unique names and what they owned), `client.go` (a connection's lifecycle),
   `fromclient.go` and `frombus.go` (the filtering each way), `busmsg.go` (the
@@ -210,8 +212,22 @@ modules and a user alice (the `home-manager` input exists only for it).
   socket removed when it closes, as nixpak starts it), everything passing
   without `--filter`, bad arguments refused, libdbus's `dbus-send` as a
   client, sd-bus's pipelined SASL, SASL refusals, an oversized message and a
-  message claiming file descriptors that never came; and the rule parser, name
-  lookup, the eavesdrop match, bus addresses and the bounded name table.
+  message claiming file descriptors that never came; through a client
+  speaking the wire itself (`raw_test.go`, `guards_test.go`): a serial reused while pending and
+  a second Hello, serials 0 and past the client's range, file descriptors
+  either way for a client that cancelled their negotiation, bus calls without
+  an interface, with a non-string match rule or on another interface, a call
+  without a destination, a caller made visible, another uid, file descriptors
+  during SASL, the hold after Hello until wildcard names' owners are known,
+  both pending-reply caps, SASL's command and line caps; the limits
+  (`limits_test.go`): file descriptors per message and pending, bodies left
+  undecoded, a client over the memory budget disconnected while another goes
+  on, queued file descriptors past a client's share, and accepting again after
+  running out of file descriptors (the test binary as the proxy, with a low
+  `RLIMIT_NOFILE`); state alone (`judge_test.go`): a peer's reply to a call to
+  the bus dropped, a unique name that left forgotten, a reply only to its
+  caller; and the rule parser, name lookup, the eavesdrop match, bus
+  addresses, the budget and the bounded name table.
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), host commands (the schema subset's

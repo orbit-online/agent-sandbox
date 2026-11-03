@@ -19,6 +19,7 @@ type outMsg struct {
 // Writes messages to one side in the order they're queued, on a goroutine of its own, so a reader never blocks on
 // the side it reads from. A full queue blocks the reader that fills it, which stops reading its side in turn
 type sender struct {
+	acct   *account
 	conn   *net.UnixConn
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -29,13 +30,15 @@ type sender struct {
 
 var errClosed = errors.New("Connection closed")
 
-func newSender(conn *net.UnixConn) *sender {
-	s := &sender{conn: conn}
+func newSender(conn *net.UnixConn, acct *account) *sender {
+	s := &sender{conn: conn, acct: acct}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
 
-// Queues a message; its file descriptors belong to the sender from here, closed once written or dropped
+// Queues a message; its file descriptors belong to the sender from here, closed once written or dropped. They
+// stay on the client's account until then (the reader took them); the bytes are taken here. A client over its
+// share is refused, and its connection ends
 func (s *sender) send(data []byte, fds []int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -43,8 +46,12 @@ func (s *sender) send(data []byte, fds []int) error {
 		s.cond.Wait()
 	}
 	if s.closed {
-		closeAll(fds)
+		s.acct.closeFDs(fds)
 		return errClosed
+	}
+	if err := s.acct.take(len(data), 0); err != nil {
+		s.acct.closeFDs(fds)
+		return err
 	}
 	s.queue = append(s.queue, outMsg{data, fds})
 	s.bytes += len(data)
@@ -58,7 +65,8 @@ func (s *sender) close() {
 	defer s.mu.Unlock()
 	s.closed = true
 	for _, m := range s.queue {
-		closeAll(m.fds)
+		s.acct.closeFDs(m.fds)
+		s.acct.give(len(m.data), 0)
 	}
 	s.queue = nil
 	s.cond.Broadcast()
@@ -81,7 +89,8 @@ func (s *sender) run() error {
 		s.mu.Unlock()
 
 		err := s.write(m)
-		closeAll(m.fds)
+		s.acct.closeFDs(m.fds)
+		s.acct.give(len(m.data), 0)
 
 		s.mu.Lock()
 		s.bytes -= len(m.data)

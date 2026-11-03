@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/docopt/docopt-go"
 	"golang.org/x/sys/unix"
@@ -40,6 +41,8 @@ type Proxy struct {
 	rules  *Rules
 	filter bool
 	log    *slog.Logger
+	budget *budget
+	uid    int // The uid a client must have
 
 	mu      sync.Mutex
 	clients int
@@ -53,19 +56,29 @@ func NewProxy(address string, rules *Rules, filter bool) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{bus: addrs, rules: rules, filter: filter, log: slog.Default()}, nil
+	return &Proxy{bus: addrs, rules: rules, filter: filter, log: slog.Default(), budget: newBudget(), uid: os.Getuid()}, nil
 }
 
-// Accepts clients until the listener closes
+// Accepts clients until the listener closes. Out of file descriptors or memory, it waits and tries again, as
+// net/http does: clients ending free them
 func (p *Proxy) Serve(l *net.UnixListener) error {
+	var backoff time.Duration
 	for {
 		conn, err := l.AcceptUnix()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			if errors.Is(err, unix.EMFILE) || errors.Is(err, unix.ENFILE) || errors.Is(err, unix.ENOBUFS) ||
+				errors.Is(err, unix.ENOMEM) || errors.Is(err, unix.ECONNABORTED) {
+				backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
+				p.log.Warn("Accept failed, trying again", "err", err, "in", backoff)
+				time.Sleep(backoff)
+				continue
+			}
 			return err
 		}
+		backoff = 0
 		p.mu.Lock()
 		full := p.clients >= maxClients
 		if !full {

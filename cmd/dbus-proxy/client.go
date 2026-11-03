@@ -32,10 +32,20 @@ const (
 	expectFakeList  // The proxy's own ListNames, for names under a wildcard
 )
 
+// A call awaiting its reply from the bus side. Calls to the bus driver, the proxy's own among them, take a reply
+// only from the bus; sync marks the proxy's own GetNameOwner of a name found under a wildcard
 type expect struct {
 	kind    expectKind
 	name    string
 	rewrite *dbus.Message
+	fromBus bool
+	sync    bool
+}
+
+// A call to the client awaiting its reply: the caller's unique name and serial
+type peerCall struct {
+	caller string
+	serial uint32
 }
 
 // One client's connection and its bus connection. The two readers share the state below under mu
@@ -49,12 +59,16 @@ type client struct {
 	log           *slog.Logger
 
 	mu         sync.Mutex
-	awaitBus   map[uint32]expect   // Calls to the bus side awaiting a reply, by the caller's serial
-	awaitPeer  map[uint32]struct{} // Calls to the client awaiting its reply, by the caller's serial
+	awaitBus   map[uint32]expect     // Calls to the bus side awaiting a reply, by the client's (or proxy's) serial
+	awaitPeer  map[peerCall]struct{} // Calls to the client awaiting its reply
 	names      *nameTable
 	fakeSerial uint32
 	helloSeen  bool
-	synced     chan struct{} // Closed once the names under wildcards are known, or nil when there are none
+	// Closed once the owners of the names under wildcards are known (ListNames, then a GetNameOwner of each, all
+	// answered), or nil when there are none; syncing counts the GetNameOwner replies still out
+	synced  chan struct{}
+	syncing int
+	acct    *account
 }
 
 func (p *Proxy) handle(conn *net.UnixConn) {
@@ -62,10 +76,11 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 	c := &client{
 		p: p, conn: conn,
 		awaitBus:   map[uint32]expect{},
-		awaitPeer:  map[uint32]struct{}{},
+		awaitPeer:  map[peerCall]struct{}{},
 		names:      newNameTable(),
 		fakeSerial: maxClientSerial,
 		log:        p.log,
+		acct:       p.budget.account(),
 	}
 	if err := c.connect(); err != nil {
 		c.log.Warn("Client refused", "err", err)
@@ -78,24 +93,28 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 		}
 		return
 	}
+	defer func() {
+		c.clientR.close()
+		c.busR.close()
+	}()
 	c.run()
 }
 
 // Checks the peer, connects to the bus and authenticates both sides
 func (c *client) connect() error {
-	c.clientR = newReader(c.conn)
+	c.clientR = newReader(c.conn, c.acct)
 	cred, err := peerCred(c.conn)
 	if err != nil {
 		return err
 	}
-	uid := os.Getuid()
-	if int(cred.Uid) != uid {
-		return fmt.Errorf("Peer uid %d is not the proxy's %d", cred.Uid, uid)
+	if int(cred.Uid) != c.p.uid {
+		return fmt.Errorf("Peer uid %d is not the proxy's %d", cred.Uid, c.p.uid)
 	}
+	uid := os.Getuid()
 	if c.bus, err = dialBus(c.p.bus); err != nil {
 		return err
 	}
-	c.busR = newReader(c.bus)
+	c.busR = newReader(c.bus, c.acct)
 	deadline := time.Now().Add(authTimeout)
 	c.conn.SetDeadline(deadline)
 	c.bus.SetDeadline(deadline)
@@ -103,7 +122,7 @@ func (c *client) connect() error {
 	if err != nil {
 		return fmt.Errorf("Authenticate to the bus: %w", err)
 	}
-	server := &saslServer{conn: c.conn, r: c.clientR, peerUID: uid, guid: guid,
+	server := &saslServer{conn: c.conn, r: c.clientR, peerUID: int(cred.Uid), guid: guid,
 		negotiate: func() (bool, error) { return negotiateFDsBus(c.bus, c.busR) }}
 	if c.unixFDs, err = server.run(); err != nil {
 		return fmt.Errorf("Authenticate the client: %w", err)
@@ -136,8 +155,8 @@ func peerCred(conn *net.UnixConn) (*unix.Ucred, error) {
 
 // Forwards both ways until either side ends or breaks a rule, then closes both
 func (c *client) run() {
-	c.toClient = newSender(c.conn)
-	c.toBus = newSender(c.bus)
+	c.toClient = newSender(c.conn, c.acct)
+	c.toBus = newSender(c.bus, c.acct)
 	done := make(chan struct{})
 	var once sync.Once
 	stop := func(side string, err error) {
@@ -167,8 +186,6 @@ func (c *client) run() {
 		}()
 	}
 	wg.Wait()
-	c.clientR.close()
-	c.busR.close()
 }
 
 func (c *client) readClient(done chan struct{}) error {
@@ -177,8 +194,10 @@ func (c *client) readClient(done chan struct{}) error {
 		if err != nil {
 			return err
 		}
-		if err := c.fromClient(m); err != nil {
-			m.closeFDs()
+		err = c.fromClient(m)
+		m.closeFDs()
+		m.release()
+		if err != nil {
 			return err
 		}
 		// Hold the client's next message until the proxy knows who owns the names under wildcards
@@ -201,8 +220,10 @@ func (c *client) readBus() error {
 		if err != nil {
 			return err
 		}
-		if err := c.fromBus(m); err != nil {
-			m.closeFDs()
+		err = c.fromBus(m)
+		m.closeFDs()
+		m.release()
+		if err != nil {
 			return err
 		}
 	}
@@ -219,9 +240,13 @@ func forward(s *sender, m *message) error {
 	return s.send(data, fds)
 }
 
-// Records a reply expected from the bus side; called with mu held
+// Records a reply expected from the bus side; called with mu held. A serial already awaiting its reply ends the
+// connection: overwriting it would let the bus's reply to one call be judged as the reply to another
 func (c *client) expectFromBus(serial uint32, e expect) error {
-	if _, ok := c.awaitBus[serial]; !ok && len(c.awaitBus) >= maxPendingReplies {
+	if _, ok := c.awaitBus[serial]; ok {
+		return fmt.Errorf("Serial %d reused while its call awaits a reply", serial)
+	}
+	if len(c.awaitBus) >= maxPendingReplies {
 		return fmt.Errorf("Too many calls awaiting replies")
 	}
 	c.awaitBus[serial] = e
@@ -235,6 +260,7 @@ func (c *client) fakeCall(out *[][]byte, m *dbus.Message, e expect) error {
 		return fmt.Errorf("Out of serials for the proxy's own calls")
 	}
 	c.fakeSerial++
+	e.fromBus = true
 	data, err := encodeNew(m, c.fakeSerial)
 	if err != nil {
 		return err

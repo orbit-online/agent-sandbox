@@ -1,0 +1,169 @@
+package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"unicode/utf8"
+
+	"github.com/godbus/dbus/v5"
+)
+
+// The header fields and the type each must have. Any other field fails the message, as in xdg-dbus-proxy
+var fieldSigs = map[dbus.HeaderField]byte{
+	dbus.FieldPath:        'o',
+	dbus.FieldInterface:   's',
+	dbus.FieldMember:      's',
+	dbus.FieldErrorName:   's',
+	dbus.FieldReplySerial: 'u',
+	dbus.FieldDestination: 's',
+	dbus.FieldSender:      's',
+	dbus.FieldSignature:   'g',
+	dbus.FieldUnixFDs:     'u',
+}
+
+// Parses the header fields of raw, whose fixed part was checked already. Only the header: the body stays bytes
+// until something needs to look into it, so its size alone bounds what a message costs
+func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderField]dbus.Variant, error) {
+	fields := map[dbus.HeaderField]dbus.Variant{}
+	pos := 16
+	for pos < end {
+		pos = int(align8(uint64(pos)))
+		if pos+4 > end {
+			return nil, errors.New("Header field past the header's end")
+		}
+		code := dbus.HeaderField(raw[pos])
+		want, known := fieldSigs[code]
+		if !known {
+			return nil, fmt.Errorf("Unknown header field %d", code)
+		}
+		if _, dup := fields[code]; dup {
+			return nil, fmt.Errorf("Header field %d twice", code)
+		}
+		// The variant's signature: one type code
+		if raw[pos+1] != 1 || raw[pos+2] != want || raw[pos+3] != 0 {
+			return nil, fmt.Errorf("Header field %d has the wrong type", code)
+		}
+		pos += 4
+		var v dbus.Variant
+		switch want {
+		case 'u':
+			pos = int(align4(uint64(pos)))
+			if pos+4 > end {
+				return nil, errors.New("Header field past the header's end")
+			}
+			v = dbus.MakeVariant(order.Uint32(raw[pos:]))
+			pos += 4
+		case 'g':
+			if pos+1 > end {
+				return nil, errors.New("Header field past the header's end")
+			}
+			n := int(raw[pos])
+			s, err := cString(raw, pos+1, n, end)
+			if err != nil {
+				return nil, err
+			}
+			sig, err := dbus.ParseSignature(s)
+			if err != nil {
+				return nil, fmt.Errorf("Invalid signature: %w", err)
+			}
+			v = dbus.MakeVariant(sig)
+			pos += 1 + n + 1
+		default:
+			pos = int(align4(uint64(pos)))
+			if pos+4 > end {
+				return nil, errors.New("Header field past the header's end")
+			}
+			n := order.Uint32(raw[pos:])
+			if uint64(n) > uint64(end) {
+				return nil, errors.New("Header string past the header's end")
+			}
+			s, err := cString(raw, pos+4, int(n), end)
+			if err != nil {
+				return nil, err
+			}
+			if want == 'o' {
+				v = dbus.MakeVariant(dbus.ObjectPath(s))
+			} else {
+				v = dbus.MakeVariant(s)
+			}
+			pos += 4 + int(n) + 1
+		}
+		fields[code] = v
+	}
+	if pos != end {
+		return nil, errors.New("Header fields overrun the header")
+	}
+	return fields, nil
+}
+
+func align4(n uint64) uint64 { return (n + 3) &^ 3 }
+
+// n bytes at pos followed by a nul, before end, valid UTF-8 without nuls
+func cString(raw []byte, pos, n, end int) (string, error) {
+	if pos+n+1 > end || raw[pos+n] != 0 {
+		return "", errors.New("Header string past the header's end or unterminated")
+	}
+	s := raw[pos : pos+n]
+	if bytes.IndexByte(s, 0) >= 0 || !utf8.Valid(s) {
+		return "", errors.New("Header string with a nul or invalid UTF-8")
+	}
+	return string(s), nil
+}
+
+// The body decoded, for the messages the proxy looks into: none larger than limit, so a client can't make the proxy
+// spend more on decoding than the bus driver's arguments take
+func (m *message) decodeBody(limit int) bool {
+	if m.decoded {
+		return m.Body != nil
+	}
+	m.decoded = true
+	if len(m.body) > limit || len(m.raw) == 0 {
+		return false
+	}
+	msg, err := decode(m.raw)
+	if err != nil {
+		return false
+	}
+	m.Body = msg.Body
+	return m.Body != nil
+}
+
+// godbus's decoder, which recovers its own panics; this guards against any it doesn't
+func decode(raw []byte) (msg *dbus.Message, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			msg, err = nil, fmt.Errorf("Decoder panic: %v", p)
+		}
+	}()
+	return dbus.DecodeMessageWithFDs(bytes.NewReader(raw), nil)
+}
+
+// Encodes a message as forwarded: the header fields the proxy parsed and checked, re-encoded by godbus in the
+// original byte order, then the body as it came, so the bus routes by exactly the fields the proxy checked
+func (m *message) encode() ([]byte, error) {
+	hdr := &dbus.Message{Type: m.Type, Flags: m.Flags, Headers: m.Headers}
+	return encodeWith(hdr, m.order, m.serial, m.body)
+}
+
+// Encodes msg with the given serial; a non-nil body replaces msg's (empty) one
+func encodeWith(msg *dbus.Message, order binary.ByteOrder, serial uint32, body []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := msg.EncodeToWithFDs(&buf, order); err != nil {
+		return nil, err
+	}
+	out := buf.Bytes()
+	order.PutUint32(out[8:12], serial)
+	if body != nil {
+		if len(msg.Body) != 0 {
+			return nil, errors.New("Message has a body already")
+		}
+		order.PutUint32(out[4:8], uint32(len(body)))
+		out = append(out, body...)
+	}
+	if len(out) > maxMessageSize {
+		return nil, fmt.Errorf("Message too long: %d bytes", len(out))
+	}
+	return out, nil
+}

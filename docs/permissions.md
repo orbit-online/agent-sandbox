@@ -491,13 +491,22 @@ Overview lists.
 Built as `cmd/dbus-proxy` (static rules only so far). Where it differs from xdg-dbus-proxy 0.1.7, read from its source:
 
 - It terminates SASL on both sides (EXTERNAL only, for the proxy's own uid) instead of passing the client's lines on,
-  and forwards each message with the header fields it decoded and checked, re-encoded, and the body as it came.
+  and forwards each message with the header fields it parsed and checked, re-encoded, and the body as it came. Bodies
+  are decoded only where the proxy looks into them (bus driver calls up to 4 KiB, NameOwnerChanged, the bus's replies
+  to calls it filters), so a message costs about its size.
+- A serial reused while its call awaits a reply ends the connection, a second Hello is refused, and a reply to a call
+  to the bus counts only from the bus: otherwise one call's reply could be judged as another's (a GetNameOwner reply
+  read as Hello's raises the name's owner to TALK). A client's reply goes only to the caller waiting for it, and a
+  method call without a destination is refused.
 - A reply is a reply by its type. xdg-dbus-proxy takes any message with a reply serial for one, so a method call
   carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
 - Monitoring and eavesdropping are refused without `--filter` too, and an `AddMatch` without an interface counts.
 - Names in `--see`/`--talk`/`--own`/`--call`/`--broadcast` and rule paths must be valid; a unique name that leaves
-  the bus is dropped from the client's table, which is bounded, as are message size, file descriptors, pending
-  replies, SASL lines and clients.
+  the bus is dropped from the client's table, which is bounded, as are pending replies, SASL lines and clients.
+- Messages are at most 4 MiB (the sandbox's largest are icons; dbus-daemon's default is 32 MiB). Bytes (reader
+  buffers, messages in hand, write queues) and file descriptors (received and not yet passed on) count against each
+  client's share and a budget for the whole proxy (128 MiB, half the soft `RLIMIT_NOFILE`); a client that would go
+  over is disconnected. Out of file descriptors, the proxy waits and accepts again.
 
 Kept for compatibility: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a `--call` or
 `--broadcast` rule lets every broadcast of the name through (the module's rules rely on it). Live rule sets will

@@ -51,6 +51,10 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 			}
 			return nil, nil
 		}
+		if e.fromBus && m.header(dbus.FieldSender) != busName {
+			// Only the bus answers a call to the bus; this one stays pending for it
+			return drop()
+		}
 		delete(c.awaitBus, rs)
 		return c.reply(m, e, fakes, drop)
 	}
@@ -77,10 +81,11 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 		}
 	}
 	if generatesReply(m) {
-		if _, ok := c.awaitPeer[m.Serial()]; !ok && len(c.awaitPeer) >= maxPendingReplies {
+		call := peerCall{sender, m.Serial()}
+		if _, ok := c.awaitPeer[call]; !ok && len(c.awaitPeer) >= maxPendingReplies {
 			return nil, fmt.Errorf("Too many calls to the client awaiting replies")
 		}
-		c.awaitPeer[m.Serial()] = struct{}{}
+		c.awaitPeer[call] = struct{}{}
 	}
 	return nil, nil
 }
@@ -105,6 +110,10 @@ func (c *client) reply(m *message, e expect, fakes *[][]byte, drop func() ([]byt
 				return nil, err
 			}
 		}
+		if e.sync {
+			c.syncing--
+			c.syncDone()
+		}
 		return drop()
 	case expectFakeMatch:
 		return drop()
@@ -117,22 +126,29 @@ func (c *client) reply(m *message, e expect, fakes *[][]byte, drop func() ([]byt
 				if p, _ := c.p.rules.lookup(name); p == policyNone {
 					continue
 				}
-				if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name}); err != nil {
+				if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name, sync: true}); err != nil {
 					return nil, err
 				}
+				c.syncing++
 			}
 		}
-		if c.synced != nil {
-			close(c.synced)
-			c.synced = nil
-		}
+		c.syncDone()
 		return drop()
 	}
 	return nil, nil
 }
 
+// Releases the client once every GetNameOwner of names under wildcards is answered; called with mu held
+func (c *client) syncDone() {
+	if c.syncing == 0 && c.synced != nil {
+		close(c.synced)
+		c.synced = nil
+	}
+}
+
+// The first argument when it's a string array; only for the bus's replies, which may be as long as a message
 func firstStrings(m *message) ([]string, bool) {
-	if len(m.Body) == 0 {
+	if !m.decodeBody(maxMessageSize) || len(m.Body) == 0 {
 		return nil, false
 	}
 	s, ok := m.Body[0].([]string)
@@ -147,7 +163,7 @@ func isNameOwnerChanged(m *message) bool {
 // NameOwnerChanged reaches the client only for names it may see; their new owners take on their rules. A unique name
 // that left is dropped from the table, since it never comes back
 func (c *client) passNameOwnerChanged(m *message) bool {
-	if len(m.Body) != 3 {
+	if !m.decodeBody(maxInspectBody) || len(m.Body) != 3 {
 		return false
 	}
 	name, ok1 := m.Body[0].(string)

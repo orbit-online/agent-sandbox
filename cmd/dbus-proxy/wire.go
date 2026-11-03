@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	// The D-Bus specification's maximum, which dbus-daemon's session bus allows
-	maxMessageSize = 1 << 27
+	// The longest message either side may send. The sandbox's traffic is small: portal calls, notifications and the
+	// tray, whose largest payloads are icons (a 512x512 ARGB pixmap is 1 MiB). 4 MiB leaves room for a 1024x1024
+	// one, an eighth of dbus-daemon's own default of 32 MiB, and keeps what a client can make the proxy hold small
+	maxMessageSize = 4 << 20
 	// The most file descriptors one sendmsg carries (the kernel's SCM_MAX_FD), so the most a message can pass on
 	maxMessageFDs = 253
 	// File descriptors received ahead of the message that claims them
@@ -22,22 +24,38 @@ const (
 	// What one read takes in, and the longest SASL line (dbus-daemon's and xdg-dbus-proxy's limit)
 	readChunk   = 64 << 10
 	maxAuthLine = 16 << 10
+	// The largest body of a bus driver call the proxy looks into: names are at most 255 bytes, match rules 1024
+	maxInspectBody = 4 << 10
 )
 
-// One D-Bus message as read: the decoded header (and body), the byte order, the body's bytes as they came and the
-// file descriptors it carries, which the holder closes or passes on
+// One D-Bus message as read: the parsed header, the byte order, its bytes as they came (the body is raw's tail) and
+// the file descriptors it carries, which the holder closes or passes on. The body is decoded only where the proxy
+// looks into it
 type message struct {
 	*dbus.Message
-	order binary.ByteOrder
-	body  []byte
-	fds   []int
+	serial  uint32
+	order   binary.ByteOrder
+	raw     []byte
+	body    []byte
+	decoded bool
+	fds     []int
+	acct    *account
 }
 
+// Shadows godbus's, which a message parsed here doesn't set
+func (m *message) Serial() uint32 { return m.serial }
+
 func (m *message) closeFDs() {
-	for _, fd := range m.fds {
-		unix.Close(fd)
-	}
+	m.acct.closeFDs(m.fds)
 	m.fds = nil
+}
+
+// Gives back what the message's bytes took from the budget, once it's handled
+func (m *message) release() {
+	if m.raw != nil {
+		m.acct.give(len(m.raw), 0)
+		m.raw, m.body = nil, nil
+	}
 }
 
 func (m *message) header(f dbus.HeaderField) string {
@@ -63,9 +81,9 @@ func (m *message) replySerial() (uint32, bool) {
 	return s, ok
 }
 
-// The first argument when it's a string
+// The first argument when it's a string, for a body no larger than maxInspectBody
 func (m *message) arg0() (string, bool) {
-	if len(m.Body) == 0 {
+	if !m.decodeBody(maxInspectBody) || len(m.Body) == 0 {
 		return "", false
 	}
 	s, ok := m.Body[0].(string)
@@ -74,23 +92,51 @@ func (m *message) arg0() (string, bool) {
 
 // Reads a connection's bytes and the file descriptors that come with them, bounded throughout
 type reader struct {
+	acct *account
 	conn *net.UnixConn
 	data []byte // Read and not consumed yet
 	fds  []int  // Received and not claimed by a message yet
 	oob  []byte
+	held int // The buffer's capacity, taken from the account
 }
 
-func newReader(conn *net.UnixConn) *reader {
-	return &reader{conn: conn, oob: make([]byte, unix.CmsgSpace(maxMessageFDs*4))}
+func newReader(conn *net.UnixConn, acct *account) *reader {
+	return &reader{conn: conn, acct: acct, oob: make([]byte, unix.CmsgSpace(maxMessageFDs*4))}
+}
+
+// Swaps the buffer for one of the given capacity, holding what's unread, and accounts for the difference
+func (r *reader) resize(capacity int) error {
+	if capacity > r.held {
+		if err := r.acct.take(capacity-r.held, 0); err != nil {
+			return err
+		}
+	} else {
+		r.acct.give(r.held-capacity, 0)
+	}
+	r.held = capacity
+	if capacity == 0 {
+		r.data = nil
+		return nil
+	}
+	grown := make([]byte, len(r.data), capacity)
+	copy(grown, r.data)
+	r.data = grown
+	return nil
 }
 
 // Reads until n bytes are buffered
 func (r *reader) fill(n int) error {
 	for len(r.data) < n {
 		if cap(r.data)-len(r.data) < readChunk {
-			grown := make([]byte, len(r.data), len(r.data)+max(readChunk, len(r.data)))
-			copy(grown, r.data)
-			r.data = grown
+			// Grow toward what's needed, a chunk at least, never past the largest message
+			want := max(len(r.data)+readChunk, min(2*len(r.data), n), n)
+			want = min(want, maxMessageSize+readChunk)
+			if want <= len(r.data) {
+				return errors.New("Read buffer full")
+			}
+			if err := r.resize(want); err != nil {
+				return err
+			}
 		}
 		k, oobn, flags, _, err := r.conn.ReadMsgUnix(r.data[len(r.data):cap(r.data)], r.oob)
 		k, oobn = max(k, 0), max(oobn, 0)
@@ -126,6 +172,10 @@ func (r *reader) takeFDs(oob []byte) error {
 		if err != nil {
 			return fmt.Errorf("Parse file descriptors: %w", err)
 		}
+		if err := r.acct.take(0, len(fds)); err != nil {
+			closeAll(fds)
+			return err
+		}
 		r.fds = append(r.fds, fds...)
 	}
 	if len(r.fds) > maxPendingFDs {
@@ -134,22 +184,22 @@ func (r *reader) takeFDs(oob []byte) error {
 	return nil
 }
 
+// Takes n bytes out of the buffer; an emptied buffer is dropped and given back
 func (r *reader) consume(n int) []byte {
 	out := make([]byte, n)
 	copy(out, r.data[:n])
 	r.data = r.data[n:]
 	if len(r.data) == 0 {
-		r.data = nil
+		r.resize(0)
 	}
 	return out
 }
 
-// Closes the file descriptors no message claimed
+// Closes the file descriptors no message claimed and gives back the buffer
 func (r *reader) close() {
-	for _, fd := range r.fds {
-		unix.Close(fd)
-	}
+	r.acct.closeFDs(r.fds)
 	r.fds = nil
+	r.resize(0)
 }
 
 // A SASL line without its CRLF, at most maxAuthLine long
@@ -195,64 +245,45 @@ func (r *reader) readMessage() (*message, error) {
 	if err := r.fill(int(bodyStart + bodyLen)); err != nil {
 		return nil, err
 	}
-	raw := r.consume(int(bodyStart + bodyLen))
-	msg, err := decode(raw)
-	if err != nil {
-		return nil, fmt.Errorf("Decode message: %w", err)
+	total := int(bodyStart + bodyLen)
+	if err := r.acct.take(total, 0); err != nil {
+		return nil, err
 	}
-	if msg.Serial() == 0 {
-		return nil, errors.New("Message without a serial")
+	raw := r.consume(total)
+	m := &message{Message: &dbus.Message{Type: dbus.Type(raw[1]), Flags: dbus.Flags(raw[2])}, order: order,
+		serial: order.Uint32(raw[8:12]), raw: raw, body: raw[bodyStart:], acct: r.acct}
+	if err := r.parse(m, 16+int(order.Uint32(raw[12:16]))); err != nil {
+		m.release()
+		return nil, err
 	}
-	m := &message{Message: msg, order: order, body: raw[bodyStart:]}
-	var nfds uint32
-	if v, ok := msg.Headers[dbus.FieldUnixFDs]; ok {
-		nfds, _ = v.Value().(uint32)
-	}
-	if nfds > maxMessageFDs {
-		return nil, fmt.Errorf("Message claims %d file descriptors", nfds)
-	}
-	if int(nfds) > len(r.fds) {
-		return nil, fmt.Errorf("Message claims %d file descriptors, %d arrived", nfds, len(r.fds))
-	}
-	m.fds = append([]int(nil), r.fds[:nfds]...)
-	r.fds = r.fds[nfds:]
 	return m, nil
 }
 
-// godbus's decoder, which recovers its own panics; this guards against any it doesn't
-func decode(raw []byte) (msg *dbus.Message, err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			msg, err = nil, fmt.Errorf("Decoder panic: %v", p)
-		}
-	}()
-	return dbus.DecodeMessageWithFDs(bytes.NewReader(raw), nil)
-}
-
-// Encodes a message as forwarded: the header fields godbus decoded, in the original byte order, then the body as it
-// came, so the bus routes by exactly the fields the proxy checked
-func (m *message) encode() ([]byte, error) {
-	hdr := &dbus.Message{Type: m.Type, Flags: m.Flags, Headers: m.Headers}
-	return encodeWith(hdr, m.order, m.Serial(), m.body)
-}
-
-// Encodes msg with the given serial; a non-nil body replaces msg's (empty) one
-func encodeWith(msg *dbus.Message, order binary.ByteOrder, serial uint32, body []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	if _, err := msg.EncodeToWithFDs(&buf, order); err != nil {
-		return nil, err
+// The checks on a message's header, and the file descriptors it claims
+func (r *reader) parse(m *message, headerEnd int) error {
+	headers, err := parseHeader(m.raw, m.order, headerEnd)
+	if err != nil {
+		return fmt.Errorf("Parse header: %w", err)
 	}
-	out := buf.Bytes()
-	order.PutUint32(out[8:12], serial)
-	if body != nil {
-		if len(msg.Body) != 0 {
-			return nil, errors.New("Message has a body already")
-		}
-		order.PutUint32(out[4:8], uint32(len(body)))
-		out = append(out, body...)
+	m.Headers = headers
+	// godbus checks the type, flags, required fields and names
+	if err := (&dbus.Message{Type: m.Type, Flags: m.Flags, Headers: headers}).IsValid(); err != nil {
+		return fmt.Errorf("Invalid message: %w", err)
 	}
-	if len(out) > maxMessageSize {
-		return nil, fmt.Errorf("Message too long: %d bytes", len(out))
+	if m.serial == 0 {
+		return errors.New("Message without a serial")
 	}
-	return out, nil
+	var nfds uint32
+	if v, ok := headers[dbus.FieldUnixFDs]; ok {
+		nfds, _ = v.Value().(uint32)
+	}
+	if nfds > maxMessageFDs {
+		return fmt.Errorf("Message claims %d file descriptors", nfds)
+	}
+	if int(nfds) > len(r.fds) {
+		return fmt.Errorf("Message claims %d file descriptors, %d arrived", nfds, len(r.fds))
+	}
+	m.fds = append([]int(nil), r.fds[:nfds]...)
+	r.fds = r.fds[nfds:]
+	return nil
 }

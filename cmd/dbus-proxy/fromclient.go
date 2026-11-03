@@ -145,11 +145,13 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		return nil, nil
 	}
 	if isReply(m) {
+		// Only to a call the client got, and to its caller
 		rs, _ := m.replySerial()
-		if _, ok := c.awaitPeer[rs]; !ok && c.p.filter {
+		call := peerCall{m.header(dbus.FieldDestination), rs}
+		if _, ok := c.awaitPeer[call]; !ok && c.p.filter {
 			return drop()
 		}
-		delete(c.awaitPeer, rs)
+		delete(c.awaitPeer, call)
 		return nil, nil
 	}
 	refuse := func(name string) ([]byte, error) {
@@ -163,6 +165,10 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		// pending call to the client would pass unchecked
 		return refuse(errAccessDenied)
 	}
+	if m.Type == dbus.TypeMethodCall && m.header(dbus.FieldDestination) == "" {
+		// The bus refuses them, or delivers them to monitors only; the proxy doesn't rely on that
+		return refuse(errAccessDenied)
+	}
 	if readsOthersTraffic(m) {
 		return refuse(errAccessDenied)
 	}
@@ -172,6 +178,11 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 	kind := expectNormal
 	hello := isBusCall(m) && m.header(dbus.FieldMember) == "Hello"
 	if hello {
+		if c.helloSeen {
+			// The bus would end the connection; refusing it here keeps a second Hello's reply from being taken
+			// for the first's
+			return refuse(errAccessDenied)
+		}
 		kind = expectHello
 	}
 	v := c.verdict(m)
@@ -208,7 +219,8 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		return refuse(errAccessDenied)
 	}
 	if generatesReply(m) {
-		if err := c.expectFromBus(m.Serial(), expect{kind: kind}); err != nil {
+		e := expect{kind: kind, fromBus: m.header(dbus.FieldDestination) == busName}
+		if err := c.expectFromBus(m.Serial(), e); err != nil {
 			return nil, err
 		}
 	}
@@ -225,14 +237,14 @@ func (c *client) rewrite(m *message, reply *dbus.Message) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.expectFromBus(m.Serial(), expect{kind: expectRewrite, rewrite: reply}); err != nil {
+	if err := c.expectFromBus(m.Serial(), expect{kind: expectRewrite, rewrite: reply, fromBus: true}); err != nil {
 		return nil, err
 	}
 	return data, nil
 }
 
 // After Hello: watch every name the rules mention and ask who owns it now, so its owner's unique name gets its
-// policy; names under a wildcard need ListNames first, and the client waits for it
+// policy; names under a wildcard need ListNames first, then a GetNameOwner of each, and the client waits for those
 func (c *client) initialNameOps(fakes *[][]byte) error {
 	wildcard := false
 	for name, subtree := range c.p.rules.names() {

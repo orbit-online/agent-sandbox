@@ -8,17 +8,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/docopt/docopt-go"
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 )
 
 // With DBUS_PROXY_MAIN set the test binary is the proxy, for the tests of its command line
 func TestMain(m *testing.M) {
 	if os.Getenv("DBUS_PROXY_MAIN") != "" {
+		if n, err := strconv.ParseUint(os.Getenv("DBUS_PROXY_NOFILE"), 10, 64); err == nil {
+			rl := unix.Rlimit{Cur: n, Max: n}
+			if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &rl); err != nil {
+				panic(err)
+			}
+		}
 		main()
 		os.Exit(0)
 	}
@@ -41,6 +49,10 @@ const busConfig = `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Con
     <allow receive_requested_reply="false" receive_type="method_return"/>
     <allow receive_requested_reply="false" receive_type="error"/>
   </policy>
+  <limit name="max_replies_per_connection">50000</limit>
+  <limit name="max_message_unix_fds">253</limit>
+  <limit name="max_incoming_unix_fds">100000</limit>
+  <limit name="max_outgoing_unix_fds">100000</limit>
 </busconfig>
 `
 
@@ -78,6 +90,12 @@ func waitFor(t *testing.T, ok func() bool) {
 // address clients connect to
 func startProxy(t *testing.T, bus string, args ...string) string {
 	t.Helper()
+	return startProxyWith(t, bus, nil, args...)
+}
+
+// startProxy, with tweak applied to the proxy before it serves
+func startProxyWith(t *testing.T, bus string, tweak func(*Proxy), args ...string) string {
+	t.Helper()
 	sock := filepath.Join(t.TempDir(), "proxy")
 	opts, err := docopt.ParseArgs(usage, append([]string{bus, sock}, args...), "")
 	if err != nil {
@@ -91,6 +109,9 @@ func startProxy(t *testing.T, bus string, args ...string) string {
 	p, err := NewProxy(bus, NewRules(rs), filter)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tweak != nil {
+		tweak(p)
 	}
 	l, err := listen(sock)
 	if err != nil {

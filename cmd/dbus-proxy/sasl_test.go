@@ -38,7 +38,7 @@ func TestPipelinedSASL(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Write(append([]byte("\x00AUTH EXTERNAL\r\nDATA\r\nNEGOTIATE_UNIX_FD\r\nBEGIN\r\n"), hello...))
-	r := newReader(conn)
+	r := newReader(conn, nil)
 	for _, want := range []string{"DATA", "OK ", "AGREE_UNIX_FD"} {
 		line, err := r.readLine()
 		if err != nil || !strings.HasPrefix(line, want) {
@@ -66,7 +66,7 @@ func TestSASLRefused(t *testing.T) {
 	} {
 		conn := dialRaw(t, addr)
 		conn.Write([]byte(tc.send))
-		r := newReader(conn)
+		r := newReader(conn, nil)
 		line, err := r.readLine()
 		if err != nil || line != tc.want {
 			t.Errorf("%q: got %q (%v), want %q", tc.send, line, err, tc.want)
@@ -81,7 +81,7 @@ func TestSASLRefused(t *testing.T) {
 	for _, send := range []string{"\x00BEGIN\r\n", "\x00AUTH EXTERNAL\x01\r\n", "x"} {
 		conn := dialRaw(t, addr)
 		conn.Write([]byte(send))
-		if _, err := newReader(conn).readLine(); err == nil {
+		if _, err := newReader(conn, nil).readLine(); err == nil {
 			t.Errorf("%q: connection still open", send)
 		}
 	}
@@ -102,7 +102,7 @@ func TestMessageBounds(t *testing.T) {
 		conn := dialRaw(t, addr)
 		conn.Write([]byte(auth))
 		conn.Write(msg)
-		r := newReader(conn)
+		r := newReader(conn, nil)
 		if line, _ := r.readLine(); !strings.HasPrefix(line, "OK ") {
 			t.Fatalf("%s: auth: %q", name, line)
 		}
@@ -132,7 +132,7 @@ func TestFDClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fc.Close()
-	r := newReader(fc.(*net.UnixConn))
+	r := newReader(fc.(*net.UnixConn), nil)
 	defer r.close()
 	for _, tc := range []struct {
 		claim, send uint32
