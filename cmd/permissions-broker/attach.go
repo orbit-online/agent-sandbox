@@ -15,7 +15,7 @@ import (
 // The attach type: binding host paths into the running sandbox and detaching them, as scripts/ns-inject-spike.py
 // verified. The daemon checks the source against the ceiling, creates the mountpoint in the grant directory on the
 // host, and runs helpers of its own binary through nsenter for what a multithreaded Go process can't do (enter a user
-// namespace), each exec'd on the host's mounts (see helpers.go):
+// namespace), each exec'd on the host's mounts (see internal/mounts/helpers.go):
 //   clone-tree, in the owner of the sandbox's mount namespace, unshares a mount namespace of its own, opens the
 //     source beneath its ceiling root without following any link or crossing a mount, clones it (open_tree,
 //     without its submounts) and passes the tree's fd back;

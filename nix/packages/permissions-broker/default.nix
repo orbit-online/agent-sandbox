@@ -28,8 +28,8 @@ buildGoModule {
   vendorHash = "sha256-4Of8zQcd0WJzGnwkK/GWhawzSDpKSHcjyx8mcLJaadE=";
   env.CGO_ENABLED = 0;
   nativeBuildInputs = [ makeBinaryWrapper ];
-  # nsenter from the util-linux it's tested against (helpers.go relies on its --keep-caps behaviour); systemd-run and
-  # systemctl from the host system, to match the running user manager
+  # nsenter from the util-linux it's tested against (internal/mounts/helpers.go relies on its --keep-caps behaviour);
+  # systemd-run and systemctl from the host system, to match the running user manager
   postInstall = ''
     wrapProgram $out/bin/permissions-broker \
       --prefix PATH : ${lib.makeBinPath [ util-linux ]} \

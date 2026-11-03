@@ -34,8 +34,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   set may not hold, per bus, from `policy.json`, which the module reads too
   and the broker and the proxy embed). Their packages in
   `nix/packages/<binary>/` build it with `subPackages`, from a source
-  filtered to `go.mod`, `go.sum`, the binary's directory and the `internal/`
-  packages it uses, each with its own `vendorHash` (Go vendors only what the
+  filtered to `go.mod`, `go.sum`, the binary's directory (its own `internal/`
+  packages included) and the `internal/` packages it uses, each with its own `vendorHash` (Go vendors only what the
   binary imports). permissions-window has a module of its own, so miqt's cgo
   and Qt stay out of the others' closures.
 - `cmd/netns-macvlan/`: the Go helper that gives the sandbox's netns
@@ -68,28 +68,46 @@ single-user Nix store, and an environment doc for the Claude running inside.
   with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
-  One concern per file: `sockets.go` (listening, peer checks, the request and
+  Its own packages are in `cmd/permissions-broker/internal/`, each auditable on
+  its own: `schema` (the JSON Schema subset
+  arguments are checked against), `duration` (the ISO 8601 durations of leases
+  and validities), `wire` (the protocol on request.sock and control.sock, and
+  `Call`, its client side), `notify` (asking with a notification), `mcpserver`
+  (the MCP server inside the sandbox, a client of request.sock, with a tool per
+  host command), `hostcmd` (a host command's declaration: its checks, its free
+  arguments, the consent's scope, what it reads on stdin), `hostsock` (what a
+  host socket may not be, reaching one without links, the addresses in the grant
+  directory), `dbusgrant` (a D-Bus capability's rule set, its checks and scope,
+  the connection to a proxy's control socket), `mountinfo` (mountinfo files) and
+  `mounts` (attach grants in the sandbox's mount namespace: the folders ceiling
+  by path and identity, the helpers run through `nsenter` that clone a host path
+  and join the sandbox's mount namespace only after their exec on the host's
+  mounts, to share the grant directory and mount and unmount grants there, the
+  grant's mount and the holders' scan; it takes the sandbox as an interface).
+  Package main is the core, one concern per file: `main.go` (the arguments),
+  `config.go` (the config, the capabilities loaded from it), `run.go` (serving
+  until the sandbox ends), `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
-  logind), `standing.go` (the standing grants from the config), `notify.go`,
-  `views.go`, `types.go`,
-  `clock.go` (the time and timers of leases and answers, which tests fake) and
-  `run.go`; `capability.go` (a capability, its parameters and summary), `instances.go` (instances, the instance
-  check and exclusive locks), `commands.go` (host commands: declarations, instance globs, the consent's
-  scope), `schema.go` (the JSON Schema subset arguments are checked against),
+  logind), `standing.go` (the standing grants from the config), `views.go` (and
+  opening the window), `types.go`, `clock.go` (the time and timers of leases and
+  answers, which tests fake), `capability.go` (a capability, its parameters and
+  summary), `kind.go` (what a capability's type adds, which the core calls into:
+  its checks, a grant made live and ended, the consent's summary and scope, the
+  list), `instances.go` (instances, the instance check and exclusive locks),
+  `commands.go` (host command capabilities: bounding arguments, instance globs),
   `call.go` (a call: covered or asked, run as a transient unit, its output),
-  `hostsockets.go` (host sockets: declarations, the addresses listened at), `refused.go` (what a host socket
-  may not be, and reaching one without links) and `splice.go`
-  (connections to them, spliced under a grant), `dbus.go` (D-Bus capabilities: declarations, what they may not
-  name, the consent's scope, pushing rule sets to the proxies' control sockets),
-  `mcp.go` the MCP server and `mcp_commands.go` its host command tools, `sandbox.go` finding and pinning the sandbox,
-  `members.go` its processes by user namespace.
-  The attach type: `folders.go` (the folders capability), `ceiling.go` (the source ceiling, by path and identity), `tree.go`
-  (the clone helper it runs through `nsenter` to clone a host path),
-  `helpers.go` (the helpers that join the sandbox's mount namespace only after
-  their exec on the host's mounts, to share the grant directory and mount and
-  unmount grants there), `mountinfo.go` (mount tables, the grant's mount), `scan.go` (the holders' scan) and `attach.go`
-  (mounting, unmounting, cleanup). Each `*_test.go` follows its file;
-  `main_test.go` has `TestMain` and the shared fakes.
+  `hostsockets.go` (listening at the host sockets' addresses), `splice.go`
+  (connections to them, spliced under a grant), `dbus.go` (D-Bus capabilities, a
+  proxy per bus, a bus's grants ended when its proxy's connection breaks),
+  `sandbox.go` (finding and pinning the sandbox), `members.go` (its processes by
+  user namespace), `folders.go` (the folders capability), `attach.go` (mounting,
+  unmounting, cleanup) and `holders.go` (what still held ended grants). Each
+  type's kind is in its type's file. Each `*_test.go` follows its file; tests
+  that go through a grant stay with the core. The rapid state machines
+  (`machine*_test.go`, and `live*_test.go`, which the VM test runs from this
+  package's test binary) drive the core's internals, hence package main;
+  `main_test.go` has `TestMain`, which runs the test binary as the helpers
+  through `main()`, and the shared fakes.
 - `nix/packages/permissions-window/`: the Permissions window (Go with miqt's
   Qt 6 bindings, and QML), a client of the broker's `control.sock`. miqt has
   no moc, so the QML talks to Go through a `QQmlPropertyMap`: state as JSON
