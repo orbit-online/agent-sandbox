@@ -53,10 +53,10 @@ func TestLiveMachine(t *testing.T) {
 const liveSettle = 15 * time.Second
 
 const (
-	liveCmd    = "test/thing"
+	liveCmd    = "test"
 	liveSvc    = "test/echo"
 	liveFolder = "folders/folder"
-	// The command's ceiling
+	// The host command's maxValidity
 	liveMaxValidity = 8 * time.Hour
 )
 

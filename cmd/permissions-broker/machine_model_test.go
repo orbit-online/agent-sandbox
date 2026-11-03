@@ -27,12 +27,14 @@ type refPending struct {
 	tag, cap, params string
 	// The lease the notification offers, and the caller's session ("" for none) as found when it asked
 	lease, sess string
-	asked       time.Time
-	options     bool
-	optionsAt   time.Time
-	call        *askCall
-	done        chan response
-	id          string // the broker's
+	// A host command's call, not a request
+	isCall    bool
+	asked     time.Time
+	options   bool
+	optionsAt time.Time
+	call      *askCall
+	done      chan response
+	id        string // the broker's
 }
 
 type refGate struct {
@@ -122,7 +124,7 @@ func (m *model) passes(cap, p, root string) bool {
 }
 
 func validLease(lease string) bool {
-	if lease == "session" || lease == "lock" {
+	if lease == "session" || lease == "lock" || lease == "once" {
 		return true
 	}
 	_, err := parseDuration(lease)
@@ -258,7 +260,7 @@ func (m *model) dropPending(p *refPending) {
 	m.pending = slices.DeleteFunc(m.pending, func(q *refPending) bool { return q == p })
 }
 
-// validity is what a command grant's run is given (P10): the ceiling's, or what's left of a duration lease if less
+// validity is what a host command's call is given (P10): its maxValidity, or what's left of a duration lease if less
 func (m *model) validity(g *refGrant) time.Duration {
 	if !g.expires.IsZero() && g.expires.Sub(m.now) < maxValidity {
 		return g.expires.Sub(m.now)

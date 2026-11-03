@@ -117,8 +117,10 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 		res.Grants = b.grantViews("")
 	case "request":
 		var g *grant
-		g, res.Output, err = b.request(p, req)
+		g, err = b.request(p, req)
 		res.Grant = b.view(g)
+	case "call":
+		res, err = b.call(p, req)
 	case "release":
 		// The caller's session drops its hold; without one, the grant ends
 		sess, _ := b.sb.sessionOf(p.pid)
@@ -172,6 +174,9 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
 		res.Grants = b.grantViews("")
 		res.Capabilities = b.listCapabilities()
 		res.Held = b.heldViews()
+		b.mu.Lock()
+		res.Calls = slices.Clone(b.calls)
+		b.mu.Unlock()
 		res.Standing = b.standingViews()
 		res.Overview = b.cfg.Overview
 	case "options":

@@ -59,7 +59,7 @@ func TestHoldersReentry(t *testing.T) {
 	b, _, _ := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestHoldersOnRelease(t *testing.T) {
 	b, hold, out := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}

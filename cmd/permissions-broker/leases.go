@@ -25,6 +25,8 @@ func (b *broker) checkLease(lease string, sess *session) error {
 		if sess == nil {
 			return errors.New("No Claude Code session found above the caller, so no session lease: ask for a duration")
 		}
+	case "once":
+		// obtain lets only calls ask for it
 	case "lock":
 		b.mu.Lock()
 		ok := b.lockOK
@@ -34,21 +36,10 @@ func (b *broker) checkLease(lease string, sess *session) error {
 		}
 	default:
 		if _, err := parseDuration(lease); err != nil {
-			return fmt.Errorf("Lease %q: session, lock or a duration such as PT1H", lease)
+			return fmt.Errorf("Lease %q: session, lock, a duration such as PT1H, or once for a call", lease)
 		}
 	}
 	return nil
-}
-
-// validity is how long what a command prints lasts: maxValidity, or a duration lease's remainder if shorter
-func (b *broker) validity(c *capability, g *grant) time.Duration {
-	v, _ := parseDuration(c.Ceiling.MaxValidity)
-	if !g.Expires.IsZero() {
-		if left := g.Expires.Sub(b.now()); left < v {
-			v = left
-		}
-	}
-	return v
 }
 
 // grant makes a grant live: starts a service's unit and ties it to its lease
@@ -135,6 +126,9 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, lease str
 	}
 	b.mu.Unlock()
 	go b.lease(g, watchDone)
+	if c.glob != "" {
+		go b.watchInstance(g)
+	}
 	slog.Info("Granted", "grant", g.ID, "capability", g.Capability, "lease", lease)
 	b.event("granted", g.ID)
 	return g, nil

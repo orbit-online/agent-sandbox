@@ -13,35 +13,53 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// request asks the user for a grant, or finds one already there that covers it, and delivers it
-func (b *broker) request(p peer, req request) (*grant, string, error) {
+// request asks the user for a grant, or finds one already there that covers it
+func (b *broker) request(p peer, req request) (*grant, error) {
 	c, ok := b.caps[req.Capability]
 	if !ok {
-		return nil, "", fmt.Errorf("No capability %q: see list", req.Capability)
+		return nil, fmt.Errorf("No capability %q: see list", req.Capability)
 	}
 	params, err := c.validate(req.Params)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	reason := strings.Join(strings.FieldsFunc(req.Reason, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
+	reason, err := foldReason(req.Reason)
+	if err != nil {
+		return nil, err
+	}
+	return b.obtain(p, c, params, reason, req.Lease, false)
+}
+
+// foldReason folds whitespace and control characters to single spaces and cuts the reason to maxReason
+func foldReason(r string) (string, error) {
+	reason := strings.Join(strings.FieldsFunc(r, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
 	if reason == "" {
-		return nil, "", errors.New("Say why you need it: the user sees the reason")
+		return "", errors.New("Say why you need it: the user sees the reason")
 	}
 	if r := []rune(reason); len(r) > maxReason {
 		reason = string(r[:maxReason]) + "…"
+	}
+	return reason, nil
+}
+
+// obtain finds a grant covering c with params, or asks the user for one. A once lease, which only a call may ask for,
+// makes a grant nothing else finds
+func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, lease string, call bool) (*grant, error) {
+	if lease == "once" && !call {
+		return nil, errors.New("A once lease is for host command calls: ask for a duration")
 	}
 	if c.Type == "attach" {
 		b.mu.Lock()
 		shared := b.shared
 		b.mu.Unlock()
 		if !shared {
-			return nil, "", errors.New("Folder and device grants need the sandbox's grant directory shared, which " +
+			return nil, errors.New("Folder and device grants need the sandbox's grant directory shared, which " +
 				"failed when it started: restart the app")
 		}
 	}
 	sess, err := b.sb.sessionOf(p.pid)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	keepSess := false
 	defer func() {
@@ -51,14 +69,13 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	}()
 	// The session was read by pid: it's the caller's only if the caller still runs
 	if p.gone() {
-		return nil, "", errors.New("The caller is gone")
+		return nil, errors.New("The caller is gone")
 	}
-	lease := req.Lease
 	if lease == "" {
 		lease = "session"
 	}
 	if err := b.checkLease(lease, sess); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	summary := c.describe(params)
 	if c.Type == "attach" {
@@ -66,11 +83,11 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		// what's at the path then, checked again
 		src, err := b.resolveAttach(c, params)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		summary = describeAttach(summary, src)
 	} else if err := c.inList(context.Background(), params); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	// Already granted: a live grant, or a standing grant from the config with exactly these parameters, serves without
@@ -81,7 +98,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	if g == nil && b.isStanding(c, params) {
 		if g, err = b.grant(c, params, summary, "standing", nil); err != nil {
 			c.covered.Unlock()
-			return nil, "", err
+			return nil, err
 		}
 	}
 	if g != nil {
@@ -90,37 +107,45 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	}
 	c.covered.Unlock()
 	if g != nil {
-		return b.deliver(c, g)
+		return g, nil
 	}
 
 	unlockGate, err := b.openGate(c.id())
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	answer, err := b.consent(c, params, summary, reason, lease)
 	unlockGate(answer.Allow)
 	if err != nil {
-		return nil, "", fmt.Errorf("Asking the user: %w", err)
+		return nil, fmt.Errorf("Asking the user: %w", err)
 	}
 	if !answer.Allow {
 		b.logDecision(summary, reason, "denied")
-		return nil, "", errors.New("The user didn't allow it")
+		return nil, errors.New("The user didn't allow it")
 	}
 	// Again, whether or not the answer changed the lease: the screen lock may have stopped being watched while the
 	// user was asked
+	if answer.Lease == "once" && !call {
+		return nil, errors.New("A once lease is for host command calls")
+	}
 	if err := b.checkLease(answer.Lease, sess); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	lease = answer.Lease
-	if len(answer.Params) > 0 {
+	if len(answer.Params) > 0 && c.Type == "command" {
+		// The call needs these bounding values; the window may change only the lease
+		if p, err := c.validate(answer.Params); err != nil || string(p) != string(params) {
+			return nil, errors.New("A host command grant's parameters can't be changed: only its lease")
+		}
+	} else if len(answer.Params) > 0 {
 		if params, err = c.validate(answer.Params); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		summary = c.describe(params)
 		if c.Type == "attach" {
 			src, err := b.resolveAttach(c, params)
 			if err != nil {
-				return nil, "", err
+				return nil, err
 			}
 			summary = describeAttach(summary, src)
 		}
@@ -128,7 +153,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	// What list prints may have changed while the user was asked (a VM shut down): checked at grant time. An attach
 	// grant's source is checked again when it's mounted
 	if err := c.inList(context.Background(), params); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	// A grant of the same may have appeared while the user was asked (the window narrowing to what's granted): that
 	// one serves, rather than a second of the same
@@ -137,7 +162,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 		keepSess = b.hold(g, sess)
 	} else if g, err = b.grant(c, params, summary, lease, sess); err != nil {
 		c.covered.Unlock()
-		return nil, "", err
+		return nil, err
 	} else if keepSess = lease == "session"; !keepSess {
 		// A session lease took the session's pidfd, any other takes it here: its watch closes it, already if the
 		// anchor is gone
@@ -145,7 +170,7 @@ func (b *broker) request(p peer, req request) (*grant, string, error) {
 	}
 	c.covered.Unlock()
 	b.logDecision(summary, reason, "allowed ("+lease+")")
-	return b.deliver(c, g)
+	return g, nil
 }
 
 // logDecision records the user's answer for the window, the last maxLog of them
@@ -156,32 +181,6 @@ func (b *broker) logDecision(summary, reason, decision string) {
 	if n := len(b.log); n > maxLog {
 		b.log = b.log[n-maxLog:]
 	}
-}
-
-// deliver returns a grant's delivery: for a command what its run command prints, run for the grant's validity. The
-// grant must still be live when the plugin runs and when the output is handed out: a request may wait for a plugin
-// slot while the grant is revoked or runs out
-func (b *broker) deliver(c *capability, g *grant) (*grant, string, error) {
-	if c.Type != "command" {
-		return g, "", nil
-	}
-	cred, err := c.runCommand(context.Background(), g.Params, func() (time.Duration, error) {
-		if !b.isLive(g) {
-			return 0, errors.New("The grant ended: ask again")
-		}
-		v := b.validity(c, g)
-		if v <= 0 {
-			return 0, errors.New("The grant just ran out: ask again")
-		}
-		return v, nil
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	if !b.isLive(g) {
-		return nil, "", errors.New("The grant ended: ask again")
-	}
-	return g, cred, nil
 }
 
 // isLive reports whether g is still granted
@@ -195,7 +194,8 @@ func (b *broker) matching(c *capability, params json.RawMessage) *grant {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, g := range b.grants {
-		if g.cap == c && string(g.Params) == string(params) {
+		// A once grant covers the call it was made for only
+		if g.cap == c && string(g.Params) == string(params) && g.Lease != "once" {
 			return g
 		}
 	}
@@ -245,6 +245,9 @@ type decision struct {
 func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string) (decision, error) {
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan request, 1)}
+	if c.Type == "command" {
+		p.Scope = c.scope()
+	}
 	b.mu.Lock()
 	b.pendingSeq++
 	p.seq = b.pendingSeq
@@ -274,7 +277,8 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	}
 	asked := make(chan result, 1)
 	go func() {
-		action, err := b.ask(ctx, prompt{Summary: summary, Reason: reason, Lease: lease, Options: len(b.cfg.Window) > 0})
+		action, err := b.ask(ctx, prompt{Summary: summary, Reason: reason, Lease: lease, Scope: p.Scope,
+			Options: len(b.cfg.Window) > 0})
 		asked <- result{action, err}
 	}()
 	select {

@@ -31,7 +31,7 @@ func TestDurationLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1S"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1S"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +46,11 @@ func TestLockLease(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
 		t.Error("Lock lease granted without the screen lock watched")
 	}
 	b.lockOK = true
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestSession(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
+	g, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestSessionNeedsClaude(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session")); err == nil {
+	if _, err := b.request(peerAt(t, child), req(c.id(), `{}`, "session")); err == nil {
 		t.Error("Session lease granted without a session")
 	}
 }
@@ -126,22 +126,22 @@ func TestRanOut(t *testing.T) {
 	b.clock = clk
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
 	// The lease is over, its timer not yet fired: no output without a validity
 	clk.jump(2 * time.Hour)
-	if _, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
-		t.Errorf("Issued %q after the lease ran out", cred)
+	if res, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "PT1H"); err == nil {
+		t.Errorf("Ran with %q after the lease ran out", res.Output)
 	}
 }
 
-// P4: a request a live command grant covers waits for a plugin slot; the grant is revoked meanwhile. No output
+// P4: a call a live grant covers waits for a plugin slot; the grant is revoked meanwhile. No output
 func TestNoOutputAfterEnd(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +154,8 @@ func TestNoOutputAfterEnd(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		_, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
-		done <- result{cred, err}
+		res, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "PT1H")
+		done <- result{res.Output, err}
 	}()
 	time.Sleep(200 * time.Millisecond)
 	if _, err := b.revoke(g.ID); err != nil {
@@ -180,7 +180,7 @@ func TestLockWatchedOnReturn(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		return signals, "1", nil
 	})
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err != nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err != nil {
 		t.Fatalf("Lock lease refused right after watchLogind: %v", err)
 	}
 	close(signals)
@@ -210,7 +210,7 @@ func TestLockLostWhileAsking(t *testing.T) {
 	}
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
+	if g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "lock")); err == nil {
 		t.Errorf("Granted a lock lease nothing watches: %+v", g)
 	}
 	if gs := b.liveGrants(""); len(gs) != 0 {
@@ -268,7 +268,7 @@ func TestSessionGoneWhileAsked(t *testing.T) {
 	old := slog.Default()
 	slog.SetDefault(slog.New(slowGranted{slog.NewTextHandler(os.Stderr, nil), b, &decoys}))
 	t.Cleanup(func() { slog.SetDefault(old) })
-	_, _, _ = b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
+	_, _ = b.request(peerAt(t, child), req(c.id(), `{}`, "session"))
 	if len(decoys) == 0 {
 		t.Fatal("The session lease didn't end with its anchor gone")
 	}

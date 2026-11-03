@@ -108,8 +108,11 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res 
 		}
 	}
 	switch {
-	case !m.leaseOK(lease, p.sess):
+	case !m.leaseOK(lease, p.sess), lease == "once" && !p.isCall:
 		refuse("no such lease now")
+		return
+	case p.cap == capToken && params != p.params:
+		refuse("a host command grant's bounding values changed")
 		return
 	case !m.passes(p.cap, params, mc.w.root):
 		refuse("above the ceiling")
@@ -122,7 +125,7 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res 
 	if g != nil {
 		m.consented[storeKey{p.cap, params}] = true
 		m.hold(g, p.sess)
-		mc.delivered(t, g, res)
+		mc.delivered(t, g, res, p.isCall)
 	} else {
 		made := mc.grantedSince(before)
 		if !m.lockFree(p.cap, params) {
@@ -141,7 +144,12 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res 
 			m.hold(g, p.sess)
 		}
 		if !gone || lease != "session" {
-			mc.delivered(t, g, res)
+			mc.delivered(t, g, res, p.isCall)
+		}
+		if lease == "once" {
+			// Made for the call, ended once it's answered
+			mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
+			return
 		}
 	}
 	if gone {

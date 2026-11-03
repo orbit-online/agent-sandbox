@@ -180,11 +180,27 @@ let
                 enable = true;
                 folders = [ { path = "/srv/notes"; } ];
                 plugins.test.package = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" "{}";
+                commands.vm = {
+                  description = "a VM";
+                  bounding.vm = {
+                    type = "string";
+                    description = "the VM";
+                  };
+                  commands.shot = {
+                    description = "a screenshot";
+                    result = "image/png";
+                    run = [ "/srv/shot" ];
+                  };
+                };
                 grants = [
                   {
                     plugin = "test";
                     capability = "thing";
                     params.scope = "read";
+                  }
+                  {
+                    capability = "vm";
+                    params.vm = "win11";
                   }
                 ];
               };
@@ -407,9 +423,10 @@ let
         "secret"
       ];
     };
-    # Only a launcher with the broker gets its MCP server
+    # Only a launcher with the broker gets its MCP server, given the host commands' declarations (checked in the
+    # closure: without run)
     testPermissionsMcp = {
-      expr = map (l: l.mcpServers.permissions or null) [
+      expr = map (l: if l.mcpServers ? permissions then l.mcpServers.permissions // { args = lib.take 2 l.mcpServers.permissions.args; } else null) [
         aliceMemo.agent-sandbox.claude-desktop
         aliceMemo.agent-sandbox.claude-desktop.launchers.work
       ];
@@ -417,7 +434,10 @@ let
         null
         {
           command = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
-          args = [ "mcp" ];
+          args = [
+            "mcp"
+            "--commands"
+          ];
         }
       ];
     };
@@ -432,6 +452,7 @@ let
                   plugin = "test";
                   capability = "thing";
                 }
+                { capability = "vm"; }
               ];
               launchers.work.permissions = {
                 enable = true;
@@ -455,8 +476,53 @@ let
       expected = [
         "agent-sandbox.claude-desktop: permissions.grants needs permissions.enable"
         "agent-sandbox.claude-desktop: permissions.grants: no plugin test in permissions.plugins"
+        "agent-sandbox.claude-desktop: permissions.grants: no host commands vm in permissions.commands"
         "agent-sandbox.claude-desktop: launchers.work.permissions.grants: folders get no standing grants, a folder that should always be there is a bind (binds)"
         "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no plugin none in permissions.plugins"
+      ];
+    };
+    # Host commands the broker would refuse, caught at eval
+    testCommandAssertions = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                commands.a_b = {
+                  description = "bad name";
+                  commands.c = {
+                    description = "fine";
+                    run = [ "/bin/true" ];
+                  };
+                };
+                commands.vm = {
+                  description = "a VM";
+                  bounding.vm.type = "string";
+                  commands.ok = {
+                    description = "a JSON result";
+                    result = "application/json";
+                    run = [ "/bin/true" ];
+                  };
+                  commands.shot = {
+                    description = "an argument named reason";
+                    arguments.reason = {
+                      type = "string";
+                      description = "r";
+                    };
+                    run = [ "/bin/true" ];
+                  };
+                };
+              };
+            }
+          )
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.a_b: a name of letters, digits and -, and at least one command"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm: every bounding argument needs a description, none may be named reason or lease, and none may be an array or multiline"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.ok: a name of letters, digits and - (vm_ok at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.shot: a name of letters, digits and - (vm_shot at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
       ];
     };
     testMcpServersHmTransform = {
@@ -658,6 +724,10 @@ in
             "readonly CONFIG=/home/alice/.local/share/claude-desktop-work/home/.config/Claude/claude_desktop_config.json"; do
             grep -qxF -- "$line" "$workState" || { echo "work's state script lacks: $line" >&2; exit 1; }
           done
+          # The permissions MCP server's host commands: what the sandbox may call, not what runs on the host
+          workMcp=$(grep -oP '^readonly MCP_SERVERS=\K\S+' "$workState")
+          jq -e '.[0].name == "vm" and .[0].commands.shot.result == "image/png" and (.[0].commands.shot | has("run") | not)' \
+            "$(jq -r '.permissions.args[2]' "$workMcp")" >/dev/null || { echo "work's MCP host commands are off" >&2; exit 1; }
           # The default launcher's ~/.claude is bound from /srv/claude, its ~/.config/Claude from the host's
           grep -qxF -- "HOME_DIRS=(/home/alice/.local/share/claude-desktop/home /srv/claude /home/alice/.config/Claude)" \
             "$(readlink -f ${sandboxed}/bin/claude-desktop)" || { echo "the default launcher's HOME_DIRS are wrong" >&2; exit 1; }
@@ -707,7 +777,10 @@ in
             and (.plugins | length) == 2 and .plugins[1].ceiling == {sources: [{path: "/srv/notes", rw: false}]}
             and (.plugins[1].manifest | endswith("/share/agent-sandbox/permissions/folders.json"))
             and (.plugins[0].manifest | endswith("/share/agent-sandbox/permissions/test.json"))
-            and .grants == [{capability: "test/thing", params: {scope: "read"}}]
+            and .grants == [{capability: "test/thing", params: {scope: "read"}}, {capability: "vm", params: {vm: "win11"}}]
+            and .commands == [{name: "vm", description: "a VM", exclusive: false,
+              bounding: {vm: {type: "string", description: "the VM"}}, commands: {shot: {description: "a screenshot",
+              arguments: {}, result: "image/png", timeout: "PT1M", run: ["/srv/shot"]}}}]
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []

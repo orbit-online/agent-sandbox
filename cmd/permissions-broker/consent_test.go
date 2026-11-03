@@ -18,32 +18,35 @@ func TestConsent(t *testing.T) {
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
 
-	if _, _, err := b.request(peerAt(t, os.Getpid()), request{Op: "request", Capability: c.id(), Lease: "PT1H"}); err == nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), request{Op: "request", Capability: c.id(), Lease: "PT1H"}); err == nil {
 		t.Error("Granted without a reason")
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
 		t.Error("Granted when the user denied")
 	}
-	g, cred, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil {
 		t.Fatalf("Not granted when the user allowed: %v", err)
 	}
 	if f.asked[1].Summary != `the test thing (path="/a")` || f.asked[1].Reason != "testing" {
 		t.Errorf("Asked %+v", f.asked[1])
 	}
-	// The output's validity is the shorter of the lease's remainder and maxValidity
-	var in pluginInput
-	if err := json.Unmarshal([]byte(cred), &in); err != nil || in.Validity != "PT3600S" {
-		t.Errorf("Issued with %q (%v), want the lease's hour", in.Validity, err)
+	// A call's validity is the shorter of the lease's remainder and maxValidity
+	res, err := callRun(b, peerAt(t, os.Getpid()), `{"path": "/a"}`, "")
+	if err != nil {
+		t.Fatalf("Call under the grant: %v", err)
+	}
+	if in := calledWith(t, res); in.Validity != "PT3600S" || string(in.Bounding) != `{"path":"/a"}` || in.Grant != g.ID {
+		t.Errorf("Called with %+v, want the lease's hour", in)
 	}
 	// A live grant covers the same request without asking; other parameters ask again
-	if again, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err != nil || again.ID != g.ID {
+	if again, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err != nil || again.ID != g.ID {
 		t.Errorf("Same request got %v, %v", again, err)
 	}
 	if f.count() != 2 {
 		t.Errorf("Asked %d times, want 2", f.count())
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a", "ro": true}`, "PT1H")); err == nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a", "ro": true}`, "PT1H")); err == nil {
 		t.Error("Other parameters granted without asking")
 	}
 }
@@ -60,14 +63,14 @@ func TestListed(t *testing.T) {
 	c.List = []string{list}
 	b.caps[c.id()] = c
 	for _, params := range []string{`{"path": "/c"}`, `{"path": "/b"}`, `{"ro": true}`} {
-		if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), params, "PT1H")); err == nil {
+		if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), params, "PT1H")); err == nil {
 			t.Errorf("Granted %s, which list doesn't name", params)
 		}
 	}
 	if f.count() != 0 {
 		t.Errorf("Asked about an instance list doesn't name: %+v", f.asked)
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a", "ro": true}`, "PT1H")); err != nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a", "ro": true}`, "PT1H")); err != nil {
 		t.Errorf("Refused an instance list names: %v", err)
 	}
 	// The window's answer can't name another instance either
@@ -90,7 +93,7 @@ func TestListed(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/b", "ro": true}`, "PT1H")); err == nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/b", "ro": true}`, "PT1H")); err == nil {
 		t.Error("Granted the window's answer of an instance list doesn't name")
 	}
 
@@ -115,24 +118,25 @@ func TestRefusalLimit(t *testing.T) {
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	for i := range maxRefusals {
-		if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
+		if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err == nil {
 			t.Fatalf("Request %d granted", i)
 		}
 	}
-	_, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
+	_, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
 	if err == nil || !strings.Contains(err.Error(), "in a row") || f.count() != maxRefusals {
 		t.Errorf("After %d refusals: %v, asked %d times", maxRefusals, err, f.count())
 	}
 	clk.advance(blockFor + time.Second)
 	f.answers = []string{"allow"}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Errorf("Not asked again after the block: %v", err)
 	}
 }
 
 func TestWindowAnswer(t *testing.T) {
 	b, _ := testBroker(t, "options")
-	c := testCap(t, "command")
+	fakeSystemd(t)
+	c := testCap(t, "service")
 	b.caps[c.id()] = c
 	go func() {
 		for {
@@ -151,7 +155,7 @@ func TestWindowAnswer(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +190,7 @@ func TestAnsweredInWindow(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -209,7 +213,7 @@ func TestListChangedWhileAsking(t *testing.T) {
 		writeList(t, c, `[]`)
 		return "allow", nil
 	}
-	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
+	if g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
 		t.Errorf("Granted an instance list no longer prints: %+v", g)
 	}
 }

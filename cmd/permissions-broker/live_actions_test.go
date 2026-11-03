@@ -23,6 +23,9 @@ var liveCaps = []string{liveCmd, liveSvc, liveFolder, liveFolder}
 
 var liveLeases = []string{"", "session", "lock", "PT1H", "standing"}
 
+// A call's: once only there
+var liveCallLeases = []string{"", "once", "once", "PT1H"}
+
 func (mc *liveMachine) drawParams(t *rapid.T, c string) string {
 	kv := map[string]any{}
 	if c == liveFolder {
@@ -74,7 +77,13 @@ func (mc *liveMachine) Request(t *rapid.T) {
 	c := rapid.SampledFrom(liveCaps).Draw(t, "capability")
 	p := mc.drawParams(t, c)
 	lease := rapid.SampledFrom(liveLeases).Draw(t, "lease")
-	mc.request(t, mc.drawCaller(t), c, p, lease, 1)
+	mc.request(t, mc.drawCaller(t), c, p, lease, 1, false)
+}
+
+// Call: the host command's call, under a grant that covers it or asking for one
+func (mc *liveMachine) Call(t *rapid.T) {
+	lease := rapid.SampledFrom(liveCallLeases).Draw(t, "lease")
+	mc.request(t, mc.drawCaller(t), liveCmd, "{}", lease, 1, true)
 }
 
 // Flood: the same request several times at once from one process (P14: one question)
@@ -82,7 +91,7 @@ func (mc *liveMachine) Flood(t *rapid.T) {
 	c := rapid.SampledFrom(liveCaps).Draw(t, "capability")
 	p := mc.drawParams(t, c)
 	lease := rapid.SampledFrom(liveLeases).Draw(t, "lease")
-	mc.request(t, mc.anonymous(t), c, p, lease, rapid.IntRange(2, 4).Draw(t, "copies"))
+	mc.request(t, mc.anonymous(t), c, p, lease, rapid.IntRange(2, 4).Draw(t, "copies"), false)
 }
 
 // Crafted: requests that never reach the user (P3, P7)
@@ -94,8 +103,13 @@ func (mc *liveMachine) Crafted(t *rapid.T) {
 		{Capability: liveFolder, Params: json.RawMessage(`{"path":"` + mc.lv.root + `\nAllowed"}`), Reason: "x"},
 		{Capability: liveCmd, Reason: " \n\x07\t "},
 		{Capability: liveCmd, Reason: "x", Lease: "forever"},
+		{Capability: liveCmd, Reason: "x", Lease: "once"},
+		{Op: "call", Capability: liveCmd, Command: "other", Reason: "x"},
+		{Op: "call", Capability: liveCmd, Command: "thing", Arguments: json.RawMessage(`{"x":1}`), Reason: "x"},
 	}).Draw(t, "crafted")
-	r.Op = "request"
+	if r.Op == "" {
+		r.Op = "request"
+	}
 	if res := mc.anonymous(t).do(t, r); res.Error == "" {
 		mc.fatalf(t, "Crafted request %+v served: %+v", r, res.Grant)
 	}
@@ -108,12 +122,10 @@ func (mc *liveMachine) ShareInside(t *rapid.T) {
 	}
 }
 
-func (mc *liveMachine) predict(c, p, lease, sess string) (string, *refGrant) {
+func (mc *liveMachine) predict(c, p, lease, sess string, call bool) (string, *refGrant) {
 	m := mc.m
-	if lease == "" {
-		lease = "session"
-	}
-	if !m.leaseOK(lease, sess) || !mc.passes(c, p) {
+	lease = defaultLease(lease, call)
+	if !m.leaseOK(lease, sess) || !mc.passes(c, p) || lease == "once" && !call {
 		return "refused", nil
 	}
 	if g := m.matching(c, p); g != nil {
@@ -139,12 +151,15 @@ func (mc *liveMachine) clearOfBlocks() {
 	mc.m.now = time.Now()
 }
 
-func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, copies int) {
+func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, copies int, call bool) {
 	mc.tags++
 	req := request{Op: "request", Capability: c, Params: json.RawMessage(p), Lease: lease,
 		Reason: fmt.Sprintf("why%d: to <b>read</b>\n\tthe notes", mc.tags)}
+	if call {
+		req.Op, req.Command, req.Arguments = "call", "thing", json.RawMessage(`{}`)
+	}
 	mc.clearOfBlocks()
-	kind, live := mc.predict(c, p, lease, who.sess)
+	kind, live := mc.predict(c, p, lease, who.sess, call)
 	dones := make([]chan response, copies)
 	for i := range dones {
 		dones[i] = who.send(req)
@@ -191,7 +206,7 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 	case "live":
 		for _, res := range results {
 			mc.m.hold(live, who.sess)
-			mc.delivered(t, live, res)
+			mc.delivered(t, live, res, call)
 		}
 	case "standing":
 		if results[0].Grant == nil {
@@ -200,7 +215,7 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "standing", "")
 		for _, res := range results {
 			mc.m.hold(g, who.sess)
-			mc.delivered(t, g, res)
+			mc.delivered(t, g, res, call)
 		}
 	case "ask":
 		for _, res := range results {
@@ -212,12 +227,12 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 	}
 }
 
-// delivered checks a request's grant and, for a command, the validity its run was given (P10)
-func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response) {
+// delivered checks a request's grant and, for a call, the validity the command was given (P10)
+func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response, call bool) {
 	if res.Error != "" || res.Grant == nil || res.Grant.ID != g.id {
 		mc.fatalf(t, "Grant %s %s not delivered: %s %+v", g.cap, g.params, res.Error, res.Grant)
 	}
-	if g.cap != liveCmd {
+	if !call {
 		return
 	}
 	want := liveMaxValidity
@@ -233,17 +248,14 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response) {
 
 // asked checks the question as the window shows it (P7: the daemon's summary, the reason cleaned) and notes it pending
 func (mc *liveMachine) asked(t *rapid.T, q *pending, req request, sess string, done chan response) {
-	lease := req.Lease
-	if lease == "" {
-		lease = "session"
-	}
+	lease := defaultLease(req.Lease, req.Op == "call")
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	if !strings.HasPrefix(q.Summary, mc.lv.desc[req.Capability]) || strings.Contains(q.Summary, tag) ||
 		q.Lease != lease || q.Capability != req.Capability || string(q.Params) != string(req.Params) {
 		mc.fatalf(t, "Asked %+v for %+v", q, req)
 	}
 	mc.m.pending = append(mc.m.pending, &refPending{tag: tag, cap: req.Capability, params: string(req.Params),
-		lease: lease, sess: sess, asked: time.Now(), done: done, id: q.ID})
+		lease: lease, sess: sess, asked: time.Now(), done: done, id: q.ID, isCall: req.Op == "call"})
 	mc.m.gate(req.Capability).asking = true
 }
 

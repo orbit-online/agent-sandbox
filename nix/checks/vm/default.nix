@@ -44,19 +44,11 @@ let
     while True:
         handle(listener.accept()[0])
   '';
-  # Plugins for the permissions broker: a command whose run prints the validity it was given, and a service with tools
+  # A plugin for the permissions broker: a service with tools
   testPlugin = pkgs.writeTextDir "share/agent-sandbox/permissions/test.json" (
     builtins.toJSON {
       name = "test";
       capabilities = [
-        {
-          name = "thing";
-          type = "command";
-          description = "a test command";
-          run = [
-            (pkgs.writeShellScript "run" "echo issued-$(${lib.getExe pkgs.jq} -r .validity)")
-          ];
-        }
         {
           name = "echo";
           type = "service";
@@ -151,15 +143,18 @@ let
                 { path = "/srv/notes"; }
                 { path = "/srv/mounted"; }
               ];
-              plugins.test = {
-                package = testPlugin;
-                ceiling.maxValidity = "PT8H";
+              plugins.test.package = testPlugin;
+              # A host command printing the validity it was given
+              commands.test = {
+                description = "a test command";
+                commands.thing = {
+                  description = "print the validity";
+                  run = [ "${pkgs.writeShellScript "run" "echo issued-$(${lib.getExe pkgs.jq} -r .validity)"}" ];
+                  maxValidity = "PT8H";
+                };
               };
               grants = [
-                {
-                  plugin = "test";
-                  capability = "thing";
-                }
+                { capability = "test"; }
                 {
                   plugin = "test";
                   capability = "echo";
@@ -306,6 +301,7 @@ let
             sandboxHome
             workStateDir
             ;
+          mcpArgs = nodes.workstation.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.work.mcpServers.permissions.args;
           routerIP = nodes.router.networking.primaryIPAddress;
           workstationIP = nodes.workstation.networking.primaryIPAddress;
         };

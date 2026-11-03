@@ -168,16 +168,18 @@ func testCap(t *testing.T, typ string) *capability {
 	}
 	c := &capability{Plugin: "test", Name: "thing", Type: typ, Description: "the test thing",
 		Params: map[string]json.RawMessage{
-			"path": json.RawMessage(`{"type": "string"}`),
-			"ro":   json.RawMessage(`{"type": "boolean"}`),
+			"path": json.RawMessage(`{"type": "string", "description": "a path"}`),
+			"ro":   json.RawMessage(`{"type": "boolean", "description": "read-only"}`),
 		}}
 	switch typ {
 	case "service":
 		c.Serve = []string{"/bin/true"}
 	case "command":
-		// Prints its input, so tests see the validity it was given
-		c.Run = script("run", "cat")
-		c.Ceiling = ceiling{MaxValidity: "PT8H", Raw: json.RawMessage(`{"maxValidity": "PT8H"}`)}
+		// A host command printing its input, so tests see the validity it was given
+		c.Plugin = ""
+		fakeSystemd(t)
+		c.Commands = map[string]*hostCommand{"run": {Description: "print the input", Run: script("run", "cat"),
+			MaxValidity: "PT8H"}}
 	}
 	if err := c.check(); err != nil {
 		t.Fatal(err)
@@ -210,14 +212,19 @@ func (f *fakeAsker) count() int {
 	return len(f.asked)
 }
 
-// fakeSystemd replaces systemd-run and systemctl with scripts that log their arguments
+// fakeSystemd replaces systemd-run and systemctl with scripts that log their arguments. systemd-run --pipe, a host
+// command's call, runs the command after --, as systemd would
 func fakeSystemd(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "log")
 	for _, name := range []string{"systemd-run", "systemctl"} {
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\necho "+name+" \"$@\" >>"+log+"\n"), 0o755); err != nil {
+		body := "#!/bin/sh\necho " + name + " \"$@\" >>" + log + "\n"
+		if name == "systemd-run" {
+			body += `case " $* " in *" --pipe "*) while [ "$1" != -- ]; do shift; done; shift; exec "$@" ;; esac` + "\n"
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -240,6 +247,22 @@ func testBroker(t *testing.T, answers ...string) (*broker, *fakeAsker) {
 	}
 	t.Cleanup(func() { b.endAll("test over") })
 	return b, f
+}
+
+// callRun calls the test command capability's run under the bounding values params
+func callRun(b *broker, p peer, params, lease string) (response, error) {
+	return b.call(p, request{Op: "call", Capability: "thing", Command: "run", Params: json.RawMessage(params),
+		Arguments: json.RawMessage(`{}`), Reason: "testing", Lease: lease})
+}
+
+// calledWith is what a call of the test command was given on stdin, which it prints
+func calledWith(t *testing.T, res response) callInput {
+	t.Helper()
+	var in callInput
+	if err := json.Unmarshal([]byte(res.Output), &in); err != nil {
+		t.Fatalf("Call printed %q: %v", res.Output, err)
+	}
+	return in
 }
 
 func req(capID, params, lease string) request {

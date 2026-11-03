@@ -26,13 +26,13 @@ import (
 const settle = 3 * time.Second
 
 // The capabilities: services of the instances list prints, one that one launcher at a time may have and one any may,
-// a command whose run prints what it's given, and folders beneath a ceiling
+// host commands whose call prints what it's given, and folders beneath a ceiling
 const (
 	capVM      = "vm/machine"
 	capConsole = "vm/console"
-	capToken   = "vault/token"
+	capToken   = "token"
 	capFolder  = "folders/folder"
-	// The command's ceiling
+	// The host command's
 	maxValidity = 30 * time.Minute
 )
 
@@ -277,15 +277,16 @@ func (w *world) script(name, body string) []string {
 // capabilities makes the plugins' capabilities
 func (w *world) capabilities() map[string]*capability {
 	str, boolean := json.RawMessage(`{"type": "string"}`), json.RawMessage(`{"type": "boolean"}`)
-	opaque := json.RawMessage(`{"type": "string", "opaque": true}`)
 	vm := &capability{Plugin: "vm", Name: "machine", Type: "service", Description: "a VM", Exclusive: true,
 		Params: map[string]json.RawMessage{"name": str, "ro": boolean}, Serve: []string{"serve"},
 		List: w.script("list", "cat "+w.instances)}
 	console := &capability{Plugin: "vm", Name: "console", Type: "service", Description: "a VM's console",
 		Params: map[string]json.RawMessage{"name": str}, Serve: []string{"serve"}, List: vm.List}
-	token := &capability{Plugin: "vault", Name: "token", Type: "command", Description: "a token",
-		Params: map[string]json.RawMessage{"scope": str, "csr": opaque}, Run: w.script("run", "cat"),
-		Ceiling: ceiling{MaxValidity: "PT30M", Raw: json.RawMessage(`{"maxValidity":"PT30M"}`)}}
+	token := &capability{Name: "token", Type: "command", Description: "a token",
+		Params: map[string]json.RawMessage{"scope": json.RawMessage(`{"type": "string", "description": "its scope"}`),
+			"csr": json.RawMessage(`{"type": "string", "opaque": true, "description": "a CSR"}`)},
+		Commands: map[string]*hostCommand{"issue": {Description: "issue one", Run: w.script("run", "cat"),
+			MaxValidity: "PT30M"}}}
 	// resolve: the path, read-only unless ro is false
 	folder := &capability{Plugin: "folders", Name: "folder", Type: "attach", Description: "a folder",
 		Params: map[string]json.RawMessage{"path": str, "ro": boolean}, Resolve: w.script("resolve", `in=$(cat)
@@ -324,7 +325,8 @@ func (w *world) setInstances(cs []*capability, names []string) {
 	}
 }
 
-var unitRe = regexp.MustCompile(`perm-test_([0-9a-f]+)`)
+// A service grant's unit; a call's is perm-test_call-<id>
+var unitRe = regexp.MustCompile(`perm-test_([0-9a-f]{16})\b`)
 
 // unitsUp reads the fake systemd's log of this iteration: the grants whose units were started and not stopped
 func (w *world) unitsUp() map[string]bool {

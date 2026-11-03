@@ -17,6 +17,15 @@ func (b *broker) listCapabilities() []capabilityInfo {
 		c := b.caps[id]
 		infos[i] = capabilityInfo{ID: id, Type: c.Type, Description: c.Description, Params: c.Params,
 			Tools: c.Type == "service" && c.Tools}
+		if c.Type == "command" {
+			// What the sandbox may call, not what runs on the host
+			infos[i].Commands = map[string]*hostCommand{}
+			for name, cmd := range c.Commands {
+				v := *cmd
+				v.Run = nil
+				infos[i].Commands[name] = &v
+			}
+		}
 		if inst, err := c.listInstances(context.Background()); err != nil {
 			infos[i].Error = err.Error()
 		} else {

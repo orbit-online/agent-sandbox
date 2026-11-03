@@ -3,9 +3,10 @@
 Status: written 2026-10-31, rewritten 2026-11-03 for the broker as gateway. Built before the rewrite: the daemon
 (`cmd/permissions-broker/`) with consent, leases, standing grants from the Nix config and the MCP server, the
 Permissions window (`nix/packages/permissions-window/`) and folder mounts (`nix/packages/permissions-folders/`,
-`permissions.folders`), behind a launcher's `permissions.enable`. The code still has what the rewrite replaces:
-`service` and `command` plugins, plugin tools that come and go with `list_changed`, and session leases. Not built yet:
-declared host commands, host sockets at stable addresses, the Go D-Bus proxy, device grants. Steps lists the order.
+`permissions.folders`), behind a launcher's `permissions.enable`. Built since: declared host commands
+(`permissions.commands`); the window doesn't show their scope and calls yet (Steps, 2). The code still has what the
+rewrite replaces: `service` plugins, plugin tools that come and go with `list_changed`, and session leases. Not built
+yet: host sockets at stable addresses, the Go D-Bus proxy, device grants. Steps lists the order.
 
 ## Why
 
@@ -243,13 +244,18 @@ permissions.commands.windows-vm = {
   `integer` and `number` (`minimum`, `maximum`), `boolean`, and arrays of those (`maxItems`). Strings carry no control
   characters unless declared `multiline` (newlines and tabs then). A string marked `opaque` is data the user has nothing
   to read in (a public key, a CSR), shown by its digest (Requests). Every argument needs a description; the consent is
-  built from them.
+  built from them. A call must give every free argument; a bounding argument it leaves out is a value of its own (the
+  grant covers calls that leave it out too), except one with `instances`, which an instance must match. A free string
+  without `maxLength` may be 64 Ki characters. Bounding arguments are scalars on one line: no arrays, no `multiline`,
+  as the summary quotes them.
 - `result` is `text` (the default) or an image MIME type.
 - `maxValidity` (optional) caps the validity the command is told (below), for commands that issue credentials.
 - `exclusive` (optional): an instance may be granted to one launcher at a time. The daemons share lock files in
   `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance, holding the launcher's name and linked into place
   so only one daemon wins. A daemon removes its locks when the grant ends and in its cleanup after a crash; a
-  standing grant takes one like any other. A request for an instance another launcher holds is refused, naming it.
+  standing grant takes one like any other. Grants of one launcher share a lock only with the same parameters (a
+  `once` grant beside another): other parameters are another client of the instance, refused as before. A request
+  for an instance another launcher holds is refused, naming it.
 
 The module checks at eval time what it can: names fit MCP's tool names (`<capability>_<command>`, at most 64 characters
 of `[A-Za-z0-9_-]`), every argument is described, no argument is named `reason` or `lease` (the broker adds those),
@@ -267,7 +273,7 @@ A call is a request: `call` on `request.sock`, which the MCP server sends for th
    call's `reason` and proposed `lease`, and makes the grant on Allow. A `once` grant is tied to the call it was made
    for and covers no other, queued or concurrent;
 3. runs the command's `run` as a transient user unit (`systemd-run --user --pipe --collect`, named
-   `perm-<launcher>_<call>`, or `perm_<call>` for the default launcher), bound to the
+   `perm-<launcher>_call-<id>`, or `perm_call-<id>` for the default launcher), bound to the
    daemon's unit, with `RuntimeMaxSec=` its `timeout` (default one minute), in the user manager's environment and
    nothing of the sandbox's. The arguments go on stdin as one JSON object, never on argv and never through a shell:
 
@@ -282,12 +288,13 @@ A call is a request: `call` on `request.sock`, which the MCP server sends for th
    content of the declared type. A non-zero exit, a timeout or more than 16 MiB on stdout is an MCP tool error
    carrying the last 4 KiB of stderr.
 
-One call per capability instance runs at a time, and at most four at once, so a command that hangs holds up only its own
-instance until its timeout. A revoke stops the grant's running calls with their units.
+One call per set of bounding values runs at a time, and at most four in all; a call waits two minutes at most for its
+turn. A command that hangs holds up its own bounding values until its timeout, and one of the four. A grant's end stops
+its running calls with their units, a call whose unit systemd is still starting included.
 
-The daemon records every call, covered or not, with its grant: the command, the time, the exit status and the arguments
-(opaque ones by digest), the last 200 per grant, in memory. The window shows them under the grant, so a one-hour
-`exec` grant shows what ran under it.
+The daemon records every call, covered or not, with its grant: the command, the time, the exit status, the tail of
+stderr and the arguments (opaque ones by digest, strings cut at 200 characters), the last 200 calls, in memory, kept
+after their grant ends. Only the window gets them, so a one-hour `exec` grant shows what ran under it.
 
 ### Writing a host command
 
@@ -495,7 +502,7 @@ say so in their description.
 |-----------|-----------------------------------------------------|------------------------------------------------|
 | `list`    |                                                     | capabilities and instances, with live grants   |
 | `request` | `capability`, `params`, `reason`, `lease`           | the grant: its id, and a mount or socket path  |
-| `call`    | `capability`, `command`, `arguments`, `reason`, `lease` | the command's output                        |
+| `call`    | `capability`, `command`, `params`, `arguments`, `reason`, `lease` | the command's output              |
 | `release` | `grant`                                             | ends the grant                                 |
 | `status`  |                                                     | the live grants                                |
 | `watch`   |                                                     | a stream of grant events, one JSON per line    |
@@ -517,9 +524,9 @@ one proposes `PT1H`.
 
 What the sandbox can make the daemon spend is bounded: each socket has its own budget of 64 connections (watch streams
 and spliced host socket connections counted per socket), so a full `request.sock` leaves `control.sock` to the window; a
-client has 10 seconds to send a request of at most 64 KiB, or 1 MiB for a `call`; accept errors are waited out rather
-than ending the socket; calls are limited as Running a call describes; instance globs are kept for five seconds; and
-requests a grant already covers are answered one at a time per capability, without logging them.
+client has 10 seconds to send a request of at most 1 MiB, enough for a call's free arguments; accept errors are waited
+out rather than ending the socket; calls are limited as Running a call describes; instance globs are kept for five
+seconds; and requests a grant already covers are answered one at a time per capability, without logging them.
 
 A grant belongs to the sandbox. Every process in the sandbox runs as the same user in the same namespaces, so nothing
 could keep one Claude session from another's grant: a folder is mounted in the mount namespace everyone shares, a host
@@ -613,9 +620,9 @@ The window lists them among the grants as "from config", with Revoke, and in its
 ## MCP
 
 `permissions-mcp` is an MCP server in the module's defaults when the broker is enabled. Its tools are fixed when it
-starts, from the declarations the module writes into the store, the file the daemon reads too, given as an argument.
-So it lists them before the daemon answers (the app starts its MCP servers at once) and needs no `list` to do it; a
-call waits up to 30 seconds for `request.sock` to appear. The tools:
+starts, from the declarations the module writes into the store for it (`--commands`): the daemon's, without `run`,
+which the sandbox has no use for. So it lists them before the daemon answers (the app starts its MCP servers at once)
+and needs no `list` to do it; a call waits up to 30 seconds for `request.sock` to answer. The tools:
 
 - `list`: what can be granted, with instances, and what's granted.
 - `request(capability, params, reason, lease)`: blocks until the user answers, 2 minutes at most (10 with the window
@@ -765,7 +772,6 @@ Each can be revisited.
     otherwise.
 18. The MCP server reads the declarations from the store rather than asking the daemon, since the app starts it before
     the daemon may have found the sandbox. The rejected build-time copies were schemas routed to host backends; here
-    the daemon still validates every call against the same file.
+    the daemon still validates every call against its own config, made from the same Nix values.
 19. The consent's scope goes in the notification body ahead of the reason, unrestricted arguments first, because
     servers may cut a long summary.
-

@@ -101,7 +101,7 @@ func TestFolder(t *testing.T) {
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
 
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestFolderLinkOut(t *testing.T) {
 	b, _, _ := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	if g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`/out"}`, "PT1H")); err == nil {
+	if g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`/out"}`, "PT1H")); err == nil {
 		t.Errorf("Followed a link out of the ceiling: %+v", g)
 	}
 	if entries, _ := os.ReadDir(b.cfg.GrantDir); len(entries) != 0 {
@@ -178,10 +178,10 @@ func TestFolderOutsideCeiling(t *testing.T) {
 	b.shared = true
 	c := folders(t, `{"path": "/srv/notes"}`)
 	b.caps[c.id()] = c
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/etc"}`, "PT1H")); err == nil || f.count() != 0 {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/etc"}`, "PT1H")); err == nil || f.count() != 0 {
 		t.Errorf("Outside the ceiling: %v, asked %d times", err, f.count())
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/srv/notes", "ro": false}`, "PT1H")); err == nil || f.count() != 0 {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/srv/notes", "ro": false}`, "PT1H")); err == nil || f.count() != 0 {
 		t.Errorf("Read-write where the ceiling says read-only: %v, asked %d times", err, f.count())
 	}
 }
@@ -192,7 +192,7 @@ func TestSessionsShare(t *testing.T) {
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
 	anchor1, child1 := startAnchor(t, "claude")
-	g, _, err := b.request(peerAt(t, child1), req(c.id(), `{}`, "session"))
+	g, err := b.request(peerAt(t, child1), req(c.id(), `{}`, "session"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestAdoptShared(t *testing.T) {
 	}
 	t.Cleanup(func() { again.endAll("test over") })
 	again.adoptShared()
-	g, _, err := again.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := again.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestCleanup(t *testing.T) {
 	b.cfg.Launcher = "work"
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestDetachFirst(t *testing.T) {
 	b, _, _ := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}

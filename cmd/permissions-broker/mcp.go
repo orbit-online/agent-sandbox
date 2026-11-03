@@ -26,13 +26,18 @@ type releaseIn struct {
 
 var implementation = &mcp.Implementation{Name: "permissions", Version: "0.1.0"}
 
-func runMCP(socket string) error {
+func runMCP(socket, commandsPath string) error {
+	cmds, err := readCommands(commandsPath)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 	n := &nudger{socket: socket, now: time.Now}
 	plugins := newPluginTools(socket, dialUnix, n)
 	// Plugin tools once the session is initialized: their list_changed mustn't come before
 	var once sync.Once
 	plugins.server = newMCPServer(socket, n, func() { once.Do(func() { go plugins.follow(ctx) }) })
+	addCommandTools(plugins.server, socket, n, cmds)
 	return plugins.server.Run(ctx, &mcp.StdioTransport{})
 }
 
@@ -42,7 +47,8 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 	server := mcp.NewServer(implementation, &mcp.ServerOptions{
 		InitializedHandler: func(context.Context, *mcp.InitializedRequest) { initialized() },
 		Instructions: "Access outside the sandbox that the user grants while it runs: folders, devices, services, " +
-			"commands run on the host. list shows what can be asked for. request asks the user, who sees what you ask for and your " +
+			"and host commands, the tools named <capability>_<command>, which ask the user for a grant of their " +
+			"capability unless one covers the call. list shows what can be asked for. request asks the user, who sees what you ask for and your " +
 			"reason, and waits for their answer. Ask only for what the task needs, for as short as it needs, and " +
 			"release a grant as soon as you're done with it. A grant belongs to the whole sandbox, not to the session " +
 			"that asked: every session can use it, and a session lease only ends with the session. Grants with lease " +
@@ -61,7 +67,8 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "request", Description: "Ask the user for a grant. Waits for their " +
 		"answer, up to two minutes, longer if they open the Permissions window on it. Returns the grant: a socket to " +
-		"connect to, a path, or for a command what it printed (output), run again on every request the grant covers."},
+		"connect to or a path. A host command capability can be asked for ahead of its calls, with the values of its " +
+		"bounding arguments as params."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			params, _ := json.Marshal(in.Params)
 			res, err := call(request{Op: "request", Capability: in.Capability, Params: params, Reason: in.Reason,
@@ -69,7 +76,7 @@ func newMCPServer(socket string, n *nudger, initialized func()) *mcp.Server {
 			if err != nil {
 				return nil, nil, err
 			}
-			return n.add(jsonResult(map[string]any{"grant": res.Grant, "output": res.Output}))
+			return n.add(jsonResult(map[string]any{"grant": res.Grant}))
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "release", Description: "Give a grant back once you're done with it. " +
 		"It ends once no session that was given it still holds it."},
@@ -104,7 +111,7 @@ func jsonResult(v any) (*mcp.CallToolResult, any, error) {
 func callBroker(socket string, req request) (response, error) {
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
-		return response{}, fmt.Errorf("The permissions broker isn't running: %w", err)
+		return response{}, fmt.Errorf("%w: %w", errNotRunning, err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(askTimeout + optionsTimeout + time.Minute))
@@ -120,6 +127,8 @@ func callBroker(socket string, req request) (response, error) {
 	}
 	return res, nil
 }
+
+var errNotRunning = errors.New("The permissions broker isn't running")
 
 // How long a session holds grants before its tool results remind it to release them, and how often they do
 var (

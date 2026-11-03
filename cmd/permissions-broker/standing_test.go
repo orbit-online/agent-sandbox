@@ -67,23 +67,24 @@ func TestStandingAtStart(t *testing.T) {
 	}
 }
 
-// A command's standing grant runs without asking, for the ceiling's maxValidity; other parameters ask. Revoked, it's
+// A host command's standing grant covers calls without asking, told maxValidity; other parameters ask. Revoked, it's
 // asked for until the daemon starts again
 func TestStandingRevoke(t *testing.T) {
 	c := testCap(t, "command")
 	b, f := standingBroker(t, c, `{"path": "/a"}`)
 	b.grantStanding()
-	g, out, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
-	if err != nil || f.count() != 0 || g.Lease != "standing" || !strings.Contains(out, `"validity":"PT28800S"`) {
-		t.Fatalf("The standing grant: %+v, %q, %v, asked %d times", g, out, err, f.count())
+	res, err := callRun(b, peerAt(t, os.Getpid()), `{"path": "/a"}`, "")
+	if err != nil || f.count() != 0 || res.Grant.Lease != "standing" || calledWith(t, res).Validity != "PT28800S" {
+		t.Fatalf("The standing grant: %+v, %v, asked %d times", res, err, f.count())
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/b"}`, "PT1H")); err == nil || f.count() != 1 {
+	g := res.Grant
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/b"}`, "PT1H")); err == nil || f.count() != 1 {
 		t.Errorf("Other parameters: %v, asked %d times", err, f.count())
 	}
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil || f.count() != 2 {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil || f.count() != 2 {
 		t.Errorf("A revoked standing grant came back: %v, asked %d times", err, f.count())
 	}
 	if v := b.standingViews(); !v[0].Ended || v[0].Grant != "" {
@@ -110,7 +111,7 @@ func TestStandingRelease(t *testing.T) {
 	if err := b.release(g.ID, nil, "released from inside"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil || f.count() != 1 {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil || f.count() != 1 {
 		t.Errorf("A released standing grant came back: %v, asked %d times", err, f.count())
 	}
 }
@@ -122,7 +123,7 @@ func TestStandingConcurrent(t *testing.T) {
 	b, f := standingBroker(t, c, `{}`)
 	var wg sync.WaitGroup
 	for range 20 {
-		wg.Go(func() { _, _, _ = b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")) })
+		wg.Go(func() { _, _ = b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H")) })
 	}
 	wg.Wait()
 	data, _ := os.ReadFile(log)

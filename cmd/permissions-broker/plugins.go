@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -25,19 +23,28 @@ type capability struct {
 	Params      map[string]json.RawMessage `json:"params"`
 	List        []string                   `json:"list"`
 	Serve       []string                   `json:"serve"`
-	Run         []string                   `json:"run"`
 	Resolve     []string                   `json:"resolve"`
 	Watch       []string                   `json:"watch"`
 	Tools       bool                       `json:"tools"`
 	Exclusive   bool                       `json:"exclusive"`
 	Ceiling     ceiling                    `json:"-"`
+	// Host commands: by name, and the bounding argument whose values the instances glob gives
+	Commands      map[string]*hostCommand `json:"-"`
+	glob, globArg string
+
+	schemas map[string]*argSchema
 
 	// Held while a request looks for a grant covering it
 	covered sync.Mutex
-	// One run or resolve command of this capability's at a time, so a capability whose commands hang (each request a
-	// live command grant covers reruns run, a minute at most) holds one of pluginSlots, not all of them
+	// One resolve command of this capability's at a time, so a capability whose commands hang holds one of
+	// pluginSlots, not all of them. Host commands: one call per instance (its bounding values) at a time
 	slotOnce sync.Once
 	slot     chan struct{}
+	slotsMu  sync.Mutex
+	slots    map[string]chan struct{}
+	// This daemon's exclusive locks, by file, and how many of its grants hold each (once grants beside another)
+	locksMu sync.Mutex
+	locks   map[string]int
 	// list's output for a few seconds, so the sandbox asking again and again doesn't fork a process each time. Also
 	// what keeps list to one process per capability, without a plugin slot: the window's state runs it, which a busy
 	// capability mustn't hold up
@@ -47,23 +54,16 @@ type capability struct {
 	listedAt time.Time
 }
 
-// At most this many run and resolve commands run at once, whatever the sandbox sends
+// At most this many resolve commands and host command calls run at once, whatever the sandbox sends
 var pluginSlots = make(chan struct{}, 4)
 
-func (c *capability) runPlugin(cmd *exec.Cmd) error { return c.runPluginIf(cmd, nil) }
-
-// runPluginIf runs one of c's commands once c's slot and a plugin slot are free, if ready, run then, doesn't refuse
-func (c *capability) runPluginIf(cmd *exec.Cmd, ready func() error) error {
+// runPlugin runs one of c's commands once c's slot and a plugin slot are free
+func (c *capability) runPlugin(cmd *exec.Cmd) error {
 	c.slotOnce.Do(func() { c.slot = make(chan struct{}, 1) })
 	c.slot <- struct{}{}
 	defer func() { <-c.slot }()
 	pluginSlots <- struct{}{}
 	defer func() { <-pluginSlots }()
-	if ready != nil {
-		if err := ready(); err != nil {
-			return err
-		}
-	}
 	return cmd.Run()
 }
 
@@ -74,26 +74,18 @@ const (
 	maxOpaque = 8192
 )
 
-// paramSchema is what the broker reads of a parameter's JSON Schema
-type paramSchema struct {
-	Type   string `json:"type"`
-	Opaque bool   `json:"opaque"`
-}
-
-func (c *capability) param(name string) paramSchema {
-	var s paramSchema
-	_ = json.Unmarshal(c.Params[name], &s)
-	return s
-}
-
 // What a plugin may grant at all, from the module. Plugin-specific fields pass through to its commands in Raw
 type ceiling struct {
-	MaxValidity string          `json:"maxValidity"`
-	Raw         json.RawMessage `json:"-"`
+	Raw json.RawMessage `json:"-"`
 }
 
-// id is how requests name a capability: <plugin>/<name>
-func (c *capability) id() string { return c.Plugin + "/" + c.Name }
+// id is how requests name a capability: <plugin>/<name>, or a host command capability's name
+func (c *capability) id() string {
+	if c.Plugin == "" {
+		return c.Name
+	}
+	return c.Plugin + "/" + c.Name
+}
 
 func loadPlugins(cfg config) (map[string]*capability, error) {
 	caps := map[string]*capability{}
@@ -134,78 +126,71 @@ func (c *capability) check() error {
 	if c.Name == "" || strings.ContainsAny(c.Name, "/ ") {
 		return fmt.Errorf("Capability name %q", c.Name)
 	}
+	c.schemas = map[string]*argSchema{}
+	for k, raw := range c.Params {
+		s, err := parseSchema(raw)
+		if err != nil {
+			return fmt.Errorf("%s: parameter %s: %w", c.Name, k, err)
+		}
+		// A parameter is quoted in the notification's summary: one line, one value
+		if s.Type == "array" || s.Multiline {
+			return fmt.Errorf("%s: parameter %s can't be an array or multiline", c.Name, k)
+		}
+		c.schemas[k] = s
+	}
 	switch c.Type {
 	case "service":
 		if len(c.Serve) == 0 {
 			return fmt.Errorf("%s is of type service without serve", c.Name)
 		}
 	case "command":
-		if len(c.Run) == 0 {
-			return fmt.Errorf("%s is of type command without run", c.Name)
+		if c.Plugin != "" {
+			return fmt.Errorf("%s: host commands are declared in the config, not by plugins", c.Name)
 		}
-		if _, err := parseDuration(c.Ceiling.MaxValidity); err != nil {
-			return fmt.Errorf("%s is of type command: its ceiling needs maxValidity: %w", c.Name, err)
-		}
+		return c.checkCommands()
 	case "attach":
 		if len(c.Resolve) == 0 {
 			return fmt.Errorf("%s is of type attach without resolve", c.Name)
 		}
 	default:
-		return fmt.Errorf("%s has type %q, not service, command or attach", c.Name, c.Type)
-	}
-	for k, schema := range c.Params {
-		var s paramSchema
-		if err := json.Unmarshal(schema, &s); err != nil || !paramTypes[s.Type] {
-			return fmt.Errorf("%s: parameter %s needs a type of string, boolean, integer or number", c.Name, k)
-		}
-		if s.Opaque && s.Type != "string" {
-			return fmt.Errorf("%s: parameter %s is opaque, which only a string can be", c.Name, k)
-		}
+		return fmt.Errorf("%s has type %q, not service or attach", c.Name, c.Type)
 	}
 	return nil
 }
 
-var paramTypes = map[string]bool{"string": true, "boolean": true, "integer": true, "number": true}
-
-// validate checks params against the capability's declared ones: no others, each of its type. Returns them
-// re-encoded with sorted keys, so equal requests compare equal
+// validate checks params against the capability's declared ones: no others, each of its schema. Returns them re-encoded with sorted keys, so equal requests compare equal
 func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
-	params := map[string]any{}
-	if len(raw) > 0 && string(raw) != "null" {
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.UseNumber()
-		if err := dec.Decode(&params); err != nil {
-			return nil, fmt.Errorf("Parameters aren't an object: %w", err)
-		}
+	params, err := decodeObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("Parameters aren't an object: %w", err)
 	}
 	for k, v := range params {
-		if _, ok := c.Params[k]; !ok {
+		s, ok := c.schemas[k]
+		if !ok {
 			return nil, fmt.Errorf("%s takes no parameter %q", c.id(), k)
 		}
-		s := c.param(k)
-		ok := false
-		switch v := v.(type) {
-		case string:
-			ok = s.Type == "string"
-			limit := maxParam
-			if s.Opaque {
-				limit = maxOpaque
-			}
-			if strings.IndexFunc(v, unicode.IsControl) >= 0 || utf8.RuneCountInString(v) > limit {
-				return nil, fmt.Errorf("Parameter %s of %s: at most %d characters, none of them control characters",
-					k, c.id(), limit)
-			}
-		case bool:
-			ok = s.Type == "boolean"
-		case json.Number:
-			_, intErr := v.Int64()
-			ok = s.Type == "number" || s.Type == "integer" && intErr == nil
-		}
-		if !ok {
-			return nil, fmt.Errorf("Parameter %s of %s must be a %s", k, c.id(), s.Type)
+		if err := s.checkValue(v, maxParam); err != nil {
+			return nil, fmt.Errorf("Parameter %s of %s: %w", k, c.id(), err)
 		}
 	}
 	return json.Marshal(params) // maps marshal with sorted keys
+}
+
+// decodeObject decodes a JSON object with numbers as json.Number; nothing or null is an empty one
+func decodeObject(raw json.RawMessage) (map[string]any, error) {
+	m := map[string]any{}
+	if len(raw) == 0 || string(raw) == "null" {
+		return m, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return map[string]any{}, nil
+	}
+	return m, nil
 }
 
 // opaqueDigest is how an opaque parameter is shown: enough to tell two apart, nothing to read
@@ -226,7 +211,7 @@ func (c *capability) describe(params json.RawMessage) string {
 	parts := make([]string, len(keys))
 	// Quoted, so a value can't pass itself off as more parameters or text of the notification's own
 	for i, k := range keys {
-		if v, ok := m[k].(string); ok && c.param(k).Opaque {
+		if v, ok := m[k].(string); ok && c.schemas[k].Opaque {
 			parts[i] = k + "=" + opaqueDigest(v)
 		} else if ok {
 			parts[i] = fmt.Sprintf("%s=%q", k, v)
@@ -246,37 +231,8 @@ func (c *capability) describe(params json.RawMessage) string {
 
 // pluginInput is what a plugin's commands read on stdin
 type pluginInput struct {
-	Params   json.RawMessage `json:"params"`
-	Ceiling  json.RawMessage `json:"ceiling,omitempty"`
-	Validity string          `json:"validity,omitempty"`
-}
-
-// runCommand runs a command plugin's run command and returns what it prints. validity runs once a plugin slot is free,
-// right before the command: the grant may have ended or run down while the request waited for one
-func (c *capability) runCommand(ctx context.Context, params json.RawMessage, validity func() (time.Duration, error)) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, c.Run[0], c.Run[1:]...)
-	var out, errOut bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	var refused error
-	err := c.runPluginIf(cmd, func() error {
-		v, err := validity()
-		if err != nil {
-			refused = err
-			return err
-		}
-		in, _ := json.Marshal(pluginInput{Params: params, Ceiling: c.Ceiling.Raw, Validity: formatDuration(v)})
-		cmd.Stdin = bytes.NewReader(in)
-		return nil
-	})
-	if refused != nil {
-		return "", refused
-	}
-	if err != nil {
-		return "", fmt.Errorf("%s couldn't run: %s", c.id(), strings.TrimSpace(errOut.String()))
-	}
-	return out.String(), nil
+	Params  json.RawMessage `json:"params"`
+	Ceiling json.RawMessage `json:"ceiling,omitempty"`
 }
 
 // unitPrefix starts the names of a launcher's service units: perm_ for the default launcher, perm-<name>_ for a named

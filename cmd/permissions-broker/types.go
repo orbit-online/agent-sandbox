@@ -23,7 +23,7 @@ const (
 	// Bounds on what a client can hold or send: open connections per socket (watch streams included), and a
 	// request's size
 	maxConns   = 64
-	maxRequest = 64 << 10
+	maxRequest = 1 << 20
 )
 
 // How long a client has to send its request
@@ -37,6 +37,9 @@ type request struct {
 	Reason     string          `json:"reason,omitempty"`
 	Lease      string          `json:"lease,omitempty"`
 	Grant      string          `json:"grant,omitempty"`
+	// call: the host command, and its free arguments (Params holds the bounding ones)
+	Command   string          `json:"command,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 	// control.sock's answer to a pending request
 	Pending string `json:"pending,omitempty"`
 	Allow   bool   `json:"allow,omitempty"`
@@ -45,9 +48,12 @@ type request struct {
 }
 
 type response struct {
-	Error        string           `json:"error,omitempty"`
-	Grant        *grant           `json:"grant,omitempty"`
-	Output       string           `json:"output,omitempty"` // what a command grant's run printed
+	Error string `json:"error,omitempty"`
+	Grant *grant `json:"grant,omitempty"`
+	// What a host command printed: text, or Data of the image type Mime
+	Output       string           `json:"output,omitempty"`
+	Mime         string           `json:"mime,omitempty"`
+	Data         []byte           `json:"data,omitempty"`
 	Grants       []*grant         `json:"grants,omitempty"`
 	Capabilities []capabilityInfo `json:"capabilities,omitempty"`
 	Pending      []*pending       `json:"pending,omitempty"`
@@ -56,6 +62,7 @@ type response struct {
 	Standing     []standingGrant  `json:"standing,omitempty"`
 	Overview     json.RawMessage  `json:"overview,omitempty"`
 	Held         []held           `json:"held,omitempty"`
+	Calls        []callRecord     `json:"calls,omitempty"`
 }
 
 type capabilityInfo struct {
@@ -67,6 +74,8 @@ type capabilityInfo struct {
 	Error       string                     `json:"error,omitempty"`
 	// Service: whether the plugin speaks MCP on its grant socket, whose tools the MCP server offers
 	Tools bool `json:"tools,omitempty"`
+	// Host commands: each command's description and free arguments
+	Commands map[string]*hostCommand `json:"commands,omitempty"`
 }
 
 type grant struct {
@@ -106,7 +115,9 @@ type pending struct {
 	Summary    string          `json:"summary"`
 	Reason     string          `json:"reason"`
 	Lease      string          `json:"lease"`
-	Options    bool            `json:"options"`
+	// Host commands: what a grant covers, every command and its free arguments
+	Scope   string `json:"scope,omitempty"`
+	Options bool   `json:"options"`
 
 	answer chan request
 	// Its place in the window's list, by arrival: rows don't move as others come and go
@@ -123,6 +134,8 @@ type logEntry struct {
 // The notification's question and the user's answer: allow, deny or options
 type prompt struct {
 	Summary, Reason, Lease string
+	// Host commands: what the grant covers, shown before the reason
+	Scope string
 	// Whether to offer Options, which needs the window
 	Options bool
 }
@@ -157,6 +170,8 @@ type broker struct {
 	watches    map[chan []byte]bool
 	// What still held attach grants when they ended
 	heldGrants []held
+	// The last maxCalls host command calls, for the window
+	calls []callRecord
 	// The time and the timers of leases and answers, which tests fake
 	clock clock
 }

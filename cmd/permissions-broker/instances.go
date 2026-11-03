@@ -19,12 +19,17 @@ import (
 
 // listInstances runs a plugin's list command, which prints a JSON array of instances
 func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error) {
-	if len(c.List) == 0 {
+	if len(c.List) == 0 && c.glob == "" {
 		return nil, nil
 	}
 	c.listMu.Lock()
 	defer c.listMu.Unlock()
 	if time.Since(c.listedAt) < 5*time.Second {
+		return c.listed, c.listErr
+	}
+	if c.glob != "" {
+		c.listed, c.listErr = c.globInstances()
+		c.listedAt = time.Now()
 		return c.listed, c.listErr
 	}
 	in, _ := json.Marshal(pluginInput{Ceiling: c.Ceiling.Raw})
@@ -50,7 +55,7 @@ func (c *capability) listInstances(ctx context.Context) (json.RawMessage, error)
 // same value in params. Without a list, and for attach capabilities (whose requests may name a folder below a listed
 // root, so its sources decide), none and no error
 func (c *capability) instancesOf(ctx context.Context, params json.RawMessage) ([]map[string]any, error) {
-	if len(c.List) == 0 || c.Type == "attach" {
+	if len(c.List) == 0 && c.glob == "" || c.Type == "attach" {
 		return nil, nil
 	}
 	listed, err := c.listInstances(ctx)
@@ -115,30 +120,54 @@ func (c *capability) exclusiveLock(ctx context.Context, launcher string, params 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	c.locksMu.Lock()
+	defer c.locksMu.Unlock()
+	if c.locks == nil {
+		c.locks = map[string]int{}
+	}
+	// Shared only by grants of this launcher with the same parameters (a once grant beside another): other parameters
+	// are another client of the instance. By launcher too: tests run two on one capability
+	lockKey := func(name string) string { return launcher + "\x00" + name + "\x00" + string(params) }
 	var taken []string
-	release := func() {
+	// Under c.locksMu: drop this grant's holds, and a lock file once no grant of ours holds it
+	drop := func() {
 		for _, name := range taken {
-			_ = os.Remove(name)
+			if c.locks[lockKey(name)]--; c.locks[lockKey(name)] == 0 {
+				delete(c.locks, lockKey(name))
+				_ = os.Remove(name)
+			}
 		}
 	}
 	for _, key := range keys {
 		name := filepath.Join(dir, strings.ReplaceAll(c.id(), "/", "_")+"-"+hashOf(key))
-		err := createWith(name, launcher+"\n")
-		if errors.Is(err, os.ErrExist) {
-			release()
-			holder, _ := os.ReadFile(name)
-			if h := strings.TrimSpace(string(holder)); h != "" {
-				return nil, fmt.Errorf("Granted to the launcher %s already", h)
+		// The file is the lock: a count without it (a cleanup removed it) starts over
+		if data, err := os.ReadFile(name); err != nil || string(data) != launcher+"\n" {
+			delete(c.locks, lockKey(name))
+		}
+		if c.locks[lockKey(name)] == 0 {
+			err := createWith(name, launcher+"\n")
+			if errors.Is(err, os.ErrExist) {
+				drop()
+				holder, _ := os.ReadFile(name)
+				if h := strings.TrimSpace(string(holder)); h != "" {
+					return nil, fmt.Errorf("Granted to the launcher %s already", h)
+				}
+				return nil, errors.New("Granted to the default launcher already")
 			}
-			return nil, errors.New("Granted to the default launcher already")
+			if err != nil {
+				drop()
+				return nil, err
+			}
 		}
-		if err != nil {
-			release()
-			return nil, err
-		}
+		// Ours now, or already, held by a grant of this daemon's with the same parameters
+		c.locks[lockKey(name)]++
 		taken = append(taken, name)
 	}
-	return release, nil
+	return func() {
+		c.locksMu.Lock()
+		defer c.locksMu.Unlock()
+		drop()
+	}, nil
 }
 
 // createWith creates name holding data, failing when it exists, and never visible without it: written to a file of its

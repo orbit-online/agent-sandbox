@@ -58,7 +58,8 @@ func (mc *liveMachine) allowed(t *rapid.T, p *refPending, lease, params string, 
 	m := mc.m
 	m.dropPending(p)
 	m.closeGate(p.cap, true)
-	if !m.leaseOK(lease, p.sess) || !mc.passes(p.cap, params) {
+	if !m.leaseOK(lease, p.sess) || !mc.passes(p.cap, params) || lease == "once" && !p.isCall ||
+		p.cap == liveCmd && params != p.params {
 		if res.Error == "" {
 			mc.fatalf(t, "Allowed %s %s %s served: %+v", p.cap, params, lease, res.Grant)
 		}
@@ -71,7 +72,7 @@ func (mc *liveMachine) allowed(t *rapid.T, p *refPending, lease, params string, 
 	if g != nil {
 		m.consented[storeKey{p.cap, params}] = true
 		m.hold(g, p.sess)
-		mc.delivered(t, g, res)
+		mc.delivered(t, g, res, p.isCall)
 	} else {
 		// The event comes on a connection of its own, and may come after the answer
 		mc.waitFor(t, "the grant's event", func() bool { return len(mc.grantedSince(before)) > 0 })
@@ -85,7 +86,12 @@ func (mc *liveMachine) allowed(t *rapid.T, p *refPending, lease, params string, 
 			m.hold(g, p.sess)
 		}
 		if !gone || lease != "session" {
-			mc.delivered(t, g, res)
+			mc.delivered(t, g, res, p.isCall)
+		}
+		if lease == "once" {
+			// Made for the call, ended once it's answered
+			mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
+			return
 		}
 	}
 	if gone {

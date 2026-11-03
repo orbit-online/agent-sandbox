@@ -32,7 +32,7 @@ func TestValidate(t *testing.T) {
 // and still free of control characters, so it can't forge lines of its own
 func TestOpaqueParam(t *testing.T) {
 	c := testCap(t, "command")
-	c.Params["csr"] = json.RawMessage(`{"type": "string", "opaque": true}`)
+	c.Params["csr"] = json.RawMessage(`{"type": "string", "opaque": true, "description": "a CSR"}`)
 	if err := c.check(); err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestService(t *testing.T) {
 	b.cfg.Unit = "daemon.service"
 	c := testCap(t, "service")
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,16 +101,16 @@ func TestExclusive(t *testing.T) {
 	c := testCap(t, "service")
 	c.Exclusive = true
 	b.caps[c.id()], other.caps[c.id()] = c, c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err == nil ||
+	if _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err == nil ||
 		!strings.Contains(err.Error(), "launcher test") {
 		t.Errorf("Another launcher got an exclusive instance: %v", err)
 	}
 	_ = b.release(g.ID, nil, "test")
-	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err != nil {
+	if _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err != nil {
 		t.Errorf("Not granted once released: %v", err)
 	}
 }
@@ -142,10 +142,10 @@ func TestExclusiveInstance(t *testing.T) {
 	c.Exclusive = true
 	writeList(t, c, `[{"path": "/vm"}]`)
 	b.caps[c.id()], other.caps[c.id()] = c, c
-	if _, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": true}`, "PT1H")); err != nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": true}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": false}`, "PT1H")); err == nil {
+	if _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm", "ro": false}`, "PT1H")); err == nil {
 		t.Error("Another launcher got the instance with another value of a parameter list doesn't print")
 	}
 }

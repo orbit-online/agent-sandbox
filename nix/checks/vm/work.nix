@@ -3,6 +3,7 @@
   pkgs,
   broker,
   workStateDir,
+  mcpArgs,
   routerIP,
   ...
 }:
@@ -82,7 +83,7 @@
           script = f"(printf '%s\\n' {lines}; sleep 3"
           for c in calls:
               script += f"; printf '%s\\n' {shlex.quote(json.dumps(c))}; sleep {wait}"
-          return script + ") | ${pkgs.lib.getExe broker} mcp"
+          return script + ") | ${pkgs.lib.getExe broker} ${pkgs.lib.escapeShellArgs mcpArgs}"
 
       def request_call(capability, params, n=2):
           return {"jsonrpc": "2.0", "id": n, "method": "tools/call", "params": {"name": "request", "arguments": {
@@ -105,12 +106,13 @@
           answer(capability, params)
           workstation.wait_until_succeeds(f"grep -q {shlex.quote(want)} ${workStateDir}/home/{name}.out", timeout=60)
 
-      # The standing grants from the config, there since the daemon started: the command issued without asking, for
-      # the ceiling's maxValidity
+      # The standing grants from the config, there since the daemon started: the host command, a tool of the MCP
+      # server's from its start, called without asking and told its maxValidity
       make_folders()
       standing = {g["capability"]: g["id"] for g in control({"op": "state"}, tries=30)["grants"] if g["lease"] == "standing"}
-      assert sorted(standing) == ["test/echo", "test/thing"], f"standing grants {standing}"
-      mcp_until(mcp_script(request_call("test/thing", {})), "issued-PT28800S")
+      assert sorted(standing) == ["test", "test/echo"], f"standing grants {standing}"
+      mcp_until(mcp_script({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+          "name": "test_thing", "arguments": {"reason": "the VM test"}}}), "issued-PT28800S")
       # The service: its plugin runs socket-activated by systemd, on a socket in the grant directory, and the MCP
       # server offers its tool and forwards a call to it
       workstation.succeed(f"systemctl --user -M alice@ is-active -q perm-work_{standing['test/echo']}.socket")
@@ -150,7 +152,7 @@
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
       state = control({"op": "state"}, tries=30)
       again = {g["capability"]: g["id"] for g in state["grants"] if g["lease"] == "standing"}
-      assert sorted(again) == ["test/echo", "test/thing"] and len(state["grants"]) == 2, f"grants after a restart: {state}"
+      assert sorted(again) == ["test", "test/echo"] and len(state["grants"]) == 2, f"grants after a restart: {state}"
       assert not set(again.values()) & set(standing.values()), f"the same ids after a restart: {again}"
       # The window's overview of the configuration
       assert state["overview"]["network"] and any(b["path"] == "/home/alice" for b in state["overview"]["binds"]), state["overview"]

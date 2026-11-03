@@ -55,7 +55,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `clock.go` (the time and timers of leases and answers, which tests fake) and
   `run.go`; `plugins.go`, `instances.go` (`list`, the instance check and exclusive
   locks) and `plugintools.go` for plugins and their MCP tools,
-  `mcp.go` the MCP server, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
+  `commands.go` (host commands: declarations, instance globs, the consent's
+  scope), `schema.go` (the JSON Schema subset arguments are checked against),
+  `call.go` (a call: covered or asked, run as a transient unit, its output),
+  `mcp.go` the MCP server and `mcp_commands.go` its host command tools, `sandbox.go` finding and pinning the sandbox, `members.go` its processes by
   user namespace, `session.go` sessions.
   The attach type: `ceiling.go` (the source ceiling, by path and identity), `tree.go`
   (the clone helper it runs through `nsenter` to clone a host path),
@@ -179,14 +182,23 @@ modules and a user alice (the `home-manager` input exists only for it).
   parent it was given is gone already.
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
-  covering the same request only), a request or window answer naming no instance
+  covering the same request only), host commands (the schema subset's
+  keywords, declarations refused for an undescribed or reserved argument, a
+  bad name, result, timeout or glob; instances from a glob; a call checked
+  before the user is asked and told the scope; a once grant covering only
+  its call and refused to a request; a failing call's exit and stderr,
+  recorded with opaque arguments by digest; image and text results, too much
+  output stopping the unit; the unit's properties and a revoke stopping it;
+  the validity; a grant ending with its instance; the MCP tools listed from
+  the declarations and a call through them, also before the daemon
+  listens), a request or window answer naming no instance
   a capability's `list` prints refused without asking (and with a failing
   `list`; not for attach capabilities), and an Allow refused when the instance went away
   while the user was asked, the refusal limit, a window answer with its
   narrowed parameters, standing grants (a config error refused: no such
   capability, attach, parameters it doesn't take, one twice; granted at start
-  when `list` prints them, once however many ask at once; a command's run
-  without asking for `maxValidity`; revoked or released, asked for until the
+  when `list` prints them, once however many ask at once; a host command's
+  calls without asking, told `maxValidity`; revoked or released, asked for until the
   daemon starts again), duration, lock (granted right after the watch is set up, which
   happens before the daemon serves; none granted when the lock stops being
   watched while the user is asked) and session
@@ -208,8 +220,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   parameter or reason in the notification, make a click on its replacement of
   the broker's notification or an `ActionInvoked` of its own allow (a fake
   notification server on a `dbus-daemon` of the test's), anchor a session at or above the
-  sandbox or, from a re-entry (`--shell`), at a host session above nsenter, get `share` served twice, get a command's output after
-  its lease ran out or for a grant revoked while its request waited for a
+  sandbox or, from a re-entry (`--shell`), at a host session above nsenter, get `share` served twice, get a call's output after
+  its lease ran out or for a grant revoked while it waited for a
   plugin slot, or hold every plugin slot with one capability whose commands hang (another's run, and its own
   `list` for the window); plus a window answer while the notification is up, pending requests
   in arrival order, and unit
@@ -249,8 +261,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   removed, also without the sandbox). Stateful property tests
   (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
   protocol model's actions against the broker on the stand-in sandbox, with
-  a fake clock, with standing grants of both services and the command in its
-  config: requests of each type from sessions, a forged session and a
+  a fake clock, with standing grants of both services and the host command in its
+  config: requests of each type and host command calls (once leases
+  included) from sessions, a forged session and a
   caller without one, floods and crafted requests, answers on the
   notification and in the window, releases, sessions ending, lock events,
   time passing, revoke, a restart (granting the standing grants that pass
@@ -316,8 +329,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   pid, its re-entry found by app ID, its state dir and GC root, and its
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
-  from there, the test plugin's standing grants from the config: its command
-  issued through the MCP server without asking, its service plugin
+  from there, the standing grants from the config: the host command, a tool of
+  the MCP server's from its start, called without asking, the test plugin's service
   socket-activated by systemd whose tool the MCP server inside offers and
   forwards a call to, and revoked, asked for again; grants through the MCP
   server that the test answers on `control.sock`: the service again, a folder
@@ -346,8 +359,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   alice, with copies of itself inside the sandbox (through the launcher's
   re-entry) as callers on `request.sock`: sessions anchored at a copy named
   `claude`, a forged one below a copy named `node`, one without a session.
-  The daemon has standing grants of the test plugins' command and service.
-  The actions: requests of each type (the test plugins' command and service,
+  The daemon has standing grants of the test host command and the test plugin's service.
+  The actions: requests of each type (the host command and the service, calls of the host command,
   folders beneath `/srv/notes` and outside it) and lease, floods, crafted
   requests and `share` from inside, the user's answers and revoke
   through `control.sock`, releases, sessions ending, `systemctl restart`

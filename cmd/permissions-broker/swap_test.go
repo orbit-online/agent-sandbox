@@ -154,7 +154,7 @@ func TestAttackStoreSwap(t *testing.T) {
 	}
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestAttackGrantDirSwap(t *testing.T) {
 	b, stdin, out := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestAttackGrantDirRenameHolders(t *testing.T) {
 	b, stdin, out := sandboxC(t, "allow")
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
-	g, _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}

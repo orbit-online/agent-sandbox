@@ -75,8 +75,13 @@ func TestSockets(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	res, err := callBroker(sock, req(c.id(), `{"path": "/a"}`, "PT1H"))
-	if err != nil || res.Grant == nil || res.Output == "" {
+	if err != nil || res.Grant == nil {
 		t.Fatalf("request: %+v, %v", res, err)
+	}
+	called, err := callBroker(sock, request{Op: "call", Capability: c.id(), Command: "run", Params: json.RawMessage(`{"path": "/a"}`),
+		Reason: "testing"})
+	if err != nil || called.Grant == nil || called.Grant.ID != res.Grant.ID || called.Output == "" {
+		t.Fatalf("call: %+v, %v", called, err)
 	}
 	list, err := callBroker(sock, request{Op: "list"})
 	if err != nil || len(list.Capabilities) != 1 || len(list.Grants) != 1 {
@@ -171,7 +176,7 @@ func TestPeerGoneAfterRead(t *testing.T) {
 	}
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
-	if _, _, err := b.request(recycled, req(c.id(), `{}`, "PT1H")); err == nil {
+	if _, err := b.request(recycled, req(c.id(), `{}`, "PT1H")); err == nil {
 		t.Error("request served a peer that's gone")
 	}
 	// share, with the pid gone to a process in the sandbox's outer mount namespace

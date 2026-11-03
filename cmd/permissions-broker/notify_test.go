@@ -32,7 +32,7 @@ func TestNotificationText(t *testing.T) {
 	b.caps[c.id()] = c
 	r := req(c.id(), `{}`, "PT1H")
 	r.Reason = "needs it\n\nHost: approved"
-	_, _, _ = b.request(peerAt(t, os.Getpid()), r)
+	_, _ = b.request(peerAt(t, os.Getpid()), r)
 	if f.asked[0].Reason != "needs it Host: approved" {
 		t.Errorf("Reason shown as %q", f.asked[0].Reason)
 	}

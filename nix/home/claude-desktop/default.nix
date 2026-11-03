@@ -62,6 +62,26 @@ let
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   permissionsWindow = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-window;
   permissionsFolders = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-folders;
+  # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
+  commandsOf =
+    withRun: lcfg:
+    lib.mapAttrsToList (name: c: {
+      inherit name;
+      inherit (c) description bounding exclusive;
+      commands = lib.mapAttrs (
+        _: cmd:
+        {
+          inherit (cmd)
+            description
+            arguments
+            result
+            timeout
+            ;
+        }
+        // lib.optionalAttrs (cmd.maxValidity != null) { inherit (cmd) maxValidity; }
+        // lib.optionalAttrs withRun { inherit (cmd) run; }
+      ) c.commands;
+    }) lcfg.permissions.commands;
   # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
   bwrapSubid =
     vars:
@@ -433,7 +453,7 @@ let
               ceiling = mkOption {
                 type = (pkgs.formats.json { }).type;
                 default = { };
-                description = "What the plugin may grant at all: `maxValidity` for a command, `sources` for an attach, and the plugin's own fields.";
+                description = "What the plugin may grant at all: `sources` for an attach, and the plugin's own fields.";
               };
             };
           }
@@ -441,22 +461,90 @@ let
         default = { };
         description = "Plugins whose capabilities the broker grants, by name.";
       };
+      commands = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              description = mkOption {
+                type = types.str;
+                description = "What a grant of the capability lets Claude do, for the consent.";
+              };
+              bounding = mkOption {
+                type = types.attrsOf (pkgs.formats.json { }).type;
+                default = { };
+                description = ''
+                  Bounding arguments, every command's, as JSON Schema (`docs/permissions.md`): a grant fixes their
+                  values. One may take `instances`, a glob with one `*` whose matches are its values.
+                '';
+              };
+              exclusive = mkOption {
+                type = types.bool;
+                default = false;
+                description = "Whether an instance may be granted to one launcher at a time.";
+              };
+              commands = mkOption {
+                type = types.attrsOf (
+                  types.submodule {
+                    options = {
+                      description = mkOption {
+                        type = types.str;
+                        description = "What the command does.";
+                      };
+                      arguments = mkOption {
+                        type = types.attrsOf (pkgs.formats.json { }).type;
+                        default = { };
+                        description = "Free arguments, as JSON Schema, each with a description: a grant covers any value they allow.";
+                      };
+                      result = mkOption {
+                        type = types.str;
+                        default = "text";
+                        description = "What it prints: `text`, or an image MIME type.";
+                      };
+                      run = mkOption {
+                        type = types.listOf types.str;
+                        description = "What runs on the host per call, with the call as JSON on stdin.";
+                      };
+                      timeout = mkOption {
+                        type = types.str;
+                        default = "PT1M";
+                        description = "How long a call may run, as an ISO 8601 duration.";
+                      };
+                      maxValidity = mkOption {
+                        type = types.nullOr types.str;
+                        default = null;
+                        description = "The longest validity a call is told, for commands issuing credentials.";
+                      };
+                    };
+                  }
+                );
+                description = "The commands, by name: Claude sees each as the tool `<capability>_<command>`.";
+              };
+            };
+          }
+        );
+        default = { };
+        description = ''
+          Host commands (`docs/permissions.md`): scripts run on the host per call, under a grant of their capability
+          that the user gives or a standing grant. The `permissions` MCP server lists them from its start.
+        '';
+      };
       grants = mkOption {
         type = types.listOf (
           types.submodule {
             options = {
               plugin = mkOption {
-                type = types.str;
-                description = "The plugin, by its name in `permissions.plugins`.";
+                type = types.nullOr types.str;
+                default = null;
+                description = "The plugin, by its name in `permissions.plugins`; null for host commands.";
               };
               capability = mkOption {
                 type = types.str;
-                description = "The plugin's capability, by name: a `service` or `command` one.";
+                description = "The plugin's capability, by name, a `service` one, or a capability of `permissions.commands`.";
               };
               params = mkOption {
                 type = (pkgs.formats.json { }).type;
                 default = { };
-                description = "Its parameters, as a request names them. A request with exactly these gets the grant.";
+                description = "Its parameters, as a request names them (for host commands, the bounding arguments). A request or call with exactly these gets the grant.";
               };
             };
           }
@@ -465,8 +553,8 @@ let
         example = lib.literalExpression ''[ { plugin = "windows-vm"; capability = "vm"; params.vm = "win11"; } ]'';
         description = ''
           Standing grants: the broker grants them at every start, without asking, still within the capability's
-          ceiling and `list` (one its capability doesn't take stops the broker). Revoked or released, one stays ended
-          until the broker starts again. A command's runs without asking, valid for the ceiling's `maxValidity`. No
+          ceiling and instances (one its capability doesn't take stops the broker). Revoked or released, one stays ended
+          until the broker starts again. Host command calls under it run without asking, told their `maxValidity`. No
           folders: what should always be there is a bind (`binds`).
         '';
       };
@@ -537,7 +625,10 @@ let
       // lib.optionalAttrs lcfg.permissions.enable {
         permissions = {
           command = lib.getExe permissionsBroker;
-          args = [ "mcp" ];
+          args = [ "mcp" ] ++ lib.optionals (lcfg.permissions.commands != { }) [
+            "--commands"
+            "${pkgs.writeText "permissions-commands.json" (builtins.toJSON (commandsOf false lcfg))}"
+          ];
         };
       }
       // hmMcpServers;
@@ -1007,8 +1098,9 @@ let
               manifest = "${permissionsFolders}/share/agent-sandbox/permissions/folders.json";
               ceiling.sources = lcfg.permissions.folders;
             };
+          commands = commandsOf true lcfg;
           grants = map (g: {
-            capability = "${g.plugin}/${g.capability}";
+            capability = if g.plugin == null then g.capability else "${g.plugin}/${g.capability}";
             inherit (g) params;
           }) lcfg.permissions.grants;
           # What the sandbox reaches from its start, for the window's read-only overview
@@ -1321,10 +1413,57 @@ in
             assertion = g.plugin != "folders";
             message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
           }) lcfg.permissions.grants
-          ++ map (g: {
-            assertion = g.plugin == "folders" || lcfg.permissions.plugins ? ${g.plugin};
-            message = "${opt}: no plugin ${g.plugin} in permissions.plugins";
-          }) lcfg.permissions.grants
+          ++ map (
+            g:
+            if g.plugin == null then
+              {
+                assertion = lcfg.permissions.commands ? ${g.capability};
+                message = "${opt}: no host commands ${g.capability} in permissions.commands";
+              }
+            else
+              {
+                assertion = g.plugin == "folders" || lcfg.permissions.plugins ? ${g.plugin};
+                message = "${opt}: no plugin ${g.plugin} in permissions.plugins";
+              }
+          ) lcfg.permissions.grants
+          # What the broker would refuse at start, caught at eval: MCP tool names, every argument described for the
+          # consent, none named as the broker's own, a result it can wrap
+          ++ lib.concatLists (
+            lib.mapAttrsToList (
+              cname: c:
+              let
+                copt = "agent-sandbox.claude-desktop: ${
+                  lib.optionalString (name != "") "launchers.${name}."
+                }permissions.commands.${cname}";
+                named = n: builtins.match "[A-Za-z0-9-]+" n != null;
+                described = args: lib.all (a: a.description or "" != "") (lib.attrValues args);
+                reserved = args: lib.any (n: args ? ${n}) [ "reason" "lease" ];
+              in
+              [
+                {
+                  assertion = named cname && c.commands != { };
+                  message = "${copt}: a name of letters, digits and -, and at least one command";
+                }
+                {
+                  assertion =
+                    described c.bounding
+                    && !reserved c.bounding
+                    && lib.all (a: a.type or "" != "array" && !(a.multiline or false)) (lib.attrValues c.bounding);
+                  message = "${copt}: every bounding argument needs a description, none may be named reason or lease, and none may be an array or multiline";
+                }
+              ]
+              ++ lib.mapAttrsToList (n: cmd: {
+                assertion =
+                  named n
+                  && lib.stringLength "${cname}_${n}" <= 64
+                  && described cmd.arguments
+                  && !reserved cmd.arguments
+                  && lib.all (a: !(c.bounding ? ${a})) (lib.attrNames cmd.arguments)
+                  && (cmd.result == "text" || lib.hasPrefix "image/" cmd.result);
+                message = "${copt}.commands.${n}: a name of letters, digits and - (${cname}_${n} at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*";
+              }) c.commands
+            ) lcfg.permissions.commands
+          )
         )
         ++ lib.optional (name != "") {
           # File names, the app ID and the .desktop file's Name take it as is

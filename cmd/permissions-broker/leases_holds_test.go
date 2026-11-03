@@ -22,11 +22,11 @@ func TestReleaseHold(t *testing.T) {
 	_, a := startAnchor(t, "claude")
 	t.Setenv("SESSION_ID", "session-2")
 	_, other := startAnchor(t, "claude")
-	g, _, err := b.request(peerAt(t, a), req(c.id(), `{}`, "PT1H"))
+	g, err := b.request(peerAt(t, a), req(c.id(), `{}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.request(peerAt(t, other), req(c.id(), `{}`, "PT1H")); err != nil {
+	if _, err := b.request(peerAt(t, other), req(c.id(), `{}`, "PT1H")); err != nil {
 		t.Fatal(err)
 	}
 	release := func(pid int) {
@@ -47,7 +47,7 @@ func TestReleaseHold(t *testing.T) {
 		t.Error("The grant outlived its last holder's release")
 	}
 
-	g, _, err = b.request(peerAt(t, a), req(c.id(), `{"path": "/b"}`, "PT1H"))
+	g, err = b.request(peerAt(t, a), req(c.id(), `{"path": "/b"}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}

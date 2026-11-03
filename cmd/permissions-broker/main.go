@@ -16,7 +16,7 @@ const usage = `permissions-broker - Grant a sandbox outside access while it runs
 Usage:
   permissions-broker serve <config>
   permissions-broker cleanup <config>
-  permissions-broker mcp [<socket>]
+  permissions-broker mcp [--commands=<file>] [<socket>]
   permissions-broker share [<socket>]
   permissions-broker make-shared <dir> <dirid>
   permissions-broker clone-tree <root> <rel> <mode>
@@ -30,8 +30,9 @@ window, asks the user about each request with a notification, and ends grants
 on their lease. Exits when the sandbox does. <config> is the JSON the module
 writes: appId, launcher, grantDir, controlSocket, sandboxGrantDir,
 window (the command opening the Permissions window), plugins (each a
-manifest path and a ceiling) and grants (the standing grants, each a
-capability and its parameters, granted at start without asking) and overview
+manifest path and a ceiling), commands (the host command capabilities), grants
+(the standing grants, each a capability and its parameters, granted at start
+without asking) and overview
 (what the sandbox reaches from its start, which control.sock's state passes
 on to the window as is). Environment variables in the paths and the window
 command are expanded.
@@ -40,7 +41,11 @@ cleanup ends the grants of a daemon that stopped, as its unit's ExecStopPost:
 service units stopped, folder grants detached. A daemon that starts does it too.
 
 mcp is the MCP server inside the sandbox, a client of <socket>
-(/run/permissions/request.sock by default).
+(/run/permissions/request.sock by default). --commands names the host
+commands' declarations, which it offers as tools.
+
+Options:
+  --commands=<file>  The host commands, as the config's commands without run.
 
 share asks the daemon to make the grant directory a shared mount, from the
 sandbox's outer mount namespace before the FHS env's bwrap copies it. Waits up
@@ -76,7 +81,8 @@ func main() {
 			cleanup(cfg, sb)
 		}
 	case opts["mcp"] == true:
-		err = runMCP(socketArg(opts))
+		commands, _ := opts.String("--commands")
+		err = runMCP(socketArg(opts), commands)
 	case opts["share"] == true:
 		err = share(socketArg(opts))
 	case opts["make-shared"] == true:
@@ -139,7 +145,9 @@ type config struct {
 		Manifest string          `json:"manifest"`
 		Ceiling  json.RawMessage `json:"ceiling"`
 	} `json:"plugins"`
-	Grants []standingConfig `json:"grants"`
+	// Host command capabilities
+	Commands []commandConfig  `json:"commands"`
+	Grants   []standingConfig `json:"grants"`
 	// The launcher's static access (binds, devices, D-Bus rules, the network, what the module adds), for the window
 	Overview json.RawMessage `json:"overview,omitempty"`
 }
@@ -175,6 +183,9 @@ func serve(path string) error {
 	}
 	caps, err := loadPlugins(cfg)
 	if err != nil {
+		return err
+	}
+	if err := loadCommands(cfg.Commands, caps); err != nil {
 		return err
 	}
 	unix.Umask(0o077)

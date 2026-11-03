@@ -50,6 +50,10 @@ func notifyAsk(ctx context.Context, p prompt) (string, error) {
 func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 	summary := "Claude asks for " + escapeMarkup(p.Summary)
 	body := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
+	if p.Scope != "" {
+		// Ahead of the reason: a server may cut what's long, and this is what's granted
+		body = "Covers: " + escapeMarkup(p.Scope) + "\n" + body
+	}
 	match := []dbus.MatchOption{dbus.WithMatchObjectPath(notifyPath), dbus.WithMatchInterface(notifyIface)}
 	if err := conn.AddMatchSignal(match...); err != nil {
 		return "", fmt.Errorf("Watch the notifications: %w", err)
