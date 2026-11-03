@@ -147,7 +147,10 @@ type config struct {
 	// Host command and host socket capabilities
 	Commands []commandConfig  `json:"commands"`
 	Sockets  []socketConfig   `json:"sockets"`
+	DBus     []dbusConfig     `json:"dbus"`
 	Grants   []standingConfig `json:"grants"`
+	// Each bus's proxy's control socket, by bus: session, system
+	DBusControl map[string]string `json:"dbusControl,omitempty"`
 	// The launcher's static access (binds, devices, D-Bus rules, the network, what the module adds), for the window
 	Overview json.RawMessage `json:"overview,omitempty"`
 }
@@ -163,6 +166,9 @@ func readConfig(path string) (config, error) {
 	}
 	for _, p := range []*string{&cfg.GrantDir, &cfg.ControlSocket} {
 		*p = os.ExpandEnv(*p)
+	}
+	for bus, p := range cfg.DBusControl {
+		cfg.DBusControl[bus] = os.ExpandEnv(p)
 	}
 	for i := range cfg.Window {
 		cfg.Window[i] = os.ExpandEnv(cfg.Window[i])
@@ -198,7 +204,7 @@ func serve(path string) error {
 	return b.run()
 }
 
-// loadCapabilities makes the config's capabilities: folders, host commands and host sockets
+// loadCapabilities makes the config's capabilities: folders, host commands, host sockets and D-Bus rule sets
 func loadCapabilities(cfg config) (map[string]*capability, error) {
 	caps := map[string]*capability{}
 	folders, err := foldersCap(cfg.Folders)
@@ -212,6 +218,9 @@ func loadCapabilities(cfg config) (map[string]*capability, error) {
 		return nil, err
 	}
 	if err := loadSockets(cfg.Sockets, caps); err != nil {
+		return nil, err
+	}
+	if err := loadDBus(cfg.DBus, caps); err != nil {
 		return nil, err
 	}
 	return caps, nil

@@ -107,6 +107,8 @@ func (mc *machine) Revoke(t *rapid.T) {
 func (mc *machine) Restart(t *rapid.T) {
 	old := mc.b
 	old.closeSockets()
+	// A crash closes its connection to the D-Bus proxy, which drops its rule sets
+	old.closeProxies()
 	for _, g := range old.liveGrants() {
 		old.closeConns(g)
 	}

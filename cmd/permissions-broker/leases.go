@@ -35,7 +35,8 @@ func (b *broker) checkLease(lease string) error {
 	return nil
 }
 
-// grant makes a grant live: mounts a folder, gives a host socket its address, and ties it to its lease
+// grant makes a grant live: mounts a folder, gives a host socket its address, adds a D-Bus rule set to its proxy,
+// and ties it to its lease
 func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string) (*grant, error) {
 	unlock, err := c.exclusiveLock(b.cfg.Launcher, params)
 	if err != nil {
@@ -60,6 +61,11 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 			unlock()
 			return nil, err
 		}
+	case "dbus":
+		if err := b.dbusAdd(g); err != nil {
+			unlock()
+			return nil, err
+		}
 	}
 	var once sync.Once
 	g.end = func(why string) {
@@ -69,6 +75,9 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 			g.over = true
 			b.mu.Unlock()
 			b.closeConns(g)
+			if c.Type == "dbus" {
+				b.dbusRemove(g)
+			}
 			if c.Type == "attach" {
 				b.detachGrant(g)
 				b.recordHeld(g, why)

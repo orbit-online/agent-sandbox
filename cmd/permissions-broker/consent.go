@@ -235,8 +235,11 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan request, 1)}
 	bounds := ""
-	if c.Type == "command" {
+	switch c.Type {
+	case "command":
 		p.Scope, bounds = c.scope(), c.bounds(params)
+	case "dbus":
+		p.Scope = c.dbusScope()
 	}
 	if call != nil {
 		p.Command, p.Arguments = call.Command, call.Arguments

@@ -75,6 +75,8 @@ type capabilityInfo struct {
 	// Host commands: each command's description and free arguments, and what a grant covers, as the consent says it
 	Commands map[string]*hostCommand `json:"commands,omitempty"`
 	Scope    []scopeItem             `json:"scope,omitempty"`
+	// D-Bus: what a grant covers, as the consent says it
+	Covers string `json:"covers,omitempty"`
 }
 
 type grant struct {
@@ -178,6 +180,8 @@ type broker struct {
 	// Listening at the host sockets' addresses, by address relative to the grant directory
 	socketsMu sync.Mutex
 	listeners map[string]*hostListener
+	// The D-Bus proxies' control sockets, by bus, under mu
+	proxies map[string]*dbusProxy
 }
 
 func randomID() string {

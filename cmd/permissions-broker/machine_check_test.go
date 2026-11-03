@@ -57,6 +57,7 @@ func (mc *machine) Check(t *rapid.T) {
 		mc.fatalf(t, "Lock watched: %v, want %v", lockOK, m.lockOK)
 	}
 	mc.checkDelivery(t)
+	mc.checkProxy(t)
 	mc.checkConns(t)
 	mc.checkWindow(t)
 	// P14: one question per capability, and the refusal block

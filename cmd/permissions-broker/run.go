@@ -40,6 +40,7 @@ func (b *broker) run() error {
 	slog.Info("Sandbox ended")
 	b.endAll("the sandbox ended")
 	b.closeSockets()
+	b.closeProxies()
 	reqLn.Close()
 	ctlLn.Close()
 	return nil

@@ -27,6 +27,8 @@ type capability struct {
 	Sources []source
 	// Host sockets: the host's socket, or none with an instances glob, whose matches are the sockets
 	Path string
+	// D-Bus: the bus and the rule set
+	DBus *dbusConfig
 	// The bounding argument whose values the instances glob gives, and the glob
 	glob, globArg string
 
@@ -79,10 +81,12 @@ func (c *capability) check() error {
 		return c.checkCommands()
 	case "socket":
 		return c.checkSocket()
+	case "dbus":
+		return c.checkDBus()
 	case "attach":
 		return nil
 	}
-	return fmt.Errorf("%s has type %q, not command, socket or attach", c.Name, c.Type)
+	return fmt.Errorf("%s has type %q, not command, socket, dbus or attach", c.Name, c.Type)
 }
 
 // validate checks params against the capability's declared ones: no others, each of its schema. Returns them re-encoded with sorted keys, so equal requests compare equal

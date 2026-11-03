@@ -15,7 +15,7 @@ import (
 // refuse)
 
 var (
-	caps   = []string{capVM, capConsole, capToken, capFolder}
+	caps   = []string{capVM, capConsole, capToken, capFolder, capBus}
 	leases = []string{"", "lock", "PT1H", "PT1H", "PT10M", "standing"}
 	// A call's: once only there
 	callLeases = []string{"", "", "once", "once", "lock", "PT10M"}
@@ -240,7 +240,9 @@ func (mc *machine) asked(t *rapid.T, call *askCall, req request, done chan respo
 	lease := leaseOf(req.Lease)
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	desc := mc.caps[req.Capability].Description
-	if call.p.Reason != cleanReason(req.Reason) || !strings.HasPrefix(call.p.Summary, desc+" (") ||
+	// A capability without parameters is its description alone
+	named := strings.HasPrefix(call.p.Summary, desc+" (") || string(req.Params) == "{}" && call.p.Summary == desc
+	if call.p.Reason != cleanReason(req.Reason) || !named ||
 		strings.Contains(call.p.Summary, tag) || call.p.Lease != lease || !call.p.Options {
 		mc.fatalf(t, "Asked %+v for %+v", call.p, req)
 	}
