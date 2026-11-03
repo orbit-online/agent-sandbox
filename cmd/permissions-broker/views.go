@@ -25,6 +25,7 @@ func (b *broker) listCapabilities() []capabilityInfo {
 				v.Run = nil
 				infos[i].Commands[name] = &v
 			}
+			infos[i].Scope = c.scopeItems()
 		}
 		if inst, err := c.listInstances(context.Background()); err != nil {
 			infos[i].Error = err.Error()

@@ -202,24 +202,79 @@ func (c *capability) globInstances() (json.RawMessage, error) {
 	return json.Marshal(inst)
 }
 
-// scope says what a grant of c covers, for the consent: unrestricted free arguments first, then the rest
-func (c *capability) scope() string {
-	var open, bounded []string
+// One part of what a grant of a host command capability covers: a command without free arguments, or one free
+// argument of a command with its declaration's description and what its schema lets through. The window shows them
+// as the notification's scope line says them
+type scopeItem struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	Argument    string `json:"argument,omitempty"`
+	About       string `json:"about,omitempty"`
+	Allows      string `json:"allows,omitempty"`
+	// Any text: no enum or pattern
+	Unrestricted bool `json:"unrestricted,omitempty"`
+}
+
+// scopeItems is what a grant of c covers: unrestricted free arguments first, then the rest, each by command and
+// argument name
+func (c *capability) scopeItems() []scopeItem {
+	var open, bounded []scopeItem
 	for _, name := range slices.Sorted(maps.Keys(c.Commands)) {
 		cmd := c.Commands[name]
 		if len(cmd.args) == 0 {
-			bounded = append(bounded, cmd.Description+" ("+name+")")
+			bounded = append(bounded, scopeItem{Command: name, Description: cmd.Description})
 		}
 		for _, arg := range slices.Sorted(maps.Keys(cmd.args)) {
 			s := cmd.args[arg]
-			if s.unrestricted() {
-				open = append(open, fmt.Sprintf("%s: %s, unrestricted (%s)", cmd.Description, s.Description, name))
+			item := scopeItem{Command: name, Description: cmd.Description, Argument: arg, About: s.Description,
+				Allows: s.allows(), Unrestricted: s.unrestricted()}
+			if item.Unrestricted {
+				open = append(open, item)
 			} else {
-				bounded = append(bounded, fmt.Sprintf("%s: %s, %s (%s)", cmd.Description, s.Description, s.allows(), name))
+				bounded = append(bounded, item)
 			}
 		}
 	}
-	return strings.Join(append(open, bounded...), ". ") + "."
+	return append(open, bounded...)
+}
+
+// scope says what a grant of c covers, for the consent, in scopeItems' order
+func (c *capability) scope() string {
+	var parts []string
+	for _, s := range c.scopeItems() {
+		switch {
+		case s.Argument == "":
+			parts = append(parts, s.Description+" ("+s.Command+")")
+		case s.Unrestricted:
+			parts = append(parts, fmt.Sprintf("%s: %s, unrestricted (%s)", s.Description, s.About, s.Command))
+		default:
+			parts = append(parts, fmt.Sprintf("%s: %s, %s (%s)", s.Description, s.About, s.Allows, s.Command))
+		}
+	}
+	return strings.Join(parts, ". ") + "."
+}
+
+// bounds names the bounding values of params by their declarations' descriptions, for the consent's body: the summary
+// names them too, but a server may cut a summary. Opaque values by digest, as the summary has them
+func (c *capability) bounds(params json.RawMessage) string {
+	m, _ := decodeObject(params)
+	var parts []string
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		about := k
+		if s := c.schemas[k]; s != nil && s.Description != "" {
+			about = s.Description
+		}
+		v, isString := m[k].(string)
+		switch {
+		case isString && c.schemas[k] != nil && c.schemas[k].Opaque:
+			parts = append(parts, about+" is "+opaqueDigest(v))
+		case isString:
+			parts = append(parts, fmt.Sprintf("%s is %q", about, v))
+		default:
+			parts = append(parts, fmt.Sprintf("%s is %v", about, m[k]))
+		}
+	}
+	return strings.Join(parts, " and ")
 }
 
 // How often the broker looks again for the instances grants are of

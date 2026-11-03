@@ -183,11 +183,14 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), host commands (the schema subset's
-  keywords, declarations refused for an undescribed or reserved argument, a
-  bad name, result, timeout or glob; instances from a glob; a call checked
-  before the user is asked and told the scope; a once grant covering only
+  keywords, a long enum said as a count, declarations refused for an undescribed or reserved argument, a
+  bad name, result, timeout or glob; instances from a glob; the scope's parts
+  in `state`, unrestricted first, and the bounding values by description; a call checked
+  before the user is asked and told the scope, the window getting the call asking with its arguments whole
+  (opaque ones by digest); the notification's "Covers" line with the lease and bounding values,
+  leases in hours and minutes; a granted request's reason on the grant; a once grant covering only
   its call and refused to a request; a failing call's exit and stderr,
-  recorded with opaque arguments by digest; image and text results, too much
+  recorded with opaque arguments by digest and its capability; image and text results, too much
   output stopping the unit; the unit's properties and a revoke stopping it;
   the validity; a grant ending with its instance; the MCP tools listed from
   the declarations and a call through them, also before the daemon

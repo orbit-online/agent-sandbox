@@ -43,12 +43,12 @@ func (b *broker) checkLease(lease string, sess *session) error {
 }
 
 // grant makes a grant live: starts a service's unit and ties it to its lease
-func (b *broker) grant(c *capability, params json.RawMessage, summary, lease string, sess *session) (*grant, error) {
+func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string, sess *session) (*grant, error) {
 	unlock, err := c.exclusiveLock(context.Background(), b.cfg.Launcher, params)
 	if err != nil {
 		return nil, err
 	}
-	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Lease: lease,
+	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock, sessions: map[string]*session{},
 		sessGone: make(chan struct{})}
 	if lease == "session" {

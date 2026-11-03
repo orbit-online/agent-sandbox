@@ -74,8 +74,9 @@ type capabilityInfo struct {
 	Error       string                     `json:"error,omitempty"`
 	// Service: whether the plugin speaks MCP on its grant socket, whose tools the MCP server offers
 	Tools bool `json:"tools,omitempty"`
-	// Host commands: each command's description and free arguments
+	// Host commands: each command's description and free arguments, and what a grant covers, as the consent says it
 	Commands map[string]*hostCommand `json:"commands,omitempty"`
+	Scope    []scopeItem             `json:"scope,omitempty"`
 }
 
 type grant struct {
@@ -83,8 +84,10 @@ type grant struct {
 	Capability string          `json:"capability"`
 	Params     json.RawMessage `json:"params"`
 	Summary    string          `json:"summary"`
-	Lease      string          `json:"lease"`
-	Expires    time.Time       `json:"expires,omitzero"`
+	// Claude's reason when the user allowed it: none for a standing grant
+	Reason  string    `json:"reason,omitempty"`
+	Lease   string    `json:"lease"`
+	Expires time.Time `json:"expires,omitzero"`
 	// The sessions it was given to, which hold it until they release it or end. A session lease ends with the last
 	Sessions []string `json:"sessions,omitempty"`
 	Socket   string   `json:"socket,omitempty"`
@@ -116,8 +119,11 @@ type pending struct {
 	Reason     string          `json:"reason"`
 	Lease      string          `json:"lease"`
 	// Host commands: what a grant covers, every command and its free arguments
-	Scope   string `json:"scope,omitempty"`
-	Options bool   `json:"options"`
+	Scope string `json:"scope,omitempty"`
+	// A call's: its command and free arguments, opaque ones by digest
+	Command   string          `json:"command,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Options   bool            `json:"options"`
 
 	answer chan request
 	// Its place in the window's list, by arrival: rows don't move as others come and go
@@ -134,8 +140,8 @@ type logEntry struct {
 // The notification's question and the user's answer: allow, deny or options
 type prompt struct {
 	Summary, Reason, Lease string
-	// Host commands: what the grant covers, shown before the reason
-	Scope string
+	// Host commands: what the grant covers, shown before the reason, and the bounding values it's for
+	Scope, Bounds string
 	// Whether to offer Options, which needs the window
 	Options bool
 }

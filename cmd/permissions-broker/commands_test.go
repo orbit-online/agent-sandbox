@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -110,5 +111,41 @@ func TestGlobInstances(t *testing.T) {
 		if err := c.inList(t.Context(), json.RawMessage(p)); err == nil {
 			t.Errorf("%s in the list", p)
 		}
+	}
+}
+
+// The scope's parts, as the window gets them with the capability: unrestricted free arguments first, each with what its
+// schema allows, and the bounding values by their descriptions for the notification's body
+func TestScopeItems(t *testing.T) {
+	c := testCap(t, "command")
+	c.Params["cert"] = json.RawMessage(`{"type": "string", "opaque": true, "description": "the key"}`)
+	c.Commands["exec"] = &hostCommand{Description: "Run PowerShell", Run: []string{"/bin/true"},
+		Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string", "multiline": true,
+			"description": "any PowerShell, as SYSTEM"}`)}}
+	c.Commands["keys"] = &hostCommand{Description: "Press keys", Run: []string{"/bin/true"},
+		Arguments: map[string]json.RawMessage{"key": json.RawMessage(`{"type": "string", "enum": ["a", "b"],
+			"description": "a key"}`)}}
+	if err := c.check(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := testBroker(t)
+	b.caps = map[string]*capability{c.id(): c}
+	got := b.listCapabilities()[0].Scope
+	want := []scopeItem{
+		{Command: "exec", Description: "Run PowerShell", Argument: "script", About: "any PowerShell, as SYSTEM",
+			Allows: "any text", Unrestricted: true},
+		{Command: "keys", Description: "Press keys", Argument: "key", About: "a key", Allows: "one of [a b]"},
+		{Command: "run", Description: "print the input"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scope = %+v\nwant    %+v", got, want)
+	}
+	params, err := c.validate(json.RawMessage(`{"path": "/a", "ro": true, "cert": "` + strings.Repeat("k", 40) + `"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bounds := c.bounds(params); bounds != `the key is `+opaqueDigest(strings.Repeat("k", 40))+
+		` and a path is "/a" and read-only is true` {
+		t.Errorf("bounds = %s", bounds)
 	}
 }

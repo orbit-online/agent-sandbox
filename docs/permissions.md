@@ -539,7 +539,7 @@ any grant. The sandbox is one trust domain toward the broker.
 The daemon asks with a notification on the host (`org.freedesktop.Notifications` on the session bus). Its summary is
 built by the daemon from the validated, resolved request ("Claude wants read-write access to
 ~/Workspace/agent/notes"), and the reason follows below it, quoted and marked as Claude's. The reason never stands
-in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 hour"), Deny, and Options, which opens
+in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 h"), Deny, and Options, which opens
 the window on the request to pick another lease or, for a folder, narrow it (read-only instead of rw). A host command
 grant has only its lease to change: its bounding values are what the call needs. A click on the body sends the action
 `default`, which denies, as closing the notification does. It comes first in the list, since cosmic-notifications draws
@@ -547,10 +547,12 @@ no buttons and otherwise answers a body click with the first action; when `GetSe
 a window is configured, `default` opens the window on the request instead, and the body says so.
 
 A grant of a host command capability covers all its commands. The summary names the capability, its bounding values and
-the lease ("Claude wants to control the Windows VM win11 for 1 hour"). The body starts with what that covers, before
-the reason: unrestricted free arguments first, each said to be unrestricted, then the others with what their
-declaration allows, from the declaration's descriptions ("Any PowerShell, run as SYSTEM. Any text typed. Clicks
-anywhere, keys from a fixed set, screenshots."). Summaries are one line and servers may cut them, so nothing the user
+the lease ("Claude wants to control the Windows VM win11 for 1 hour"). The body starts with what that covers, for how
+long and on which bounding values, before the reason: unrestricted free arguments first, each said to be
+unrestricted, then the others with what their declaration allows, from the declaration's descriptions ("Covers, for
+1 h, where the VM is "win11": Run PowerShell in the guest: any PowerShell, run as SYSTEM, unrestricted (exec). Click
+at a position on the screen: column, in pixels, a number within 0–7679 (click). ..."). An enum of more than 8 values
+reads as a count ("one of 161 values"); the window lists them in a grant's details. Leases read as "1 h 30 min". Summaries are one line and servers may cut them, so nothing the user
 must see goes only there. A declaration with an undescribed free argument is a config error. The window shows the
 same, with the call that asked.
 

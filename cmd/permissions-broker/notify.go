@@ -69,7 +69,7 @@ func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 		// Ahead of the reason: a server may cut what's long, and the scope is what's granted
 		var lines []string
 		if p.Scope != "" {
-			lines = append(lines, "Covers: "+escapeMarkup(p.Scope))
+			lines = append(lines, escapeMarkup(coversLine(p)))
 		}
 		if hint != "" {
 			lines = append(lines, hint)
@@ -165,15 +165,42 @@ func escapeMarkup(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
+// coversLine says what a host command grant covers, for how long and on which bounding values: "Covers, for 1 h,
+// where the VM is "win11": Run PowerShell in the guest: any PowerShell, run as SYSTEM, unrestricted (exec). ..."
+func coversLine(p prompt) string {
+	head := "Covers, " + leaseLabel(p.Lease)
+	if p.Bounds != "" {
+		head += ", where " + p.Bounds
+	}
+	return head + ": " + p.Scope
+}
+
 func leaseLabel(lease string) string {
 	switch lease {
 	case "session":
 		return "until this Claude session ends"
 	case "lock":
 		return "until the screen locks"
+	case "once":
+		return "for this call only"
 	}
 	if d, err := parseDuration(lease); err == nil {
-		return "for " + d.String()
+		return "for " + spokenDuration(d)
 	}
 	return lease
+}
+
+// spokenDuration says d in hours and minutes, as "1 h 30 min", or in seconds when it's shorter than a minute
+func spokenDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d s", int(d.Seconds()))
+	}
+	h, m := int(d.Hours()), int(d.Minutes())%60
+	switch {
+	case h == 0:
+		return fmt.Sprintf("%d min", m)
+	case m == 0:
+		return fmt.Sprintf("%d h", h)
+	}
+	return fmt.Sprintf("%d h %d min", h, m)
 }

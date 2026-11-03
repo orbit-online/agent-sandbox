@@ -66,7 +66,7 @@ func (b *broker) grantStanding() {
 		}
 		s.cap.covered.Lock()
 		if b.matching(s.cap, s.Params) == nil {
-			if _, err := b.grant(s.cap, s.Params, s.Summary, "standing", nil); err != nil {
+			if _, err := b.grant(s.cap, s.Params, s.Summary, "", "standing", nil); err != nil {
 				slog.Warn("Standing grant", "capability", s.Capability, "err", err)
 			}
 		}

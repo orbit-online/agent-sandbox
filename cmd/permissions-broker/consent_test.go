@@ -31,6 +31,10 @@ func TestConsent(t *testing.T) {
 	if f.asked[1].Summary != `the test thing (path="/a")` || f.asked[1].Reason != "testing" {
 		t.Errorf("Asked %+v", f.asked[1])
 	}
+	// The window shows the grant with the reason it was allowed for
+	if g.Reason != "testing" {
+		t.Errorf("Grant's reason %q", g.Reason)
+	}
 	// A call's validity is the shorter of the lease's remainder and maxValidity
 	res, err := callRun(b, peerAt(t, os.Getpid()), `{"path": "/a"}`, "")
 	if err != nil {
@@ -235,5 +239,45 @@ func TestPendingOrder(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("Pending in the order %v", got)
 		}
+	}
+}
+
+// The window gets the call that asks: its command and free arguments whole, opaque ones by digest
+func TestPendingCall(t *testing.T) {
+	b, c, _ := commandBroker(t, "cat", "options")
+	c.Commands["run"].Arguments = map[string]json.RawMessage{
+		"script": json.RawMessage(`{"type": "string", "multiline": true, "description": "a script"}`),
+		"csr":    json.RawMessage(`{"type": "string", "opaque": true, "description": "a CSR"}`)}
+	if err := c.check(); err != nil {
+		t.Fatal(err)
+	}
+	script, csr := strings.Repeat("Get-Item\n", 40), strings.Repeat("A", 64)
+	seen := make(chan *pending, 1)
+	go func() {
+		for {
+			var asked *pending
+			b.mu.Lock()
+			for _, p := range b.pending {
+				if p.Options {
+					asked = p
+				}
+			}
+			b.mu.Unlock()
+			if asked != nil {
+				seen <- asked
+				_ = b.answer(request{Pending: asked.ID})
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	args, _ := json.Marshal(map[string]string{"script": script, "csr": csr})
+	_, _ = b.call(peerAt(t, os.Getpid()), request{Op: "call", Capability: c.id(), Command: "run", Arguments: args,
+		Reason: "testing"})
+	p := <-seen
+	var got map[string]string
+	_ = json.Unmarshal(p.Arguments, &got)
+	if p.Command != "run" || got["script"] != script || got["csr"] != opaqueDigest(csr) || p.Scope != c.scope() {
+		t.Errorf("Pending %s %v, scope %q", p.Command, got, p.Scope)
 	}
 }

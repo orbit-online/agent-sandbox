@@ -40,12 +40,14 @@ type callInput struct {
 
 // A call as the window shows it
 type callRecord struct {
-	Grant     string          `json:"grant"`
-	Time      time.Time       `json:"time"`
-	Command   string          `json:"command"`
-	Arguments json.RawMessage `json:"arguments"`
-	Exit      int             `json:"exit"`
-	Error     string          `json:"error,omitempty"`
+	Grant string `json:"grant"`
+	// The grant's capability, which the window names once the grant has ended
+	Capability string          `json:"capability"`
+	Time       time.Time       `json:"time"`
+	Command    string          `json:"command"`
+	Arguments  json.RawMessage `json:"arguments"`
+	Exit       int             `json:"exit"`
+	Error      string          `json:"error,omitempty"`
 }
 
 // call runs a host command under a grant that covers it, asking the user for one if none does. Everything the call
@@ -75,7 +77,7 @@ func (b *broker) call(p peer, req request) (response, error) {
 	if lease == "" {
 		lease = callLease
 	}
-	g, err := b.obtain(p, c, params, reason, lease, true)
+	g, err := b.obtain(p, c, params, reason, lease, &askingCall{Command: req.Command, Arguments: cmd.shown(args, 0)})
 	if err != nil {
 		return response{}, err
 	}
@@ -144,7 +146,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 	if runErr != nil && (ctx.Err() != nil || out.over) {
 		_ = exec.Command(systemctl, "--user", "stop", unit).Run()
 	}
-	rec := callRecord{Grant: g.ID, Time: b.now(), Command: name, Arguments: cmd.shown(args)}
+	rec := callRecord{Grant: g.ID, Capability: c.id(), Time: b.now(), Command: name, Arguments: cmd.shown(args, maxRecorded)}
 	stderr := strings.TrimSpace(errOut.String())
 	var exitErr *exec.ExitError
 	switch {
@@ -238,16 +240,17 @@ func (b *broker) recordCall(rec callRecord) {
 	}
 }
 
-// shown is a call's arguments for the record: opaque ones by digest, long strings cut
-func (cmd *hostCommand) shown(args json.RawMessage) json.RawMessage {
+// shown is a call's arguments as the window shows them: opaque ones by digest, strings longer than cut cut (none with
+// cut 0, for the call asking the user, whose script they read whole)
+func (cmd *hostCommand) shown(args json.RawMessage, cut int) json.RawMessage {
 	m, _ := decodeObject(args)
 	for k, v := range m {
 		s, ok := v.(string)
 		switch {
 		case ok && cmd.args[k].Opaque:
 			m[k] = opaqueDigest(s)
-		case ok && utf8.RuneCountInString(s) > maxRecorded:
-			m[k] = fmt.Sprintf("%s… (%d characters)", string([]rune(s)[:maxRecorded]), utf8.RuneCountInString(s))
+		case ok && cut > 0 && utf8.RuneCountInString(s) > cut:
+			m[k] = fmt.Sprintf("%s… (%d characters)", string([]rune(s)[:cut]), utf8.RuneCountInString(s))
 		}
 	}
 	data, _ := json.Marshal(m)

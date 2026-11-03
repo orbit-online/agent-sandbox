@@ -217,7 +217,7 @@ func TestLockLostWhileAsking(t *testing.T) {
 		t.Errorf("Live: %+v", gs)
 	}
 	// Made live after the bus went, it is refused there too
-	if g, err := b.grant(c, json.RawMessage(`{}`), "x", "lock", nil); err == nil {
+	if g, err := b.grant(c, json.RawMessage(`{}`), "x", "", "lock", nil); err == nil {
 		t.Errorf("grant made a lock lease nothing watches: %+v", g)
 	}
 }

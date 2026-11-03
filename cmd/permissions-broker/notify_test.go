@@ -308,3 +308,28 @@ func TestNotificationDefaultGuards(t *testing.T) {
 		t.Errorf("A click on the body later answered %q", a)
 	}
 }
+
+// A host command's notification says, ahead of the reason, what the grant covers, for how long and where: the scope,
+// the lease and the bounding values by their descriptions. The lease is said in hours and minutes
+func TestNotificationCovers(t *testing.T) {
+	addr, f := testBus(t)
+	id, _ := askWith(t, addr, f, prompt{Summary: "the VM", Reason: "testing", Lease: "PT1H30M",
+		Scope: "Run PowerShell: any PowerShell, unrestricted (exec).", Bounds: `the VM is "win11"`})
+	f.mu.Lock()
+	body := f.bodies[id]
+	f.mu.Unlock()
+	want := `Covers, for 1 h 30 min, where the VM is "win11": Run PowerShell: any PowerShell, unrestricted (exec).` +
+		"\nClaude's reason"
+	if !strings.HasPrefix(body, want) {
+		t.Errorf("Body %q", body)
+	}
+	if f.key(id, "Allow for 1 h 30 min") == "" {
+		t.Errorf("Actions %q", f.shown[id])
+	}
+	for d, want := range map[time.Duration]string{time.Hour: "1 h", 8 * time.Hour: "8 h", 30 * time.Minute: "30 min",
+		90 * time.Minute: "1 h 30 min", 20 * time.Second: "20 s"} {
+		if got := spokenDuration(d); got != want {
+			t.Errorf("spokenDuration(%s) = %q", d, got)
+		}
+	}
+}

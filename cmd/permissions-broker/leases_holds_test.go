@@ -80,7 +80,7 @@ func TestSessionWatchedOnce(t *testing.T) {
 		t.Fatal("No sessions")
 	}
 	before := watches()
-	g, err := b.grant(c, json.RawMessage(`{}`), "x", "session", s1)
+	g, err := b.grant(c, json.RawMessage(`{}`), "x", "", "session", s1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestEndedSessionDropsHold(t *testing.T) {
 		}
 	}
 
-	g, err := b.grant(c, json.RawMessage(`{}`), "x", "PT1H", nil)
+	g, err := b.grant(c, json.RawMessage(`{}`), "x", "", "PT1H", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestEndedSessionDropsHold(t *testing.T) {
 
 	// The last holder ends: the grant runs on until a release from any session
 	anchor, s3 := start("session-3")
-	g, err = b.grant(c, json.RawMessage(`{}`), "x", "PT1H", nil)
+	g, err = b.grant(c, json.RawMessage(`{}`), "x", "", "PT1H", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

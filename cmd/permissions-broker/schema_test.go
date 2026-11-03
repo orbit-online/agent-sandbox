@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -87,5 +88,26 @@ func TestSchemaScope(t *testing.T) {
 		"(click). print the input (run)."
 	if got := c.scope(); got != want {
 		t.Errorf("scope = %q\nwant    %q", got, want)
+	}
+}
+
+// A long enum (windows-vm's 161 key names) reads as a count, a short one as its values
+func TestSchemaLongEnum(t *testing.T) {
+	names := make([]string, 161)
+	for i := range names {
+		names[i] = fmt.Sprintf("%q", fmt.Sprintf("k%d", i))
+	}
+	for schema, want := range map[string]string{
+		`{"type": "string", "enum": [` + strings.Join(names, ", ") + `]}`:                             "one of 161 values",
+		`{"type": "string", "enum": [` + strings.Join(names[:maxListedEnum], ", ") + `]}`:             "one of [k0 k1 k2 k3 k4 k5 k6 k7]",
+		`{"type": "array", "items": {"type": "string", "enum": [` + strings.Join(names, ", ") + `]}}`: "a list of one of 161 values",
+	} {
+		s, err := parseSchema(json.RawMessage(schema))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.allows(); got != want {
+			t.Errorf("allows = %q, want %q", got, want)
+		}
 	}
 }

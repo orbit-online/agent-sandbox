@@ -412,7 +412,7 @@ func TestCallLog(t *testing.T) {
 		t.Fatalf("%d calls kept", len(calls))
 	}
 	if strings.Contains(string(calls[0].Arguments), long) || !strings.Contains(string(calls[0].Arguments), "(250 characters)") ||
-		len(calls[0].Error) != maxStderr {
+		len(calls[0].Error) != maxStderr || calls[0].Capability != c.id() {
 		t.Errorf("Recorded %s, error of %d bytes", calls[0].Arguments, len(calls[0].Error))
 	}
 }

@@ -197,11 +197,17 @@ func (s *argSchema) unrestricted() bool {
 	return s.Type == "string" && len(s.Enum) == 0 && s.Pattern == ""
 }
 
+// An enum longer than this reads as a count in the consent (161 key names would bury the rest); the window lists the
+// values when the user expands a grant
+const maxListedEnum = 8
+
 // allows says what s lets through, for the consent
 func (s *argSchema) allows() string {
 	switch {
 	case s.Type == "array":
 		return "a list of " + s.Items.allows()
+	case len(s.Enum) > maxListedEnum:
+		return fmt.Sprintf("one of %d values", len(s.Enum))
 	case len(s.Enum) > 0:
 		return fmt.Sprintf("one of %v", s.Enum)
 	case s.Pattern != "":

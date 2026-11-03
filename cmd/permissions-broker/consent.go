@@ -27,7 +27,7 @@ func (b *broker) request(p peer, req request) (*grant, error) {
 	if err != nil {
 		return nil, err
 	}
-	return b.obtain(p, c, params, reason, req.Lease, false)
+	return b.obtain(p, c, params, reason, req.Lease, nil)
 }
 
 // foldReason folds whitespace and control characters to single spaces and cuts the reason to maxReason
@@ -42,10 +42,16 @@ func foldReason(r string) (string, error) {
 	return reason, nil
 }
 
+// The call that asks for a grant, which the window shows: its command and free arguments
+type askingCall struct {
+	Command   string
+	Arguments json.RawMessage
+}
+
 // obtain finds a grant covering c with params, or asks the user for one. A once lease, which only a call may ask for,
-// makes a grant nothing else finds
-func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, lease string, call bool) (*grant, error) {
-	if lease == "once" && !call {
+// makes a grant nothing else finds. call is the call asking, nil for a request
+func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, lease string, call *askingCall) (*grant, error) {
+	if lease == "once" && call == nil {
 		return nil, errors.New("A once lease is for host command calls: ask for a duration")
 	}
 	if c.Type == "attach" {
@@ -96,7 +102,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	c.covered.Lock()
 	g := b.matching(c, params)
 	if g == nil && b.isStanding(c, params) {
-		if g, err = b.grant(c, params, summary, "standing", nil); err != nil {
+		if g, err = b.grant(c, params, summary, "", "standing", nil); err != nil {
 			c.covered.Unlock()
 			return nil, err
 		}
@@ -114,7 +120,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	if err != nil {
 		return nil, err
 	}
-	answer, err := b.consent(c, params, summary, reason, lease)
+	answer, err := b.consent(c, params, summary, reason, lease, call)
 	unlockGate(answer.Allow)
 	if err != nil {
 		return nil, fmt.Errorf("Asking the user: %w", err)
@@ -125,7 +131,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	}
 	// Again, whether or not the answer changed the lease: the screen lock may have stopped being watched while the
 	// user was asked
-	if answer.Lease == "once" && !call {
+	if answer.Lease == "once" && call == nil {
 		return nil, errors.New("A once lease is for host command calls")
 	}
 	if err := b.checkLease(answer.Lease, sess); err != nil {
@@ -160,7 +166,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	c.covered.Lock()
 	if g = b.matching(c, params); g != nil {
 		keepSess = b.hold(g, sess)
-	} else if g, err = b.grant(c, params, summary, lease, sess); err != nil {
+	} else if g, err = b.grant(c, params, summary, reason, lease, sess); err != nil {
 		c.covered.Unlock()
 		return nil, err
 	} else if keepSess = lease == "session"; !keepSess {
@@ -242,11 +248,15 @@ type decision struct {
 }
 
 // consent asks with a notification. Options hands the request to the window, which answers through control.sock
-func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string) (decision, error) {
+func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string, call *askingCall) (decision, error) {
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan request, 1)}
+	bounds := ""
 	if c.Type == "command" {
-		p.Scope = c.scope()
+		p.Scope, bounds = c.scope(), c.bounds(params)
+	}
+	if call != nil {
+		p.Command, p.Arguments = call.Command, call.Arguments
 	}
 	b.mu.Lock()
 	b.pendingSeq++
@@ -277,7 +287,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	}
 	asked := make(chan result, 1)
 	go func() {
-		action, err := b.ask(ctx, prompt{Summary: summary, Reason: reason, Lease: lease, Scope: p.Scope,
+		action, err := b.ask(ctx, prompt{Summary: summary, Reason: reason, Lease: lease, Scope: p.Scope, Bounds: bounds,
 			Options: len(b.cfg.Window) > 0})
 		asked <- result{action, err}
 	}()
