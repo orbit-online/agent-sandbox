@@ -26,7 +26,7 @@ func TestParseRule(t *testing.T) {
 			t.Fatalf("%q: %v", tc.rule, err)
 		}
 		got := *rs.byName["org.x.Y"][0]
-		tc.want.policy, tc.want.types = policyTalk, filterCall
+		tc.want.policy, tc.want.types, tc.want.set = policyTalk, filterCall, rs
 		if got != tc.want {
 			t.Errorf("%q: got %+v, want %+v", tc.rule, got, tc.want)
 		}

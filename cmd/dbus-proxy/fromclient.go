@@ -55,7 +55,7 @@ func readsOthersTraffic(m *message) bool {
 // The verdict for a call or signal from the client, by its destination's policy and the rules
 func (c *client) verdict(m *message) verdict {
 	dest := m.header(dbus.FieldDestination)
-	p, fs := c.names.lookup(c.p.rules, dest)
+	p, fs := c.lookup(dest)
 	if p < policySee {
 		return hide
 	}
@@ -104,7 +104,7 @@ func (c *client) arg0Policy(m *message) policy {
 	if !ok || name == "" {
 		return policyNone
 	}
-	p, _ := c.names.lookup(c.p.rules, name)
+	p, _ := c.lookup(name)
 	return p
 }
 
@@ -118,6 +118,7 @@ func (c *client) fromClient(m *message) error {
 	}
 	var fakes [][]byte
 	c.mu.Lock()
+	c.cur = c.p.current()
 	out, err := c.judgeClient(m, &fakes)
 	c.mu.Unlock()
 	if err != nil {
@@ -244,10 +245,18 @@ func (c *client) rewrite(m *message, reply *dbus.Message) ([]byte, error) {
 }
 
 // After Hello: watch every name the rules mention and ask who owns it now, so its owner's unique name gets its
-// policy; names under a wildcard need ListNames first, then a GetNameOwner of each, and the client waits for those
+// policy; names under a wildcard need ListNames first, then a GetNameOwner of each, and the client waits for those.
+// The live sets' names as when a set is added
 func (c *client) initialNameOps(fakes *[][]byte) error {
+	for _, rs := range c.cur.live() {
+		if err := c.lookupSet(rs, fakes); err != nil {
+			return err
+		}
+	}
+	// Those added since the client's message were taken with the rules above, under the same mu
+	c.newSets = nil
 	wildcard := false
-	for name, subtree := range c.p.rules.names() {
+	for name, subtree := range c.cur.names() {
 		if err := c.fakeCall(fakes, busCall("AddMatch", ownerMatch(name, subtree)), expect{kind: expectFakeMatch}); err != nil {
 			return err
 		}
@@ -260,8 +269,10 @@ func (c *client) initialNameOps(fakes *[][]byte) error {
 		}
 	}
 	if wildcard {
-		c.synced = make(chan struct{})
-		return c.fakeCall(fakes, busCall("ListNames"), expect{kind: expectFakeList})
+		if err := c.fakeCall(fakes, busCall("ListNames"), expect{kind: expectFakeList}); err != nil {
+			return err
+		}
+		c.holdFor(1)
 	}
 	return nil
 }

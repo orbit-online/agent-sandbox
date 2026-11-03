@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/docopt/docopt-go"
@@ -17,7 +20,7 @@ import (
 const usage = `dbus-proxy - Filter a sandbox's D-Bus traffic, taking xdg-dbus-proxy's arguments
 
 Usage:
-  dbus-proxy [--fd=<fd>] <address> <path> [--filter] [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
+  dbus-proxy [--fd=<fd>] [--control=<path>] [--pid=<pid>] <address> <path> [--filter] [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
   dbus-proxy --help
 
 Listens on <path> and connects each client to the bus at <address>. The subset
@@ -33,6 +36,11 @@ of xdg-dbus-proxy's arguments nixpak passes, with their meaning:
 
 A name may end in ".*" for the names below it, a path in "/*" for its subtree.
 With or without --filter, the client can't monitor the bus or eavesdrop.
+
+  --control=<path>      Take live rule sets from the permissions broker on a
+                        socket at <path>, relative to $XDG_RUNTIME_DIR (mode
+                        0600, its directory made 0700); see control.go
+  --pid=<pid>           Exit when process <pid> does
 `
 
 // Listens for clients of one bus and applies one set of rules
@@ -46,6 +54,11 @@ type Proxy struct {
 
 	mu      sync.Mutex
 	clients int
+	conns   map[*client]bool // The clients past authentication, for live sets
+
+	// The rules with the live sets, once the control socket changed them (livesets.go); setsMu orders the changes
+	cur    atomic.Pointer[Rules]
+	setsMu sync.Mutex
 }
 
 // Clients connected at once; the app opens a handful
@@ -154,6 +167,44 @@ func syncFD(fd int) error {
 	}
 }
 
+// Listens on the control socket at rel beneath $XDG_RUNTIME_DIR, as nixpak passes dbus.args unexpanded: a clean
+// relative path, its directory made 0700 and the socket bound under umask 077, then made 0600, the mode the doc names
+func listenControl(rel string) (*net.UnixListener, error) {
+	run := os.Getenv("XDG_RUNTIME_DIR")
+	if !filepath.IsAbs(run) {
+		return nil, errors.New("--control needs $XDG_RUNTIME_DIR")
+	}
+	if rel == "" || filepath.IsAbs(rel) || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("--control %q: a clean path relative to $XDG_RUNTIME_DIR", rel)
+	}
+	path := filepath.Join(run, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	old := unix.Umask(0o077)
+	l, err := listen(path)
+	unix.Umask(old)
+	if err != nil {
+		return nil, err
+	}
+	// Bound 0700; connecting takes write permission only
+	if err := os.Chmod(path, 0o600); err != nil {
+		l.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+// Waits for the process behind pidfd to end
+func waitPidfd(pidfd int) error {
+	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	for {
+		if _, err := unix.Poll(fds, -1); err == nil || !errors.Is(err, unix.EINTR) {
+			return err
+		}
+	}
+}
+
 func run(opts docopt.Opts) error {
 	rs, err := parseRules(opts)
 	if err != nil {
@@ -166,12 +217,32 @@ func run(opts docopt.Opts) error {
 	if err != nil {
 		return err
 	}
+	served := make(chan error, 4)
+	if s, ok := opts["--pid"].(string); ok {
+		// Taken before listening: whoever waits for the socket knows the pid was watched while it lived
+		pid, err := strconv.Atoi(s)
+		if err != nil || pid <= 0 {
+			return fmt.Errorf("Invalid --pid %q", s)
+		}
+		pidfd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			return fmt.Errorf("Watch --pid %d: %w", pid, err)
+		}
+		go func() { served <- waitPidfd(pidfd) }()
+	}
+	if rel, ok := opts["--control"].(string); ok {
+		cl, err := listenControl(rel)
+		if err != nil {
+			return err
+		}
+		defer cl.Close()
+		go func() { served <- p.serveControl(cl) }()
+	}
 	l, err := listen(path)
 	if err != nil {
 		return err
 	}
 	defer l.Close()
-	served := make(chan error, 1)
 	go func() { served <- p.Serve(l) }()
 	if s, ok := opts["--fd"].(string); ok {
 		fd, err := strconv.Atoi(s)

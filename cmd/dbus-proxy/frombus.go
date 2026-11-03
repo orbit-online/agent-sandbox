@@ -42,6 +42,7 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 		m.Message = nil
 		return nil, nil
 	}
+	c.cur = c.p.current()
 	if isReply(m) {
 		rs, _ := m.replySerial()
 		e, ok := c.awaitBus[rs]
@@ -66,11 +67,8 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 	}
 	sender := m.header(dbus.FieldSender)
 	if m.Type == dbus.TypeSignal && m.header(dbus.FieldDestination) == "" {
-		// xdg-dbus-proxy passes every broadcast of a name with TALK, and any rule gives a name TALK, so a --call or
-		// --broadcast rule lets all the name's broadcasts through. Kept for compatibility (nixpak's configs rely on it)
-		p, fs := c.names.lookup(c.p.rules, sender)
-		if p != policyOwn && p != policyTalk &&
-			!anyMatches(fs, filterBroadcast, m.header(dbus.FieldPath), m.header(dbus.FieldInterface), m.header(dbus.FieldMember)) {
+		_, fs := c.lookup(sender)
+		if !broadcastPasses(fs, m.header(dbus.FieldPath), m.header(dbus.FieldInterface), m.header(dbus.FieldMember)) {
 			return drop()
 		}
 	}
@@ -123,7 +121,7 @@ func (c *client) reply(m *message, e expect, fakes *[][]byte, drop func() ([]byt
 				if name == "" || name[0] == ':' {
 					continue
 				}
-				if p, _ := c.p.rules.lookup(name); p == policyNone {
+				if p, _ := c.cur.lookup(name); p == policyNone {
 					continue
 				}
 				if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name, sync: true}); err != nil {
@@ -132,6 +130,7 @@ func (c *client) reply(m *message, e expect, fakes *[][]byte, drop func() ([]byt
 				c.syncing++
 			}
 		}
+		c.syncing--
 		c.syncDone()
 		return drop()
 	}
@@ -172,7 +171,7 @@ func (c *client) passNameOwnerChanged(m *message) bool {
 	if !ok1 || !ok2 || !ok3 || name == "" {
 		return false
 	}
-	if p, _ := c.names.lookup(c.p.rules, name); p < policySee {
+	if p, _ := c.lookup(name); p < policySee {
 		return false
 	}
 	if name[0] != ':' && newOwner != "" {
@@ -194,7 +193,7 @@ func (c *client) filterNames(m *message) ([]byte, error) {
 	}
 	seen := []string{}
 	for _, n := range names {
-		if p, _ := c.names.lookup(c.p.rules, n); p >= policySee {
+		if p, _ := c.lookup(n); p >= policySee {
 			seen = append(seen, n)
 		}
 	}

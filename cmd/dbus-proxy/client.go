@@ -69,6 +69,18 @@ type client struct {
 	synced  chan struct{}
 	syncing int
 	acct    *account
+	// The rules this message is judged by, taken under mu as it's judged: a live set added or removed applies from
+	// the next message (livesets.go)
+	cur *Rules
+	// The live sets a message the client sent or got was judged under, which a set's removal closes the connection
+	// for; the live sets added or removed since the client's last message, whose names it hasn't looked up or
+	// stopped watching yet; and the match rules watching each set's names
+	used     map[*RuleSet]bool
+	newSets  []*RuleSet
+	goneSets []*RuleSet
+	matches  map[*RuleSet][]string
+	// Ends the connection, from outside its goroutines
+	kill func()
 }
 
 func (p *Proxy) handle(conn *net.UnixConn) {
@@ -78,6 +90,8 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 		awaitBus:   map[uint32]expect{},
 		awaitPeer:  map[peerCall]struct{}{},
 		names:      newNameTable(),
+		used:       map[*RuleSet]bool{},
+		matches:    map[*RuleSet][]string{},
 		fakeSerial: maxClientSerial,
 		log:        p.log,
 		acct:       p.budget.account(),
@@ -169,6 +183,9 @@ func (c *client) run() {
 			c.toBus.close()
 		})
 	}
+	c.kill = func() { stop("live rules", errRevoked) }
+	c.p.register(c)
+	defer c.p.unregister(c)
 	var wg sync.WaitGroup
 	for _, f := range []struct {
 		side string
@@ -192,6 +209,12 @@ func (c *client) readClient(done chan struct{}) error {
 	for {
 		m, err := c.clientR.readMessage()
 		if err != nil {
+			return err
+		}
+		// The names of live sets added since, before the message is judged by them
+		if err := c.syncSets(done); err != nil {
+			m.closeFDs()
+			m.release()
 			return err
 		}
 		err = c.fromClient(m)

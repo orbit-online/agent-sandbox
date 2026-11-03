@@ -36,6 +36,8 @@ type filter struct {
 	pathSubtree bool // The path ended in "/*"; "@/*" leaves path empty and covers every path
 	iface       string
 	member      string
+	// The rule set it came from; nil for the filters a unique name gets from its own policy
+	set *RuleSet
 }
 
 // The filters a unique name gets from its own policy, xdg-dbus-proxy's match_all
@@ -80,13 +82,37 @@ func anyMatches(fs []*filter, t filterType, path, iface, member string) bool {
 	return false
 }
 
-// The filters of one source by name: the command line now, a grant's rule set once the broker sends them
+// The filters of one source by name: the command line's, the bus's own, or a grant's the broker sent (live)
 type RuleSet struct {
 	byName map[string][]*filter
+	// The grant's id for a live set, empty for a static one
+	id string
 }
 
 func NewRuleSet() *RuleSet {
 	return &RuleSet{byName: map[string][]*filter{}}
+}
+
+func (rs *RuleSet) live() bool { return rs.id != "" }
+
+// The names the set mentions, each with whether a filter covers the names below it
+func (rs *RuleSet) names() map[string]bool {
+	out := map[string]bool{}
+	for name, fs := range rs.byName {
+		for _, f := range fs {
+			out[name] = out[name] || f.subtree
+		}
+	}
+	return out
+}
+
+// Its filters, counted
+func (rs *RuleSet) size() int {
+	n := 0
+	for _, fs := range rs.byName {
+		n += len(fs)
+	}
+	return n
 }
 
 // Splits "org.foo.*" into the name and whether it covers the names below it, and checks the name
@@ -127,7 +153,7 @@ func (rs *RuleSet) AddPolicy(arg string, p policy) error {
 	if err != nil {
 		return err
 	}
-	rs.byName[name] = append(rs.byName[name], &filter{policy: p, subtree: subtree, types: filterAll})
+	rs.byName[name] = append(rs.byName[name], &filter{policy: p, subtree: subtree, types: filterAll, set: rs})
 	return nil
 }
 
@@ -143,7 +169,7 @@ func (rs *RuleSet) AddRule(arg string, t filterType) error {
 	if err != nil {
 		return err
 	}
-	f := &filter{policy: policyTalk, subtree: subtree, types: t}
+	f := &filter{policy: policyTalk, subtree: subtree, types: t, set: rs}
 	method := rule
 	if at := strings.IndexByte(rule, '@'); at >= 0 {
 		method = rule[:at]
@@ -168,7 +194,8 @@ func (rs *RuleSet) AddRule(arg string, t filterType) error {
 	return nil
 }
 
-// The rule sets a proxy applies, looked up together. Static for now: the command line's and the bus's own
+// The rule sets a proxy applies, looked up together: the bus's own, the command line's, then the live ones. Never
+// changed once in use: adding or removing a live set makes new Rules (control.go)
 type Rules struct {
 	sets []*RuleSet
 }
@@ -176,8 +203,24 @@ type Rules struct {
 // Every client may talk to the bus itself
 func NewRules(sets ...*RuleSet) *Rules {
 	bus := NewRuleSet()
-	bus.byName[busName] = []*filter{{policy: policyTalk, types: filterAll}}
+	bus.byName[busName] = []*filter{{policy: policyTalk, types: filterAll, set: bus}}
 	return &Rules{sets: append([]*RuleSet{bus}, sets...)}
+}
+
+// The rules with rs added
+func (r *Rules) with(rs *RuleSet) *Rules {
+	return &Rules{sets: append(append([]*RuleSet{}, r.sets...), rs)}
+}
+
+// The rules without rs
+func (r *Rules) without(rs *RuleSet) *Rules {
+	out := &Rules{}
+	for _, s := range r.sets {
+		if s != rs {
+			out.sets = append(out.sets, s)
+		}
+	}
+	return out
 }
 
 // The highest policy and the filters that apply to a well-known name: the name's own, then those of its dot-prefixes
@@ -206,18 +249,42 @@ func (r *Rules) lookup(name string) (policy, []*filter) {
 	}
 }
 
-// The names the rules mention other than the bus, each with whether a filter covers the names below it
+// The names the static sets mention other than the bus, each with whether a filter covers the names below it
 func (r *Rules) names() map[string]bool {
 	out := map[string]bool{}
 	for _, rs := range r.sets {
-		for name, fs := range rs.byName {
-			if name == busName {
-				continue
-			}
-			for _, f := range fs {
-				out[name] = out[name] || f.subtree
+		if rs.live() {
+			continue
+		}
+		for name, subtree := range rs.names() {
+			if name != busName {
+				out[name] = out[name] || subtree
 			}
 		}
 	}
 	return out
+}
+
+// The live sets
+func (r *Rules) live() []*RuleSet {
+	var out []*RuleSet
+	for _, rs := range r.sets {
+		if rs.live() {
+			out = append(out, rs)
+		}
+	}
+	return out
+}
+
+// Whether a broadcast from a sender with these filters reaches the client. xdg-dbus-proxy passes every broadcast of a
+// name with TALK, and any rule gives a name TALK, so a static --call or --broadcast rule lets all the name's broadcasts
+// through: kept for compatibility, as nixpak's configs rely on it. A live set's call and broadcast rules don't: only
+// what its broadcast rules match passes, or everything with its see, talk or own
+func broadcastPasses(fs []*filter, path, iface, member string) bool {
+	for _, f := range fs {
+		if f.policy >= policyTalk && (f.set == nil || !f.set.live() || f.types == filterAll) {
+			return true
+		}
+	}
+	return anyMatches(fs, filterBroadcast, path, iface, member)
 }
