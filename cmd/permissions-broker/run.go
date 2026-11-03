@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"golang.org/x/sys/unix"
 )
 
@@ -72,4 +73,27 @@ func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	}
 	b.adoptShared()
 	return reqLn, ctlLn, nil
+}
+
+// serve runs the daemon for the config at path, until the sandbox ends
+func serve(path string) error {
+	cfg, err := readConfig(path)
+	if err != nil {
+		return err
+	}
+	caps, err := loadCapabilities(cfg)
+	if err != nil {
+		return err
+	}
+	unix.Umask(0o077)
+	sb, err := findSandbox(cfg.AppID)
+	if err != nil {
+		return err
+	}
+	b, err := newBroker(cfg, caps, sb, notify.Ask)
+	if err != nil {
+		return err
+	}
+	watchLogind(b, logindSignals)
+	return b.run()
 }
