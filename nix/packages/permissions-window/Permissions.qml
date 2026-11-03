@@ -3,7 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // The Permissions window's content. broker.state is the broker's state as JSON, broker.error what went wrong; actions
-// go to broker.command as JSON. main.go passes a QQmlPropertyMap, tst_permissions.qml a mock
+// go to broker.command as JSON. main.go passes a QQmlPropertyMap, tst_permissions.qml a mock. The rows are the
+// broker's, in its order: the window keeps only what the user set on them (edits, what's expanded)
 Item {
     id: root
     required property var broker
@@ -12,6 +13,8 @@ Item {
     readonly property var pending: st.pending || []
     readonly property var grants: st.grants || []
     readonly property var log: (st.log || []).slice().reverse().slice(0, 30)
+    // Host command calls, newest first, also those of grants that ended
+    readonly property var calls: (st.calls || []).slice().reverse()
     // What the sandbox reaches from its start, from the launcher's config, read-only: each section a title and its lines
     readonly property var standing: st.standing || []
     readonly property var overview: {
@@ -39,6 +42,13 @@ Item {
     }
     // What still holds folder grants that ended, however they ended
     readonly property var held: st.held || []
+    // The capabilities by id: their parameters' declarations and, for host commands, what a grant covers
+    readonly property var caps: {
+        const c = {}
+        for (const cap of st.capabilities || [])
+            c[cap.id] = cap
+        return c
+    }
     // Each capability's parameter types, for the fields that narrow a request. An opaque parameter (data for the
     // plugin, such as a CSR) gets no field: there's nothing to narrow, and the summary shows its digest
     readonly property var types: {
@@ -55,9 +65,18 @@ Item {
     readonly property var leases: [
         { value: "session", text: "Until this Claude session ends" },
         { value: "lock", text: "Until the screen locks" },
-        { value: "PT1H", text: "For an hour" },
-        { value: "PT8H", text: "For eight hours" }
+        { value: "PT1H", text: "For 1 h" },
+        { value: "PT8H", text: "For 8 h" }
     ]
+    // A request's leases: the usual ones, once for a call, and what Claude proposed when it's none of those
+    function leasesFor(req) {
+        const list = leases.slice()
+        if (req.command)
+            list.push({ value: "once", text: leaseText("once") })
+        if (!list.some(l => l.value === req.lease))
+            list.push({ value: req.lease, text: leaseText(req.lease) })
+        return list
+    }
 
     // What the user set on each pending request, by its id: the list is rebuilt on every broker event, which the
     // sandbox can cause at will, and a row must keep the user's narrowing and lease through it
@@ -66,6 +85,17 @@ Item {
         if (!edits[req.id])
             edits[req.id] = { params: Object.assign({}, req.params), lease: req.lease }
         return edits[req.id]
+    }
+
+    // Which sections and grants the user expanded or collapsed, by key: sections start expanded, grants collapsed
+    property var expanded: ({})
+    function isOpen(key, open) {
+        return expanded[key] === undefined ? open : expanded[key]
+    }
+    function toggle(key, open) {
+        const e = Object.assign({}, expanded)
+        e[key] = !isOpen(key, open)
+        expanded = e
     }
 
     // Another request where a row was: one moved up, a row above it gone, or one in a row's place, [A] turned [B] or
@@ -89,6 +119,15 @@ Item {
         onTriggered: root.settling = false
     }
 
+    // The time, for what grants have left
+    property double now: Date.now()
+    Timer {
+        interval: 30000
+        running: true
+        repeat: true
+        onTriggered: root.now = Date.now()
+    }
+
     // A counter in each command, so the same action twice is still a change of broker.command
     property int sent: 0
     function send(cmd) {
@@ -96,13 +135,116 @@ Item {
         root.broker.command = JSON.stringify(cmd)
     }
 
+    // "1 h 30 min" for PT1H30M, or "" when lease isn't a duration
+    function spoken(lease) {
+        const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(lease || "")
+        if (!m || !(m[1] || m[2] || m[3]))
+            return ""
+        const secs = Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0)
+        return minutes(Math.floor(secs / 60)) || secs + " s"
+    }
+    function minutes(n) {
+        const h = Math.floor(n / 60), m = n % 60
+        return [h ? h + " h" : "", m ? m + " min" : ""].filter(s => s).join(" ")
+    }
     function leaseText(lease) {
-        if (lease === "standing")
-            return "From config"
+        switch (lease) {
+        case "standing": return "From config"
+        case "once": return "For this call only"
+        }
         for (const l of leases)
             if (l.value === lease)
                 return l.text
-        return lease
+        return spoken(lease) ? "For " + spoken(lease) : lease
+    }
+    function timeLeft(expires) {
+        if (!expires)
+            return ""
+        const ms = new Date(expires).getTime() - now
+        return ms <= 0 ? "ending" : minutes(Math.ceil(ms / 60000)) + " left"
+    }
+
+    // A capability's parameter values, one a line, each by its declaration's description
+    function paramLines(capId, params) {
+        const decl = (caps[capId] || {}).params || {}
+        return Object.keys(params || {}).sort().map(k => {
+            const d = decl[k] || {}
+            const v = params[k]
+            const shown = d.opaque && typeof v === "string" ? "opaque, " + v.length + " characters"
+                                                            : typeof v === "string" ? v : JSON.stringify(v)
+            return (d.description ? d.description + " (" + k + ")" : k) + ": " + shown
+        }).join("\n")
+    }
+    function grantParams(g) {
+        const lines = [paramLines(g.capability, g.params)]
+        if (g.path)
+            lines.push("Mounted at " + g.path + (g.source ? ", from " + g.source : ""))
+        if (g.socket)
+            lines.push("Socket at " + g.socket)
+        return lines.filter(l => l).join("\n")
+    }
+    // A call's free arguments, one a line after the call's own: the broker has opaque ones by digest
+    function argumentLines(args) {
+        return Object.keys(args || {}).sort().map(k => "\n" + k + ": "
+                                                   + (typeof args[k] === "string" ? args[k] : JSON.stringify(args[k])))
+                                          .join("")
+    }
+    // What a grant of a host command capability covers, one command or free argument a line, unrestricted ones first.
+    // full adds the values of an enum the broker counts rather than lists (more than its maxListedEnum, 8)
+    function scopeText(capId, full) {
+        const cap = caps[capId] || {}
+        return (cap.scope || []).map(s => {
+            if (!s.argument)
+                return s.description + " (" + s.command + ")"
+            const line = s.description + " (" + s.command + "): " + s.argument + ", " + s.about + ", "
+                         + (s.unrestricted ? "unrestricted" : s.allows)
+            const decl = ((cap.commands || {})[s.command] || {}).arguments || {}
+            const arg = decl[s.argument] || {}
+            const values = arg.enum || (arg.items || {}).enum || []
+            return full && values.length > 8 ? line + ": " + values.join(", ") : line
+        }).join("\n")
+    }
+    function callsText(list, none) {
+        if (list.length === 0)
+            return none
+        return list.map(c => Qt.formatDateTime(new Date(c.time), "yyyy-MM-dd HH:mm:ss") + " " + c.capability + " "
+                        + c.command + ": " + (c.error || c.exit ? "failed, exit " + c.exit : "exit 0")
+                        + (c.error ? ", " + c.error : "") + argumentLines(c.arguments)).join("\n\n")
+    }
+    function holdersText(g) {
+        const lines = [(g.sessions || []).length > 0 ? "Given to Claude sessions: " + g.sessions.join(", ")
+                                                     : "Given to the sandbox: anything in it may use it"]
+        if ((g.holders || []).length > 0)
+            lines.push("Open in: " + g.holders.map(h => h.comm + " (" + h.pid + (h.possible ? ", possibly" : "")
+                                                     + ")").join(", "))
+        return lines.join("\n")
+    }
+
+    // Badges: each a name for its objectName, a text and whether it warns
+    function freeBadges(capId, id) {
+        const items = ((caps[capId] || {}).scope || []).filter(s => s.argument)
+        const out = []
+        if (items.length > 0)
+            out.push({ name: "badge-free-" + id,
+                       text: items.length + (items.length === 1 ? " free argument" : " free arguments") })
+        for (const s of items.filter(s => s.unrestricted))
+            out.push({ name: "badge-unrestricted-" + id + "-" + s.command + "-" + s.argument, warning: true,
+                       text: "unrestricted: " + s.command + " " + s.argument })
+        return out
+    }
+    function grantBadges(g) {
+        const out = []
+        if (g.lease === "standing")
+            out.push({ name: "badge-config-" + g.id, text: "from config" })
+        else
+            out.push({ name: "badge-lease-" + g.id,
+                       text: { session: "session", lock: "until lock", once: "once" }[g.lease] || spoken(g.lease) || g.lease })
+        const sessions = (g.sessions || []).length, procs = (g.holders || []).length
+        if (sessions + procs > 0)
+            out.push({ name: "badge-holders-" + g.id, text: "held by " + [
+                sessions ? sessions + (sessions === 1 ? " session" : " sessions") : "",
+                procs ? procs + (procs === 1 ? " process" : " processes") : ""].filter(s => s).join(", ") })
+        return out.concat(freeBadges(g.capability, g.id))
     }
 
     ScrollView {
@@ -126,211 +268,113 @@ Item {
                 wrapMode: Text.Wrap
             }
 
-            Label {
-                Layout.leftMargin: 12
-                text: "Waiting for your answer"
-                font.bold: true
+            Section {
+                key: "pending"
+                title: "Waiting for your answer"
+                info: String(root.pending.length)
                 visible: root.pending.length > 0
-            }
-            Repeater {
-                model: root.pending
-                delegate: Frame {
-                    id: request
-                    required property var modelData
-                    // The request's parameters, as the fields below narrow them, kept across refreshes
-                    readonly property var edited: root.editsOf(modelData).params
-                    readonly property var paramTypes: root.types[modelData.capability] || {}
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        Label {
-                            Layout.fillWidth: true
-                            text: request.modelData.summary
-                            textFormat: Text.PlainText
-                            wrapMode: Text.Wrap
-                            font.bold: true
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Claude's reason, in its own words: " + JSON.stringify(request.modelData.reason)
-                            textFormat: Text.PlainText
-                            wrapMode: Text.Wrap
-                        }
-                        Repeater {
-                            model: Object.keys(request.paramTypes)
-                            delegate: RowLayout {
-                                id: param
-                                required property string modelData
-                                readonly property string kind: request.paramTypes[modelData]
-                                Label { text: param.modelData }
-                                Label {
-                                    objectName: "opaque-" + param.modelData
-                                    visible: param.kind === "opaque"
-                                    readonly property var value: request.edited[param.modelData]
-                                    text: value === undefined ? "not given"
-                                                              : "opaque, " + String(value).length + " characters, as in the summary"
-                                    font.italic: true
-                                }
-                                CheckBox {
-                                    objectName: "param-" + param.modelData
-                                    visible: param.kind === "boolean"
-                                    checked: request.edited[param.modelData] === true
-                                    onToggled: request.edited[param.modelData] = checked
-                                }
-                                TextField {
-                                    objectName: "field-" + param.modelData
-                                    visible: param.kind !== "boolean" && param.kind !== "opaque"
-                                    Layout.fillWidth: true
-                                    text: request.edited[param.modelData] !== undefined ? String(request.edited[param.modelData]) : ""
-                                    onEditingFinished: {
-                                        if (text === "")
-                                            delete request.edited[param.modelData]
-                                        else
-                                            request.edited[param.modelData] = param.kind === "string" ? text : Number(text)
-                                    }
-                                }
-                            }
-                        }
-                        RowLayout {
-                            ComboBox {
-                                id: lease
-                                objectName: "lease"
-                                textRole: "text"
-                                valueRole: "value"
-                                model: root.leases
-                                Component.onCompleted: currentIndex = Math.max(0, indexOfValue(root.editsOf(request.modelData).lease))
-                                onActivated: root.editsOf(request.modelData).lease = currentValue
-                            }
-                            Item { Layout.fillWidth: true }
-                            Button {
-                                objectName: "deny"
-                                text: "Deny"
-                                enabled: !root.settling
-                                onClicked: root.send({ op: "answer", pending: request.modelData.id, allow: false })
-                            }
-                            Button {
-                                objectName: "allow"
-                                text: "Allow"
-                                highlighted: true
-                                enabled: !root.settling
-                                onClicked: root.send({ op: "answer", pending: request.modelData.id, allow: true,
-                                                       lease: lease.currentValue, params: request.edited })
-                            }
-                        }
+                expanded: root.isOpen("section:" + key, true)
+                onToggled: root.toggle("section:" + key, true)
+                Repeater {
+                    model: root.pending
+                    delegate: RequestRow {
+                        view: root
                     }
                 }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 12
-                Layout.rightMargin: 12
+            Section {
+                key: "held"
+                title: "Still open"
                 visible: root.held.length > 0
-                Label {
-                    objectName: "held"
+                expanded: root.isOpen("section:" + key, true)
+                onToggled: root.toggle("section:" + key, true)
+                RowLayout {
                     Layout.fillWidth: true
-                    // A folder grant that ended is unmounted, but what's open in it stays readable to whoever holds it
-                    text: "Still open in folders no longer granted: "
-                          + root.held.map(g => g.summary + " (" + g.why + "): "
-                                          + g.holders.map(h => h.comm + " (" + h.pid + (h.possible ? ", possibly" : "")
-                                                          + ")").join(", ")).join("; ")
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                }
-                Button {
-                    objectName: "end"
-                    text: "End them"
-                    onClicked: root.send({ op: "end", grants: root.held.map(g => g.grant) })
-                }
-            }
-
-            Label {
-                Layout.leftMargin: 12
-                text: "From the configuration"
-                font.bold: true
-                visible: root.overview.length > 0
-            }
-            Repeater {
-                model: root.overview
-                delegate: ColumnLayout {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
-                    spacing: 2
-                    Label {
-                        text: modelData.title
-                        font.italic: true
-                    }
-                    // Selectable, so its paths and rules can be copied
-                    TextArea {
-                        objectName: "overview-" + modelData.key
+                    ReadOnlyText {
+                        objectName: "held"
                         Layout.fillWidth: true
-                        Layout.leftMargin: 12
-                        text: modelData.text
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        readOnly: true
-                        selectByMouse: true
-                        background: null
-                        padding: 0
-                    }
-                }
-            }
-
-            Label {
-                Layout.leftMargin: 12
-                text: "Granted"
-                font.bold: true
-            }
-            Label {
-                Layout.leftMargin: 12
-                visible: root.grants.length === 0
-                text: "Nothing right now."
-            }
-            Repeater {
-                model: root.grants
-                delegate: RowLayout {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
-                    Label {
-                        objectName: "grant-" + modelData.id
-                        Layout.fillWidth: true
-                        text: modelData.summary + ", " + root.leaseText(modelData.lease).toLowerCase()
-                              + (modelData.expires ? ", until " + Qt.formatDateTime(new Date(modelData.expires), "HH:mm") : "")
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
+                        // A folder grant that ended is unmounted, but what's open in it stays readable to whoever holds it
+                        text: "Still open in folders no longer granted: "
+                              + root.held.map(g => g.summary + " (" + g.why + "): "
+                                              + g.holders.map(h => h.comm + " (" + h.pid + (h.possible ? ", possibly" : "")
+                                                              + ")").join(", ")).join("; ")
                     }
                     Button {
-                        objectName: "revoke"
-                        text: "Revoke"
-                        onClicked: root.send({ op: "revoke", grant: modelData.id })
+                        objectName: "end"
+                        text: "End them"
+                        onClicked: root.send({ op: "end", grants: root.held.map(g => g.grant) })
                     }
                 }
             }
 
-            Label {
-                Layout.leftMargin: 12
-                text: "Recent decisions"
-                font.bold: true
-                visible: root.log.length > 0
+            Section {
+                key: "config"
+                title: "From the configuration"
+                info: "read-only"
+                visible: root.overview.length > 0
+                expanded: root.isOpen("section:" + key, true)
+                onToggled: root.toggle("section:" + key, true)
+                Repeater {
+                    model: root.overview
+                    delegate: ColumnLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Label {
+                            text: modelData.title
+                            font.italic: true
+                        }
+                        ReadOnlyText {
+                            objectName: "overview-" + modelData.key
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 12
+                            text: modelData.text
+                        }
+                    }
+                }
             }
-            Repeater {
-                model: root.log
-                delegate: Label {
-                    required property var modelData
+
+            Section {
+                key: "granted"
+                title: "Granted"
+                info: root.grants.length > 0 ? String(root.grants.length) : "nothing right now"
+                expanded: root.isOpen("section:" + key, true)
+                onToggled: root.toggle("section:" + key, true)
+                Repeater {
+                    model: root.grants
+                    delegate: GrantRow {
+                        view: root
+                    }
+                }
+            }
+
+            Section {
+                key: "calls"
+                title: "Host command calls"
+                info: String(root.calls.length)
+                visible: root.calls.length > 0
+                expanded: root.isOpen("section:" + key, true)
+                onToggled: root.toggle("section:" + key, true)
+                ReadOnlyText {
+                    objectName: "calls"
                     Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
-                    text: Qt.formatDateTime(new Date(modelData.time), "yyyy-MM-dd HH:mm") + ": " + modelData.decision + ", "
-                          + modelData.summary
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
+                    text: root.callsText(root.calls, "")
+                }
+            }
+
+            Section {
+                key: "log"
+                title: "Recent decisions"
+                visible: root.log.length > 0
+                expanded: root.isOpen("section:" + key, true)
+                onToggled: root.toggle("section:" + key, true)
+                ReadOnlyText {
+                    objectName: "log"
+                    Layout.fillWidth: true
+                    text: root.log.map(e => Qt.formatDateTime(new Date(e.time), "yyyy-MM-dd HH:mm") + ": " + e.decision
+                                       + ", " + e.summary
+                                       + (e.reason ? ". Claude's reason: " + JSON.stringify(e.reason) : "")).join("\n")
                 }
             }
         }

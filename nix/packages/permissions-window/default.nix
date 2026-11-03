@@ -36,6 +36,12 @@ buildGoModule {
       ./window_test.go
       ./Main.qml
       ./Permissions.qml
+      ./Section.qml
+      ./RequestRow.qml
+      ./GrantRow.qml
+      ./Badges.qml
+      ./Badge.qml
+      ./ReadOnlyText.qml
       ./tst_permissions.qml
     ];
   };
@@ -64,7 +70,8 @@ buildGoModule {
     ${lib.getExe' qtdeclarative "qmltestrunner"} -input tst_permissions.qml
   '';
   postInstall = ''
-    install -Dm644 -t $out/share/permissions-window Main.qml Permissions.qml
+    install -Dm644 -t $out/share/permissions-window Main.qml Permissions.qml Section.qml RequestRow.qml GrantRow.qml \
+      Badges.qml Badge.qml ReadOnlyText.qml
     wrapProgram $out/bin/permissions-window --set QML_IMPORT_PATH ${qmlPath} --set QT_PLUGIN_PATH ${pluginPath} \
       --unset QML2_IMPORT_PATH
   '';

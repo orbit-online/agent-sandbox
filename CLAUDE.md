@@ -74,7 +74,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   Qt 6 bindings, and QML), a client of the broker's `control.sock`. miqt has
   no moc, so the QML talks to Go through a `QQmlPropertyMap`: state as JSON
   in, actions as JSON out (`window.go` holds the logic, `main.go` the Qt
-  glue). The launcher opens it with
+  glue). `Permissions.qml` is the content, with its parts in files of their
+  own: `Section.qml` (a collapsible section), `RequestRow.qml`, `GrantRow.qml`,
+  `Badges.qml` and `Badge.qml`, `ReadOnlyText.qml` (selectable text). The launcher opens it with
   `--permissions` and the `.desktop` file's "Permissions" action; the broker
   opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
   paths to its own Qt's, Plasma's style and platform theme included: the
@@ -291,7 +293,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
   a standing grant shown as from the config, the overview of the configuration (binds, devices, D-Bus, the
   network, the standing grants live and ended, the implicit lines), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
-  replaced in place.
+  replaced in place, a grant expanded and collapsed (kept through a refresh) and a section collapsed, the
+  badges (lease, from config, holders, free arguments with a warning for an unrestricted one), a host command
+  grant's parameters, holders, reason, scope (a long enum listed) and calls, the calls of ended grants, a host
+  command request with no editable bounding value, its scope and the call asking, its lease still editable (once
+  and Claude's proposal offered) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.

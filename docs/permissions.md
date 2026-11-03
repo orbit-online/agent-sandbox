@@ -4,7 +4,7 @@ Status: written 2026-10-31, rewritten 2026-11-03 for the broker as gateway. Buil
 (`cmd/permissions-broker/`) with consent, leases, standing grants from the Nix config and the MCP server, the
 Permissions window (`nix/packages/permissions-window/`) and folder mounts (`nix/packages/permissions-folders/`,
 `permissions.folders`), behind a launcher's `permissions.enable`. Built since: declared host commands
-(`permissions.commands`); the window doesn't show their scope and calls yet (Steps, 2). The code still has what the
+(`permissions.commands`), with a consent that names what a grant covers and the window's redesign. The code still has what the
 rewrite replaces: `service` plugins, plugin tools that come and go with `list_changed`, and session leases. Not built
 yet: host sockets at stable addresses, the Go D-Bus proxy, device grants. Steps lists the order.
 
@@ -128,7 +128,23 @@ host (user, no capabilities)                       sandbox
   rest. It is a client only: all state lives in the daemon. Above the grants it shows, read-only, what the
   configuration gives the sandbox from its start (Overview, below). It refreshes on every watch event, which the
   sandbox can cause at will. So pending requests come in the order they arrived, and a row doesn't move under the
-  pointer. What the user set on a row (narrowed parameters, a lease) is kept by request id through the refresh.
+  pointer. What the user set on a row (narrowed parameters, a lease, a grant expanded, a section collapsed) is kept
+  by id through the refresh.
+
+  Its sections (waiting requests, what's still open in ended folder grants, the configuration, the grants, host
+  command calls, recent decisions) each collapse to their header. A grant is one line: its summary (capability and
+  bounding values), its badges and the time it has left, with Revoke; expanded, it shows its parameters by their
+  declarations' descriptions, who holds it (the Claude sessions, or the sandbox as a whole, and what still has it
+  open), Claude's reason, and for a host command capability what it covers and the calls made under it. Badges: the
+  lease (or "from config" for a standing grant), the sessions and processes holding it, and a host command
+  capability's free arguments, with a warning badge for each unrestricted one. A waiting request shows its summary,
+  the same badges for free arguments, for a host command its bounding values, what a grant covers and the call
+  asking (its command and free arguments, opaque ones by digest, the rest whole), and Claude's reason. Fields narrow a
+  folder or service request; a host command request has none, only its lease, which offers `once` for a call and
+  Claude's own proposal. Everything the broker or Claude wrote is in read-only text boxes the user can select and
+  copy from. The broker sends what this needs in `state`: each host command capability's `scope` (its commands and
+  free arguments, unrestricted ones first, each with its description and what its schema allows), a pending call's
+  `command` and `arguments`, a grant's `reason`, and each call's `capability`.
 
 ### Handle on the sandbox, and restarts
 
@@ -780,3 +796,11 @@ Each can be revisited.
     the daemon still validates every call against its own config, made from the same Nix values.
 19. The consent's scope goes in the notification body ahead of the reason, unrestricted arguments first, because
     servers may cut a long summary.
+20. The broker sends a host command capability's scope as a list (`scope` in `state`) that its notification line is
+    built from, rather than the window working it out from the declarations: one wording of what's covered, in both.
+21. A waiting request doesn't collapse: it is the consent, and the user answers it with what it covers in view.
+    Sections and grants do.
+22. The call asking for a grant reaches the window with its free arguments whole (opaque ones by digest), unlike the
+    call log's, cut at 200 characters: a script is read before it's allowed.
+23. An enum of more than 8 values reads as a count in the consent: windows-vm's 161 key names would bury the rest of
+    the notification. The window lists the values in a grant's details.
