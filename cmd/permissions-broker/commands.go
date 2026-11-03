@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
@@ -204,7 +205,7 @@ func (c *capability) globMatches() (map[string]string, error) {
 			continue
 		}
 		v := strings.TrimSuffix(strings.TrimPrefix(ms[i], prefix), suffix)
-		if c.Type == "socket" && !isHostSocket(m) {
+		if c.Type == "socket" && !hostsock.IsSocket(m) {
 			continue
 		}
 		if s := c.schemas[c.globArg]; v != "" && found[v] == "" && s.CheckValue(v, maxParam) == nil {

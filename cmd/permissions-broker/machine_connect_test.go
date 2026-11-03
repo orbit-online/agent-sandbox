@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"pgregory.net/rapid"
 )
 
@@ -35,7 +36,7 @@ const maxOpen = 3
 func (mc *machine) Connect(t *rapid.T) {
 	n := rapid.SampledFrom([]string{"a", "b", "c"}).Draw(t, "instance")
 	addr := filepath.Join(mc.w.cfg.GrantDir, socketsDir, capConsole, n)
-	conn, err := dialPath(addr, settle)
+	conn, err := hostsock.DialPath(addr, settle)
 	if !mc.m.listening[n] {
 		if err == nil {
 			conn.Close()

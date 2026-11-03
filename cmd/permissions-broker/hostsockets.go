@@ -9,10 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
-	"golang.org/x/sys/unix"
 )
 
 // Host sockets (docs/permissions.md): a socket on the host the module declares, reachable at a stable address in the
@@ -61,50 +60,32 @@ func (c *capability) checkSocket() error {
 		return errors.New("a path, or no path and one bounding argument with instances")
 	}
 	for _, p := range []string{c.Path, c.glob} {
-		if v := unsetVariable(p); v != "" {
+		if v := hostsock.UnsetVariable(p); v != "" {
 			return fmt.Errorf("%s: $%s isn't set", p, v)
 		}
 	}
-	if len(c.Name) > maxAddrName {
-		return fmt.Errorf("name %q: %d characters at most, the length an address may have", c.Name, maxAddrName)
+	if len(c.Name) > hostsock.MaxAddrName {
+		return fmt.Errorf("name %q: %d characters at most, the length an address may have", c.Name, hostsock.MaxAddrName)
 	}
 	if c.Path != "" {
-		return refusedSocket(expandPath(c.Path))
+		return hostsock.Refused(expandPath(c.Path))
 	}
 	// An instance names its address: a value too long for one isn't an instance
-	if s := c.schemas[c.globArg]; s.MaxLength == nil || *s.MaxLength > maxAddrName {
-		n := maxAddrName
+	if s := c.schemas[c.globArg]; s.MaxLength == nil || *s.MaxLength > hostsock.MaxAddrName {
+		n := hostsock.MaxAddrName
 		if s.MaxLength != nil && *s.MaxLength < n {
 			n = *s.MaxLength
 		}
 		s.MaxLength = &n
 	}
-	return refusedGlob(expandPath(c.glob))
+	return hostsock.RefusedGlob(expandPath(c.glob))
 }
 
-// Tests' hooks: after syncSockets looked for instances, before splice connects to the host, between dialHost's check
-// and its connect
+// Tests' hooks: after syncSockets looked for instances, before splice connects to the host
 var (
 	globbed    = func() {}
 	beforeDial = func() {}
-	hostOpened = func() {}
 )
-
-// An address's file name is at most this long: bound through /proc/self/fd/<fd>/, it must fit a socket path's 108
-// bytes
-const maxAddrName = 80
-
-// unsetVariable is a variable path names that isn't set, if any
-func unsetVariable(path string) string {
-	unset := ""
-	os.Expand(path, func(v string) string {
-		if _, ok := os.LookupEnv(v); !ok && unset == "" {
-			unset = v
-		}
-		return ""
-	})
-	return unset
-}
 
 // A listener at a host socket's address, and the host socket it leads to
 type hostListener struct {
@@ -161,7 +142,7 @@ func (b *broker) syncSockets(c *capability) {
 		if b.listeners[addr] != nil {
 			continue
 		}
-		ln, err := listenIn(b.cfg.GrantDir, addr)
+		ln, err := hostsock.Listen(b.cfg.GrantDir, addr)
 		if err != nil {
 			slog.Warn("Listen for a host socket", "capability", c.id(), "at", addr, "err", err)
 			continue
@@ -202,41 +183,4 @@ func (b *broker) closeSockets() {
 		l.ln.Close()
 		delete(b.listeners, addr)
 	}
-}
-
-// listenIn listens at rel beneath dir, making the directories between as the daemon's own. Bound through the
-// directory's fd, so the address isn't held to a socket path's 108 bytes, and never unlinked by its path: the fd is
-// gone by then
-func listenIn(dir, rel string) (*net.UnixListener, error) {
-	parent := filepath.Join(dir, filepath.Dir(rel))
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return nil, err
-	}
-	dfd, err := unix.Open(parent, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer unix.Close(dfd)
-	name := filepath.Base(rel)
-	_ = unix.Unlinkat(dfd, name, 0)
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: fmt.Sprintf("/proc/self/fd/%d/%s", dfd, name), Net: "unix"})
-	if err != nil {
-		return nil, err
-	}
-	ln.SetUnlinkOnClose(false)
-	return ln, nil
-}
-
-// dialPath connects to the socket at path, through its directory's fd as listenIn binds
-func dialPath(path string, timeout time.Duration) (*net.UnixConn, error) {
-	dfd, err := unix.Open(filepath.Dir(path), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer unix.Close(dfd)
-	conn, err := net.DialTimeout("unix", fmt.Sprintf("/proc/self/fd/%d/%s", dfd, filepath.Base(path)), timeout)
-	if err != nil {
-		return nil, err
-	}
-	return conn.(*net.UnixConn), nil
 }

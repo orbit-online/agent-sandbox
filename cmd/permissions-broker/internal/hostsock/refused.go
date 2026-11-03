@@ -1,4 +1,10 @@
-package main
+// Package hostsock is what a host socket may not be, reaching one without links, and the addresses the sandbox reaches
+// them at. Splicing hands a host socket the broker's standing as the host user, unsandboxed, so the broker refuses the
+// sockets known to grant more than their own service: D-Bus buses (past every rule of the D-Bus proxies), the systemd
+// user manager's private bus (transient units, which is running code on the host), the accessibility bus, the
+// launchers' own sockets and $XDG_RUNTIME_DIR as a whole. This is a guard against the known ones: what else a socket
+// gives is the config's responsibility
+package hostsock
 
 import (
 	"errors"
@@ -11,12 +17,6 @@ import (
 
 	"golang.org/x/sys/unix"
 )
-
-// What a host socket may not be, and reaching one without links. Splicing hands a host socket the broker's standing as
-// the host user, unsandboxed, so the broker refuses the sockets known to grant more than their own service: D-Bus
-// buses (past every rule of the D-Bus proxies), the systemd user manager's private bus (transient units, which is
-// running code on the host), the accessibility bus, the launchers' own sockets and $XDG_RUNTIME_DIR as a whole. This
-// is a guard against the known ones: what else a socket gives is the config's responsibility
 
 // refusedRoots are the directories and sockets refused with everything beneath them, as segment patterns
 // (filepath.Match): /proc (aliases of any path), /run/dbus, /var/run (an alias of /run), what $XDG_RUNTIME_DIR holds
@@ -70,8 +70,8 @@ func normal(path string) error {
 	return nil
 }
 
-// refusedSocket refuses a host socket path, as it is to be reached: without links
-func refusedSocket(path string) error {
+// Refused refuses a host socket path, as it is to be reached: without links
+func Refused(path string) error {
 	run, err := runtimeDir()
 	if err != nil {
 		return err
@@ -91,10 +91,10 @@ func refusedSocket(path string) error {
 	return nil
 }
 
-// refusedGlob refuses an instances glob that could match a refused socket: one whose literal part (the segments before
+// RefusedGlob refuses an instances glob that could match a refused socket: one whose literal part (the segments before
 // the *) is refused, or is a prefix of a refused root or of $XDG_RUNTIME_DIR, so that the * falls within its depth.
 // Its matches are checked again one by one
-func refusedGlob(glob string) error {
+func RefusedGlob(glob string) error {
 	run, err := runtimeDir()
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func refusedGlob(glob string) error {
 // openHostSocket opens path as a socket without following a link anywhere on it (O_PATH): what's refused is checked on
 // the path that is opened, and a link planted at it or above it, now or later, isn't followed
 func openHostSocket(path string) (int, error) {
-	if err := refusedSocket(path); err != nil {
+	if err := Refused(path); err != nil {
 		return -1, err
 	}
 	fd, err := unix.Openat2(unix.AT_FDCWD, path, &unix.OpenHow{Flags: unix.O_PATH | unix.O_NOFOLLOW | unix.O_CLOEXEC,
@@ -136,8 +136,8 @@ func openHostSocket(path string) (int, error) {
 	return fd, nil
 }
 
-// isHostSocket reports whether path is a socket the broker would connect to
-func isHostSocket(path string) bool {
+// IsSocket reports whether path is a socket the broker would connect to
+func IsSocket(path string) bool {
 	fd, err := openHostSocket(path)
 	if err != nil {
 		return false
@@ -146,9 +146,12 @@ func isHostSocket(path string) bool {
 	return true
 }
 
-// dialHost connects to the host socket at path through the fd openHostSocket opened: the inode checked is the one
+// Test hook: between Dial's check and its connect
+var hostOpened = func() {}
+
+// Dial connects to the host socket at path through the fd openHostSocket opened: the inode checked is the one
 // connected to
-func dialHost(path string, timeout time.Duration) (*net.UnixConn, error) {
+func Dial(path string, timeout time.Duration) (*net.UnixConn, error) {
 	fd, err := openHostSocket(path)
 	if err != nil {
 		return nil, err

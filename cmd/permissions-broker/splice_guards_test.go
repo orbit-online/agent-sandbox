@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"golang.org/x/sys/unix"
 )
 
@@ -17,7 +18,7 @@ import (
 func TestRevokeWhileDialing(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	dir := t.TempDir()
-	ln, err := listenIn(dir, "host.sock")
+	ln, err := hostsock.Listen(dir, "host.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestRevokeWhileDialing(t *testing.T) {
 	dialing, revoked := make(chan struct{}), make(chan struct{})
 	beforeDial = func() { close(dialing); <-revoked }
 	t.Cleanup(func() { beforeDial = func() {} })
-	client, err := dialPath(filepath.Join(b.cfg.GrantDir, socketsDir, "agent"), time.Second)
+	client, err := hostsock.DialPath(filepath.Join(b.cfg.GrantDir, socketsDir, "agent"), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,36 +93,6 @@ func TestGrantWithoutAddress(t *testing.T) {
 	}
 }
 
-// The broker makes an address only in a directory of its own, not through a link put where the directory goes
-func TestListenNoFollow(t *testing.T) {
-	dir, elsewhere := t.TempDir(), t.TempDir()
-	if err := os.Symlink(elsewhere, filepath.Join(dir, socketsDir)); err != nil {
-		t.Fatal(err)
-	}
-	if ln, err := listenIn(dir, filepath.Join(socketsDir, "agent")); err == nil {
-		ln.Close()
-		t.Error("Listened through a link")
-	}
-	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
-		t.Errorf("Made %v where the link leads", entries)
-	}
-}
-
-// An address a daemon before left behind, a socket nobody listens at, is taken over
-func TestListenStale(t *testing.T) {
-	dir := t.TempDir()
-	old, err := listenIn(dir, filepath.Join(socketsDir, "agent"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	old.Close()
-	ln, err := listenIn(dir, filepath.Join(socketsDir, "agent"))
-	if err != nil {
-		t.Fatalf("A stale address: %v", err)
-	}
-	ln.Close()
-}
-
 // The daemon stops listening at the host sockets' addresses when the sandbox ends: nothing connects there after
 func TestRunClosesSockets(t *testing.T) {
 	b, stdin, _ := sandboxC(t)
@@ -137,7 +108,7 @@ func TestRunClosesSockets(t *testing.T) {
 	go func() { ran <- b.run() }()
 	addr := filepath.Join(b.cfg.GrantDir, socketsDir, "agent")
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if conn, err := dialPath(addr, time.Second); err == nil {
+		if conn, err := hostsock.DialPath(addr, time.Second); err == nil {
 			conn.Close()
 			break
 		}
@@ -154,7 +125,7 @@ func TestRunClosesSockets(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("run didn't end with the sandbox")
 	}
-	if conn, err := dialPath(addr, time.Second); err == nil {
+	if conn, err := hostsock.DialPath(addr, time.Second); err == nil {
 		conn.Close()
 		t.Error("Still listening after the daemon ended")
 	}

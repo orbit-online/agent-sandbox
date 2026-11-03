@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 )
 
 // testSocket gives b a host socket capability vm whose instances are echo servers at <dir>/<name>.sock, one per name
@@ -35,7 +37,7 @@ func testSocket(t *testing.T, b *broker, names ...string) *capability {
 // connection is closed first
 func echoes(t *testing.T, b *broker, addr string) (*net.UnixConn, string) {
 	t.Helper()
-	conn, err := dialPath(filepath.Join(b.cfg.GrantDir, addr), time.Second)
+	conn, err := hostsock.DialPath(filepath.Join(b.cfg.GrantDir, addr), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

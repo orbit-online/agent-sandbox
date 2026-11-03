@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"golang.org/x/sys/unix"
 )
 
@@ -228,7 +229,7 @@ func TestCleanup(t *testing.T) {
 	if err := os.WriteFile(lock, []byte("work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := listenIn(b.cfg.GrantDir, socketsDir+"/echo"); err != nil {
+	if _, err := hostsock.Listen(b.cfg.GrantDir, socketsDir+"/echo"); err != nil {
 		t.Fatal(err)
 	}
 	// The daemon is gone (its grants still in its memory): cleanup knows them only from the sandbox and the host

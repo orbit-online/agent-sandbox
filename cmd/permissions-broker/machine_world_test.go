@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
@@ -282,7 +283,7 @@ type echoServer struct {
 }
 
 func startEcho(t interface{ Fatal(...any) }, dir, rel string) *echoServer {
-	ln, err := listenIn(dir, rel)
+	ln, err := hostsock.Listen(dir, rel)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 )
 
 // Connections to a host socket's address: under a live grant, spliced to the host socket, bytes copied both ways and
@@ -86,7 +88,7 @@ func (b *broker) splice(conn *net.UnixConn, c *capability, params json.RawMessag
 	defer b.dropConn(g, s)
 	defer s.close()
 	beforeDial()
-	up, err := dialHost(host, dialTimeout)
+	up, err := hostsock.Dial(host, dialTimeout)
 	if err != nil {
 		slog.Warn("Connect to a host socket", "capability", c.id(), "grant", g.ID, "err", err)
 		return

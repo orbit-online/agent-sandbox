@@ -6,50 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-// What a host socket may not be: buses beyond the session and system bus (the systemd user manager's, the
-// accessibility bus, proxies), /proc aliases, /var/run, a path that isn't clean, and globs that could match any of
-// those; and nothing at all without $XDG_RUNTIME_DIR
-func TestSocketRefusals(t *testing.T) {
-	run := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", run)
-	for _, path := range []string{
-		run + "/systemd/private", run + "/at-spi/bus_0", run + "/.dbus-proxy/session-bus-proxy-1", run + "/dbus-1/x",
-		run + "/bus", "/proc/self/root" + run + "/ssh-agent.sock", "/proc/1/cwd/agent.sock",
-		"/var/run/user/1000/bus", "/var/run/agent.sock", "/run/dbus/other", run + "/a/../bus", run + "//bus",
-		run + "/./bus", run, filepath.Dir(run),
-	} {
-		if err := refusedSocket(path); err == nil {
-			t.Errorf("%s: accepted", path)
-		}
-	}
-	for _, glob := range []string{
-		run + "/systemd/*", run + "/*.sock", run + "/*/x.sock", "/run/*/x.sock", "/*/x", "/var/*/bus",
-		"/proc/*/root/agent.sock", run + "/at-spi/*", run + "/dbus-*", run + "/vms/../*.sock",
-	} {
-		if err := refusedGlob(glob); err == nil {
-			t.Errorf("Glob %s: accepted", glob)
-		}
-	}
-	for _, path := range []string{run + "/ssh-agent.sock", "/srv/agent.sock", run + "/vms/a/console.sock"} {
-		if err := refusedSocket(path); err != nil {
-			t.Errorf("%s: %v", path, err)
-		}
-	}
-	for _, glob := range []string{run + "/vms/*/console.sock", "/srv/*.sock", run + "/vms/vm-*.sock"} {
-		if err := refusedGlob(glob); err != nil {
-			t.Errorf("Glob %s: %v", glob, err)
-		}
-	}
-	t.Setenv("XDG_RUNTIME_DIR", "")
-	if err := refusedSocket("/srv/agent.sock"); err == nil {
-		t.Error("Accepted without $XDG_RUNTIME_DIR")
-	}
-	if err := refusedGlob("/srv/*.sock"); err == nil {
-		t.Error("Accepted a glob without $XDG_RUNTIME_DIR")
-	}
-}
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
+)
 
 // A glob's match that's a link, or reached through one, or isn't a socket, is no instance: a link planted where the
 // glob looks can't lead the broker to a refused socket
@@ -110,12 +69,12 @@ func TestSocketLinkSwapped(t *testing.T) {
 	if _, line := echoes(t, b, addr); line != "" {
 		t.Errorf("Spliced through a link: %q", line)
 	}
-	if _, err := dialHost(moved, time.Second); err != nil {
+	if _, err := hostsock.Dial(moved, time.Second); err != nil {
 		t.Errorf("The socket itself: %v", err)
 	}
 	for _, path := range []string{"/proc/self/root" + moved, filepath.Join(dir, "file")} {
 		_ = os.WriteFile(filepath.Join(dir, "file"), nil, 0o600)
-		if conn, err := dialHost(path, time.Second); err == nil {
+		if conn, err := hostsock.Dial(path, time.Second); err == nil {
 			conn.Close()
 			t.Errorf("Connected to %s", path)
 		}
@@ -127,7 +86,7 @@ func TestSocketLinkSwapped(t *testing.T) {
 func TestInstanceNameLength(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	b.cfg.GrantDir = filepath.Join(t.TempDir(), strings.Repeat("g", 120))
-	long, fits := strings.Repeat("x", maxAddrName+1), strings.Repeat("y", maxAddrName)
+	long, fits := strings.Repeat("x", hostsock.MaxAddrName+1), strings.Repeat("y", hostsock.MaxAddrName)
 	c := testSocket(t, b)
 	dir := filepath.Dir(c.glob)
 	for _, n := range []string{long, fits} {
@@ -182,35 +141,5 @@ func TestSyncRacesGrant(t *testing.T) {
 	<-synced
 	if _, line := echoes(t, b, filepath.Join(socketsDir, "vm", "a")); line != "ping\n" {
 		t.Errorf("The grant's address after the earlier sync: %q", line)
-	}
-}
-
-// A socket swapped for a link between the broker's check and its connect: the connect reaches the socket checked, by
-// its fd, not where the link leads
-func TestSocketSwappedWhileDialing(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	dir := t.TempDir()
-	e := startEcho(t, dir, "agent.sock")
-	t.Cleanup(e.stop)
-	busDir := t.TempDir()
-	bus, err := listenIn(busDir, "bus")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bus.Close()
-	hostOpened = func() {
-		_ = os.Rename(e.path, e.path+".moved")
-		_ = os.Symlink(filepath.Join(busDir, "bus"), e.path)
-	}
-	t.Cleanup(func() { hostOpened = func() {} })
-	conn, err := dialHost(e.path, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	_ = bus.SetDeadline(time.Now().Add(500 * time.Millisecond))
-	if c, err := bus.Accept(); err == nil {
-		c.Close()
-		t.Error("Connected where the link swapped in leads")
 	}
 }
