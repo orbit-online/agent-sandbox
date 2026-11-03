@@ -56,12 +56,13 @@ nixpak configuration). The descriptions are in
 ## memo
 
 With [memo](https://github.com/secoya/agent-memos)'s Home Manager module,
-`memo.enable` gives the sandbox memo with your stores and one of its own,
-`/etc/claude/environment.memo`. The sections of `environment.md` that only
-some work needs (the sandbox's home, user namespaces, Nix) move into that
-store and load by topic, and `/etc/claude/environment.md` keeps the rest. The
-sandbox gets a `config.yaml` of its own for it, since the host's can't list a
-store that only exists inside.
+`memo.enable` gives the sandbox memo with your stores and one of its own.
+The sections of `environment.md` that only some work needs (the sandbox's
+home, user namespaces, Nix) move into that store and load by topic, and
+`/etc/claude/environment.md` keeps the rest. The module adds the store to
+`programs.agent-memos.settings.stores` by its store path, right after the
+embedded stores, and the sandbox mounts the same `config.yaml`: `memo` on the
+host shows what Claude inside gets.
 
 ## MCP servers
 

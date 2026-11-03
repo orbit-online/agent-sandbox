@@ -35,7 +35,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   the slice too. Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
-  `<!-- memo: FILTER -->` marker, the marked ones going into the memo store `/etc/claude/environment.memo`
+  `<!-- memo: FILTER -->` marker, the marked ones going into a memo store that the module adds to
+  `programs.agent-memos.settings.stores` by its store path, so the host's memo config lists it too
   (`<!-- memo-doc: ... -->` lines document its values). The store also injects `environment`, the frontmatter's name
   for the environment. Then the module's scripts (`*.sh`; `store-gc.sh` and
   `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks, `cgrun.sh` for its jobs). `default.nix` loads them with its `script` helper: Nix values
@@ -225,6 +226,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   input passed in from the store. Run them directly with `nix run
   --inputs-from . nixpkgs#nix-unit -- --flake .#tests.x86_64-linux`. They
   check that the assertions hold (with memo too), the memo assertion, the
+  sandbox's store in memo's config on the host, the
   files, package and `environmentFile` a launcher with `memo.enable` gets
   (and the default launcher doesn't), the NixOS wrapper appears only when a user
   enables the module, for group users, the users-group, subid and
@@ -274,8 +276,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
-  import, its pointer to memo, the store and memo's config in the FHS env,
-  the store right after the embedded ones), its permissions broker (the
+  import, its pointer to memo, memo's config in the FHS env with the store
+  right after the embedded ones, the store in the closure), its permissions broker (the
   read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, no `claude://` handler; both launchers' actions running the launcher by name, no store path). For both launchers, their app

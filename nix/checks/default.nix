@@ -146,7 +146,7 @@ let
       '';
   # A stand-in for agent-memos' Home Manager module, with the options this module reads
   memoStub =
-    { lib, ... }:
+    { config, lib, ... }:
     {
       options.programs.agent-memos = {
         enable = lib.mkEnableOption "memo";
@@ -165,7 +165,14 @@ let
           inherit ((pkgs.formats.yaml { })) type;
           default = { };
         };
+        configFile = lib.mkOption {
+          type = lib.types.path;
+          default = (pkgs.formats.yaml { }).generate "config.yaml" config.programs.agent-memos.settings;
+        };
       };
+      config.programs.agent-memos.settings.stores = lib.mkBefore (
+        map (s: "embed:${s}") config.programs.agent-memos.embeds
+      );
     };
   # alice with memo and the permissions broker, given to the work launcher
   aliceMemo =
@@ -176,11 +183,7 @@ let
             imports = [ memoStub ];
             programs.agent-memos = {
               enable = true;
-              settings.stores = [
-                "embed:core"
-                "embed:docs"
-                "/srv/team.memo"
-              ];
+              settings.stores = [ "/srv/team.memo" ];
             };
             agent-sandbox.claude-desktop.launchers.work = {
               memo.enable = true;
@@ -234,6 +237,18 @@ let
       expr = lib.filter (a: !a.assertion) aliceMemo.assertions;
       expected = [ ];
     };
+    # memo's config on the host lists the sandbox's store too, right after the embedded ones
+    testMemoStores = {
+      expr = map (
+        s: if lib.hasSuffix "-claude-desktop-environment/environment.memo" s then "environment.memo" else s
+      ) aliceMemo.programs.agent-memos.settings.stores;
+      expected = [
+        "embed:core"
+        "embed:docs"
+        "environment.memo"
+        "/srv/team.memo"
+      ];
+    };
     testMemoAssertion = {
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { memo.enable = true; })));
       expected = [
@@ -265,10 +280,7 @@ let
           environmentFile = "environment.md";
         }
         {
-          files = [
-            "/etc/claude/environment.memo"
-            "/home/alice/.config/agent-memos/config.yaml"
-          ];
+          files = [ "/home/alice/.config/agent-memos/config.yaml" ];
           hello = true;
           environmentFile = "core-environment.md";
         }
@@ -1152,14 +1164,15 @@ in
           ! grep -qxF -e '## Nix' -e '## Home' "$import" || { echo "$import has the sections memo loads" >&2; exit 1; }
           grep -qF 'More loads through memo when the work touches it: Home (`topic=sandbox`)' "$import" || { echo "$import lacks the pointer to memo" >&2; exit 1; }
           fhs=$(grep -P -- '-claude-desktop-[^/]+-bwrap$' "$workClosure/store-paths")
-          store=$(grep -oP -- '--ro-bind \K\S+(?= /etc/claude/environment\.memo$)' "$fhs") || { echo "work's FHS env lacks the store's bind" >&2; exit 1; }
+          memo=$(grep -oP -- '--ro-bind \K\S+(?= /home/alice/\.config/agent-memos/config\.yaml$)' "$fhs") || { echo "work's FHS env lacks memo's config" >&2; exit 1; }
+          stores=$(grep '^- ' "$memo" | tr '\n' ' ')
+          [[ $stores =~ ^'- embed:core - embed:docs - '(/nix/store/[^/ ]+-claude-desktop-environment/environment\.memo)' - /srv/team.memo '$ ]] ||
+            { echo "memo's stores in the sandbox: $stores" >&2; exit 1; }
+          store=''${BASH_REMATCH[1]}
+          grep -qxF "$(dirname "$store")" "$workClosure/store-paths" || { echo "work's closure lacks $store" >&2; exit 1; }
           for line in '-- nix/pragmas --' 'filter=topic={nix,sandbox}' 'topic=sandbox # The sandbox you run in: its home, what survives a restart, its namespaces' 'unix=environment' 'echo environment=bwrap'; do
             grep -qxF -- "$line" "$store" || { echo "$store lacks: $line" >&2; exit 1; }
           done
-          memo=$(grep -oP -- '--ro-bind \K\S+(?= /home/alice/\.config/agent-memos/config\.yaml$)' "$fhs") || { echo "work's FHS env lacks memo's config" >&2; exit 1; }
-          stores=$(grep '^- ' "$memo" | tr '\n' ' ')
-          [[ $stores == '- embed:core - embed:docs - /etc/claude/environment.memo - /srv/team.memo ' ]] ||
-            { echo "memo's stores in the sandbox: $stores" >&2; exit 1; }
           # work has the permissions broker: its grant directory read-only at /run/permissions, its config, the daemon
           # started by the wrapper; the default launcher has none of it
           workArgs=$(grep -- '-bwrap-args\.json$' "$workClosure/store-paths")

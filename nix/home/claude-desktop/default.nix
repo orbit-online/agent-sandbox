@@ -270,19 +270,6 @@ let
       "source ${./environment-split.sh}";
   # Home Manager's memo, when imported
   memoCfg = config.programs.agent-memos or { };
-  # memo's config with the sandbox's store right after the embedded ones. The host's config can't list it: memo
-  # reports a missing store on every call
-  memoConfig =
-    let
-      stores = memoCfg.settings.stores or [ ];
-      embeds = lib.length (memoCfg.embeds or [ ]);
-    in
-    (pkgs.formats.yaml { }).generate "agent-memos-config.yaml" (
-      memoCfg.settings or { }
-      // {
-        stores = lib.take embeds stores ++ [ "/etc/claude/environment.memo" ] ++ lib.drop embeds stores;
-      }
-    );
   # programs.mcp.servers as Home Manager's own clients take them, env files through a wrapper. Disabled ones left out
   hmMcpServers = lib.optionalAttrs config.programs.mcp.enable (
     lib.mapAttrs (_: s: removeAttrs s [ "enabled" ]) (
@@ -318,9 +305,10 @@ let
       type = types.bool;
       default = false;
       description = ''
-        Give the sandbox Home Manager's memo (`programs.agent-memos`): its package on PATH, and its config with the
-        sandbox's own store, `/etc/claude/environment.memo`, right after the embedded stores. That store holds the
-        sections of `environment.md` that load by topic, and `environmentFile` keeps the rest.
+        Give the sandbox Home Manager's memo (`programs.agent-memos`): its package on PATH and its config. The
+        sandbox's own store goes in that config right after the embedded stores, on the host too, so `memo` there
+        answers as it does inside. That store holds the sections of `environment.md` that load by topic, and
+        `environmentFile` keeps the rest.
       '';
     };
     environmentText = mkOption {
@@ -809,8 +797,7 @@ let
       // lib.genAttrs (map (e: "/etc/${e}") hostEtc) (_: sys // { optional = true; });
       path = lib.mkIf lcfg.memo.enable (lib.mkOptionDefault [ memoCfg.package ]);
       files = lib.mkIf lcfg.memo.enable {
-        "${config.home.homeDirectory}/.config/agent-memos/config.yaml".source = memoConfig;
-        "/etc/claude/environment.memo".source = "${environment}/environment.memo";
+        "${config.home.homeDirectory}/.config/agent-memos/config.yaml".source = memoCfg.configFile;
       };
       # Calls only, never "talk": the proxy filters by name, and talk reaches every object the name's owner exports
       # (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see the name and
@@ -1798,6 +1785,13 @@ in
       ) launchers
     );
     home.packages = lib.mapAttrsToList (_: l: l.claude-desktop) launchers;
+    # The sandbox's store right after memo's embedded ones (mkBefore), by its store path, so memo on the host answers
+    # as it does inside
+    programs = lib.optionalAttrs (options ? programs.agent-memos) {
+      agent-memos.settings.stores = lib.mkIf (lib.any (l: l.memo.enable) ([ cfg ] ++ lib.attrValues cfg.launchers)) (
+        lib.mkOrder 550 [ "${environment}/environment.memo" ]
+      );
+    };
     agent-sandbox.claude-desktop = launcherDefaults null cfg;
   };
 }
