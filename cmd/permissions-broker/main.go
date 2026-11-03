@@ -220,7 +220,7 @@ func loadCapabilities(cfg config) (map[string]*capability, error) {
 	if err := loadSockets(cfg.Sockets, caps); err != nil {
 		return nil, err
 	}
-	if err := loadDBus(cfg.DBus, caps); err != nil {
+	if err := loadDBus(cfg.DBus, caps, cfg.AppID); err != nil {
 		return nil, err
 	}
 	return caps, nil

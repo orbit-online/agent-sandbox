@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 )
 
 // D-Bus capabilities (docs/permissions.md, D-Bus): a rule set for the session-bus proxy or the system-bus one, granted
@@ -31,6 +33,8 @@ type dbusConfig struct {
 	Own         []string            `json:"own,omitempty"`
 	Call        map[string][]string `json:"call,omitempty"`
 	Broadcast   map[string][]string `json:"broadcast,omitempty"`
+	// The sandbox's app ID, which owned names must lie below
+	appID string
 }
 
 // The proxy takes 64 rules in a set at most
@@ -42,22 +46,11 @@ var (
 	dbusBuss  = []string{"session", "system"}
 )
 
-// Names no D-Bus capability may reach, with the names below them, nor a wildcard covering them. The bus driver on
-// either bus: the static guards (no monitoring, eavesdropping or bus calls beyond the static ones) rest on it. On the
-// session bus, what hands over more than its own service: the notification server (the broker's consent: the sandbox
-// could replace or close its notifications), the systemd user manager (transient units run code on the host),
-// flatpak-session-helper (HostCommand), the portals' backends (behind the frontends' app ID checks) and the
-// accessibility bus's address. A guard against the known ones, as for host sockets: the rest is the config's
-var refusedBusNames = map[string][]string{
-	"session": {"org.freedesktop.DBus", "org.freedesktop.Notifications", "org.freedesktop.systemd1",
-		"org.freedesktop.Flatpak", "org.freedesktop.impl.portal", "org.a11y.Bus"},
-	"system": {"org.freedesktop.DBus"},
-}
-
-// loadDBus makes the config's D-Bus capabilities, each under its own name
-func loadDBus(cfgs []dbusConfig, caps map[string]*capability) error {
+// loadDBus makes the config's D-Bus capabilities, each under its own name, for the sandbox of app ID appID
+func loadDBus(cfgs []dbusConfig, caps map[string]*capability, appID string) error {
 	for i := range cfgs {
 		dc := cfgs[i]
+		dc.appID = appID
 		c := &capability{Name: dc.Name, Type: "dbus", Description: dc.Description, DBus: &dc}
 		if err := c.check(); err != nil {
 			return fmt.Errorf("D-Bus capability %s: %w", dc.Name, err)
@@ -70,8 +63,8 @@ func loadDBus(cfgs []dbusConfig, caps map[string]*capability) error {
 	return nil
 }
 
-// checkDBus checks a D-Bus capability: a name, a description, a bus, rules the proxy takes, and none reaching what
-// refusedBusNames lists; on the system bus no wildcards and no own, so every service it reaches is named
+// checkDBus checks a D-Bus capability: a name, a description, a bus, rules the proxy takes, and nothing the bus's
+// policy refuses (internal/dbuspolicy: a guard against known footguns, not a guarantee)
 func (c *capability) checkDBus() error {
 	d := c.DBus
 	switch {
@@ -83,8 +76,6 @@ func (c *capability) checkDBus() error {
 		return errors.New("no bounding arguments: a D-Bus capability is granted whole")
 	case !slices.Contains(dbusBuss, d.Bus):
 		return fmt.Errorf("bus %q: session or system", d.Bus)
-	case d.Bus == "system" && len(d.Own) > 0:
-		return errors.New("no own on the system bus")
 	}
 	n := len(d.See) + len(d.Talk) + len(d.Own)
 	var names []string
@@ -107,20 +98,13 @@ func (c *capability) checkDBus() error {
 		return fmt.Errorf("%d rules: from 1 to %d", n, maxDBusRules)
 	}
 	for _, arg := range names {
-		name, wildcard := strings.CutSuffix(arg, ".*")
+		name, _ := strings.CutSuffix(arg, ".*")
 		if !wellKnown.MatchString(name) || len(name) > 255 {
 			return fmt.Errorf("%q isn't a well-known bus name", arg)
 		}
-		if wildcard && d.Bus == "system" {
-			return fmt.Errorf("%s: no wildcards on the system bus", arg)
-		}
-		for _, r := range refusedBusNames[d.Bus] {
-			if name == r || strings.HasPrefix(name, r+".") || wildcard && strings.HasPrefix(r, name+".") {
-				return fmt.Errorf("%s is refused: it reaches %s", arg, r)
-			}
-		}
 	}
-	return nil
+	return dbuspolicy.Check(d.Bus, d.appID, dbuspolicy.Set{See: d.See, Talk: d.Talk, Own: d.Own, Call: d.Call,
+		Broadcast: d.Broadcast})
 }
 
 // dbusScope says plainly what a grant covers, for the consent: "On the system bus: call org.freedesktop.timedate1's
@@ -139,8 +123,9 @@ func (c *capability) dbusScope() string {
 		what  string
 	}{
 		{d.See, "see %s (no calls)"},
-		{d.Talk, "call any method of %s and get its signals (talk)"},
-		{d.Own, "own %s, and anything talk gives (own)"},
+		{d.Talk, "call any method of %s and get its signals (talk); the service may be started on demand and may " +
+			"ask polkit"},
+		{d.Own, "own %s, and anything talk gives (own): host programs will send it what they mean for that name"},
 	} {
 		for _, n := range p.names {
 			parts = append(parts, fmt.Sprintf(p.what, named(n)))
@@ -159,10 +144,38 @@ func (c *capability) dbusScope() string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			parts = append(parts, fmt.Sprintf(r.what, named(k), strings.Join(r.rules[k], ", ")))
+			rules := make([]string, len(r.rules[k]))
+			for i, rule := range r.rules[k] {
+				rules[i] = describeRule(rule)
+			}
+			parts = append(parts, fmt.Sprintf(r.what, named(k), strings.Join(rules, ", ")))
 		}
 	}
 	return "On the " + d.Bus + " bus: " + strings.Join(parts, "; ") + "."
+}
+
+// describeRule says what a call or broadcast rule matches, as the proxy reads it: "any method", "any method of
+// org.foo.Iface", "org.foo.Iface.Get", with its path. A METHOD starting with * matches every method, whatever follows
+func describeRule(rule string) string {
+	iface, member := dbuspolicy.Method(rule)
+	out := iface + "." + member
+	switch {
+	case iface == "":
+		out = "any method"
+	case member == "":
+		out = "any method of " + iface
+	}
+	if _, path, ok := strings.Cut(rule, "@"); ok && path != "" {
+		switch sub, ok := strings.CutSuffix(path, "/*"); {
+		case ok && sub == "":
+			out += " on any object"
+		case ok:
+			out += " on " + sub + " and the objects below it"
+		default:
+			out += " on " + path
+		}
+	}
+	return out
 }
 
 // The rule set as the proxy's control socket takes it

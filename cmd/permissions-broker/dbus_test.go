@@ -79,11 +79,14 @@ func (f *fakeProxy) ops() []dbusSet {
 	return append([]dbusSet{}, f.got...)
 }
 
+// The app ID the tests' sandbox has, which owned names lie below
+const testAppID = "com.nixpak.ClaudeDesktop.test"
+
 func dbusCap(t *testing.T, name string, dc dbusConfig) *capability {
 	t.Helper()
 	dc.Name, dc.Description = name, "a test rule set"
 	caps := map[string]*capability{}
-	if err := loadDBus([]dbusConfig{dc}, caps); err != nil {
+	if err := loadDBus([]dbusConfig{dc}, caps, testAppID); err != nil {
 		t.Fatal(err)
 	}
 	return caps[name]
@@ -114,16 +117,25 @@ func TestDBusDeclarations(t *testing.T) {
 		"a name without rules":      {Bus: "session", Call: map[string][]string{"org.test.A": {}}},
 		"too many rules":            {Bus: "session", See: strings.Split(strings.Repeat("org.test.A,", maxDBusRules+1), ",")[:maxDBusRules+1]},
 		"a session system cap name": {Bus: "session", Talk: []string{"org.test.A"}, Name: "a/b"},
+		// The shared policy (internal/dbuspolicy), a few of its refusals
+		"dconf":                {Bus: "session", Call: map[string][]string{"ca.desrt.dconf": {"ca.desrt.dconf.Writer.Change"}}},
+		"the portal's screen":  {Bus: "session", Call: map[string][]string{"org.freedesktop.portal.Desktop": {"org.freedesktop.portal.ScreenCast.Start"}}},
+		"polkit":               {Bus: "system", Talk: []string{"org.freedesktop.PolicyKit1"}},
+		"login1's every call":  {Bus: "system", Call: map[string][]string{"org.freedesktop.login1": {"org.freedesktop.login1.Manager.*"}}},
+		"own a host name":      {Bus: "session", Own: []string{"org.freedesktop.StatusNotifierWatcher"}},
+		"own another launcher": {Bus: "session", Own: []string{testAppID + ".work"}},
+		"*.Get":                {Bus: "session", Call: map[string][]string{"org.test.A": {"*.Get"}}},
+		"a vendor's namespace": {Bus: "session", Talk: []string{"org.example.*"}},
 	} {
 		dc.Description = "d"
 		if dc.Name == "" {
 			dc.Name = "test"
 		}
-		if err := loadDBus([]dbusConfig{dc}, map[string]*capability{}); err == nil {
+		if err := loadDBus([]dbusConfig{dc}, map[string]*capability{}, testAppID); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if err := loadDBus([]dbusConfig{{Name: "x", Bus: "session", Talk: []string{"org.test.A"}}}, map[string]*capability{}); err == nil {
+	if err := loadDBus([]dbusConfig{{Name: "x", Bus: "session", Talk: []string{"org.test.A"}}}, map[string]*capability{}, testAppID); err == nil {
 		t.Error("No description: accepted")
 	}
 	caps := map[string]*capability{}
@@ -131,17 +143,33 @@ func TestDBusDeclarations(t *testing.T) {
 		{Name: "timedate", Description: "d", Bus: "system", Talk: []string{"org.freedesktop.timedate1"}},
 		{Name: "hostname", Description: "d", Bus: "system",
 			Call: map[string][]string{"org.freedesktop.hostname1": {"org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1"}}},
-		{Name: "portal", Description: "d", Bus: "session", See: []string{"org.freedesktop.portal.*"},
-			Call:      map[string][]string{"org.freedesktop.portal.Desktop": {"*@/org/freedesktop/portal/*", "*@/"}},
+		{Name: "portal", Description: "d", Bus: "session", See: []string{"org.example.App.*"},
+			Call: map[string][]string{"org.freedesktop.portal.Desktop": {"org.freedesktop.portal.OpenURI.*@/org/freedesktop/portal/*",
+				"org.freedesktop.portal.Settings.Read@/"}},
 			Broadcast: map[string][]string{"org.freedesktop.portal.Desktop": {"org.freedesktop.portal.Settings.*"}}},
-	}, caps); err != nil {
+	}, caps, testAppID); err != nil {
 		t.Fatal(err)
 	}
-	if err := loadDBus([]dbusConfig{{Name: "portal", Description: "d", Bus: "session", Talk: []string{"org.test.A"}}}, caps); err == nil {
+	if err := loadDBus([]dbusConfig{{Name: "portal", Description: "d", Bus: "session", Talk: []string{"org.test.A"}}}, caps, testAppID); err == nil {
 		t.Error("A capability declared twice")
 	}
 	if got := caps["hostname"].dbusScope(); got != "On the system bus: call org.freedesktop.hostname1: "+
-		"org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1." {
+		"org.freedesktop.DBus.Properties.Get on /org/freedesktop/hostname1." {
+		t.Errorf("The scope: %q", got)
+	}
+	// The portal's call rules said as the proxy reads them, own and talk with what they bring
+	if got := caps["portal"].dbusScope(); got != "On the session bus: see org.example.App and the names below it (no calls); "+
+		"call org.freedesktop.portal.Desktop: any method of org.freedesktop.portal.OpenURI on /org/freedesktop/portal and the "+
+		"objects below it, org.freedesktop.portal.Settings.Read on /; "+
+		"get the signals of org.freedesktop.portal.Desktop: any method of org.freedesktop.portal.Settings." {
+		t.Errorf("The scope: %q", got)
+	}
+	own := dbusCap(t, "own", dbusConfig{Bus: "session", Own: []string{testAppID + ".Helper"}, Talk: []string{"org.test.A"},
+		Call: map[string][]string{"org.test.B": {"*@/*"}}})
+	if got := own.dbusScope(); !strings.Contains(got, "own "+testAppID+".Helper, and anything talk gives (own): host programs "+
+		"will send it what they mean for that name") || !strings.Contains(got, "call any method of org.test.A and get its "+
+		"signals (talk); the service may be started on demand and may ask polkit") ||
+		!strings.Contains(got, "call org.test.B: any method on any object") {
 		t.Errorf("The scope: %q", got)
 	}
 }
@@ -227,5 +255,32 @@ func TestDBusStandingAndLost(t *testing.T) {
 	}
 	if ops := proxy.ops(); ops[len(ops)-1].Op != "add" || ops[len(ops)-1].ID != b.liveGrants()[0].ID {
 		t.Errorf("The proxy got %+v", ops)
+	}
+}
+
+// A grant that finds the proxy's connection broken when it adds its set ends the bus's other grants: the proxy
+// dropped their sets with the connection
+func TestDBusLostOnAdd(t *testing.T) {
+	proxy, path := startFakeProxy(t)
+	b, _ := testBroker(t, "allow", "allow")
+	b.cfg.DBusControl = map[string]string{"session": path}
+	for _, n := range []string{"one", "two"} {
+		c := dbusCap(t, n, dbusConfig{Bus: "session", Talk: []string{"org.test." + n}})
+		b.caps[c.id()] = c
+	}
+	first, err := b.request(peerAt(t, os.Getpid()), req("one", `{}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.drop()
+	if _, err := b.request(peerAt(t, os.Getpid()), req("two", `{}`, "PT1H")); err == nil {
+		t.Fatal("A grant whose set never reached the proxy")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for b.isLive(first) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if b.isLive(first) {
+		t.Error("A grant outlived its proxy's connection")
 	}
 }
