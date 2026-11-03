@@ -45,6 +45,7 @@
       packages = forAllSystems (system: {
         netns-macvlan = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-macvlan { };
         subid-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/subid-broker { };
+        dbus-proxy = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/dbus-proxy { };
         permissions-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-broker { };
         permissions-window = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-window { };
       });

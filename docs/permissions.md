@@ -488,6 +488,21 @@ replies through to calls it let through, and filters match rules. It refuses wha
 addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those are the static rules, the ones the
 Overview lists.
 
+Built as `cmd/dbus-proxy` (static rules only so far). Where it differs from xdg-dbus-proxy 0.1.7, read from its source:
+
+- It terminates SASL on both sides (EXTERNAL only, for the proxy's own uid) instead of passing the client's lines on,
+  and forwards each message with the header fields it decoded and checked, re-encoded, and the body as it came.
+- A reply is a reply by its type. xdg-dbus-proxy takes any message with a reply serial for one, so a method call
+  carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
+- Monitoring and eavesdropping are refused without `--filter` too, and an `AddMatch` without an interface counts.
+- Names in `--see`/`--talk`/`--own`/`--call`/`--broadcast` and rule paths must be valid; a unique name that leaves
+  the bus is dropped from the client's table, which is bounded, as are message size, file descriptors, pending
+  replies, SASL lines and clients.
+
+Kept for compatibility: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a `--call` or
+`--broadcast` rule lets every broadcast of the name through (the module's rules rely on it). Live rule sets will
+want this tightened.
+
 The system bus: a second instance, which `bwrap-subid.sh` starts as a transient user unit next to the broker's, before
 it execs bwrap, and waits for on `--fd` as nixpak does. It runs in a bwrap of its own holding its closure, the host's
 system bus socket and its runtime directory. The host's socket is in that bwrap only, never in the sandbox. It listens

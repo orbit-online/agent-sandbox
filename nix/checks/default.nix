@@ -727,6 +727,7 @@ in
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
       netns-macvlan
       subid-broker
+      dbus-proxy
       permissions-broker
       permissions-window
       ;

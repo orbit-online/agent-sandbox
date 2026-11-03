@@ -1,0 +1,73 @@
+package main
+
+import (
+	"testing"
+	"time"
+
+	"github.com/godbus/dbus/v5"
+)
+
+// --call rules: a method on a path, an interface's methods on a subtree, anything anywhere
+func TestCallRules(t *testing.T) {
+	bus := startBus(t)
+	startService(t, bus)
+	const unknownIface = "org.freedesktop.DBus.Error.UnknownInterface"
+	for _, tc := range []struct {
+		rule   string
+		path   dbus.ObjectPath
+		method string
+		want   string
+	}{
+		{"org.test.Iface.Echo@/org/test", "/org/test", "Echo", ""},
+		{"org.test.Iface.Echo@/org/test", "/org/test", "Other", errAccessDenied},
+		{"org.test.Iface.Echo@/org/test", "/other", "Echo", errAccessDenied},
+		{"org.test.Iface.Echo@/org/test", "/org/test/sub/obj", "Echo", errAccessDenied},
+		{"org.test.Iface.*@/org/test/sub/*", "/org/test/sub/obj", "Other", ""},
+		{"org.test.Iface.*@/org/test/sub/*", "/org/test/sub", "Other", unknownIface},
+		{"org.test.Iface.*@/org/test/sub/*", "/org/test/subway", "Other", errAccessDenied},
+		{"org.test.Iface.*@/org/test/sub/*", "/org/test", "Other", errAccessDenied},
+		{"org.test.Iface.*@/*", "/other", "Other", ""},
+		{"*", "/other", "Echo", ""},
+		{"org.test.Other.*", "/org/test", "Echo", errAccessDenied},
+	} {
+		c := connect(t, startProxy(t, bus, "--filter", "--call="+svcName+"="+tc.rule))
+		_, err := call(c, svcName, tc.path, svcIface+"."+tc.method, "x")
+		wantErr(t, tc.rule+" "+string(tc.path)+" "+tc.method, err, tc.want)
+	}
+}
+
+// --broadcast lets the name's broadcasts reach a client that asked for them; without a rule, or with --see, they don't
+func TestBroadcast(t *testing.T) {
+	bus := startBus(t)
+	svc := startService(t, bus)
+	for _, tc := range []struct {
+		args []string
+		path dbus.ObjectPath
+		want bool
+	}{
+		{nil, "/org/test", false},
+		{[]string{"--see=" + svcName}, "/org/test", false},
+		{[]string{"--broadcast=" + svcName + "=org.test.Iface.Sig@/org/test"}, "/org/test", true},
+		// xdg-dbus-proxy's quirk, kept: any rule gives the name TALK, and TALK passes all its broadcasts
+		{[]string{"--broadcast=" + svcName + "=org.test.Iface.Sig@/org/test"}, "/other", true},
+		{[]string{"--talk=" + svcName}, "/other", true},
+	} {
+		c := connect(t, startProxy(t, bus, append([]string{"--filter"}, tc.args...)...))
+		got := signals(c, 300*time.Millisecond)
+		if err := c.AddMatchSignal(dbus.WithMatchInterface(svcIface)); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.Emit(tc.path, svcIface+".Sig", "v"); err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, s := range got() {
+			if s.Name == svcIface+".Sig" {
+				n++
+			}
+		}
+		if (n > 0) != tc.want {
+			t.Errorf("%v on %s: got %d signals, want them: %v", tc.args, tc.path, n, tc.want)
+		}
+	}
+}

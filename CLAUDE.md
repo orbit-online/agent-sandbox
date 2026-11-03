@@ -42,6 +42,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
   and the FHS env run, maps the user's subuid range in and starts it.
+- `cmd/dbus-proxy/`: the Go D-Bus proxy that will replace xdg-dbus-proxy
+  (`docs/permissions.md`, D-Bus), taking the subset of its arguments nixpak
+  passes (`dbus-proxy --help`); not wired into the module yet. `main.go`
+  (arguments, listening, `--fd`), `address.go` (bus addresses), `sasl.go`
+  (SASL toward both sides), `wire.go` (reading messages and their file
+  descriptors, bounded, and encoding), `sender.go` (each side's write queue),
+  `rules.go` (rule sets and xdg-dbus-proxy's matching), `names.go` (a client's
+  unique names and what they owned), `client.go` (a connection's lifecycle),
+  `fromclient.go` and `frombus.go` (the filtering each way), `busmsg.go` (the
+  messages the proxy makes up).
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
@@ -92,7 +102,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
-`packages.<system>.permissions-broker`, `packages.<system>.permissions-window`. Consumers import both modules and enable
+`packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`.
+Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
@@ -183,6 +194,24 @@ modules and a user alice (the `home-manager` input exists only for it).
   target below it, refusing a client outside one, a sibling userns, the
   client's own and another uid, and `dieWith` ending the broker when the
   parent it was given is gone already.
+- `dbus-proxy`: the package build runs its Go tests (`*_test.go`) with
+  `-race`, against a `dbus-daemon` of the test's that allows unrequested
+  replies and eavesdropping (each test's control shows the proxy refusing
+  what the bus would pass): a hidden name (not listed, no owner, a call unknown),
+  `--see` (visible, a call denied), `--talk` (any call and its reply, by the
+  owner's unique name too, and under a wildcard owned before the client
+  connected), `--own`, `--call` rules (method and path, an interface on a `/*`
+  subtree, `@/*`, `*`), `--broadcast` (none without a rule or with `--see`,
+  and xdg-dbus-proxy's quirk of passing all of a ruled name's broadcasts),
+  replies (let through to calls let through, refused unasked both ways, a call
+  carrying a pending reply serial refused), NameOwnerChanged by policy,
+  `BecomeMonitor` and eavesdropping match rules refused with and without
+  `--filter`, file descriptors both ways, `--fd` (the byte, exit and the
+  socket removed when it closes, as nixpak starts it), everything passing
+  without `--filter`, bad arguments refused, libdbus's `dbus-send` as a
+  client, sd-bus's pipelined SASL, SASL refusals, an oversized message and a
+  message claiming file descriptors that never came; and the rule parser, name
+  lookup, the eavesdrop match, bus addresses and the bounded name table.
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), host commands (the schema subset's
