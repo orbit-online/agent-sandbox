@@ -725,15 +725,40 @@ let
                     ];
                   };
                   ok = {
-                    description = "the hostname";
+                    description = "the hostname, its own names and the tray";
                     bus = "system";
                     call."org.freedesktop.hostname1" = [ "org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1" ];
+                    call."org.freedesktop.login1" = [ "org.freedesktop.login1.Manager.CanReboot@/org/freedesktop/login1" ];
+                  };
+                  owned = {
+                    description = "names of its own";
+                    bus = "session";
+                    own = [
+                      "com.nixpak.ClaudeDesktop.work.Helper"
+                      "org.freedesktop.StatusNotifierItem-7-1"
+                    ];
+                  };
+                  hijack = {
+                    description = "a host program's name, another launcher's";
+                    bus = "session";
+                    own = [
+                      "org.kde.StatusNotifierWatcher"
+                      "com.nixpak.ClaudeDesktop.work.other"
+                    ];
+                  };
+                  dconf = {
+                    description = "keybindings";
+                    bus = "session";
+                    call."ca.desrt.dconf" = [ "ca.desrt.dconf.Writer.Change" ];
                   };
                   portal = {
-                    description = "a portal backend";
+                    description = "the portal's screen cast and a vendor's namespace";
                     bus = "session";
-                    see = [ "org.freedesktop.impl.portal.desktop.kde" ];
-                    broadcast."org.freedesktop.portal.Desktop" = [ "*@/*" ];
+                    see = [ "org.example.*" ];
+                    call."org.freedesktop.portal.Desktop" = [
+                      "org.freedesktop.portal.ScreenCast.Start"
+                      "*.Get"
+                    ];
                   };
                   sys = {
                     description = "wildcard and own";
@@ -741,10 +766,11 @@ let
                     talk = [ "org.freedesktop.timedate1.*" ];
                     own = [ "org.test.A" ];
                   };
-                  sysbus = {
-                    description = "the bus driver";
+                  logind = {
+                    description = "polkit and every login1 method";
                     bus = "system";
-                    talk = [ "org.freedesktop.DBus" ];
+                    see = [ "org.freedesktop.PolicyKit1" ];
+                    call."org.freedesktop.login1" = [ "org.freedesktop.login1.Manager.*" ];
                   };
                 };
               };
@@ -755,17 +781,19 @@ let
       expected =
         let
           o = "agent-sandbox.claude-desktop: launchers.work.permissions.dbus";
-          guards = "refused: no rules reach the bus driver, nor on the session bus the notification server, the systemd user manager, org.freedesktop.Flatpak, the portals' backends or org.a11y.Bus";
-          rules = "from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]";
+          policy = "refused by the D-Bus policy (internal/dbuspolicy/policy.json): ";
+          own = "only com.nixpak.ClaudeDesktop.work and names below it not starting with a lowercase element, and the tray's";
         in
         [
           "${o}.a_b: a name of letters, digits and - that no host commands or host sockets have, and a description"
-          "${o}.bad: ${rules}"
-          "${o}.empty: ${rules}"
-          "${o}.notify: org.freedesktop.Notifications, org.freedesktop.* ${guards}"
-          "${o}.portal: org.freedesktop.impl.portal.desktop.kde ${guards}"
-          "${o}.sys: no own and no wildcards on the system bus"
-          "${o}.sysbus: org.freedesktop.DBus ${guards}"
+          "${o}.bad: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]"
+          "${o}.dconf: ${policy}ca.desrt.dconf is refused"
+          "${o}.empty: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]"
+          "${o}.hijack: ${policy}own org.kde.StatusNotifierWatcher: ${own}; own com.nixpak.ClaudeDesktop.work.other: ${own}"
+          "${o}.logind: ${policy}org.freedesktop.PolicyKit1 is refused; org.freedesktop.login1=org.freedesktop.login1.Manager.*: only calls naming an interface and a member"
+          "${o}.notify: ${policy}org.freedesktop.Notifications is refused; org.freedesktop.*: a wildcard needs three name elements before .*; org.freedesktop.*: no wildcard there; org.freedesktop.* is refused; org.freedesktop.*: no wildcard over a name with call rules only"
+          "${o}.portal: ${policy}org.example.*: a wildcard needs three name elements before .*; org.freedesktop.portal.Desktop=*.Get: a METHOD starting with * matches every method; org.freedesktop.portal.Desktop=org.freedesktop.portal.ScreenCast.Start: refused on org.freedesktop.portal.Desktop; org.freedesktop.portal.Desktop=*.Get: refused on org.freedesktop.portal.Desktop"
+          "${o}.sys: ${policy}own org.test.A: ${own}; org.freedesktop.timedate1.*: no wildcards on this bus"
           "${o}.taken: a name of letters, digits and - that no host commands or host sockets have, and a description"
         ];
     };
@@ -1048,7 +1076,8 @@ in
             { echo "work's bwrap args lack the read-only /run/dbus" >&2; exit 1; }
           ! jq -e 'any(.[]; . == "/run/dbus")' "$args" >/dev/null || { echo "the default launcher binds /run/dbus" >&2; exit 1; }
           workDbusArgs=$(grep -- '-xdg-dbus-proxy-args\.json$' "$workClosure/store-paths")
-          jq -e 'any(.[]; . == "--control=claude-desktop/dbus-control-work/session.sock")' "$workDbusArgs" >/dev/null ||
+          jq -e 'any(.[]; . == "--control=claude-desktop/dbus-control-work/session/control.sock")
+            and any(.[]; . == "--bus=session") and any(.[]; . == "--app-id=com.nixpak.ClaudeDesktop.work")' "$workDbusArgs" >/dev/null ||
             { echo "work's session proxy lacks --control: $(<"$workDbusArgs")" >&2; exit 1; }
           ! jq -e 'any(.[] | strings; startswith("--control"))' "$(grep -- '-xdg-dbus-proxy-args\.json$' "$paths")" >/dev/null ||
             { echo "the default launcher's session proxy has --control" >&2; exit 1; }
@@ -1062,12 +1091,12 @@ in
           workBwrap=$(hostBwrap "$workClosure/store-paths")
           grep -qxF 'readonly SYSTEM_BUS_UNIT=claude-desktop-work-system-bus' "$workBwrap" &&
             grep -qxF 'readonly SYSTEM_BUS_DIR=claude-desktop/system-bus-work' "$workBwrap" &&
-            grep -qxF 'readonly SYSTEM_BUS_CONTROL=claude-desktop/dbus-control-work/system.sock' "$workBwrap" ||
+            grep -qxF 'readonly SYSTEM_BUS_CONTROL=claude-desktop/dbus-control-work/system/control.sock' "$workBwrap" ||
             { echo "work's bwrap doesn't start the system-bus proxy" >&2; exit 1; }
           grep -qxF "readonly SYSTEM_BUS_UNIT='''" "$(hostBwrap "$paths")" ||
             { echo "the default launcher starts a system-bus proxy" >&2; exit 1; }
-          jq -e '.dbusControl == {session: "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/dbus-control-work/session.sock",
-              system: "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/dbus-control-work/system.sock"}
+          jq -e '.dbusControl == {session: "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/dbus-control-work/session/control.sock",
+              system: "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/dbus-control-work/system/control.sock"}
             and .dbus == [{name: "settings", description: "the settings", bus: "session", see: [], talk: [],
               own: [], call: {"org.freedesktop.portal.Desktop": ["org.freedesktop.portal.Settings.Read@/org/freedesktop/portal/desktop"]},
               broadcast: {}}, {name: "timedate", description: "the time zone", bus: "system", see: [],

@@ -139,6 +139,17 @@ let
                 bus = "system";
                 call."org.freedesktop.hostname1" = [ "org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1" ];
               };
+              # A polkit-checked answer through the system-bus proxy: login1's CanReboot says whether polkit would let
+              # the caller reboot without asking (reboot: allow_active yes, allow_any and allow_inactive auth_admin_keep)
+              dbus.reboot = {
+                description = "ask whether the host may reboot";
+                bus = "system";
+                # gdbus introspects the object for the method's signature first
+                call."org.freedesktop.login1" = [
+                  "org.freedesktop.login1.Manager.CanReboot@/org/freedesktop/login1"
+                  "org.freedesktop.DBus.Introspectable.Introspect@/org/freedesktop/login1"
+                ];
+              };
               dbus.clipboard = {
                 description = "read the clipboard";
                 bus = "session";
@@ -170,6 +181,8 @@ let
       # A host-only name, which the sandbox's own hosts file leaves out
       networking.hosts."127.0.0.1" = [ "host-only.test" ];
       users.users.alice.linger = true;
+      # For the polkit check through the system-bus proxy (work.nix); desktops have it
+      security.polkit.enable = true;
       users.users.bob.isNormalUser = true;
       home-manager.useUserPackages = true;
       environment.systemPackages = [ pkgs.libcap ];

@@ -102,6 +102,8 @@ let
       // vars;
     };
   dbusProxy = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
+  # What D-Bus capabilities may not hold, by bus: the broker and the proxies embed the same file
+  dbusPolicy = lib.importJSON ../../../internal/dbuspolicy/policy.json;
   # nixpak's bwrap, per launcher: with D-Bus capabilities on the system bus, it starts the system-bus proxy
   bwrapHostOf =
     systemBus:
@@ -1057,7 +1059,7 @@ let
         pkgs = nixpakPkgs;
       } {
         config =
-          { sloth, ... }:
+          nixpakArgs@{ sloth, ... }:
           {
             imports = [ lcfg.sandbox ];
             # The wrapper finds its running sandbox by it
@@ -1092,7 +1094,11 @@ let
               ];
             };
             # The session-bus proxy's control socket, for the broker's D-Bus grants
-            dbus.args = lib.optional (dbusOn "session") "--control=${dbusControlDir}/session.sock";
+            dbus.args = lib.optionals (dbusOn "session") [
+              "--control=${dbusControlDir}/session/control.sock"
+              "--bus=session"
+              "--app-id=${nixpakArgs.config.flatpak.appId}"
+            ];
             dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
               "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
             ];
@@ -1157,7 +1163,8 @@ let
 
       mcpServers = pkgs.writeText "mcp-servers.json" (builtins.toJSON lcfg.mcpServers);
       # D-Bus capabilities, by bus: their proxies take live rules from the broker on control sockets relative to
-      # $XDG_RUNTIME_DIR (nixpak passes dbus.args unexpanded), in a directory of the launcher's that nothing binds.
+      # $XDG_RUNTIME_DIR (nixpak passes dbus.args unexpanded), each in a directory of its own (dbus-control[-<name>]/
+      # session/ and system/) that nothing binds into the sandbox: the system-bus proxy's bwrap holds only its own.
       # The system-bus proxy, which only runs for a launcher with capabilities on the system bus, listens in a
       # directory of its own, bound read-only at /run/dbus. Launcher names can't hold _, and the prefixes differ, so no
       # launcher's directory is another's
@@ -1169,7 +1176,7 @@ let
           {
             unit = "claude-desktop${suffix}-system-bus";
             dir = "claude-desktop/system-bus${suffix}";
-            control = "${dbusControlDir}/system.sock";
+            control = "${dbusControlDir}/system/control.sock";
           }
         else
           null;
@@ -1219,7 +1226,7 @@ let
           dbusControl = lib.genAttrs (lib.filter dbusOn [
             "session"
             "system"
-          ]) (bus: "\${XDG_RUNTIME_DIR}/${dbusControlDir}/${bus}.sock");
+          ]) (bus: "\${XDG_RUNTIME_DIR}/${dbusControlDir}/${bus}/control.sock");
           grants = map (g: { inherit (g) capability params; }) lcfg.permissions.grants;
           # What the sandbox reaches from its start, for the window's read-only overview
           overview =
@@ -1672,10 +1679,8 @@ in
               }) c.commands
             ) lcfg.permissions.commands
           )
-          # D-Bus capabilities the broker would refuse, caught at eval: rules the proxy takes, and none that would undo
-          # the proxies' static guards (the bus driver, and on the session bus what hands over more than its own
-          # service: the notification server, the systemd user manager, flatpak's HostCommand, the portals' backends,
-          # the accessibility bus), nor own or wildcards on the system bus
+          # D-Bus capabilities the broker and the proxies would refuse, caught at eval: rules the proxy takes, and
+          # nothing the bus's policy refuses (internal/dbuspolicy, read from the same policy.json)
           ++ lib.concatLists (
             lib.mapAttrsToList (
               dname: d:
@@ -1690,24 +1695,80 @@ in
                 bare = lib.removeSuffix ".*";
                 valid = n: builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" (bare n) != null;
                 ruleOk = r: builtins.match "(\\*|[A-Za-z0-9_.*-]*)(@(/\\*|(/[A-Za-z0-9_]+)+(/\\*)?|/))?" r != null;
-                refusedNames =
-                  {
-                    session = [
-                      "org.freedesktop.DBus"
-                      "org.freedesktop.Notifications"
-                      "org.freedesktop.systemd1"
-                      "org.freedesktop.Flatpak"
-                      "org.freedesktop.impl.portal"
-                      "org.a11y.Bus"
-                    ];
-                    system = [ "org.freedesktop.DBus" ];
-                  }
-                  .${d.bus};
-                reaches =
+                # internal/dbuspolicy's policy, as dbuspolicy.Check applies it: a guard against known footguns, not
+                # a guarantee (docs/permissions.md, D-Bus)
+                p = dbusPolicy.${d.bus};
+                appId = l.sandboxed.config.flatpak.appId;
+                covers = r: n: if lib.hasSuffix "*" r then lib.hasPrefix (lib.removeSuffix "*" r) n else n == r || lib.hasPrefix "${r}." n;
+                below = a: b: lib.hasPrefix "${a}." b;
+                guarded = p.explicitCalls ++ lib.attrNames p.methods;
+                nameErrs =
+                  talk: n:
+                  let
+                    b = bare n;
+                    w = wild n;
+                  in
+                  lib.optional (w && !p.wildcards) "${n}: no wildcards on this bus"
+                  ++ lib.optional (w && lib.length (lib.splitString "." b) < 3) "${n}: a wildcard needs three name elements before .*"
+                  ++ lib.optional (w && lib.any (x: b == x || below x b || below b x) p.noWildcard) "${n}: no wildcard there"
+                  ++ lib.optional (lib.any (r: covers r b || (w && below b (lib.removeSuffix "*" r))) p.refused) "${n} is refused"
+                  ++ lib.optional (w && lib.any (g: covers b g || below b g) guarded) "${n}: no wildcard over a name with call rules only"
+                  ++ lib.optional (talk && lib.elem b guarded) "${n}: no talk or own, only call rules";
+                method =
+                  r:
+                  let
+                    m = lib.head (lib.splitString "@" r);
+                    parts = lib.splitString "." m;
+                  in
+                  if m == "" || lib.hasPrefix "*" m then
+                    { iface = ""; member = ""; }
+                  else if lib.length parts == 1 then
+                    { iface = m; member = ""; }
+                  else
+                    {
+                      iface = lib.concatStringsSep "." (lib.init parts);
+                      member = if lib.last parts == "*" then "" else lib.last parts;
+                    };
+                starErrs =
+                  n: r:
+                  let
+                    m = lib.head (lib.splitString "@" r);
+                  in
+                  lib.optional (lib.hasPrefix "*" m && m != "*") "${n}=${r}: a METHOD starting with * matches every method";
+                callErrs =
+                  n: r:
+                  let
+                    m = method r;
+                    b = bare n;
+                  in
+                  lib.optional (p.methods ? ${b} && (m.iface == "" || lib.elem m.iface p.methods.${b})) "${n}=${r}: refused on ${b}"
+                  ++ lib.optional (lib.elem b p.explicitCalls && (m.iface == "" || m.member == "")) "${n}=${r}: only calls naming an interface and a member";
+                ownErrs =
                   n:
-                  lib.any (
-                    r: bare n == r || lib.hasPrefix "${r}." (bare n) || (wild n && lib.hasPrefix "${bare n}." r)
-                  ) refusedNames;
+                  let
+                    b = bare n;
+                    w = wild n;
+                    rest = lib.removePrefix "${appId}." b;
+                  in
+                  lib.optional (
+                    !(
+                      p.own
+                      && (
+                        (!w && builtins.match "org\\.freedesktop\\.StatusNotifierItem-[0-9]+-[0-9]+" b != null)
+                        || (!w && b == appId)
+                        || (below appId b && builtins.match "[a-z].*" rest == null)
+                      )
+                    )
+                  ) "own ${n}: only ${appId} and names below it not starting with a lowercase element, and the tray's";
+                policyErrs =
+                  lib.concatMap ownErrs d.own
+                  ++ lib.concatMap (nameErrs false) (d.see ++ lib.attrNames d.call ++ lib.attrNames d.broadcast)
+                  ++ lib.concatMap (nameErrs true) (d.talk ++ d.own)
+                  ++ lib.concatLists (
+                    lib.mapAttrsToList (n: rs: lib.concatMap (starErrs n) rs) d.call
+                    ++ lib.mapAttrsToList (n: rs: lib.concatMap (starErrs n) rs) d.broadcast
+                    ++ lib.mapAttrsToList (n: rs: lib.concatMap (callErrs n) rs) d.call
+                  );
               in
               [
                 {
@@ -1727,14 +1788,10 @@ in
                   message = "${dopt}: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]";
                 }
                 {
-                  assertion = !lib.any reaches ruled;
-                  message = "${dopt}: ${lib.concatStringsSep ", " (lib.filter reaches ruled)} refused: no rules reach the bus driver, nor on the session bus the notification server, the systemd user manager, org.freedesktop.Flatpak, the portals' backends or org.a11y.Bus";
+                  assertion = policyErrs == [ ];
+                  message = "${dopt}: refused by the D-Bus policy (internal/dbuspolicy/policy.json): ${lib.concatStringsSep "; " policyErrs}";
                 }
               ]
-              ++ lib.optional (d.bus == "system") {
-                assertion = d.own == [ ] && !lib.any wild ruled;
-                message = "${dopt}: no own and no wildcards on the system bus";
-              }
             ) lcfg.permissions.dbus
           )
         )

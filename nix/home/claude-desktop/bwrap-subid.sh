@@ -54,15 +54,15 @@ subid)
   # The system-bus proxy, with D-Bus capabilities on the system bus (docs/permissions.md, D-Bus): a unit of its own
   # in a bwrap holding its closure, the host's system bus socket and its directories. It listens in
   # $SYSTEM_BUS_DIR, which nixpak binds read-only at /run/dbus, takes the broker's rule sets on its control socket,
-  # and exits with this shell's pid, which bwrap's becomes. It shares the host's pid namespace: it watches the pid
-  # there, and its control socket's peer check compares pid namespaces
+  # and exits with this shell's pid, which bwrap's becomes: it shares the host's pid namespace to watch the pid there.
+  # Its bwrap holds the system control socket's directory only, not the session proxy's next to it
   : "${SYSTEM_BUS_UNIT?}" "${SYSTEM_BUS_DIR?}" "${SYSTEM_BUS_CONTROL?}" "${SYSTEM_BUS_PROXY:?}" "${SYSTEM_BUS_CLOSURE:?}"
   : "${SYSTEMD_RUN:?}" "${SYSTEMCTL:?}"
   if [[ -n $SYSTEM_BUS_UNIT ]]; then
     bus_dir=$XDG_RUNTIME_DIR/$SYSTEM_BUS_DIR
     ctl_dir=$XDG_RUNTIME_DIR/${SYSTEM_BUS_CONTROL%/*}
     mkdir -p "$bus_dir" "$ctl_dir"
-    chmod 700 "$bus_dir" "$ctl_dir"
+    chmod 700 "$bus_dir" "${ctl_dir%/*}" "$ctl_dir"
     rm -f "$bus_dir/system_bus_socket"
     # One left from a sandbox that ended moments ago
     "$SYSTEMCTL" --user stop "$SYSTEM_BUS_UNIT" 2>/dev/null || true
@@ -72,7 +72,7 @@ subid)
       "$BWRAP" --unshare-user --unshare-ipc --unshare-net --unshare-uts --unshare-cgroup-try --die-with-parent \
       "${closure[@]}" --bind /run/dbus/system_bus_socket /run/dbus/system_bus_socket \
       --bind "$bus_dir" "$bus_dir" --bind "$ctl_dir" "$ctl_dir" -- \
-      "$SYSTEM_BUS_PROXY" --control="$SYSTEM_BUS_CONTROL" --pid=$$ unix:path=/run/dbus/system_bus_socket \
+      "$SYSTEM_BUS_PROXY" --control="$SYSTEM_BUS_CONTROL" --bus=system --pid=$$ unix:path=/run/dbus/system_bus_socket \
       "$bus_dir/system_bus_socket" --filter
     for _ in {1..50}; do
       [[ -S $bus_dir/system_bus_socket ]] && break

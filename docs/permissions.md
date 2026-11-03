@@ -533,9 +533,12 @@ through it passes the proxy's rules.
 
 Live rules: each proxy listens on a control socket on the host side, mode 0600 in a directory it makes 0700, which only
 the broker connects to. The proxy takes it as `--control=<path>` relative to its `XDG_RUNTIME_DIR` (`dbus.args` aren't
-expanded, verified 9): `claude-desktop/dbus-control[-<name>]/session.sock` and `system.sock`, which nothing binds into
-the sandbox and nixpak's wrapper reaches through its `/run` bind. The session proxy gets it only with D-Bus capabilities
-on the session bus. One JSON object a line each way:
+expanded, verified 9): `claude-desktop/dbus-control[-<name>]/session/control.sock` and `system/control.sock`, each in a
+directory of its own, which nothing binds into the sandbox; nixpak's wrapper reaches the session one through its `/run`
+bind, and the system-bus proxy's bwrap holds only the system one's directory, so neither proxy reaches the other's.
+`--bus=session|system` names the policy its sets are checked against and `--app-id` the sandbox's app ID, below which
+`own` may go. The session proxy gets them only with D-Bus capabilities on the session bus. One JSON object a line
+each way:
 
 ```
 {"op":"add","id":"<grant>","see":[NAME],"talk":[NAME],"own":[NAME],"call":["NAME=RULE"],"broadcast":["NAME=RULE"]}
@@ -551,7 +554,7 @@ proxy has no `/proc` in nixpak's wrapper, and the kernel won't give it the peer'
 (`PIDFD_GET_PID_NAMESPACE` and the like need ptrace access, which commoncap refuses across user namespaces, and both
 proxies run in one of their own: `EACCES`, seen in the VM test and reproduced in this sandbox). One connection at a
 time: a second while the broker is connected is closed. Bounded: lines of 64 KiB, 32 live sets, 64 rules a set, ids of 64
-characters. A set may not name `org.freedesktop.DBus` nor a wildcard covering it, and the static guards come before
+characters. A set may not hold what the bus's policy refuses (below), and the static guards come before
 any rule is looked at: no `BecomeMonitor`, no eavesdropping match rules, no call without a destination, bus calls only
 as the static rules allow.
 
@@ -576,21 +579,61 @@ every live rule set, closing those connections the same way, and keeps its stati
 connection to a proxy broken, ends that bus's grants, and dials again at the next one; a daemon that starts again
 pushes its standing grants anew.
 
-The consent names the bus and the rules: "Covers, for 1 h: On the system bus: call any method of
-org.freedesktop.timedate1 and get its signals (talk)." What a capability may hold is checked by the module at eval and
-the daemon at start: never the bus driver, nor a wildcard covering it; on the session bus nothing that hands over more
-than its own service: `org.freedesktop.Notifications` (the broker's consent: the sandbox could replace or close its
-notifications), `org.freedesktop.systemd1` (transient units run code on the host), `org.freedesktop.Flatpak`
-(`HostCommand`), `org.freedesktop.impl.portal.*` (the backends behind the portals' app ID checks) and `org.a11y.Bus`,
-each with the names below it and wildcards covering it; on the system bus no wildcards and no `own`, so every service
-reached is named. As for host sockets, that list guards against the known ones: what else a rule set gives is the
-config's responsibility.
+The consent names the bus and the rules as the proxy reads them: "Covers, for 1 h: On the system bus: call any method
+of org.freedesktop.timedate1 and get its signals (talk); the service may be started on demand and may ask polkit." A
+call or broadcast rule reads "any method", "any method of org.foo.Iface" or "org.foo.Iface.Get", with "on /path" or
+"on /path and the objects below it". A METHOD starting with `*` matches every method whatever follows, as in
+xdg-dbus-proxy (`filter_new_from_rule`: "Both interface and method wildcarded"), so a rule set may hold `*` alone,
+never `*.Get`. An `own` line says that host programs will send the name what they mean for it.
+
+What a capability may hold is one policy per bus in `internal/dbuspolicy/policy.json`, which the module reads for its
+assertions and the broker (at start) and both proxies (on every `add`) embed: a confused broker or a peer that isn't
+the broker can't add what the config can't declare. The policy guards the config's author against known footguns. It
+is not a guarantee: D-Bus capabilities are declared by the user in Nix and every grant is consented to, and what any
+name not listed gives is the config's responsibility, as for host sockets and host commands. It refuses:
+
+- on either bus, the bus driver (`org.freedesktop.DBus`), which the static guards rest on;
+- on the session bus, names that hand over more than their own service, each with the names below it and any wildcard
+  covering it: `org.freedesktop.Notifications` (the broker's consent), `org.freedesktop.systemd1` (transient units),
+  `org.freedesktop.Flatpak` and `org.freedesktop.portal.Flatpak` (`HostCommand`, `Spawn`),
+  `org.freedesktop.impl.portal.*` (the backends behind the portals' app ID checks), `org.freedesktop.secrets` and
+  `org.gnome.keyring` (the user's secrets), `org.a11y.Bus`, `ca.desrt.dconf` (`Writer.Change` sets a keybinding's
+  command), `org.gnome.Terminal`, `org.gnome.Shell` (`Eval`), `org.gnome.Mutter.RemoteDesktop` and `.ScreenCast`,
+  `org.kde.KWin` (`loadScript`) and `org.kde.klauncher*`;
+- on the session bus, wildcards with fewer than three name elements before `.*` (`org.gnome.*`, `ca.desrt.*`) and any
+  over `org.freedesktop.portal`;
+- on `org.freedesktop.portal.Desktop`, talk and any call rule that doesn't name an interface, and the RemoteDesktop and
+  ScreenCast interfaces: their sessions persist (below);
+- on the session bus, `own` of anything but the sandbox's app ID (`com.nixpak.ClaudeDesktop[.<name>]`), the names below
+  it whose next element doesn't start with a lowercase letter (lowercase ones are how launchers' app IDs are made, so
+  the default launcher can't take a named one's), and the tray's `org.freedesktop.StatusNotifierItem-<pid>-<n>`, as
+  Flatpak limits apps to their app ID: owning a host program's name makes host programs send the sandbox what they
+  mean for the real service (a notification watcher, a secret service);
+- on the system bus, wildcards, `own`, `org.freedesktop.PolicyKit1` (registering an authentication agent) and
+  `org.freedesktop.systemd1`; `org.freedesktop.login1` only by call rules naming an interface and a member.
+
+polkit and the proxy: services on the system bus check polkit with the caller's bus name as the subject, which polkit
+resolves to the proxy's process, a process of the user's in a user unit outside any login session. polkit 127 (the
+nixpkgs version) then takes the user's graphical session: `polkit_backend_session_monitor_get_session_for_subject`
+tries `sd_pidfd_get_session` and `sd_pid_get_session`, then falls back to `sd_pidfd_get_owner_uid` and
+`sd_uid_get_display` (`src/polkitbackend/polkitbackendsessionmonitor-systemd.c`, lines 381–428), and
+`check_authorization_sync` picks `allow_active` when that session is local and active
+(`polkitbackendinteractiveauthority.c`, lines 1248–1260). So a call through a grant is judged as the user's active
+session when there is one, `allow_active` included, as any process of the user's outside a session is (verified in
+the VM test: login1's `CanReboot` through a grant says `challenge` without a graphical session and `yes` with an active
+one, as for a process of the user's in a user unit on the host). A rule set on a service whose actions are
+`allow_active=yes` (logind's reboot, NetworkManager, udisks) hands those over without a prompt while the user is at
+the desktop; its description should say so.
 
 What a revoke can't take back: file descriptors a client received over the bus (a logind inhibitor, a portal's fd)
-stay valid until closed, as with mount grants. Every client's upstream connection is the proxy's, so services see one
-process for the whole sandbox: polkit's `auth_admin_keep` and the like, keyed on that process, carry an admin
-authorization across clients and grants for their keep time. Rule sets on services that authorize that way should
-say so in their description.
+stay valid until closed, as with mount grants. Portal state kept under the sandbox's app ID stays too: permission-store
+entries a portal recorded (a "remember this choice"), and RemoteDesktop and ScreenCast restore tokens
+(`persist_mode=2`), with which a later session of the same app resumes without a dialog; the policy refuses those two
+interfaces for that reason, and the permission store is the user's to clear (`flatpak permission-reset` for the app
+ID). Every client's upstream connection is the proxy's, so services see one process for the whole sandbox: polkit's
+`auth_admin_keep` is kept for the subject and the action, so an admin authorization carries across clients and grants
+for the same action, for its keep time. Rule sets on services that authorize that way should say so in their
+description.
 
 ## Requests
 
@@ -933,5 +976,13 @@ Each can be revisited.
     static ones, which nixpak's configs rely on.
 38. The broker ends a bus's D-Bus grants when it finds its connection to the proxy broken, on its next use of it, rather
     than watching the connection: the proxies end only with the sandbox, which ends the daemon's grants anyway.
-39. What D-Bus capabilities may not name (D-Bus) is a list of known escapes per bus, like host sockets' refused paths.
-    On the system bus `own` is refused outright: nothing in the sandbox needs to offer a system service.
+39. What D-Bus capabilities may not hold (D-Bus) is a policy per bus of known escapes, like host sockets' refused
+    paths, in one JSON file the module, the broker and the proxies read. On the system bus `own` is refused outright:
+    nothing in the sandbox needs to offer a system service.
+40. A METHOD starting with `*` and more after it (`*.Get`) is refused in rule sets: xdg-dbus-proxy, and the proxy after
+    it, read it as every method, which isn't what such a rule says.
+41. `own` below the app ID skips names whose next element starts with a lowercase letter, rather than knowing the other
+    launchers' names: the policy is the same for every launcher and needs no list of them.
+42. The proxies' calls are judged by polkit as the user's graphical session (D-Bus), which nothing here can change: the
+    proxy runs as the user, and polkit's fallback applies to every process of the user's outside a session. Documented,
+    and the VM test pins it, rather than refused.
