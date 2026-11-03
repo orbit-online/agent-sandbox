@@ -322,7 +322,7 @@ func (w *world) mounted() map[string]bool {
 	}
 	names := map[string]bool{}
 	for _, l := range lines {
-		if name, ok := strings.CutPrefix(l.point, w.cfg.SandboxGrantDir+"/"); ok {
+		if name, ok := strings.CutPrefix(l.Point, w.cfg.SandboxGrantDir+"/"); ok {
 			names[strings.SplitN(name, "/", 2)[0]] = true
 		}
 	}

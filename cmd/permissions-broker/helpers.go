@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -82,7 +83,7 @@ func (s *sandbox) detachBelow(dir grantDir) error {
 		return err
 	}
 	var names []string
-	for _, p := range mountsBelow(lines, dir.path) {
+	for _, p := range mountinfo.Below(lines, dir.path) {
 		name, _, _ := strings.Cut(strings.TrimPrefix(p, dir.path+"/"), "/")
 		if !slices.Contains(names, name) {
 			names = append(names, name)

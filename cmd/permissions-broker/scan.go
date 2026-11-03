@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -71,8 +72,8 @@ type mountView struct {
 func viewMounts(pids []int, m *grantMount, deadline time.Time) *mountView {
 	v := &mountView{m: m, deadline: deadline, visible: map[uint64]bool{}, copies: map[uint64]bool{m.id: true},
 		rebinds: map[uint64]bool{}, tried: map[string]bool{}}
-	for _, l := range readMountinfo("/proc/self/mountinfo") {
-		v.visible[l.id] = true
+	for _, l := range mountinfo.Read("/proc/self/mountinfo") {
+		v.visible[l.ID] = true
 	}
 	seen := map[uint64]bool{}
 	for _, pid := range pids {
@@ -85,10 +86,10 @@ func viewMounts(pids []int, m *grantMount, deadline time.Time) *mountView {
 				continue
 			}
 			seen[ns] = true
-			for _, l := range readMountinfo(task + "/mountinfo") {
-				v.visible[l.id] = true
-				if m.copyOf(l) || mountsOf([]mountLine{l}, m.dev, m.root) {
-					v.copies[l.id] = true
+			for _, l := range mountinfo.Read(task + "/mountinfo") {
+				v.visible[l.ID] = true
+				if m.copyOf(l) || mountinfo.MountsOf([]mountinfo.Line{l}, m.dev, m.root) {
+					v.copies[l.ID] = true
 					v.rebinds[ns] = true
 				}
 			}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
@@ -138,15 +139,15 @@ func agentMounts(socket string) response {
 		return response{Error: err.Error()}
 	}
 	defer f.Close()
-	lines, err := parseMountinfo(f)
+	lines, err := mountinfo.Parse(f)
 	if err != nil {
 		return response{Error: err.Error()}
 	}
 	dir := socket[:strings.LastIndex(socket, "/")+1]
 	var points []string
 	for _, l := range lines {
-		if strings.HasPrefix(l.point, dir) {
-			points = append(points, l.point)
+		if strings.HasPrefix(l.Point, dir) {
+			points = append(points, l.Point)
 		}
 	}
 	return response{Output: strings.Join(points, "\n")}

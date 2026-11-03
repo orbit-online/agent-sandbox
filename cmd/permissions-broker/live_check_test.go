@@ -112,7 +112,7 @@ func (mc *liveMachine) compareDelivery(t *rapid.T, folders []string) error {
 	}
 	var outer []string
 	for _, l := range lines {
-		if name, ok := strings.CutPrefix(l.point, lv.cfg.SandboxGrantDir+"/"); ok {
+		if name, ok := strings.CutPrefix(l.Point, lv.cfg.SandboxGrantDir+"/"); ok {
 			outer = append(outer, name)
 		}
 	}

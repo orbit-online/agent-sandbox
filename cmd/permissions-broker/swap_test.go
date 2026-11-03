@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -206,10 +207,10 @@ func TestAttackGrantDirSwap(t *testing.T) {
 }
 
 // mountOf finds the device and root of the mount at mountpoint, the last one there
-func mountOf(lines []mountLine, mountpoint string) (dev, root string) {
+func mountOf(lines []mountinfo.Line, mountpoint string) (dev, root string) {
 	for _, l := range lines {
-		if l.point == mountpoint {
-			dev, root = l.dev, l.root
+		if l.Point == mountpoint {
+			dev, root = l.Dev, l.Root
 		}
 	}
 	return dev, root

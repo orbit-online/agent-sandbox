@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
@@ -184,7 +185,7 @@ func (s *sandbox) check() error {
 
 // mountinfo reads the mount table of the sandbox's pinned mount namespace: a /proc/<pid>/mountinfo opened while pid
 // is checked to be in it, before and after (the file shows the namespace the task had at the open)
-func (s *sandbox) mountinfo() ([]mountLine, error) {
+func (s *sandbox) mountinfo() ([]mountinfo.Line, error) {
 	if err := s.check(); err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func (s *sandbox) mountinfo() ([]mountLine, error) {
 	if err := s.check(); err != nil {
 		return nil, err
 	}
-	return parseMountinfo(f)
+	return mountinfo.Parse(f)
 }
 
 // sameNs reports whether pid is in our namespace of the kind (mnt, user), false when it can't tell
