@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -69,7 +70,7 @@ func liveAgent(socket string) {
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
 		tag, data, _ := strings.Cut(sc.Text(), " ")
-		var req request
+		var req wire.Request
 		if err := json.Unmarshal([]byte(data), &req); err != nil {
 			answer(tag, response{Error: "agent: " + err.Error()})
 			continue
@@ -101,7 +102,7 @@ type heldConns struct {
 // do serves connect and probe, keyed by the request's Grant. connect connects to the address Capability names in the
 // grant directory, sends a line (the request's Reason) and reads it back, and keeps the connection; probe sends a line
 // on it again. Output is the line read back; Error says the connection was closed, and a closed one is forgotten
-func (h *heldConns) do(socket string, req request) response {
+func (h *heldConns) do(socket string, req wire.Request) response {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if req.Op == "connect" {
@@ -152,7 +153,7 @@ func agentMounts(socket string) response {
 }
 
 // rawCall sends one request on socket and returns the response as it came, its error included
-func rawCall(socket string, req request) response {
+func rawCall(socket string, req wire.Request) response {
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
 		return response{Error: "dial: " + err.Error()}
@@ -229,7 +230,7 @@ func (p *liveProc) read(out io.Reader) {
 }
 
 // send sends a request and returns where its response arrives
-func (p *liveProc) send(req request) chan response {
+func (p *liveProc) send(req wire.Request) chan response {
 	ch := make(chan response, 1)
 	data, _ := json.Marshal(req)
 	p.mu.Lock()
@@ -244,7 +245,7 @@ func (p *liveProc) send(req request) chan response {
 }
 
 // do sends a request and waits for its response
-func (p *liveProc) do(t *rapid.T, req request) response {
+func (p *liveProc) do(t *rapid.T, req wire.Request) response {
 	select {
 	case res := <-p.send(req):
 		return res

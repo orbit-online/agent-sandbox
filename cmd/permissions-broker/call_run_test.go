@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // A call's run: its unit, output, failures, validity, slots and log (call.go runCall)
@@ -20,13 +22,13 @@ func TestCallFails(t *testing.T) {
 	if err := c.check(); err != nil {
 		t.Fatal(err)
 	}
-	_, err := b.call(peerAt(t, os.Getpid()), request{Op: "call", Capability: c.id(), Command: "run",
+	_, err := b.call(peerAt(t, os.Getpid()), wire.Request{Op: "call", Capability: c.id(), Command: "run",
 		Arguments: json.RawMessage(`{"csr": "MIIBsecret"}`), Reason: "testing"})
 	if err == nil || !strings.Contains(err.Error(), "exit 3") || !strings.Contains(err.Error(), "broken") {
 		t.Errorf("Failed call: %v", err)
 	}
 	gs := b.grantViews()
-	calls := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}).Calls
+	calls := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "state"}).Calls
 	if len(gs) != 1 || len(calls) != 1 {
 		t.Fatalf("Grants %+v, calls %+v", gs, calls)
 	}
@@ -194,10 +196,10 @@ func TestCallLog(t *testing.T) {
 	}
 	long := strings.Repeat("y", maxRecorded+50)
 	for range maxCalls + 2 {
-		_, _ = b.call(peerAt(t, os.Getpid()), request{Op: "call", Capability: c.id(), Command: "run",
+		_, _ = b.call(peerAt(t, os.Getpid()), wire.Request{Op: "call", Capability: c.id(), Command: "run",
 			Arguments: json.RawMessage(`{"text": "` + long + `"}`), Reason: "testing"})
 	}
-	calls := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}).Calls
+	calls := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "state"}).Calls
 	if len(calls) != maxCalls {
 		t.Fatalf("%d calls kept", len(calls))
 	}

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -119,7 +120,7 @@ func (mc *machine) checkDelivery(t *rapid.T) {
 
 // checkWindow: what control.sock's state shows the window, pending requests in arrival order
 func (mc *machine) checkWindow(t *rapid.T) {
-	res := mc.b.handleControl(nil, mc.w.host, request{Op: "state"})
+	res := mc.b.handleControl(nil, mc.w.host, wire.Request{Op: "state"})
 	if res.Error != "" {
 		mc.fatalf(t, "State: %s", res.Error)
 	}

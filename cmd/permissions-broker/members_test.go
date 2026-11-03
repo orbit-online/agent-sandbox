@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // reenter starts sh -c script in the sandbox's user namespace, and its mount namespace with mnt, through nsenter from
@@ -115,7 +117,7 @@ func TestHoldersOnRelease(t *testing.T) {
 	if err := b.release(g.ID, "released from inside"); err != nil {
 		t.Fatal(err)
 	}
-	res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"})
+	res := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "state"})
 	if len(res.Held) != 1 || res.Held[0].Grant != g.ID || len(res.Held[0].Holders) != 1 || res.Held[0].Holders[0].Pid != pid {
 		t.Fatalf("Held after a release: %+v", res.Held)
 	}
@@ -129,7 +131,7 @@ func TestHoldersOnRelease(t *testing.T) {
 	if _, ok := startTime(pid); !ok {
 		t.Error("Ended a process by a stale record")
 	}
-	if res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "end", Grants: []string{g.ID}}); res.Error != "" {
+	if res := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "end", Grants: []string{g.ID}}); res.Error != "" {
 		t.Error(res.Error)
 	}
 	for range 50 {

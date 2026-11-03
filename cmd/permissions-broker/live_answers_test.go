@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -17,7 +18,7 @@ func (mc *liveMachine) WindowAnswer(t *rapid.T) {
 		t.Skip("Nothing pending")
 	}
 	p := mc.m.pending[rapid.IntRange(0, len(mc.m.pending)-1).Draw(t, "pending")]
-	ans := request{Op: "answer", Pending: p.id, Allow: rapid.Bool().Draw(t, "allow")}
+	ans := wire.Request{Op: "answer", Pending: p.id, Allow: rapid.Bool().Draw(t, "allow")}
 	if ans.Allow {
 		ans.Lease = rapid.SampledFrom(liveLeases).Draw(t, "lease")
 		if rapid.Bool().Draw(t, "narrow") {
@@ -27,7 +28,7 @@ func (mc *liveMachine) WindowAnswer(t *rapid.T) {
 	mc.answer(t, p, ans)
 }
 
-func (mc *liveMachine) answer(t *rapid.T, p *refPending, ans request) {
+func (mc *liveMachine) answer(t *rapid.T, p *refPending, ans wire.Request) {
 	before := mc.grantedCount()
 	if res := mc.lv.control(ans); res.Error != "" {
 		mc.fatalf(t, "Answer to %s: %s", p.tag, res.Error)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // Calls of host commands: validated, covered by a grant or asked for, run as a transient user unit with the arguments
@@ -53,7 +54,7 @@ type callRecord struct {
 
 // call runs a host command under a grant that covers it, asking the user for one if none does. Everything the call
 // carries is checked before the user is asked
-func (b *broker) call(p peer, req request) (response, error) {
+func (b *broker) call(p peer, req wire.Request) (response, error) {
 	c, ok := b.caps[req.Capability]
 	if !ok || c.Type != "command" {
 		return response{}, fmt.Errorf("No host commands %q: see list", req.Capability)

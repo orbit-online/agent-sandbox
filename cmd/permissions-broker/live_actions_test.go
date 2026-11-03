@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -75,7 +76,7 @@ func (mc *liveMachine) Flood(t *rapid.T) {
 
 // Crafted: requests that never reach the user (P3, P7)
 func (mc *liveMachine) Crafted(t *rapid.T) {
-	r := rapid.SampledFrom([]request{
+	r := rapid.SampledFrom([]wire.Request{
 		{Capability: "test/other", Reason: "x"},
 		{Capability: liveCmd, Params: json.RawMessage(`{"unit":"evil"}`), Reason: "x"},
 		{Capability: liveFolder, Params: json.RawMessage(`{"path":5}`), Reason: "x"},
@@ -96,7 +97,7 @@ func (mc *liveMachine) Crafted(t *rapid.T) {
 
 // ShareInside: the share asked from where the app runs: refused (S9)
 func (mc *liveMachine) ShareInside(t *rapid.T) {
-	if res := mc.anonymous(t).do(t, request{Op: "share"}); !strings.Contains(res.Error, "outer mount namespace") {
+	if res := mc.anonymous(t).do(t, wire.Request{Op: "share"}); !strings.Contains(res.Error, "outer mount namespace") {
 		mc.fatalf(t, "Share from inside: %+v", res)
 	}
 }
@@ -132,7 +133,7 @@ func (mc *liveMachine) clearOfBlocks() {
 
 func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, copies int, call bool) {
 	mc.tags++
-	req := request{Op: "request", Capability: c, Params: json.RawMessage(p), Lease: lease,
+	req := wire.Request{Op: "request", Capability: c, Params: json.RawMessage(p), Lease: lease,
 		Reason: fmt.Sprintf("why%d: to <b>read</b>\n\tthe notes", mc.tags)}
 	if call {
 		req.Op, req.Command, req.Arguments = "call", "thing", json.RawMessage(`{}`)
@@ -146,7 +147,7 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, c, p, lease string, co
 	var asked *pending
 	if kind == "ask" {
 		mc.waitFor(t, "the question for "+c, func() bool {
-			for _, q := range mc.lv.control(request{Op: "state"}).Pending {
+			for _, q := range mc.lv.control(wire.Request{Op: "state"}).Pending {
 				if q.Reason == cleanReason(req.Reason) {
 					asked = q
 				}
@@ -227,7 +228,7 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response, call boo
 }
 
 // asked checks the question as the window shows it (P7: the daemon's summary, the reason cleaned) and notes it pending
-func (mc *liveMachine) asked(t *rapid.T, q *pending, req request, done chan response) {
+func (mc *liveMachine) asked(t *rapid.T, q *pending, req wire.Request, done chan response) {
 	lease := leaseOf(req.Lease)
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	if !strings.HasPrefix(q.Summary, mc.lv.desc[req.Capability]) || strings.Contains(q.Summary, tag) ||
@@ -250,7 +251,7 @@ func (mc *liveMachine) drawGrant(t *rapid.T) string {
 // Release: release from inside, which ends the grant
 func (mc *liveMachine) Release(t *rapid.T) {
 	id := mc.drawGrant(t)
-	res := mc.anonymous(t).do(t, request{Op: "release", Grant: id})
+	res := mc.anonymous(t).do(t, wire.Request{Op: "release", Grant: id})
 	g := mc.m.grants[id]
 	if g == nil {
 		if res.Error == "" {
@@ -271,7 +272,7 @@ func (mc *liveMachine) Release(t *rapid.T) {
 func (mc *liveMachine) Connect(t *rapid.T) {
 	mc.tags++
 	key := "c" + strconv.Itoa(mc.tags)
-	res := mc.anonymous(t).do(t, request{Op: "connect", Capability: socketsDir + "/" + liveSock, Grant: key,
+	res := mc.anonymous(t).do(t, wire.Request{Op: "connect", Capability: socketsDir + "/" + liveSock, Grant: key,
 		Reason: "ping " + key})
 	g := mc.m.matching(liveSock, "{}")
 	switch {
@@ -295,7 +296,7 @@ func (mc *liveMachine) Lock(t *rapid.T) {
 // Revoke: the user revokes a grant in the window; a standing grant stays ended until a restart
 func (mc *liveMachine) Revoke(t *rapid.T) {
 	id := mc.drawGrant(t)
-	res := mc.lv.control(request{Op: "revoke", Grant: id})
+	res := mc.lv.control(wire.Request{Op: "revoke", Grant: id})
 	g := mc.m.grants[id]
 	if g == nil {
 		if res.Error == "" {

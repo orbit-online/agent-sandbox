@@ -1,16 +1,17 @@
-package main
+// Package mcpserver is the sandbox's permissions MCP server: a client of the broker's request.sock, with tools to list,
+// request, release and see grants, and one per host command
+package mcpserver
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 type requestIn struct {
@@ -26,20 +27,26 @@ type releaseIn struct {
 
 var implementation = &mcp.Implementation{Name: "permissions", Version: "0.1.0"}
 
-func runMCP(socket, commandsPath string) error {
+// Run serves MCP on stdin and stdout, a client of the broker at socket. commandsPath names the host commands'
+// declarations, which it offers as tools
+func Run(socket, commandsPath string) error {
 	cmds, err := readCommands(commandsPath)
 	if err != nil {
 		return err
 	}
-	n := &nudger{socket: socket, now: time.Now}
-	server := newMCPServer(socket, n)
-	addCommandTools(server, socket, n, cmds)
-	return server.Run(context.Background(), &mcp.StdioTransport{})
+	return NewServer(socket, cmds).Run(context.Background(), &mcp.StdioTransport{})
 }
 
-// newMCPServer is the MCP server with its own tools, fixed from its start: Claude Code doesn't pick up tools added
-// later
-func newMCPServer(socket string, n *nudger) *mcp.Server {
+// NewServer is the MCP server, its tools fixed from its start: Claude Code doesn't pick up tools added later. Its own,
+// and one per host command
+func NewServer(socket string, cmds []Commands) *mcp.Server {
+	n := &nudger{socket: socket, now: time.Now}
+	server := newServer(socket, n)
+	addCommandTools(server, socket, n, cmds)
+	return server
+}
+
+func newServer(socket string, n *nudger) *mcp.Server {
 	server := mcp.NewServer(implementation, &mcp.ServerOptions{
 		Instructions: "Access outside the sandbox that the user grants while it runs: folders, host sockets, " +
 			"and host commands, the tools named <capability>_<command>, which ask the user for a grant of their " +
@@ -51,11 +58,11 @@ func newMCPServer(socket string, n *nudger) *mcp.Server {
 			"session that asked: every session can use it, and any can release it. Grants with lease standing " +
 			"come from the sandbox's configuration and are there from the start.",
 	})
-	call := func(req request) (response, error) { return callBroker(socket, req) }
+	call := func(req wire.Request) (reply, error) { return callBroker(socket, req) }
 
 	mcp.AddTool(server, &mcp.Tool{Name: "list", Description: "What can be granted, with its parameters, and what is."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-			res, err := call(request{Op: "list"})
+			res, err := call(wire.Request{Op: "list"})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -67,7 +74,7 @@ func newMCPServer(socket string, n *nudger) *mcp.Server {
 		"bounding arguments as params."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			params, _ := json.Marshal(in.Params)
-			res, err := call(request{Op: "request", Capability: in.Capability, Params: params, Reason: in.Reason,
+			res, err := call(wire.Request{Op: "request", Capability: in.Capability, Params: params, Reason: in.Reason,
 				Lease: in.Lease})
 			if err != nil {
 				return nil, nil, err
@@ -77,7 +84,7 @@ func newMCPServer(socket string, n *nudger) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "release", Description: "Give a grant back once you're done with it. " +
 		"It ends for the whole sandbox."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in releaseIn) (*mcp.CallToolResult, any, error) {
-			if _, err := call(request{Op: "release", Grant: in.Grant}); err != nil {
+			if _, err := call(wire.Request{Op: "release", Grant: in.Grant}); err != nil {
 				return nil, nil, err
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Released"}}}, nil, nil
@@ -85,7 +92,7 @@ func newMCPServer(socket string, n *nudger) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "The sandbox's live grants, usable from the " +
 		"whole sandbox."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-			res, err := call(request{Op: "status"})
+			res, err := call(wire.Request{Op: "status"})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -102,29 +109,31 @@ func jsonResult(v any) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
 }
 
-// callBroker sends one request and reads the answer. A request waits for the user: two minutes, or ten with the
-// window open
-func callBroker(socket string, req request) (response, error) {
-	conn, err := net.Dial("unix", socket)
-	if err != nil {
-		return response{}, fmt.Errorf("%w: %w", errNotRunning, err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(askTimeout + optionsTimeout + time.Minute))
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return response{}, err
-	}
-	var res response
-	if err := json.NewDecoder(conn).Decode(&res); err != nil {
-		return response{}, fmt.Errorf("Read the broker's answer: %w", err)
-	}
-	if res.Error != "" {
-		return response{}, errors.New(strings.TrimSpace(res.Error))
+// reply is what the server reads of the broker's answers. What it passes on to Claude it keeps as the broker sent it
+type reply struct {
+	Capabilities json.RawMessage `json:"capabilities"`
+	Grant        json.RawMessage `json:"grant"`
+	Grants       json.RawMessage `json:"grants"`
+	// What a host command printed: text, or Data of the image type Mime
+	Output string `json:"output"`
+	Mime   string `json:"mime"`
+	Data   []byte `json:"data"`
+}
+
+// heldGrant is what the nudge says of a grant
+type heldGrant struct {
+	ID      string    `json:"id"`
+	Summary string    `json:"summary"`
+	Granted time.Time `json:"granted"`
+}
+
+func callBroker(socket string, req wire.Request) (reply, error) {
+	var res reply
+	if err := wire.Call(socket, req, &res); err != nil {
+		return reply{}, err
 	}
 	return res, nil
 }
-
-var errNotRunning = errors.New("The permissions broker isn't running")
 
 // How old grants get before tool results remind Claude to release them, and how often they do
 var (
@@ -159,12 +168,18 @@ func (n *nudger) note() string {
 	if now.Sub(n.last) < nudgeEvery {
 		return ""
 	}
-	status, err := callBroker(n.socket, request{Op: "status"})
+	status, err := callBroker(n.socket, wire.Request{Op: "status"})
 	if err != nil {
 		return ""
 	}
+	var grants []heldGrant
+	if len(status.Grants) > 0 {
+		if err := json.Unmarshal(status.Grants, &grants); err != nil {
+			return ""
+		}
+	}
 	var held []string
-	for _, g := range status.Grants {
+	for _, g := range grants {
 		if now.Sub(g.Granted) >= nudgeAfter {
 			held = append(held, fmt.Sprintf("%s (grant %s, since %s)", g.Summary, g.ID, g.Granted.Format("15:04")))
 		}

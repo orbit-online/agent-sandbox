@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -46,10 +47,10 @@ func (mc *machine) NotifyDeny(t *rapid.T) {
 // NotifyOptions: Options on the notification hands the request to the window, which waits 10 minutes at most
 func (mc *machine) NotifyOptions(t *rapid.T) {
 	p := mc.drawPending(t, true)
-	timers := mc.clk.asked(optionsTimeout)
+	timers := mc.clk.asked(wire.OptionsTimeout)
 	p.call.answer <- "options"
 	// Its timer starts now
-	for deadline := time.Now().Add(settle); mc.clk.asked(optionsTimeout) == timers; {
+	for deadline := time.Now().Add(settle); mc.clk.asked(wire.OptionsTimeout) == timers; {
 		if time.Now().After(deadline) {
 			mc.fatalf(t, "Options on %s: the window's wait didn't start", p.tag)
 		}
@@ -62,7 +63,7 @@ func (mc *machine) NotifyOptions(t *rapid.T) {
 // the parameters narrowed or not
 func (mc *machine) WindowAnswer(t *rapid.T) {
 	p := mc.drawPending(t, false)
-	ans := request{Op: "answer", Pending: p.id, Allow: rapid.Bool().Draw(t, "allow")}
+	ans := wire.Request{Op: "answer", Pending: p.id, Allow: rapid.Bool().Draw(t, "allow")}
 	if ans.Allow {
 		ans.Lease = rapid.SampledFrom(leases).Draw(t, "lease")
 		if rapid.Bool().Draw(t, "narrow") {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -78,7 +79,7 @@ func (mc *machine) Flood(t *rapid.T) {
 // Crafted: what the sandbox may send that never reaches the user (P3, P7): an unknown capability, parameters the
 // capability doesn't take, of the wrong type or with control characters, no reason, a lease that isn't one
 func (mc *machine) Crafted(t *rapid.T) {
-	r := rapid.SampledFrom([]request{
+	r := rapid.SampledFrom([]wire.Request{
 		{Capability: "other", Params: json.RawMessage(`{"name":"a"}`), Reason: "x"},
 		{Capability: capConsole, Params: json.RawMessage(`{"name":"../a"}`), Reason: "x"},
 		{Capability: capConsole, Params: json.RawMessage(`{}`), Reason: "x"},
@@ -131,7 +132,7 @@ func (mc *machine) predict(c, p, lease string, call bool) (string, *refGrant) {
 
 func (mc *machine) request(t *rapid.T, who *caller, c, p, lease, reason string, copies int, call bool) {
 	mc.tags++
-	req := request{Op: "request", Capability: c, Params: json.RawMessage(p), Lease: lease,
+	req := wire.Request{Op: "request", Capability: c, Params: json.RawMessage(p), Lease: lease,
 		Reason: fmt.Sprintf("why%d: %s", mc.tags, reason)}
 	if call {
 		req.Op, req.Command, req.Arguments = "call", "issue", json.RawMessage(`{}`)
@@ -238,7 +239,7 @@ func leaseOf(lease string) string {
 }
 
 // asked checks the question the user was asked (P7: the daemon's summary, the reason cleaned) and notes it pending
-func (mc *machine) asked(t *rapid.T, call *askCall, req request, done chan response) {
+func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, done chan response) {
 	lease := leaseOf(req.Lease)
 	tag, _, _ := strings.Cut(req.Reason, " ")
 	desc := mc.caps[req.Capability].Description

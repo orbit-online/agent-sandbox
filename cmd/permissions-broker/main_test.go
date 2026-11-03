@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -214,7 +215,7 @@ func testBroker(t *testing.T, answers ...string) (*broker, *fakeAsker) {
 
 // callRun calls the test command capability's run under the bounding values params
 func callRun(b *broker, p peer, params, lease string) (response, error) {
-	return b.call(p, request{Op: "call", Capability: "thing", Command: "run", Params: json.RawMessage(params),
+	return b.call(p, wire.Request{Op: "call", Capability: "thing", Command: "run", Params: json.RawMessage(params),
 		Arguments: json.RawMessage(`{}`), Reason: "testing", Lease: lease})
 }
 
@@ -228,8 +229,8 @@ func calledWith(t *testing.T, res response) callInput {
 	return in
 }
 
-func req(capID, params, lease string) request {
-	return request{Op: "request", Capability: capID, Params: json.RawMessage(params), Reason: "testing", Lease: lease}
+func req(capID, params, lease string) wire.Request {
+	return wire.Request{Op: "request", Capability: capID, Params: json.RawMessage(params), Reason: "testing", Lease: lease}
 }
 
 // ownNs starts the test binary as a mount process in a user, mount and uts namespace of its own, root there

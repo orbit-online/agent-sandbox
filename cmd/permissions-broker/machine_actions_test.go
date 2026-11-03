@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -26,7 +27,7 @@ func (mc *machine) drawGrant(t *rapid.T) string {
 func (mc *machine) Release(t *rapid.T) {
 	id := mc.drawGrant(t)
 	pr, done := mc.w.peerOfPid(mc.w.anonymous().pid)
-	res := mc.b.handleRequest(nil, pr, request{Op: "release", Grant: id})
+	res := mc.b.handleRequest(nil, pr, wire.Request{Op: "release", Grant: id})
 	done()
 	g := mc.m.grants[id]
 	if g == nil {
@@ -69,14 +70,14 @@ func (mc *machine) LockWatched(t *rapid.T) {
 
 // Advance: time passes. Duration leases run out, unanswered notifications and the window time out, blocks lift
 func (mc *machine) Advance(t *rapid.T) {
-	d := rapid.SampledFrom([]time.Duration{time.Second, 59 * time.Second, askTimeout, optionsTimeout, 31 * time.Minute,
+	d := rapid.SampledFrom([]time.Duration{time.Second, 59 * time.Second, wire.AskTimeout, wire.OptionsTimeout, 31 * time.Minute,
 		time.Hour}).Draw(t, "by")
 	mc.clk.advance(d)
 	m := mc.m
 	m.now = m.now.Add(d)
 	mc.waitEnded(t, m.endWhere(func(g *refGrant) bool { return !g.expires.IsZero() && !g.expires.After(m.now) })...)
 	for _, p := range slices.Clone(m.pending) {
-		if !p.options && !p.asked.Add(askTimeout).After(m.now) || p.options && !p.optionsAt.Add(optionsTimeout).After(m.now) {
+		if !p.options && !p.asked.Add(wire.AskTimeout).After(m.now) || p.options && !p.optionsAt.Add(wire.OptionsTimeout).After(m.now) {
 			mc.refused(t, p, mc.waitDone(t, p))
 		}
 	}
@@ -85,7 +86,7 @@ func (mc *machine) Advance(t *rapid.T) {
 // Revoke: the user revokes a grant in the window; a standing grant stays ended until a restart
 func (mc *machine) Revoke(t *rapid.T) {
 	id := mc.drawGrant(t)
-	res := mc.b.handleControl(nil, mc.w.host, request{Op: "revoke", Grant: id})
+	res := mc.b.handleControl(nil, mc.w.host, wire.Request{Op: "revoke", Grant: id})
 	g := mc.m.grants[id]
 	if g == nil {
 		if res.Error == "" {
@@ -124,7 +125,7 @@ func (mc *machine) Restart(t *rapid.T) {
 // Share: the sandbox's outer mount namespace asks for the grant directory shared, once
 func (mc *machine) Share(t *rapid.T) {
 	pr, done := mc.w.peerOfPid(mc.w.sb.pid)
-	res := mc.b.handleRequest(nil, pr, request{Op: "share"})
+	res := mc.b.handleRequest(nil, pr, wire.Request{Op: "share"})
 	done()
 	if mc.m.shareAsked {
 		if res.Error == "" {
@@ -142,7 +143,7 @@ func (mc *machine) Share(t *rapid.T) {
 func (mc *machine) ShareFromElsewhere(t *rapid.T) {
 	pr, done := mc.w.peerOfPid(mc.w.anonymous().pid)
 	defer done()
-	if res := mc.b.handleRequest(nil, pr, request{Op: "share"}); res.Error == "" {
+	if res := mc.b.handleRequest(nil, pr, wire.Request{Op: "share"}); res.Error == "" {
 		t.Fatal("Shared from another mount namespace")
 	}
 }
@@ -182,7 +183,7 @@ func (mc *machine) OtherLauncher(t *rapid.T) {
 
 // AttackControl: the sandbox sends control.sock's operations (S6, P6): answering, revoking, ending holders
 func (mc *machine) AttackControl(t *rapid.T) {
-	req := request{Op: rapid.SampledFrom([]string{"answer", "revoke", "state", "end"}).Draw(t, "op"),
+	req := wire.Request{Op: rapid.SampledFrom([]string{"answer", "revoke", "state", "end"}).Draw(t, "op"),
 		Allow: true, Lease: "PT8H", Grant: mc.drawGrant(t), Grants: slices.Collect(maps.Keys(mc.m.grants))}
 	if len(mc.m.pending) > 0 {
 		req.Pending = mc.m.pending[0].id

@@ -1,15 +1,13 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // commandBroker is a broker with the test command capability, its run replaced by script
@@ -34,7 +32,7 @@ func TestCallChecksFirst(t *testing.T) {
 	if err := c.check(); err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range []request{
+	for _, r := range []wire.Request{
 		{Command: "other", Arguments: json.RawMessage(`{"n": 1}`)},
 		{Command: "run", Arguments: json.RawMessage(`{"n": 10}`)},
 		{Command: "run", Arguments: json.RawMessage(`{}`)},
@@ -54,7 +52,7 @@ func TestCallChecksFirst(t *testing.T) {
 	if f.count() != 0 {
 		t.Errorf("Asked %d times", f.count())
 	}
-	if _, err := b.call(peerAt(t, os.Getpid()), request{Op: "call", Capability: c.id(), Command: "run",
+	if _, err := b.call(peerAt(t, os.Getpid()), wire.Request{Op: "call", Capability: c.id(), Command: "run",
 		Arguments: json.RawMessage(`{"n": 9}`), Reason: "testing"}); err != nil || f.count() != 1 {
 		t.Errorf("A valid call: %v, asked %d times", err, f.count())
 	}
@@ -125,89 +123,6 @@ func TestInstanceGone(t *testing.T) {
 	}
 }
 
-// The MCP server lists every host command from its start, and a call runs it
-func TestCommandTools(t *testing.T) {
-	b, c, _ := commandBroker(t, "cat", "allow")
-	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
-	ln, err := listen(sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go b.serveOn(ln, b.handleRequest)
-	cfg := commandConfig{Name: c.Name, Description: c.Description, Bounding: c.Params, Commands: c.Commands}
-	server := newMCPServer(sock, nil)
-	addCommandTools(server, sock, nil, []commandConfig{cfg})
-	ctx := context.Background()
-	st, ct := mcp.NewInMemoryTransports()
-	if _, err := server.Connect(ctx, st, nil); err != nil {
-		t.Fatal(err)
-	}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tools, err := cs.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tool *mcp.Tool
-	for _, tl := range tools.Tools {
-		if tl.Name == "thing_run" {
-			tool = tl
-		}
-	}
-	schema, _ := json.Marshal(tool.InputSchema)
-	if tool == nil || !strings.Contains(string(schema), `"required":["path","reason","ro"]`) ||
-		!strings.Contains(string(schema), `"lease"`) {
-		t.Fatalf("Tool %+v, schema %s", tool, schema)
-	}
-	out, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "thing_run",
-		Arguments: map[string]any{"path": "/a", "ro": true, "reason": "testing"}})
-	if err != nil || out.IsError {
-		t.Fatalf("Call: %+v, %v", out, err)
-	}
-	var in callInput
-	if err := json.Unmarshal([]byte(out.Content[0].(*mcp.TextContent).Text), &in); err != nil ||
-		string(in.Bounding) != `{"path":"/a","ro":true}` || string(in.Arguments) != `{}` {
-		t.Errorf("Ran with %+v, %v", in, err)
-	}
-	out, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "thing_run", Arguments: map[string]any{"reason": "x",
-		"path": "/b", "lease": "forever"}})
-	if err != nil || !out.IsError {
-		t.Errorf("A bad lease: %+v, %v", out, err)
-	}
-}
-
-// A call made before the daemon listens waits for it
-func TestCallWaitsForBroker(t *testing.T) {
-	b, c, _ := commandBroker(t, "cat", "allow")
-	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
-	go func() {
-		time.Sleep(time.Second)
-		ln, err := listen(sock)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		t.Cleanup(func() { ln.Close() })
-		b.serveOn(ln, b.handleRequest)
-	}()
-	cfg := commandConfig{Name: c.Name, Bounding: c.Params, Commands: c.Commands}
-	args, _ := json.Marshal(map[string]any{"reason": "testing"})
-	out, err := commandHandler(sock, nil, cfg, "run")(context.Background(),
-		&mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: "thing_run", Arguments: args}})
-	if err != nil || out.IsError {
-		t.Errorf("Call before the daemon listened: %+v, %v", out, err)
-	}
-}
-
 // What a call can't do: carry an array or multiline bounding value, and run once its grant ended while it waited
 func TestCallParamsRefused(t *testing.T) {
 	for _, schema := range []string{`{"type": "array", "items": {"type": "string"}, "description": "d"}`,
@@ -255,7 +170,7 @@ func TestWindowKeepsBounding(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"path": "/b"}`)})
+				_ = b.answer(wire.Request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"path": "/b"}`)})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)

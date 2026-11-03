@@ -10,13 +10,10 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 const (
-	// No answer in this long denies
-	askTimeout = 2 * time.Minute
-	// Once the user opens the window on a request, it waits this long at most
-	optionsTimeout = 10 * time.Minute
 	// Requests the user may turn down in a row before the broker stops asking about the capability for a while
 	maxRefusals = 3
 	blockFor    = 2 * time.Minute
@@ -30,24 +27,6 @@ const (
 
 // How long a client has to send its request
 var readTimeout = 10 * time.Second
-
-// A request on request.sock, or an operation on control.sock
-type request struct {
-	Op         string          `json:"op"`
-	Capability string          `json:"capability,omitempty"`
-	Params     json.RawMessage `json:"params,omitempty"`
-	Reason     string          `json:"reason,omitempty"`
-	Lease      string          `json:"lease,omitempty"`
-	Grant      string          `json:"grant,omitempty"`
-	// call: the host command, and its free arguments (Params holds the bounding ones)
-	Command   string          `json:"command,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	// control.sock's answer to a pending request
-	Pending string `json:"pending,omitempty"`
-	Allow   bool   `json:"allow,omitempty"`
-	// control.sock's end: the ended grants whose holders to end, as the window shows them
-	Grants []string `json:"grants,omitempty"`
-}
 
 type response struct {
 	Error string `json:"error,omitempty"`
@@ -124,7 +103,7 @@ type pending struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	Options   bool            `json:"options"`
 
-	answer chan request
+	answer chan wire.Request
 	// Its place in the window's list, by arrival: rows don't move as others come and go
 	seq uint64
 }

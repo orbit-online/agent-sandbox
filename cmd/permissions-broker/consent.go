@@ -11,10 +11,11 @@ import (
 	"unicode"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // request asks the user for a grant, or finds one already there that covers it
-func (b *broker) request(p peer, req request) (*grant, error) {
+func (b *broker) request(p peer, req wire.Request) (*grant, error) {
 	c, ok := b.caps[req.Capability]
 	if !ok {
 		return nil, fmt.Errorf("No capability %q: see list", req.Capability)
@@ -235,7 +236,7 @@ type decision struct {
 // consent asks with a notification. Options hands the request to the window, which answers through control.sock
 func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string, call *askingCall) (decision, error) {
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
-		answer: make(chan request, 1)}
+		answer: make(chan wire.Request, 1)}
 	bounds := ""
 	switch c.Type {
 	case "command":
@@ -261,7 +262,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
-	timeout := b.clock.after(askTimeout)
+	timeout := b.clock.after(wire.AskTimeout)
 	go func() {
 		select {
 		case <-timeout:
@@ -301,12 +302,12 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	select {
 	case a := <-p.answer:
 		return windowDecision(a, lease), nil
-	case <-b.clock.after(optionsTimeout):
+	case <-b.clock.after(wire.OptionsTimeout):
 		return decision{}, nil
 	}
 }
 
-func windowDecision(a request, lease string) decision {
+func windowDecision(a wire.Request, lease string) decision {
 	if a.Lease == "" {
 		a.Lease = lease
 	}
@@ -324,7 +325,7 @@ func (b *broker) markOptions(id string) error {
 	return nil
 }
 
-func (b *broker) answer(req request) error {
+func (b *broker) answer(req wire.Request) error {
 	b.mu.Lock()
 	p, ok := b.pending[req.Pending]
 	b.mu.Unlock()

@@ -1,4 +1,4 @@
-package main
+package mcpserver
 
 import (
 	"context"
@@ -12,16 +12,31 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // The host commands as MCP tools, from the declarations the module writes into the store: listed from the server's
 // start, before the daemon may have found the sandbox. Claude Code doesn't pick up tools added later. The daemon
 // validates every call against its own copy
 
+// Commands is a host command capability as the module declares it, of which the server reads what makes its tools
+type Commands struct {
+	Name        string                     `json:"name"`
+	Description string                     `json:"description"`
+	Bounding    map[string]json.RawMessage `json:"bounding"`
+	Commands    map[string]*Command        `json:"commands"`
+}
+
+// Command is one host command of a capability: its description and free arguments
+type Command struct {
+	Description string                     `json:"description"`
+	Arguments   map[string]json.RawMessage `json:"arguments"`
+}
+
 // How long a call waits for the daemon to listen
 var brokerWait = 30 * time.Second
 
-func readCommands(path string) ([]commandConfig, error) {
+func readCommands(path string) ([]Commands, error) {
 	if path == "" {
 		return nil, nil
 	}
@@ -29,7 +44,7 @@ func readCommands(path string) ([]commandConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Read the host commands: %w", err)
 	}
-	var cfgs []commandConfig
+	var cfgs []Commands
 	if err := json.Unmarshal(data, &cfgs); err != nil {
 		return nil, fmt.Errorf("Parse the host commands %s: %w", path, err)
 	}
@@ -37,7 +52,7 @@ func readCommands(path string) ([]commandConfig, error) {
 }
 
 // addCommandTools adds a tool <capability>_<command> per host command
-func addCommandTools(server *mcp.Server, socket string, n *nudger, cfgs []commandConfig) {
+func addCommandTools(server *mcp.Server, socket string, n *nudger, cfgs []Commands) {
 	for _, cc := range cfgs {
 		for _, name := range slices.Sorted(maps.Keys(cc.Commands)) {
 			cmd := cc.Commands[name]
@@ -50,7 +65,7 @@ func addCommandTools(server *mcp.Server, socket string, n *nudger, cfgs []comman
 	}
 }
 
-func boundBy(cc commandConfig) string {
+func boundBy(cc Commands) string {
 	if len(cc.Bounding) == 0 {
 		return ""
 	}
@@ -59,7 +74,7 @@ func boundBy(cc commandConfig) string {
 
 // toolSchema is a command's input schema: the capability's bounding arguments, the command's free ones, a reason and
 // a lease, all required but the lease. The broker's own keywords go; a pattern matches the whole value
-func toolSchema(cc commandConfig, cmd *hostCommand) map[string]any {
+func toolSchema(cc Commands, cmd *Command) map[string]any {
 	props := map[string]any{
 		"reason": map[string]any{"type": "string", "description": "why you need it, in a sentence: the user sees it " +
 			"when asked"},
@@ -85,7 +100,7 @@ func toolSchema(cc commandConfig, cmd *hostCommand) map[string]any {
 	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}
 }
 
-func commandHandler(socket string, n *nudger, cc commandConfig, name string) mcp.ToolHandler {
+func commandHandler(socket string, n *nudger, cc Commands, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		in, err := schema.DecodeObject(req.Params.Arguments)
 		if err != nil {
@@ -104,11 +119,11 @@ func commandHandler(socket string, n *nudger, cc commandConfig, name string) mcp
 		}
 		params, _ := json.Marshal(bounding)
 		args, _ := json.Marshal(in)
-		call := request{Op: "call", Capability: cc.Name, Command: name, Params: params, Arguments: args,
+		call := wire.Request{Op: "call", Capability: cc.Name, Command: name, Params: params, Arguments: args,
 			Reason: reason, Lease: lease}
 		res, err := callBroker(socket, call)
 		// The app starts its MCP servers at once, maybe before the daemon found the sandbox and listens
-		for wait := time.Now().Add(brokerWait); errors.Is(err, errNotRunning) && time.Now().Before(wait); {
+		for wait := time.Now().Add(brokerWait); errors.Is(err, wire.ErrNotRunning) && time.Now().Before(wait); {
 			time.Sleep(500 * time.Millisecond)
 			res, err = callBroker(socket, call)
 		}

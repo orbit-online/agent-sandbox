@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mcpserver"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -84,7 +86,7 @@ func main() {
 		}
 	case opts["mcp"] == true:
 		commands, _ := opts.String("--commands")
-		err = runMCP(socketArg(opts), commands)
+		err = mcpserver.Run(socketArg(opts), commands)
 	case opts["share"] == true:
 		err = share(socketArg(opts))
 	case opts["make-shared"] == true:
@@ -127,8 +129,17 @@ func share(socket string) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	_, err := callBroker(socket, request{Op: "share"})
+	_, err := callBroker(socket, wire.Request{Op: "share"})
 	return err
+}
+
+// callBroker sends one request to the broker at socket and reads its answer
+func callBroker(socket string, req wire.Request) (response, error) {
+	var res response
+	if err := wire.Call(socket, req, &res); err != nil {
+		return response{}, err
+	}
+	return res, nil
 }
 
 type config struct {

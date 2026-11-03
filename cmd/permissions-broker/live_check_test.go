@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -16,7 +17,7 @@ import (
 func (mc *liveMachine) Check(t *rapid.T) {
 	for _, p := range slices.Clone(mc.m.pending) {
 		if time.Since(p.asked) > 90*time.Second {
-			mc.answer(t, p, request{Op: "answer", Pending: p.id})
+			mc.answer(t, p, wire.Request{Op: "answer", Pending: p.id})
 		}
 	}
 	m := mc.m
@@ -42,7 +43,7 @@ func (mc *liveMachine) Check(t *rapid.T) {
 
 func (mc *liveMachine) compare(t *rapid.T) error {
 	m, lv := mc.m, mc.lv
-	st := lv.control(request{Op: "state"})
+	st := lv.control(wire.Request{Op: "state"})
 	if st.Error != "" {
 		return fmt.Errorf("State: %s", st.Error)
 	}
@@ -118,7 +119,7 @@ func (mc *liveMachine) compareDelivery(t *rapid.T, folders []string) error {
 	if slices.Sort(outer); !slices.Equal(outer, folders) {
 		return fmt.Errorf("Mounted in the sandbox's outer mount namespace %v, want %v", outer, folders)
 	}
-	res := mc.anonymous(t).do(t, request{Op: "mounts"})
+	res := mc.anonymous(t).do(t, wire.Request{Op: "mounts"})
 	var inner []string
 	for _, p := range strings.Fields(res.Output) {
 		inner = append(inner, strings.TrimPrefix(p, lv.cfg.SandboxGrantDir+"/"))
@@ -132,7 +133,7 @@ func (mc *liveMachine) compareDelivery(t *rapid.T, folders []string) error {
 // checkConns: the connections to the echo socket whose grant ended are closed (P4), the others still reach the host
 func (mc *liveMachine) checkConns(t *rapid.T) {
 	for key, id := range mc.conns {
-		res := mc.anonymous(t).do(t, request{Op: "probe", Grant: key, Reason: "probe " + key})
+		res := mc.anonymous(t).do(t, wire.Request{Op: "probe", Grant: key, Reason: "probe " + key})
 		switch _, live := mc.m.grants[id]; {
 		case !live && !strings.HasPrefix(res.Error, "closed: "):
 			mc.fatalf(t, "A connection under %s, which ended, still open: %+v", id, res)

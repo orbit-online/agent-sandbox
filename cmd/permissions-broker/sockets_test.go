@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -42,10 +43,10 @@ func TestShare(t *testing.T) {
 func TestControlFromHostOnly(t *testing.T) {
 	b, _ := testBroker(t)
 	cmd := ownNs(t, t.TempDir())
-	if res := b.handleControl(nil, peerAt(t, cmd.Process.Pid), request{Op: "state"}); res.Error == "" {
+	if res := b.handleControl(nil, peerAt(t, cmd.Process.Pid), wire.Request{Op: "state"}); res.Error == "" {
 		t.Error("control.sock answered a peer in another user namespace")
 	}
-	if res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}); res.Error != "" {
+	if res := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "state"}); res.Error != "" {
 		t.Errorf("control.sock refused the host: %s", res.Error)
 	}
 }
@@ -71,23 +72,23 @@ func TestSockets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer watch.Close()
-	_ = json.NewEncoder(watch).Encode(request{Op: "watch"})
+	_ = json.NewEncoder(watch).Encode(wire.Request{Op: "watch"})
 	time.Sleep(50 * time.Millisecond)
 
 	res, err := callBroker(sock, req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil || res.Grant == nil {
 		t.Fatalf("request: %+v, %v", res, err)
 	}
-	called, err := callBroker(sock, request{Op: "call", Capability: c.id(), Command: "run", Params: json.RawMessage(`{"path": "/a"}`),
+	called, err := callBroker(sock, wire.Request{Op: "call", Capability: c.id(), Command: "run", Params: json.RawMessage(`{"path": "/a"}`),
 		Reason: "testing"})
 	if err != nil || called.Grant == nil || called.Grant.ID != res.Grant.ID || called.Output == "" {
 		t.Fatalf("call: %+v, %v", called, err)
 	}
-	list, err := callBroker(sock, request{Op: "list"})
+	list, err := callBroker(sock, wire.Request{Op: "list"})
 	if err != nil || len(list.Capabilities) != 1 || len(list.Grants) != 1 {
 		t.Errorf("list: %+v, %v", list, err)
 	}
-	if _, err := callBroker(sock, request{Op: "release", Grant: res.Grant.ID}); err != nil {
+	if _, err := callBroker(sock, wire.Request{Op: "release", Grant: res.Grant.ID}); err != nil {
 		t.Error(err)
 	}
 	_ = watch.SetReadDeadline(time.Now().Add(time.Second))
@@ -134,11 +135,11 @@ func TestServeLimits(t *testing.T) {
 			c.Close()
 		}
 	}()
-	if _, err := callBroker(ctlSock, request{Op: "state"}); err != nil {
+	if _, err := callBroker(ctlSock, wire.Request{Op: "state"}); err != nil {
 		t.Errorf("control.sock with request.sock full: %v", err)
 	}
 	time.Sleep(readTimeout + 200*time.Millisecond)
-	if _, err := callBroker(reqSock, request{Op: "list"}); err != nil {
+	if _, err := callBroker(reqSock, wire.Request{Op: "list"}); err != nil {
 		t.Errorf("request.sock after the idle clients timed out: %v", err)
 	}
 	// An oversized request is cut off, not read whole
@@ -171,7 +172,7 @@ func TestPeerGoneAfterRead(t *testing.T) {
 	_ = cmd.Wait()
 	b, _ := testBroker(t, "allow")
 	recycled := peer{pid: os.Getpid(), pidfd: fd}
-	if res := b.handleControl(nil, recycled, request{Op: "state"}); res.Error == "" {
+	if res := b.handleControl(nil, recycled, wire.Request{Op: "state"}); res.Error == "" {
 		t.Error("control.sock answered a peer that's gone, for the process its pid went to")
 	}
 	c := testCap(t, "command")
@@ -197,7 +198,7 @@ func TestPeerGoneAfterRead(t *testing.T) {
 func TestStateOverview(t *testing.T) {
 	b, _ := testBroker(t)
 	b.cfg.Overview = json.RawMessage(`{"network":"its own","binds":[{"path":"/srv","rw":true}]}`)
-	res := b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"})
+	res := b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "state"})
 	data, _ := json.Marshal(res)
 	if !strings.Contains(string(data), `"overview":{"network":"its own","binds":[{"path":"/srv","rw":true}]}`) {
 		t.Errorf("State %s", data)

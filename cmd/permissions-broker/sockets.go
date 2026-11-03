@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
@@ -27,7 +28,7 @@ func listen(path string) (*net.UnixListener, error) {
 }
 
 // serveOn serves request.sock or control.sock until it's closed, within acceptLoop's budget
-func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, peer, request) response) {
+func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, peer, wire.Request) response) {
 	acceptLoop(ln, func(conn *net.UnixConn) {
 		defer conn.Close()
 		p, err := peerOf(conn)
@@ -36,7 +37,7 @@ func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, peer, 
 		}
 		defer unix.Close(p.pidfd)
 		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-		var req request
+		var req wire.Request
 		if err := json.NewDecoder(io.LimitReader(conn, maxRequest)).Decode(&req); err != nil {
 			_ = json.NewEncoder(conn).Encode(response{Error: "Not a JSON request"})
 			return
@@ -84,7 +85,7 @@ func peerOf(conn *net.UnixConn) (peer, error) {
 	return peer{pid: pid, pidfd: pidfd}, nil
 }
 
-func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
+func (b *broker) handleRequest(_ *net.UnixConn, p peer, req wire.Request) response {
 	var res response
 	var err error
 	switch req.Op {
@@ -114,7 +115,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req request) response {
 
 // handleControl serves the Permissions window and the launcher, which run on the host: a peer in another user
 // namespace (anything in the sandbox, whatever path it reaches the socket by) gets nothing
-func (b *broker) handleControl(_ *net.UnixConn, p peer, req request) response {
+func (b *broker) handleControl(_ *net.UnixConn, p peer, req wire.Request) response {
 	if !sameNs(p.pid, "user") || p.gone() {
 		return response{Error: "Only from the host"}
 	}

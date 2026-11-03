@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
@@ -78,7 +79,7 @@ func newLiveEnv(t *testing.T) *liveEnv {
 	if lv.sb, err = lookupSandbox(os.Getenv("XDG_RUNTIME_DIR"), cfg.AppID); err != nil {
 		t.Fatal(err)
 	}
-	res := rawCall(cfg.ControlSocket, request{Op: "state"})
+	res := rawCall(cfg.ControlSocket, wire.Request{Op: "state"})
 	if res.Error != "" {
 		t.Fatal(res.Error)
 	}
@@ -94,7 +95,7 @@ func newLiveEnv(t *testing.T) *liveEnv {
 }
 
 // control sends an operation on control.sock, as the window does
-func (lv *liveEnv) control(req request) response { return rawCall(lv.cfg.ControlSocket, req) }
+func (lv *liveEnv) control(req wire.Request) response { return rawCall(lv.cfg.ControlSocket, req) }
 
 func (lv *liveEnv) systemctl(args ...string) (string, error) {
 	out, err := exec.Command(systemctl, append([]string{"--user"}, args...)...).CombinedOutput()
@@ -119,7 +120,7 @@ func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 	t.Cleanup(func() {
 		// Questions left are denied, so their callers end
 		for _, p := range mc.pendingNow() {
-			lv.control(request{Op: "answer", Pending: p.id})
+			lv.control(wire.Request{Op: "answer", Pending: p.id})
 		}
 		for _, p := range mc.procs {
 			p.kill()
@@ -140,7 +141,7 @@ func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 func (mc *liveMachine) started(t *rapid.T) {
 	m := mc.m
 	found := map[storeKey]string{}
-	for _, g := range mc.lv.control(request{Op: "state"}).Grants {
+	for _, g := range mc.lv.control(wire.Request{Op: "state"}).Grants {
 		if g.Lease == "standing" {
 			found[storeKey{g.Capability, string(g.Params)}] = g.ID
 		}

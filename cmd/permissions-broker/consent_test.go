@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 func TestConsent(t *testing.T) {
@@ -19,7 +20,7 @@ func TestConsent(t *testing.T) {
 	c := testCap(t, "command")
 	b.caps[c.id()] = c
 
-	if _, err := b.request(peerAt(t, os.Getpid()), request{Op: "request", Capability: c.id(), Lease: "PT1H"}); err == nil {
+	if _, err := b.request(peerAt(t, os.Getpid()), wire.Request{Op: "request", Capability: c.id(), Lease: "PT1H"}); err == nil {
 		t.Error("Granted without a reason")
 	}
 	if _, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/a"}`, "PT1H")); err == nil {
@@ -88,7 +89,7 @@ func TestListed(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT1H", Params: json.RawMessage(`{"path": "c"}`)})
+				_ = b.answer(wire.Request{Pending: id, Allow: true, Lease: "PT1H", Params: json.RawMessage(`{"path": "c"}`)})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -145,7 +146,7 @@ func TestWindowAnswer(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"vm": "b"}`)})
+				_ = b.answer(wire.Request{Pending: id, Allow: true, Lease: "PT8H", Params: json.RawMessage(`{"vm": "b"}`)})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -180,7 +181,7 @@ func TestAnsweredInWindow(t *testing.T) {
 			}
 			b.mu.Unlock()
 			if id != "" {
-				_ = b.answer(request{Pending: id, Allow: true})
+				_ = b.answer(wire.Request{Pending: id, Allow: true})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -225,7 +226,7 @@ func TestPendingOrder(t *testing.T) {
 	}
 	for range 20 {
 		var got []string
-		for _, p := range b.handleControl(nil, peerAt(t, os.Getpid()), request{Op: "state"}).Pending {
+		for _, p := range b.handleControl(nil, peerAt(t, os.Getpid()), wire.Request{Op: "state"}).Pending {
 			got = append(got, p.ID)
 		}
 		if !slices.Equal(got, want) {
@@ -257,14 +258,14 @@ func TestPendingCall(t *testing.T) {
 			b.mu.Unlock()
 			if asked != nil {
 				seen <- asked
-				_ = b.answer(request{Pending: asked.ID})
+				_ = b.answer(wire.Request{Pending: asked.ID})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	args, _ := json.Marshal(map[string]string{"script": script, "csr": csr})
-	_, _ = b.call(peerAt(t, os.Getpid()), request{Op: "call", Capability: c.id(), Command: "run", Arguments: args,
+	_, _ = b.call(peerAt(t, os.Getpid()), wire.Request{Op: "call", Capability: c.id(), Command: "run", Arguments: args,
 		Reason: "testing"})
 	p := <-seen
 	var got map[string]string
