@@ -6,8 +6,9 @@ Permissions window (`nix/packages/permissions-window/`) and folder mounts (`perm
 `permissions.enable`. Built since: declared host commands (`permissions.commands`), with a consent that names what a
 grant covers and the window's redesign; the first half of step 3 (2026-11-03): plugins, their service units and tools
 and session leases removed, folders built into the broker, and host sockets at stable addresses
-(`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Not built yet: the Go D-Bus
-proxy, device grants. Steps lists the order.
+(`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Then the Go D-Bus proxy with
+static rules (step 5), and the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03). Not built yet: live
+rules and the system-bus instance (step 7), device grants. Steps lists the order.
 
 ## Why
 
@@ -488,7 +489,10 @@ replies through to calls it let through, and filters match rules. It refuses wha
 addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those are the static rules, the ones the
 Overview lists.
 
-Built as `cmd/dbus-proxy` (static rules only so far). Where it differs from xdg-dbus-proxy 0.1.7, read from its source:
+Built as `cmd/dbus-proxy` (static rules only so far), and nixpak's session-bus proxy since step 6: the module passes
+nixpak `pkgs // { xdg-dbus-proxy = <dbus-proxy>; }`, whose package links `bin/xdg-dbus-proxy` to `bin/dbus-proxy`, so
+only nixpak's wrapper changes. nixpak's argv works as it is: the bus address from `DBUS_SESSION_BUS_ADDRESS`, the
+outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on it. Where it differs from xdg-dbus-proxy 0.1.7, read from its source:
 
 - It terminates SASL on both sides (EXTERNAL only, for the proxy's own uid) instead of passing the client's lines on,
   and forwards each message with the header fields it parsed and checked, re-encoded, and the body as it came. Bodies
@@ -751,7 +755,7 @@ The first design's steps are built (Status). The rewrite's:
 5. The Go D-Bus proxy with static rules: the argv subset, SASL, fd passing, name tracking, replies, match rules.
    Tests against a real `dbus-daemon`, a revert check per rule kind, `-race`.
 6. The sandbox on the new proxy: VM test that OpenURI, a portal notification and the tray still work, and a call
-   outside the rules is refused.
+   outside the rules is refused. Built.
 7. Live rules: D-Bus capabilities as grants on the session proxy and the system-bus instance. Tests: a grant and a
    revoke applied to the next message.
 8. Consumers: the home SSH and kubectl plugins ported to declared host commands; windows-vm's tools listed before any

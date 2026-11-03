@@ -71,7 +71,8 @@ release it when you're done.
   Portals see the app as Flatpak `com.nixpak.ClaudeDesktop`, or
   `com.nixpak.ClaudeDesktop.<name>` for a named launcher (nixpak's
   `/.flatpak-info`, which the FHS env's inner bwrap doesn't bind).
-- Session D-Bus goes through nixpak's `xdg-dbus-proxy`, which lets through
+- Session D-Bus goes through a filtering proxy on the host (the module's
+  `dbus-proxy`, started by nixpak in place of xdg-dbus-proxy), which lets through
   calls only: OpenURI, Settings and Notification on the portal, and with the
   tray the StatusNotifierWatcher's registration. Notifications go through the
   portal (`NOTIFY_FORCE_PORTAL=1` for libnotify, `notify-send`); the

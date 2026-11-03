@@ -42,9 +42,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
   and the FHS env run, maps the user's subuid range in and starts it.
-- `cmd/dbus-proxy/`: the Go D-Bus proxy that will replace xdg-dbus-proxy
+- `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
   (`docs/permissions.md`, D-Bus), taking the subset of its arguments nixpak
-  passes (`dbus-proxy --help`); not wired into the module yet. `main.go`
+  passes (`dbus-proxy --help`). The module hands it to nixpak as
+  `pkgs.xdg-dbus-proxy` (the package links `bin/xdg-dbus-proxy` to it), so
+  nixpak's launcher starts it as the session-bus proxy. `main.go`
   (arguments, listening, `--fd`), `address.go` (bus addresses), `sasl.go`
   (SASL toward both sides), `wire.go` (reading messages and their file
   descriptors, bounded), `header.go` (parsing the header, decoding a body
@@ -169,7 +171,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   the devices (`/dev/kvm` once, from `kvm` and `devices`) and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
-  refused), and nixpak's
+  refused), nixpak's D-Bus proxy wrapper running our `dbus-proxy` (no
+  xdg-dbus-proxy in the closure), and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
   the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
@@ -371,9 +374,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
   set, with no capabilities left), D-Bus through the proxy (`notify-send` reaching the fake portal's
-  notifications; a fake Plasma on the fake portal's process: the tray's
+  notifications; `xdg-open` reaching its OpenURI from a caller whose `/.flatpak-info` names the app; a
+  method of the portal no rule lists refused, a name without rules hidden (no owner, not listed); a
+  fake Plasma on the fake portal's process: the tray's
   registration reaches it, its notification server, clipboard and another kded
-  object don't, by name or by unique name), the subid maps (alice's auto range in the sandbox's userns
+  object don't, by name or by unique name; the proxy process running `dbus-proxy` from its store path), the subid maps (alice's auto range in the sandbox's userns
   from the host's view, the FHS env's identity map, `/etc/subuid` and
   `/etc/subgid` inside, `unshare --map-auto` and a root-mapping map through
   the shims and the broker, the shim in `/usr/bin`, a file written inside

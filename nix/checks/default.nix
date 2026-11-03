@@ -103,6 +103,7 @@ let
       p: p.name == "claude-desktop-sandboxed"
     ) null sys.config.home-manager.users.alice.home.packages;
   sandboxed = sandboxedOf system;
+  dbusProxy = self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
   # patch-asar.sh on an asar holding the app's notification backend choice as 4.x has it (the app the checks build
   # predates it): the native backend's condition made false, and the build refusing an app with two of them
   notificationPatch =
@@ -713,7 +714,7 @@ let
   };
   # The VM test's parts as vm-<part>, and vm, which builds them all
   vmParts = import ./vm {
-    inherit pkgs aliceModule;
+    inherit pkgs aliceModule dbusProxy;
     broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   };
   vmChecks = lib.mapAttrs' (part: lib.nameValuePair "vm-${part}") vmParts // {
@@ -801,6 +802,15 @@ in
           (( $(grep -cF '`/dev/kvm`' "$doc") == 1 )) || { echo "environment.md lists /dev/kvm twice" >&2; exit 1; }
           ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
           grep -qE '^coreutils, .*, nix\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
+
+          # nixpak's launcher starts our D-Bus proxy: its XDG_DBUS_PROXY_EXE wrapper runs the module's dbus-proxy, and
+          # xdg-dbus-proxy isn't in the closure
+          launcher=$(grep -rlE '^export XDG_DBUS_PROXY_EXE=' $(grep -- '-nixpak-' "$paths")) || { echo "no launcher sets XDG_DBUS_PROXY_EXE" >&2; exit 1; }
+          for l in $launcher; do
+            exe=$(grep -oP "^export XDG_DBUS_PROXY_EXE='?\K/nix/store/[^' ]+" "$l")
+            grep -qF -- '${dbusProxy}/bin/xdg-dbus-proxy "$@"' "$exe" || { echo "$exe doesn't run ${dbusProxy}" >&2; exit 1; }
+          done
+          ! grep -qxF -- "${pkgs.xdg-dbus-proxy}" "$paths" || { echo "xdg-dbus-proxy is in the closure" >&2; exit 1; }
 
           # The tray icon by the colour scheme, also on GNOME (an asar stores its files as they are)
           asar=$(grep -- '-claude-desktop-app\.asar$' "$paths")

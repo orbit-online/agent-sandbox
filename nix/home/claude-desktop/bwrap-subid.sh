@@ -14,7 +14,7 @@ info_out=
 case $SUBID_MAP in
 subid)
   : "${SUBID_BROKER:?}"
-  # nixpak's launcher puts --info-fd first for the app; its xdg-dbus-proxy runs in a plain bwrap
+  # nixpak's launcher puts --info-fd first for the app; its D-Bus proxy runs in a plain bwrap
   [[ ${1:-} == --info-fd ]] || exec "$BWRAP" "$@"
   user=$(id -un)
   IFS=: read -r _ ustart ucount < <(grep -m1 "^$user:" /etc/subuid) || true

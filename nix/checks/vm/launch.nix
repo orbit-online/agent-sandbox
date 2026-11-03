@@ -2,6 +2,7 @@
 # theme, re-entries and --shell, the network, /etc and the store, netns-macvlan's refusals
 {
   gdbus,
+  dbusProxy,
   stateDir,
   sandboxHome,
   routerIP,
@@ -76,7 +77,7 @@
       assert app_caps == "0000000000000000", f"the app has capabilities {app_caps}"
       assert app_netns != as_alice("/run/current-system/sw/bin/readlink /proc/self/ns/net").strip(), "the app runs in the host's netns"
 
-  with subtest("D-Bus reaches the portal's notifications and the tray's calls, nothing else of Plasma's"):
+  with subtest("D-Bus through our proxy reaches the portal's notifications and OpenURI and the tray's calls, nothing else"):
       def bus_call(dest, path, method, *args):
           q = " ".join(shlex.quote(a) for a in args)
           return workstation.execute(sandbox_cmd(
@@ -114,6 +115,28 @@
       assert f"StatusNotifierItem-{app_pid}-1" in items, items
       status, out = bus_call("org.kde.StatusNotifierWatcher", "/kded", "org.kde.kded6.unloadModule", "x")
       assert status != 0 and "true" not in out, f"kded's other object: {status} {out}"
+      # Links go to the host's browser through the portal's OpenURI, which names the app by the caller's process: the
+      # proxy's, in nixpak's wrapper with the app's /.flatpak-info
+      in_sandbox("xdg-open https://example.test/from-the-sandbox")
+      workstation.wait_until_succeeds("grep -q from-the-sandbox /run/user/1000/fake-portal-uris", timeout=30)
+      opened = json.loads(workstation.succeed("grep from-the-sandbox /run/user/1000/fake-portal-uris"))
+      assert opened["app"] == "com.nixpak.ClaudeDesktop", f"the portal saw the caller as {opened}"
+      # A method of an allowed name that no rule lists
+      status, out = bus_call("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+                             "org.freedesktop.portal.OpenURI.SchemeSupported", "https", "@a{sv} {}")
+      assert status != 0 and "AccessDenied" in out, f"OpenURI.SchemeSupported: {status} {out}"
+      workstation.fail("grep -q scheme /run/user/1000/fake-portal-uris")
+      # A name without rules is hidden: no owner, not listed
+      status, out = bus_call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.GetNameOwner",
+                             "org.kde.klipper")
+      assert status != 0 and "NameHasNoOwner" in out, f"GetNameOwner org.kde.klipper: {status} {out}"
+      status, out = bus_call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.ListNames")
+      assert status == 0 and "org.freedesktop.portal.Desktop" in out and "org.kde.klipper" not in out, f"ListNames: {out}"
+      # The proxy nixpak started is ours: its wrapper runs bin/xdg-dbus-proxy, a link to dbus-proxy
+      proxies = workstation.succeed("pgrep -u alice -x xdg-dbus-proxy").split()
+      assert len(proxies) == 1, f"proxies: {proxies}"
+      exe = workstation.succeed(f"readlink /proc/{proxies[0]}/exe").strip()
+      assert exe == "${dbusProxy}/bin/dbus-proxy", f"the D-Bus proxy runs {exe}"
 
   with subtest("the launch replaced the planted links and left alice's files alone"):
       victims_untouched()

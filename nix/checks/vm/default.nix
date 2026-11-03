@@ -6,6 +6,7 @@
   pkgs,
   aliceModule,
   broker,
+  dbusProxy,
 }:
 let
   inherit (pkgs) lib;
@@ -276,6 +277,7 @@ let
             pkgs
             broker
             brokerLive
+            dbusProxy
             gdbus
             stateDir
             sandboxHome

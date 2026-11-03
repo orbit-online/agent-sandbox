@@ -26,6 +26,11 @@ buildGoModule {
   checkFlags = [ "-race" ];
   # The tests run a dbus-daemon of their own, and dbus-send as a libdbus client
   nativeCheckInputs = [ dbus ];
+  # Under xdg-dbus-proxy's name too: the module hands it to nixpak as pkgs.xdg-dbus-proxy, whose wrapper runs
+  # bin/xdg-dbus-proxy
+  postInstall = ''
+    ln -s dbus-proxy $out/bin/xdg-dbus-proxy
+  '';
   meta = {
     description = "Filter a sandbox's D-Bus traffic, taking xdg-dbus-proxy's arguments";
     mainProgram = "dbus-proxy";

@@ -3,7 +3,7 @@
 # the user's. U2 maps all of U1's ids as themselves. bwrap-subid.sh writes both maps.
 #
 # init userns (host)
-# │  runs: nixpak launcher, xdg-dbus-proxy, the pasta-slot script (netSetup), bwrap's parent,
+# │  runs: nixpak launcher, dbus-proxy (in a bwrap of nixpak's), the pasta-slot script (netSetup), bwrap's parent,
 # │        netns-macvlan (cap_net_admin, creates eth0 in N), subid-broker (writes maps below U1 on request)
 # │
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
@@ -61,6 +61,12 @@ let
   subidBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.subid-broker;
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   permissionsWindow = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-window;
+  # nixpak's D-Bus proxy: its launcher runs pkgs.xdg-dbus-proxy in a wrapper whose path it sets at build time
+  # (docs/permissions.md, D-Bus), so the proxy comes in through the pkgs it gets. Only that attribute: nixpak's
+  # callPackage and everything else still see nixpkgs as is
+  nixpakPkgs = pkgs // {
+    xdg-dbus-proxy = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
+  };
   # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
   commandsOf =
     withRun: lcfg:
@@ -982,7 +988,10 @@ let
           );
       });
 
-      sandboxed = inputs.nixpak.lib.nixpak { inherit lib pkgs; } {
+      sandboxed = inputs.nixpak.lib.nixpak {
+        inherit lib;
+        pkgs = nixpakPkgs;
+      } {
         config =
           { sloth, ... }:
           {
@@ -994,7 +1003,7 @@ let
               # Chromium names it StatusNotifierItem-<pid>-<n>
               "org.freedesktop.StatusNotifierItem-${toString appPid}-1" = "own";
             };
-            # Calls only, never "talk": xdg-dbus-proxy filters by name, and talk reaches every object the name's owner
+            # Calls only, never "talk": the proxy filters by name, and talk reaches every object the name's owner
             # exports (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see
             # the name and get replies and the owner's signals (the proxy passes a name's broadcasts once it has any
             # rule, and signals sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the
