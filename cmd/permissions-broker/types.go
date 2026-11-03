@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
@@ -56,8 +57,8 @@ type capabilityInfo struct {
 	Instances   json.RawMessage            `json:"instances,omitempty"`
 	Error       string                     `json:"error,omitempty"`
 	// Host commands: each command's description and free arguments, and what a grant covers, as the consent says it
-	Commands map[string]*hostCommand `json:"commands,omitempty"`
-	Scope    []scopeItem             `json:"scope,omitempty"`
+	Commands map[string]*hostcmd.Command `json:"commands,omitempty"`
+	Scope    []hostcmd.ScopeItem         `json:"scope,omitempty"`
 	// D-Bus: what a grant covers, as the consent says it
 	Covers string `json:"covers,omitempty"`
 }

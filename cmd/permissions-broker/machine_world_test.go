@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"golang.org/x/sys/unix"
@@ -229,13 +230,13 @@ func (w *world) capabilities() map[string]*capability {
 	vm := &capability{Name: capVM, Type: "command", Description: "a VM", Exclusive: true,
 		Params: map[string]json.RawMessage{"name": name,
 			"ro": json.RawMessage(`{"type": "boolean", "description": "read-only"}`)},
-		Commands: map[string]*hostCommand{"start": {Description: "start it", Run: w.script("start", "cat")}}}
+		Commands: map[string]*hostcmd.Command{"start": {Description: "start it", Run: w.script("start", "cat")}}}
 	console := &capability{Name: capConsole, Type: "socket", Description: "a VM's console",
 		Params: map[string]json.RawMessage{"name": name}}
 	token := &capability{Name: capToken, Type: "command", Description: "a token",
 		Params: map[string]json.RawMessage{"scope": json.RawMessage(`{"type": "string", "description": "its scope"}`),
 			"csr": json.RawMessage(`{"type": "string", "opaque": true, "description": "a CSR"}`)},
-		Commands: map[string]*hostCommand{"issue": {Description: "issue one", Run: w.script("run", "cat"),
+		Commands: map[string]*hostcmd.Command{"issue": {Description: "issue one", Run: w.script("run", "cat"),
 			MaxValidity: "PT30M"}}}
 	bus := &capability{Name: capBus, Type: "dbus", Description: "a portal",
 		DBus: &dbusgrant.Config{Name: capBus, Bus: "session", Talk: []string{"org.test.Portal"}}}

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -10,9 +8,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
@@ -25,7 +23,7 @@ type capability struct {
 	Params      map[string]json.RawMessage
 	Exclusive   bool
 	// Host commands: by name
-	Commands map[string]*hostCommand
+	Commands map[string]*hostcmd.Command
 	// Folders: the ceiling, what may be granted at all
 	Sources []mounts.Source
 	// Host sockets: the host's socket, or none with an instances glob, whose matches are the sockets
@@ -101,12 +99,6 @@ func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(params) // maps marshal with sorted keys
 }
 
-// opaqueDigest is how an opaque parameter is shown: enough to tell two apart, nothing to read
-func opaqueDigest(v string) string {
-	sum := sha256.Sum256([]byte(v))
-	return fmt.Sprintf("sha256:%s (%d characters)", hex.EncodeToString(sum[:])[:16], utf8.RuneCountInString(v))
-}
-
 // describe is the notification's summary of a validated request, built from its parameters, not from the reason
 func (c *capability) describe(params json.RawMessage) string {
 	var m map[string]any
@@ -120,7 +112,7 @@ func (c *capability) describe(params json.RawMessage) string {
 	// Quoted, so a value can't pass itself off as more parameters or text of the notification's own
 	for i, k := range keys {
 		if v, ok := m[k].(string); ok && c.schemas[k].Opaque {
-			parts[i] = k + "=" + opaqueDigest(v)
+			parts[i] = k + "=" + schema.OpaqueDigest(v)
 		} else if ok {
 			parts[i] = fmt.Sprintf("%s=%q", k, v)
 		} else {

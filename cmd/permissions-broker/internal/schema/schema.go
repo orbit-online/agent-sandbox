@@ -7,6 +7,8 @@ package schema
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -242,4 +244,10 @@ func DecodeObject(raw json.RawMessage) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	return m, nil
+}
+
+// OpaqueDigest is how an opaque parameter is shown: enough to tell two apart, nothing to read
+func OpaqueDigest(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return fmt.Sprintf("sha256:%s (%d characters)", hex.EncodeToString(sum[:])[:16], utf8.RuneCountInString(v))
 }

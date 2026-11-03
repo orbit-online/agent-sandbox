@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
@@ -270,7 +272,7 @@ func TestPendingCall(t *testing.T) {
 	p := <-seen
 	var got map[string]string
 	_ = json.Unmarshal(p.Arguments, &got)
-	if p.Command != "run" || got["script"] != script || got["csr"] != opaqueDigest(csr) || p.Scope != c.scope() {
+	if p.Command != "run" || got["script"] != script || got["csr"] != schema.OpaqueDigest(csr) || p.Scope != hostcmd.Scope(c.Commands) {
 		t.Errorf("Pending %s %v, scope %q", p.Command, got, p.Scope)
 	}
 }

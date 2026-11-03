@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
@@ -29,16 +29,6 @@ const (
 	maxCalls    = 200
 	maxRecorded = 200
 )
-
-// What a host command reads on stdin
-type callInput struct {
-	Capability string          `json:"capability"`
-	Command    string          `json:"command"`
-	Grant      string          `json:"grant"`
-	Bounding   json.RawMessage `json:"bounding"`
-	Arguments  json.RawMessage `json:"arguments"`
-	Validity   string          `json:"validity,omitempty"`
-}
 
 // A call as the window shows it
 type callRecord struct {
@@ -67,7 +57,7 @@ func (b *broker) call(p peer, req wire.Request) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	args, err := cmd.validateArgs(req.Arguments)
+	args, err := cmd.ValidateArgs(req.Arguments)
 	if err != nil {
 		return response{}, fmt.Errorf("%s_%s: %w", c.id(), req.Command, err)
 	}
@@ -79,7 +69,7 @@ func (b *broker) call(p peer, req wire.Request) (response, error) {
 	if lease == "" {
 		lease = defaultLease
 	}
-	g, err := b.obtain(p, c, params, reason, lease, &askingCall{Command: req.Command, Arguments: cmd.shown(args, 0)})
+	g, err := b.obtain(p, c, params, reason, lease, &askingCall{Command: req.Command, Arguments: cmd.Shown(args, 0)})
 	if err != nil {
 		return response{}, err
 	}
@@ -92,7 +82,7 @@ func (b *broker) call(p peer, req wire.Request) (response, error) {
 
 // runCall runs cmd under g, once the instance's slot and a call slot are free. The grant must still be live then
 // and when the output is handed out: a call may wait for a slot while the grant is revoked or runs out
-func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant, args json.RawMessage) (response, error) {
+func (b *broker) runCall(c *capability, name string, cmd *hostcmd.Command, g *grant, args json.RawMessage) (response, error) {
 	release, err := c.callSlot(string(g.Params))
 	if err != nil {
 		return response{}, err
@@ -136,7 +126,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 		runArgs = append(runArgs, "--property=BindsTo="+b.cfg.Unit, "--property=After="+b.cfg.Unit)
 	}
 	runArgs = append(append(runArgs, "--"), cmd.Run...)
-	in, _ := json.Marshal(callInput{Capability: c.id(), Command: name, Grant: g.ID, Bounding: g.Params, Arguments: args,
+	in, _ := json.Marshal(hostcmd.Input{Capability: c.id(), Command: name, Grant: g.ID, Bounding: g.Params, Arguments: args,
 		Validity: duration.Format(validity)})
 	// systemd ends the unit at RuntimeMaxSec; this ends the wait should systemd-run itself hang
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+runSlack)
@@ -148,7 +138,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 	if runErr != nil && (ctx.Err() != nil || out.over) {
 		_ = exec.Command(systemctl, "--user", "stop", unit).Run()
 	}
-	rec := callRecord{Grant: g.ID, Capability: c.id(), Time: b.now(), Command: name, Arguments: cmd.shown(args, maxRecorded)}
+	rec := callRecord{Grant: g.ID, Capability: c.id(), Time: b.now(), Command: name, Arguments: cmd.Shown(args, maxRecorded)}
 	stderr := strings.TrimSpace(errOut.String())
 	var exitErr *exec.ExitError
 	switch {
@@ -183,7 +173,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostCommand, g *grant,
 
 // callValidity is what a call is told its output may be valid for: the time g has left, at most cmd's maxValidity.
 // None when neither bounds it
-func (b *broker) callValidity(g *grant, cmd *hostCommand) (time.Duration, error) {
+func (b *broker) callValidity(g *grant, cmd *hostcmd.Command) (time.Duration, error) {
 	v, _ := duration.Parse(cmd.MaxValidity)
 	if !g.Expires.IsZero() {
 		left := g.Expires.Sub(b.now())
@@ -240,23 +230,6 @@ func (b *broker) recordCall(rec callRecord) {
 	if n := len(b.calls); n > maxCalls {
 		b.calls = b.calls[n-maxCalls:]
 	}
-}
-
-// shown is a call's arguments as the window shows them: opaque ones by digest, strings longer than cut cut (none with
-// cut 0, for the call asking the user, whose script they read whole)
-func (cmd *hostCommand) shown(args json.RawMessage, cut int) json.RawMessage {
-	m, _ := schema.DecodeObject(args)
-	for k, v := range m {
-		s, ok := v.(string)
-		switch {
-		case ok && cmd.args[k].Opaque:
-			m[k] = opaqueDigest(s)
-		case ok && cut > 0 && utf8.RuneCountInString(s) > cut:
-			m[k] = fmt.Sprintf("%s… (%d characters)", string([]rune(s)[:cut]), utf8.RuneCountInString(s))
-		}
-	}
-	data, _ := json.Marshal(m)
-	return data
 }
 
 // capped keeps what's written up to max bytes, and fails the write past it

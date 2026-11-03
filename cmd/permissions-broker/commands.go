@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
@@ -22,37 +22,14 @@ import (
 
 // A capability of host commands, as the config declares it. The MCP server reads the same without run
 type commandConfig struct {
-	Name        string                     `json:"name"`
-	Description string                     `json:"description"`
-	Bounding    map[string]json.RawMessage `json:"bounding"`
-	Exclusive   bool                       `json:"exclusive"`
-	Commands    map[string]*hostCommand    `json:"commands"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	Bounding    map[string]json.RawMessage  `json:"bounding"`
+	Exclusive   bool                        `json:"exclusive"`
+	Commands    map[string]*hostcmd.Command `json:"commands"`
 }
-
-type hostCommand struct {
-	Description string                     `json:"description"`
-	Arguments   map[string]json.RawMessage `json:"arguments"`
-	Result      string                     `json:"result"`
-	Run         []string                   `json:"run,omitempty"`
-	Timeout     string                     `json:"timeout"`
-	MaxValidity string                     `json:"maxValidity"`
-
-	args map[string]*schema.Schema
-}
-
-const (
-	// A free string without maxLength may be this long: the consent covers it whole, the window shows it
-	maxFree = 64 << 10
-	// MCP tool names: <capability>_<command>
-	maxToolName = 64
-	// A call's timeout unless its command declares one
-	defaultTimeout = "PT1M"
-)
 
 var commandName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
-
-// Names the broker adds to every command's arguments, or uses itself
-var reservedArgs = []string{"reason", "lease"}
 
 // loadCommands makes the config's host command capabilities, each under its own name
 func loadCommands(cfgs []commandConfig, caps map[string]*capability) error {
@@ -83,45 +60,8 @@ func (c *capability) checkCommands() error {
 		return err
 	}
 	for name, cmd := range c.Commands {
-		if !commandName.MatchString(name) || len(c.Name)+1+len(name) > maxToolName {
-			return fmt.Errorf("command %q: letters, digits and -, and %s_%s at most %d characters", name, c.Name,
-				name, maxToolName)
-		}
-		if cmd.Description == "" || len(cmd.Run) == 0 {
-			return fmt.Errorf("command %s needs a description and run", name)
-		}
-		switch {
-		case cmd.Result == "":
-			cmd.Result = "text"
-		case cmd.Result != "text" && !strings.HasPrefix(cmd.Result, "image/"):
-			return fmt.Errorf("command %s: result %q, text or an image MIME type", name, cmd.Result)
-		}
-		if cmd.Timeout == "" {
-			cmd.Timeout = defaultTimeout
-		}
-		if _, err := duration.Parse(cmd.Timeout); err != nil {
-			return fmt.Errorf("command %s: timeout: %w", name, err)
-		}
-		if cmd.MaxValidity != "" {
-			if _, err := duration.Parse(cmd.MaxValidity); err != nil {
-				return fmt.Errorf("command %s: maxValidity: %w", name, err)
-			}
-		}
-		cmd.args = map[string]*schema.Schema{}
-		for arg, raw := range cmd.Arguments {
-			s, err := schema.Parse(raw)
-			if err != nil {
-				return fmt.Errorf("command %s: argument %s: %w", name, arg, err)
-			}
-			switch {
-			case s.Description == "":
-				return fmt.Errorf("command %s: argument %s has no description: the consent names it", name, arg)
-			case slices.Contains(reservedArgs, arg) || c.schemas[arg] != nil:
-				return fmt.Errorf("command %s: argument %s: a bounding argument or the broker's has that name", name, arg)
-			case s.Instances != "":
-				return fmt.Errorf("command %s: argument %s: instances are for bounding arguments", name, arg)
-			}
-			cmd.args[arg] = s
+		if err := cmd.Check(c.Name, name, c.schemas); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -134,7 +74,7 @@ func (c *capability) checkBounding() error {
 		if s.Description == "" {
 			return fmt.Errorf("bounding argument %s has no description: the consent names it", name)
 		}
-		if slices.Contains(reservedArgs, name) {
+		if slices.Contains(hostcmd.ReservedArgs, name) {
 			return fmt.Errorf("bounding argument %s: the broker uses that name", name)
 		}
 		if s.Instances != "" {
@@ -148,30 +88,6 @@ func (c *capability) checkBounding() error {
 		}
 	}
 	return nil
-}
-
-// validateArgs checks a call's free arguments: each declared one, of its schema, and no other. Returns them re-encoded
-// with sorted keys
-func (cmd *hostCommand) validateArgs(raw json.RawMessage) (json.RawMessage, error) {
-	args, err := schema.DecodeObject(raw)
-	if err != nil {
-		return nil, fmt.Errorf("Arguments aren't an object: %w", err)
-	}
-	for k := range args {
-		if cmd.args[k] == nil {
-			return nil, fmt.Errorf("No argument %q", k)
-		}
-	}
-	for k, s := range cmd.args {
-		v, ok := args[k]
-		if !ok {
-			return nil, fmt.Errorf("Argument %s is missing", k)
-		}
-		if err := s.CheckValue(v, maxFree); err != nil {
-			return nil, fmt.Errorf("Argument %s: %w", k, err)
-		}
-	}
-	return json.Marshal(args)
 }
 
 // expandPath expands the environment's variables in a declared path, and a leading ~
@@ -230,58 +146,6 @@ func (c *capability) globInstances() (json.RawMessage, error) {
 	return json.Marshal(inst)
 }
 
-// One part of what a grant of a host command capability covers: a command without free arguments, or one free
-// argument of a command with its declaration's description and what its schema lets through. The window shows them
-// as the notification's scope line says them
-type scopeItem struct {
-	Command     string `json:"command"`
-	Description string `json:"description"`
-	Argument    string `json:"argument,omitempty"`
-	About       string `json:"about,omitempty"`
-	Allows      string `json:"allows,omitempty"`
-	// Any text: no enum or pattern
-	Unrestricted bool `json:"unrestricted,omitempty"`
-}
-
-// scopeItems is what a grant of c covers: unrestricted free arguments first, then the rest, each by command and
-// argument name
-func (c *capability) scopeItems() []scopeItem {
-	var open, bounded []scopeItem
-	for _, name := range slices.Sorted(maps.Keys(c.Commands)) {
-		cmd := c.Commands[name]
-		if len(cmd.args) == 0 {
-			bounded = append(bounded, scopeItem{Command: name, Description: cmd.Description})
-		}
-		for _, arg := range slices.Sorted(maps.Keys(cmd.args)) {
-			s := cmd.args[arg]
-			item := scopeItem{Command: name, Description: cmd.Description, Argument: arg, About: s.Description,
-				Allows: s.Allows(), Unrestricted: s.Unrestricted()}
-			if item.Unrestricted {
-				open = append(open, item)
-			} else {
-				bounded = append(bounded, item)
-			}
-		}
-	}
-	return append(open, bounded...)
-}
-
-// scope says what a grant of c covers, for the consent, in scopeItems' order
-func (c *capability) scope() string {
-	var parts []string
-	for _, s := range c.scopeItems() {
-		switch {
-		case s.Argument == "":
-			parts = append(parts, s.Description+" ("+s.Command+")")
-		case s.Unrestricted:
-			parts = append(parts, fmt.Sprintf("%s: %s, unrestricted (%s)", s.Description, s.About, s.Command))
-		default:
-			parts = append(parts, fmt.Sprintf("%s: %s, %s (%s)", s.Description, s.About, s.Allows, s.Command))
-		}
-	}
-	return strings.Join(parts, ". ") + "."
-}
-
 // bounds names the bounding values of params by their declarations' descriptions, for the consent's body: the summary
 // names them too, but a server may cut a summary. Opaque values by digest, as the summary has them
 func (c *capability) bounds(params json.RawMessage) string {
@@ -295,7 +159,7 @@ func (c *capability) bounds(params json.RawMessage) string {
 		v, isString := m[k].(string)
 		switch {
 		case isString && c.schemas[k] != nil && c.schemas[k].Opaque:
-			parts = append(parts, about+" is "+opaqueDigest(v))
+			parts = append(parts, about+" is "+schema.OpaqueDigest(v))
 		case isString:
 			parts = append(parts, fmt.Sprintf("%s is %q", about, v))
 		default:
@@ -329,16 +193,16 @@ type commandKind struct{ baseKind }
 func (commandKind) check(c *capability) error { return c.checkCommands() }
 
 func (commandKind) scope(c *capability, params json.RawMessage) (string, string) {
-	return c.scope(), c.bounds(params)
+	return hostcmd.Scope(c.Commands), c.bounds(params)
 }
 
 func (commandKind) info(c *capability, i *capabilityInfo) {
 	// What the sandbox may call, not what runs on the host
-	i.Commands = map[string]*hostCommand{}
+	i.Commands = map[string]*hostcmd.Command{}
 	for name, cmd := range c.Commands {
 		v := *cmd
 		v.Run = nil
 		i.Commands[name] = &v
 	}
-	i.Scope = c.scopeItems()
+	i.Scope = hostcmd.ScopeItems(c.Commands)
 }

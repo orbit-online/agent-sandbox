@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mcpserver"
 )
 
@@ -76,7 +77,7 @@ func TestCommandTools(t *testing.T) {
 	if err != nil || out.IsError {
 		t.Fatalf("Call: %+v, %v", out, err)
 	}
-	var in callInput
+	var in hostcmd.Input
 	if err := json.Unmarshal([]byte(out.Content[0].(*mcp.TextContent).Text), &in); err != nil ||
 		string(in.Bounding) != `{"path":"/a","ro":true}` || string(in.Arguments) != `{}` {
 		t.Errorf("Ran with %+v, %v", in, err)

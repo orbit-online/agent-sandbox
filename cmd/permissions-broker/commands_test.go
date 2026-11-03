@@ -7,6 +7,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
 // A declaration the broker can't stand behind stops it: every argument described, no names it uses, names that make
@@ -33,10 +36,12 @@ func TestCommandsRefused(t *testing.T) {
 		"no run":       func(c *capability) { c.Commands["run"].Run = nil },
 		"name":         func(c *capability) { c.Name = "a_b" },
 		"command name": func(c *capability) { c.Commands["a b"] = c.Commands["run"] },
-		"tool name":    func(c *capability) { c.Commands[strings.Repeat("x", maxToolName-len(c.Name))] = c.Commands["run"] },
-		"result":       func(c *capability) { c.Commands["run"].Result = "application/json" },
-		"timeout":      func(c *capability) { c.Commands["run"].Timeout = "1m" },
-		"maxValidity":  func(c *capability) { c.Commands["run"].MaxValidity = "forever" },
+		"tool name": func(c *capability) {
+			c.Commands[strings.Repeat("x", hostcmd.MaxToolName-len(c.Name))] = c.Commands["run"]
+		},
+		"result":      func(c *capability) { c.Commands["run"].Result = "application/json" },
+		"timeout":     func(c *capability) { c.Commands["run"].Timeout = "1m" },
+		"maxValidity": func(c *capability) { c.Commands["run"].MaxValidity = "forever" },
 		"two globs": func(c *capability) {
 			c.Params["a"] = json.RawMessage(`{"type": "string", ` + desc + `, "instances": "/run/*/a"}`)
 			c.Params["b"] = json.RawMessage(`{"type": "string", ` + desc + `, "instances": "/run/*/b"}`)
@@ -61,18 +66,18 @@ func TestCommandsRefused(t *testing.T) {
 
 // The config's host commands load under their names; a name taken twice stops the daemon
 func TestLoadCommands(t *testing.T) {
-	cfg := commandConfig{Name: "vm", Description: "a VM", Commands: map[string]*hostCommand{
+	cfg := commandConfig{Name: "vm", Description: "a VM", Commands: map[string]*hostcmd.Command{
 		"shot": {Description: "a screenshot", Run: []string{"/bin/true"}, Result: "image/png"}}}
 	caps := map[string]*capability{}
 	if err := loadCommands([]commandConfig{cfg}, caps); err != nil {
 		t.Fatal(err)
 	}
 	c := caps["vm"]
-	if c == nil || c.Type != "command" || c.Commands["shot"].Timeout != defaultTimeout {
+	if c == nil || c.Type != "command" || c.Commands["shot"].Timeout != hostcmd.DefaultTimeout {
 		t.Errorf("Loaded %+v", c)
 	}
 	again := cfg
-	again.Commands = map[string]*hostCommand{"shot": {Description: "again", Run: []string{"/bin/true"}}}
+	again.Commands = map[string]*hostcmd.Command{"shot": {Description: "again", Run: []string{"/bin/true"}}}
 	if err := loadCommands([]commandConfig{again}, caps); err == nil {
 		t.Error("A second vm loaded")
 	}
@@ -118,10 +123,10 @@ func TestGlobInstances(t *testing.T) {
 func TestScopeItems(t *testing.T) {
 	c := testCap(t, "command")
 	c.Params["cert"] = json.RawMessage(`{"type": "string", "opaque": true, "description": "the key"}`)
-	c.Commands["exec"] = &hostCommand{Description: "Run PowerShell", Run: []string{"/bin/true"},
+	c.Commands["exec"] = &hostcmd.Command{Description: "Run PowerShell", Run: []string{"/bin/true"},
 		Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string", "multiline": true,
 			"description": "any PowerShell, as SYSTEM"}`)}}
-	c.Commands["keys"] = &hostCommand{Description: "Press keys", Run: []string{"/bin/true"},
+	c.Commands["keys"] = &hostcmd.Command{Description: "Press keys", Run: []string{"/bin/true"},
 		Arguments: map[string]json.RawMessage{"key": json.RawMessage(`{"type": "string", "enum": ["a", "b"],
 			"description": "a key"}`)}}
 	if err := c.check(); err != nil {
@@ -130,7 +135,7 @@ func TestScopeItems(t *testing.T) {
 	b, _ := testBroker(t)
 	b.caps = map[string]*capability{c.id(): c}
 	got := b.listCapabilities()[0].Scope
-	want := []scopeItem{
+	want := []hostcmd.ScopeItem{
 		{Command: "exec", Description: "Run PowerShell", Argument: "script", About: "any PowerShell, as SYSTEM",
 			Allows: "any text", Unrestricted: true},
 		{Command: "keys", Description: "Press keys", Argument: "key", About: "a key", Allows: "one of [a b]"},
@@ -143,7 +148,7 @@ func TestScopeItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bounds := c.bounds(params); bounds != `the key is `+opaqueDigest(strings.Repeat("k", 40))+
+	if bounds := c.bounds(params); bounds != `the key is `+schema.OpaqueDigest(strings.Repeat("k", 40))+
 		` and a path is "/a" and read-only is true` {
 		t.Errorf("bounds = %s", bounds)
 	}
@@ -152,10 +157,10 @@ func TestScopeItems(t *testing.T) {
 // What the consent says a schema allows, and which free arguments it calls unrestricted
 func TestSchemaScope(t *testing.T) {
 	c := testCap(t, "command")
-	c.Commands["exec"] = &hostCommand{Description: "Run PowerShell", Run: []string{"/bin/true"},
+	c.Commands["exec"] = &hostcmd.Command{Description: "Run PowerShell", Run: []string{"/bin/true"},
 		Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string", "multiline": true,
 			"description": "any PowerShell, as SYSTEM"}`)}}
-	c.Commands["click"] = &hostCommand{Description: "Click", Run: []string{"/bin/true"},
+	c.Commands["click"] = &hostcmd.Command{Description: "Click", Run: []string{"/bin/true"},
 		Arguments: map[string]json.RawMessage{"x": json.RawMessage(`{"type": "integer", "minimum": 0,
 			"maximum": 99, "description": "column"}`)}}
 	if err := c.check(); err != nil {
@@ -163,7 +168,7 @@ func TestSchemaScope(t *testing.T) {
 	}
 	want := "Run PowerShell: any PowerShell, as SYSTEM, unrestricted (exec). Click: column, a number within 0–99 " +
 		"(click). print the input (run)."
-	if got := c.scope(); got != want {
+	if got := hostcmd.Scope(c.Commands); got != want {
 		t.Errorf("scope = %q\nwant    %q", got, want)
 	}
 }

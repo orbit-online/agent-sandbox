@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
@@ -220,7 +221,7 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool) {
 		}
 		return
 	}
-	var in callInput
+	var in hostcmd.Input
 	if err := json.Unmarshal([]byte(res.Output), &in); err != nil {
 		mc.fatalf(t, "Call output %q: %v", res.Output, err)
 	}

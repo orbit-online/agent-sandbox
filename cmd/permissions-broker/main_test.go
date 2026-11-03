@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"golang.org/x/sys/unix"
@@ -120,7 +121,7 @@ func testCap(t *testing.T, typ string) *capability {
 	if typ == "command" {
 		// A host command printing its input, so tests see the validity it was given
 		fakeSystemd(t)
-		c.Commands = map[string]*hostCommand{"run": {Description: "print the input", Run: script("run", "cat"),
+		c.Commands = map[string]*hostcmd.Command{"run": {Description: "print the input", Run: script("run", "cat"),
 			MaxValidity: "PT8H"}}
 	}
 	if err := c.check(); err != nil {
@@ -220,9 +221,9 @@ func callRun(b *broker, p peer, params, lease string) (response, error) {
 }
 
 // calledWith is what a call of the test command was given on stdin, which it prints
-func calledWith(t *testing.T, res response) callInput {
+func calledWith(t *testing.T, res response) hostcmd.Input {
 	t.Helper()
-	var in callInput
+	var in hostcmd.Input
 	if err := json.Unmarshal([]byte(res.Output), &in); err != nil {
 		t.Fatalf("Call printed %q: %v", res.Output, err)
 	}
