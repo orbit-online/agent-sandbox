@@ -39,13 +39,21 @@ func TestNotificationText(t *testing.T) {
 }
 
 // fakeNotifications is a notification server on a bus of its own. Like Plasma's, it replaces a notification by its id
-// whoever asks, and emits ActionInvoked for the key of the button clicked
+// whoever asks, and emits ActionInvoked for the key of the button clicked. Its name in GetServerInformation is name
 type fakeNotifications struct {
 	conn   *dbus.Conn
+	name   string
 	mu     sync.Mutex
 	last   uint32
 	shown  map[uint32][]string // id: the actions, key then label
+	bodies map[uint32]string
 	posted chan uint32
+}
+
+func (f *fakeNotifications) GetServerInformation() (string, string, string, string, *dbus.Error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.name, "test", "1", "1.3", nil
 }
 
 func (f *fakeNotifications) Notify(app string, replaces uint32, icon, summary, body string, actions []string,
@@ -58,6 +66,7 @@ func (f *fakeNotifications) Notify(app string, replaces uint32, icon, summary, b
 		id = f.last
 	}
 	f.shown[id] = actions
+	f.bodies[id] = body
 	select {
 	case f.posted <- id:
 	default:
@@ -82,6 +91,27 @@ func (f *fakeNotifications) click(t *testing.T, id uint32, label string) {
 		}
 	}
 	t.Fatalf("No button %q on notification %d: %q", label, id, actions)
+}
+
+// clickBody clicks the body of notification id as cosmic-notifications does: the action named default, or without one
+// the first
+func (f *fakeNotifications) clickBody(t *testing.T, id uint32) {
+	t.Helper()
+	f.mu.Lock()
+	actions := f.shown[id]
+	f.mu.Unlock()
+	if len(actions) < 2 {
+		t.Fatalf("No actions on notification %d", id)
+	}
+	key := actions[0]
+	for i := 0; i+1 < len(actions); i += 2 {
+		if actions[i] == "default" {
+			key = actions[i]
+		}
+	}
+	if err := f.conn.Emit(notifyPath, notifyIface+".ActionInvoked", id, key); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // key is the action key of the button labelled label on notification id
@@ -119,7 +149,8 @@ func testBus(t *testing.T) (string, *fakeNotifications) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	f := &fakeNotifications{conn: busConn(t, addr), shown: map[uint32][]string{}, posted: make(chan uint32, 8)}
+	f := &fakeNotifications{conn: busConn(t, addr), name: "fake", shown: map[uint32][]string{},
+		bodies: map[uint32]string{}, posted: make(chan uint32, 8)}
 	if err := f.conn.Export(f, notifyPath, notifyIface); err != nil {
 		t.Fatal(err)
 	}
@@ -142,11 +173,16 @@ func busConn(t *testing.T, addr string) *dbus.Conn {
 // ask asks on a connection of its own to the test bus, and returns the notification's id and a channel for the answer
 func ask(t *testing.T, addr string, f *fakeNotifications) (uint32, <-chan string) {
 	t.Helper()
+	return askWith(t, addr, f, prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H"})
+}
+
+func askWith(t *testing.T, addr string, f *fakeNotifications, p prompt) (uint32, <-chan string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	answer := make(chan string, 1)
 	go func() {
-		a, err := askOn(ctx, busConn(t, addr), prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H"})
+		a, err := askOn(ctx, busConn(t, addr), p)
 		if err != nil {
 			a = "error: " + err.Error()
 		}
@@ -205,5 +241,70 @@ func TestNotificationForged(t *testing.T) {
 	f.click(t, id, "Allow")
 	if a := answered(t, answer); a != "allow" {
 		t.Errorf("Allow answered %q", a)
+	}
+}
+
+// A click on the body sends the default action, first in the list: it denies, and on COSMIC, which draws no buttons and
+// would otherwise send the first action, it opens the window when there is one
+func TestNotificationDefault(t *testing.T) {
+	notifyMature = 0
+	t.Cleanup(func() { notifyMature = time.Second })
+	addr, f := testBus(t)
+	window := prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H", Options: true}
+	for _, c := range []struct {
+		server string
+		p      prompt
+		want   string
+	}{{"fake", window, "deny"}, {cosmicServer, window, "options"}, {cosmicServer, prompt{Summary: "x", Reason: "y"}, "deny"}} {
+		f.mu.Lock()
+		f.name = c.server
+		f.mu.Unlock()
+		id, answer := askWith(t, addr, f, c.p)
+		f.mu.Lock()
+		first, body := f.shown[id][0], f.bodies[id]
+		f.mu.Unlock()
+		if first != "default" {
+			t.Errorf("%s: the first action is %q", c.server, first)
+		}
+		if hinted := strings.Contains(body, "Permissions window"); hinted != (c.want == "options") {
+			t.Errorf("%s: the body %q", c.server, body)
+		}
+		f.clickBody(t, id)
+		if a := answered(t, answer); a != c.want {
+			t.Errorf("%s, options %v: a click on the body answered %q", c.server, c.p.Options, a)
+		}
+	}
+}
+
+// The sandbox's own ActionInvoked of default is ignored, and a default within notifyMature asks again
+func TestNotificationDefaultGuards(t *testing.T) {
+	notifyMature = 0
+	t.Cleanup(func() { notifyMature = time.Second })
+	addr, f := testBus(t)
+	sandbox := busConn(t, addr)
+
+	id, answer := ask(t, addr, f)
+	if err := sandbox.Emit(notifyPath, notifyIface+".ActionInvoked", id, "default"); err != nil {
+		t.Fatal(err)
+	}
+	f.click(t, id, "Allow")
+	if a := answered(t, answer); a != "allow" {
+		t.Errorf("The sandbox's default answered %q", a)
+	}
+
+	notifyMature = 300 * time.Millisecond
+	id, answer = ask(t, addr, f)
+	f.clickBody(t, id)
+	select {
+	case again := <-f.posted:
+		time.Sleep(notifyMature)
+		f.clickBody(t, again)
+	case a := <-answer:
+		t.Fatalf("A click on the body at once answered %q", a)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Not asked again")
+	}
+	if a := answered(t, answer); a != "deny" {
+		t.Errorf("A click on the body later answered %q", a)
 	}
 }

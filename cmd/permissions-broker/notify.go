@@ -41,7 +41,8 @@ func notifyAsk(ctx context.Context, p prompt) (string, error) {
 }
 
 // askOn asks with a notification that has Allow, Deny and Options buttons and returns allow, deny, options or "" (closed
-// unanswered). The sandbox talks to the notification server too: it can replace the broker's notification by its id
+// unanswered). A click on its body sends the action named default, which denies, or on COSMIC opens the window (see
+// bodyClick). The sandbox talks to the notification server too: it can replace the broker's notification by its id
 // with buttons of its own, and send signals. So each button's action key is random, per notification, and only
 // ActionInvoked and NotificationClosed from the server itself (the current owner of its name) count. A replaced
 // notification can still be clicked, but its keys aren't the broker's: that's a deny. An answer within a second of
@@ -49,11 +50,7 @@ func notifyAsk(ctx context.Context, p prompt) (string, error) {
 // is about to click. Not answering in time denies, and the notification is replaced by one without buttons
 func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 	summary := "Claude asks for " + escapeMarkup(p.Summary)
-	body := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
-	if p.Scope != "" {
-		// Ahead of the reason: a server may cut what's long, and this is what's granted
-		body = "Covers: " + escapeMarkup(p.Scope) + "\n" + body
-	}
+	reason := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
 	match := []dbus.MatchOption{dbus.WithMatchObjectPath(notifyPath), dbus.WithMatchInterface(notifyIface)}
 	if err := conn.AddMatchSignal(match...); err != nil {
 		return "", fmt.Errorf("Watch the notifications: %w", err)
@@ -68,9 +65,20 @@ func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 			Store(&owner); err != nil {
 			return "", fmt.Errorf("Find the notification server: %w", err)
 		}
+		click, label, hint := bodyClick(ctx, server, p)
+		// Ahead of the reason: a server may cut what's long, and the scope is what's granted
+		var lines []string
+		if p.Scope != "" {
+			lines = append(lines, "Covers: "+escapeMarkup(p.Scope))
+		}
+		if hint != "" {
+			lines = append(lines, hint)
+		}
+		body := strings.Join(append(lines, reason), "\n")
 		allow, deny, options := randomID(), randomID(), randomID()
-		keys := map[string]string{allow: "allow", deny: "deny"}
-		actions := []string{allow, "Allow " + leaseLabel(p.Lease), deny, "Deny"}
+		keys := map[string]string{"default": click, allow: "allow", deny: "deny"}
+		// The default action goes first: a server that draws no buttons and finds none named default may take the first
+		actions := []string{"default", label, allow, "Allow " + leaseLabel(p.Lease), deny, "Deny"}
 		if p.Options {
 			keys[options] = "options"
 			actions = append(actions, options, "Options…")
@@ -103,6 +111,22 @@ func askOn(ctx context.Context, conn *dbus.Conn, p prompt) (string, error) {
 		}
 		return action, nil
 	}
+}
+
+// The name cosmic-notifications gives in GetServerInformation
+const cosmicServer = "cosmic-notifications"
+
+// bodyClick is what the default action, a click on the notification's body, answers, its label, and a line for the body
+// saying so. It denies, as closing the notification does. cosmic-notifications draws no buttons, so there it opens the
+// window with the request still pending, when there is one. Only the server's name picks it: a wrong match costs the
+// window, and a failed GetServerInformation denies
+func bodyClick(ctx context.Context, server dbus.BusObject, p prompt) (string, string, string) {
+	var name, vendor, version, spec string
+	if err := server.CallWithContext(ctx, notifyIface+".GetServerInformation", 0).
+		Store(&name, &vendor, &version, &spec); err == nil && name == cosmicServer && p.Options {
+		return "options", "Options…", "Click to answer in the Permissions window."
+	}
+	return "deny", "Deny", ""
 }
 
 // awaitAction waits for the server's answer to notification id: the action of the key clicked, deny for a key that

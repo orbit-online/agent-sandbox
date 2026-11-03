@@ -218,13 +218,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   the sandbox can't do to it: hold every connection (control.sock still
   answers, idle clients time out), send an oversized request, dress up a
   parameter or reason in the notification, make a click on its replacement of
-  the broker's notification or an `ActionInvoked` of its own allow (a fake
-  notification server on a `dbus-daemon` of the test's), anchor a session at or above the
+  the broker's notification or an `ActionInvoked` of its own allow or
+  `default` (a fake notification server on a `dbus-daemon` of the test's),
+  or get a body click answered within a second, anchor a session at or above the
   sandbox or, from a re-entry (`--shell`), at a host session above nsenter, get `share` served twice, get a call's output after
   its lease ran out or for a grant revoked while it waited for a
   plugin slot, or hold every plugin slot with one capability whose commands hang (another's run, and its own
   `list` for the window); plus a window answer while the notification is up, pending requests
-  in arrival order, and unit
+  in arrival order, a click on the notification's body (the `default`
+  action, first: a deny, on cosmic-notifications the window's options and a
+  deny without a window), and unit
   names per launcher. Attach grants against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, the cloned tree
