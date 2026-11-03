@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
@@ -29,7 +30,7 @@ type capability struct {
 	// Host sockets: the host's socket, or none with an instances glob, whose matches are the sockets
 	Path string
 	// D-Bus: the bus and the rule set
-	DBus *dbusConfig
+	DBus *dbusgrant.Config
 	// The bounding argument whose values the instances glob gives, and the glob
 	glob, globArg string
 

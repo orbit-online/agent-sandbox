@@ -10,12 +10,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 )
 
 // fakeProxy stands in for a D-Bus proxy's control socket: it records each request and answers ok, or the error set
 type fakeProxy struct {
 	mu     sync.Mutex
-	got    []dbusSet
+	got    []dbusgrant.Set
 	refuse string
 	conns  []net.Conn
 }
@@ -45,7 +47,7 @@ func startFakeProxy(t *testing.T) (*fakeProxy, string) {
 					if err != nil {
 						return
 					}
-					var s dbusSet
+					var s dbusgrant.Set
 					_ = json.Unmarshal(line, &s)
 					f.mu.Lock()
 					f.got = append(f.got, s)
@@ -73,20 +75,20 @@ func (f *fakeProxy) drop() {
 }
 
 // ops is what the broker sent, in order
-func (f *fakeProxy) ops() []dbusSet {
+func (f *fakeProxy) ops() []dbusgrant.Set {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]dbusSet{}, f.got...)
+	return append([]dbusgrant.Set{}, f.got...)
 }
 
 // The app ID the tests' sandbox has, which owned names lie below
 const testAppID = "com.nixpak.ClaudeDesktop.test"
 
-func dbusCap(t *testing.T, name string, dc dbusConfig) *capability {
+func dbusCap(t *testing.T, name string, dc dbusgrant.Config) *capability {
 	t.Helper()
 	dc.Name, dc.Description = name, "a test rule set"
 	caps := map[string]*capability{}
-	if err := loadDBus([]dbusConfig{dc}, caps, testAppID); err != nil {
+	if err := loadDBus([]dbusgrant.Config{dc}, caps, testAppID); err != nil {
 		t.Fatal(err)
 	}
 	return caps[name]
@@ -95,7 +97,7 @@ func dbusCap(t *testing.T, name string, dc dbusConfig) *capability {
 // What the broker refuses to declare: rules that would undo the proxies' static guards, wildcards and own on the
 // system bus, and what the proxy wouldn't take
 func TestDBusDeclarations(t *testing.T) {
-	for name, dc := range map[string]dbusConfig{
+	for name, dc := range map[string]dbusgrant.Config{
 		"no bus":                    {Talk: []string{"org.test.A"}},
 		"another bus":               {Bus: "accessibility", Talk: []string{"org.test.A"}},
 		"no rules":                  {Bus: "session"},
@@ -115,7 +117,7 @@ func TestDBusDeclarations(t *testing.T) {
 		"a unique name":             {Bus: "session", Talk: []string{":1.2"}},
 		"not a rule":                {Bus: "session", Call: map[string][]string{"org.test.A": {"x@bad"}}},
 		"a name without rules":      {Bus: "session", Call: map[string][]string{"org.test.A": {}}},
-		"too many rules":            {Bus: "session", See: strings.Split(strings.Repeat("org.test.A,", maxDBusRules+1), ",")[:maxDBusRules+1]},
+		"too many rules":            {Bus: "session", See: strings.Split(strings.Repeat("org.test.A,", dbusgrant.MaxRules+1), ",")[:dbusgrant.MaxRules+1]},
 		"a session system cap name": {Bus: "session", Talk: []string{"org.test.A"}, Name: "a/b"},
 		// The shared policy (internal/dbuspolicy), a few of its refusals
 		"dconf":                {Bus: "session", Call: map[string][]string{"ca.desrt.dconf": {"ca.desrt.dconf.Writer.Change"}}},
@@ -131,15 +133,15 @@ func TestDBusDeclarations(t *testing.T) {
 		if dc.Name == "" {
 			dc.Name = "test"
 		}
-		if err := loadDBus([]dbusConfig{dc}, map[string]*capability{}, testAppID); err == nil {
+		if err := loadDBus([]dbusgrant.Config{dc}, map[string]*capability{}, testAppID); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if err := loadDBus([]dbusConfig{{Name: "x", Bus: "session", Talk: []string{"org.test.A"}}}, map[string]*capability{}, testAppID); err == nil {
+	if err := loadDBus([]dbusgrant.Config{{Name: "x", Bus: "session", Talk: []string{"org.test.A"}}}, map[string]*capability{}, testAppID); err == nil {
 		t.Error("No description: accepted")
 	}
 	caps := map[string]*capability{}
-	if err := loadDBus([]dbusConfig{
+	if err := loadDBus([]dbusgrant.Config{
 		{Name: "timedate", Description: "d", Bus: "system", Talk: []string{"org.freedesktop.timedate1"}},
 		{Name: "hostname", Description: "d", Bus: "system",
 			Call: map[string][]string{"org.freedesktop.hostname1": {"org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1"}}},
@@ -150,30 +152,30 @@ func TestDBusDeclarations(t *testing.T) {
 	}, caps, testAppID); err != nil {
 		t.Fatal(err)
 	}
-	if err := loadDBus([]dbusConfig{{Name: "portal", Description: "d", Bus: "session", Talk: []string{"org.test.A"}}}, caps, testAppID); err == nil {
+	if err := loadDBus([]dbusgrant.Config{{Name: "portal", Description: "d", Bus: "session", Talk: []string{"org.test.A"}}}, caps, testAppID); err == nil {
 		t.Error("A capability declared twice")
 	}
 	// On the system bus, what polkit makes of the calls: the user's at the desktop
-	if got := caps["hostname"].dbusScope(); got != "On the system bus: call org.freedesktop.hostname1: "+
+	if got := caps["hostname"].DBus.Scope(); got != "On the system bus: call org.freedesktop.hostname1: "+
 		"org.freedesktop.DBus.Properties.Get on /org/freedesktop/hostname1 (polkit treats these calls as yours at the "+
 		"desktop: actions an active session may take run without asking)." {
 		t.Errorf("The scope: %q", got)
 	}
-	if got := caps["timedate"].dbusScope(); got != "On the system bus: call any method of org.freedesktop.timedate1 and "+
+	if got := caps["timedate"].DBus.Scope(); got != "On the system bus: call any method of org.freedesktop.timedate1 and "+
 		"get its signals (talk); the service may be started on demand (polkit treats these calls as yours at the desktop: "+
 		"actions an active session may take run without asking)." {
 		t.Errorf("The scope: %q", got)
 	}
 	// The portal's call rules said as the proxy reads them, own and talk with what they bring
-	if got := caps["portal"].dbusScope(); got != "On the session bus: see org.example.App and the names below it (no calls); "+
+	if got := caps["portal"].DBus.Scope(); got != "On the session bus: see org.example.App and the names below it (no calls); "+
 		"call org.freedesktop.portal.Desktop: any method of org.freedesktop.portal.OpenURI on /org/freedesktop/portal and the "+
 		"objects below it, org.freedesktop.portal.Settings.Read on /; "+
 		"get the signals of org.freedesktop.portal.Desktop: any method of org.freedesktop.portal.Settings." {
 		t.Errorf("The scope: %q", got)
 	}
-	own := dbusCap(t, "own", dbusConfig{Bus: "session", Own: []string{testAppID + ".Helper"}, Talk: []string{"org.test.A"},
+	own := dbusCap(t, "own", dbusgrant.Config{Bus: "session", Own: []string{testAppID + ".Helper"}, Talk: []string{"org.test.A"},
 		Call: map[string][]string{"org.test.B": {"*@/*"}}})
-	if got := own.dbusScope(); !strings.Contains(got, "own "+testAppID+".Helper, and anything talk gives (own): host programs "+
+	if got := own.DBus.Scope(); !strings.Contains(got, "own "+testAppID+".Helper, and anything talk gives (own): host programs "+
 		"will send it what they mean for that name") || !strings.Contains(got, "call any method of org.test.A and get its "+
 		"signals (talk); the service may be started on demand and may ask polkit") ||
 		!strings.Contains(got, "call org.test.B: any method on any object") {
@@ -187,7 +189,7 @@ func TestDBusGrant(t *testing.T) {
 	session, sessionPath := startFakeProxy(t)
 	system, systemPath := startFakeProxy(t)
 	b.cfg.DBusControl = map[string]string{"session": sessionPath, "system": systemPath}
-	c := dbusCap(t, "timedate", dbusConfig{Bus: "system", Talk: []string{"org.freedesktop.timedate1"},
+	c := dbusCap(t, "timedate", dbusgrant.Config{Bus: "system", Talk: []string{"org.freedesktop.timedate1"},
 		Call: map[string][]string{"org.freedesktop.hostname1": {"org.freedesktop.DBus.Properties.Get"}}})
 	b.caps[c.id()] = c
 	g, err := b.request(peerAt(t, os.Getpid()), req("timedate", `{}`, "PT1H"))
@@ -228,12 +230,12 @@ func TestDBusGrant(t *testing.T) {
 // the next grant reaches it again
 func TestDBusStandingAndLost(t *testing.T) {
 	proxy, path := startFakeProxy(t)
-	c := dbusCap(t, "portal", dbusConfig{Bus: "session", Talk: []string{"org.test.A"}})
+	c := dbusCap(t, "portal", dbusgrant.Config{Bus: "session", Talk: []string{"org.test.A"}})
 	b, _ := testBroker(t)
 	b.cfg.DBusControl = map[string]string{"session": path}
 	b.cfg.Grants = []standingConfig{{Capability: "portal"}}
 	b.caps[c.id()] = c
-	other := dbusCap(t, "other", dbusConfig{Bus: "session", See: []string{"org.test.B"}})
+	other := dbusCap(t, "other", dbusgrant.Config{Bus: "session", See: []string{"org.test.B"}})
 	b.caps[other.id()] = other
 	b.cfg.Grants = append(b.cfg.Grants, standingConfig{Capability: "other"})
 	b, err := newBroker(b.cfg, b.caps, b.sb, (&fakeAsker{}).ask)
@@ -272,7 +274,7 @@ func TestDBusLostOnAdd(t *testing.T) {
 	b, _ := testBroker(t, "allow", "allow")
 	b.cfg.DBusControl = map[string]string{"session": path}
 	for _, n := range []string{"one", "two"} {
-		c := dbusCap(t, n, dbusConfig{Bus: "session", Talk: []string{"org.test." + n}})
+		c := dbusCap(t, n, dbusgrant.Config{Bus: "session", Talk: []string{"org.test." + n}})
 		b.caps[c.id()] = c
 	}
 	first, err := b.request(peerAt(t, os.Getpid()), req("one", `{}`, "PT1H"))

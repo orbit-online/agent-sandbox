@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
@@ -153,7 +154,7 @@ type broker struct {
 	socketsMu sync.Mutex
 	listeners map[string]*hostListener
 	// The D-Bus proxies' control sockets, by bus, under mu
-	proxies map[string]*dbusProxy
+	proxies map[string]*dbusgrant.Proxy
 }
 
 func randomID() string {

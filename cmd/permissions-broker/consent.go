@@ -242,7 +242,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	case "command":
 		p.Scope, bounds = c.scope(), c.bounds(params)
 	case "dbus":
-		p.Scope = c.dbusScope()
+		p.Scope = c.DBus.Scope()
 	}
 	if call != nil {
 		p.Command, p.Arguments = call.Command, call.Arguments

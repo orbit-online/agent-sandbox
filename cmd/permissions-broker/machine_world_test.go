@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
@@ -235,7 +236,7 @@ func (w *world) capabilities() map[string]*capability {
 		Commands: map[string]*hostCommand{"issue": {Description: "issue one", Run: w.script("run", "cat"),
 			MaxValidity: "PT30M"}}}
 	bus := &capability{Name: capBus, Type: "dbus", Description: "a portal",
-		DBus: &dbusConfig{Name: capBus, Bus: "session", Talk: []string{"org.test.Portal"}}}
+		DBus: &dbusgrant.Config{Name: capBus, Bus: "session", Talk: []string{"org.test.Portal"}}}
 	caps := map[string]*capability{}
 	for _, c := range []*capability{vm, console, token, bus} {
 		if err := c.check(); err != nil {

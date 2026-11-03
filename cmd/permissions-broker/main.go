@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mcpserver"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
@@ -157,10 +158,10 @@ type config struct {
 	// What the folders capability may grant
 	Folders []source `json:"folders"`
 	// Host command and host socket capabilities
-	Commands []commandConfig  `json:"commands"`
-	Sockets  []socketConfig   `json:"sockets"`
-	DBus     []dbusConfig     `json:"dbus"`
-	Grants   []standingConfig `json:"grants"`
+	Commands []commandConfig    `json:"commands"`
+	Sockets  []socketConfig     `json:"sockets"`
+	DBus     []dbusgrant.Config `json:"dbus"`
+	Grants   []standingConfig   `json:"grants"`
 	// Each bus's proxy's control socket, by bus: session, system
 	DBusControl map[string]string `json:"dbusControl,omitempty"`
 	// The launcher's static access (binds, devices, D-Bus rules, the network, what the module adds), for the window

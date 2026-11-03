@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"pgregory.net/rapid"
 )
 
@@ -58,7 +59,7 @@ func (p *proxyStandIn) serve(conn net.Conn) {
 		if err != nil {
 			return
 		}
-		var s dbusSet
+		var s dbusgrant.Set
 		_ = json.Unmarshal(line, &s)
 		res := `{"ok":true}`
 		p.mu.Lock()

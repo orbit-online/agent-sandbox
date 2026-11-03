@@ -28,7 +28,7 @@ func (b *broker) listCapabilities() []capabilityInfo {
 			infos[i].Scope = c.scopeItems()
 		}
 		if c.Type == "dbus" {
-			infos[i].Covers = c.dbusScope()
+			infos[i].Covers = c.DBus.Scope()
 		}
 		if inst, err := c.listInstances(); err != nil {
 			infos[i].Error = err.Error()
