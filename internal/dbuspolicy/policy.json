@@ -1,0 +1,48 @@
+{
+  "session": {
+    "refused": [
+      "org.freedesktop.DBus",
+      "org.freedesktop.Notifications",
+      "org.freedesktop.systemd1",
+      "org.freedesktop.Flatpak",
+      "org.freedesktop.portal.Flatpak",
+      "org.freedesktop.impl.portal",
+      "org.freedesktop.secrets",
+      "org.a11y.Bus",
+      "ca.desrt.dconf",
+      "org.gnome.Terminal",
+      "org.gnome.keyring",
+      "org.gnome.Shell",
+      "org.gnome.Mutter.RemoteDesktop",
+      "org.gnome.Mutter.ScreenCast",
+      "org.kde.KWin",
+      "org.kde.klauncher*"
+    ],
+    "noWildcard": [
+      "org.freedesktop.portal"
+    ],
+    "methods": {
+      "org.freedesktop.portal.Desktop": [
+        "org.freedesktop.portal.RemoteDesktop",
+        "org.freedesktop.portal.ScreenCast"
+      ]
+    },
+    "explicitCalls": [],
+    "wildcards": true,
+    "own": true
+  },
+  "system": {
+    "refused": [
+      "org.freedesktop.DBus",
+      "org.freedesktop.PolicyKit1",
+      "org.freedesktop.systemd1"
+    ],
+    "noWildcard": [],
+    "methods": {},
+    "explicitCalls": [
+      "org.freedesktop.login1"
+    ],
+    "wildcards": false,
+    "own": false
+  }
+}

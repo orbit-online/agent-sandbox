@@ -13,12 +13,15 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
+// The app ID of the tests' sandbox, which live sets may own names below
+const testApp = "org.test.App"
+
 // A proxy with a control socket, its clients' address and the control socket's path
 func startLive(t *testing.T, bus string, args ...string) (string, string) {
 	t.Helper()
 	ctlPath := filepath.Join(t.TempDir(), "control")
 	var p *Proxy
-	addr := startProxyWith(t, bus, func(pp *Proxy) { p = pp }, args...)
+	addr := startProxyWith(t, bus, func(pp *Proxy) { p = pp; pp.policyBus, pp.appID = "session", testApp }, args...)
 	l, err := listen(ctlPath)
 	if err != nil {
 		t.Fatal(err)
@@ -108,9 +111,9 @@ func TestLiveRemoveCloses(t *testing.T) {
 	addr, ctlPath := startLive(t, bus, "--filter")
 	used, other := connect(t, addr), connect(t, addr)
 	ctl := dialControl(t, ctlPath)
-	ctl.must(t, map[string]any{"op": "add", "id": "g1", "talk": []string{svcName}, "own": []string{"org.test.Live"}})
+	ctl.must(t, map[string]any{"op": "add", "id": "g1", "talk": []string{svcName}, "own": []string{testApp + ".Live"}})
 	wantErr(t, "the grant", echo(used, svcName), "")
-	if r, err := used.RequestName("org.test.Live", dbus.NameFlagDoNotQueue); err != nil || r != dbus.RequestNameReplyPrimaryOwner {
+	if r, err := used.RequestName(testApp+".Live", dbus.NameFlagDoNotQueue); err != nil || r != dbus.RequestNameReplyPrimaryOwner {
 		t.Fatalf("RequestName under the grant: %v %v", r, err)
 	}
 	if err := busCallOn(other, "GetId"); err != nil {
@@ -124,7 +127,7 @@ func TestLiveRemoveCloses(t *testing.T) {
 		t.Error("A connection that used the set still calls")
 	}
 	watcher := connect(t, bus)
-	waitFor(t, func() bool { return !hasOwner(t, watcher, "org.test.Live") })
+	waitFor(t, func() bool { return !hasOwner(t, watcher, testApp+".Live") })
 	wantErr(t, "another client after the revoke", echo(other, svcName), errServiceUnknown)
 	if err := busCallOn(other, "GetId"); err != nil {
 		t.Errorf("A client that didn't use the set lost its connection: %v", err)
@@ -198,6 +201,11 @@ func TestLiveSetRefused(t *testing.T) {
 		{"op": "add", "id": "a", "talk": []string{"notaname"}},
 		{"op": "remove", "id": "nosuch"},
 		{"op": "eavesdrop", "id": "a"},
+		// The bus's policy (internal/dbuspolicy), as the module and the broker check it
+		{"op": "add", "id": "a", "call": []string{"ca.desrt.dconf=ca.desrt.dconf.Writer.Change"}},
+		{"op": "add", "id": "a", "own": []string{"org.freedesktop.StatusNotifierWatcher"}},
+		{"op": "add", "id": "a", "call": []string{"org.freedesktop.portal.Desktop=org.freedesktop.portal.RemoteDesktop.Start"}},
+		{"op": "add", "id": "a", "talk": []string{"org.example.*"}},
 	} {
 		if res := ctl.do(t, req); res == nil || res.OK || res.Error == "" {
 			t.Errorf("%v: %+v", req, res)

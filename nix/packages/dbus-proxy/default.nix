@@ -14,6 +14,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/dbus-proxy
+      ../../../internal/dbuspolicy
     ];
   };
   subPackages = [ "cmd/dbus-proxy" ];

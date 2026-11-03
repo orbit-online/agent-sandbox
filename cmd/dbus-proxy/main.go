@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 	"golang.org/x/sys/unix"
 )
 
 const usage = `dbus-proxy - Filter a sandbox's D-Bus traffic, taking xdg-dbus-proxy's arguments
 
 Usage:
-  dbus-proxy [--fd=<fd>] [--control=<path>] [--pid=<pid>] <address> <path> [--filter] [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
+  dbus-proxy [--fd=<fd>] [--control=<path> --bus=<bus> [--app-id=<id>]] [--pid=<pid>] <address> <path> [--filter] [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
   dbus-proxy --help
 
 Listens on <path> and connects each client to the bus at <address>. The subset
@@ -40,6 +41,10 @@ With or without --filter, the client can't monitor the bus or eavesdrop.
   --control=<path>      Take live rule sets from the permissions broker on a
                         socket at <path>, relative to $XDG_RUNTIME_DIR (mode
                         0600, its directory made 0700); see control.go
+  --bus=<bus>           session or system: the policy live sets are checked
+                        against (internal/dbuspolicy)
+  --app-id=<id>         The sandbox's app ID, which live sets may own names
+                        below (none without it)
   --pid=<pid>           Exit when process <pid> does
 `
 
@@ -59,6 +64,8 @@ type Proxy struct {
 	// The rules with the live sets, once the control socket changed them (livesets.go); setsMu orders the changes
 	cur    atomic.Pointer[Rules]
 	setsMu sync.Mutex
+	// The bus and the sandbox's app ID, which live sets are checked against
+	policyBus, appID string
 }
 
 // Clients connected at once; the app opens a handful
@@ -231,6 +238,11 @@ func run(opts docopt.Opts) error {
 		go func() { served <- waitPidfd(pidfd) }()
 	}
 	if rel, ok := opts["--control"].(string); ok {
+		p.policyBus, _ = opts.String("--bus")
+		p.appID, _ = opts.String("--app-id")
+		if _, ok := dbuspolicy.Buses[p.policyBus]; !ok {
+			return fmt.Errorf("Invalid --bus %q: session or system", p.policyBus)
+		}
 		cl, err := listenControl(rel)
 		if err != nil {
 			return err

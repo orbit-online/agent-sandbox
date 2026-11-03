@@ -24,7 +24,7 @@ func TestControlArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { watched.Process.Kill(); watched.Wait() })
-	cmd := exec.Command(os.Args[0], bus, sock, "--control=dbus-control/session.sock",
+	cmd := exec.Command(os.Args[0], bus, sock, "--control=dbus-control/session.sock", "--bus=session",
 		"--pid="+strconv.Itoa(watched.Process.Pid), "--filter")
 	cmd.Env = append(os.Environ(), "DBUS_PROXY_MAIN=1", "XDG_RUNTIME_DIR="+run)
 	cmd.Stderr = os.Stderr
@@ -53,17 +53,19 @@ func TestControlArgs(t *testing.T) {
 	}
 }
 
-// --control must be a clean path relative to $XDG_RUNTIME_DIR
+// --control must be a clean path relative to $XDG_RUNTIME_DIR, with --bus naming a bus
 func TestControlArgsRefused(t *testing.T) {
-	for _, rel := range []string{"/abs/sock", "../out.sock", "a/../../b", ""} {
+	for _, args := range [][]string{{"--control=/abs/sock", "--bus=session"}, {"--control=../out.sock", "--bus=session"},
+		{"--control=a/../../b", "--bus=session"}, {"--control=", "--bus=session"}, {"--control=ok.sock", "--bus=other"},
+		{"--control=ok.sock"}} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		cmd := exec.CommandContext(ctx, os.Args[0], "unix:path=/x", filepath.Join(t.TempDir(), "p"), "--control="+rel)
+		cmd := exec.CommandContext(ctx, os.Args[0], append([]string{"unix:path=/x", filepath.Join(t.TempDir(), "p")}, args...)...)
 		cmd.Env = append(os.Environ(), "DBUS_PROXY_MAIN=1", "XDG_RUNTIME_DIR="+t.TempDir())
 		out, err := cmd.CombinedOutput()
 		timedOut := ctx.Err() != nil
 		cancel()
-		if err == nil || timedOut || !strings.Contains(string(out), "--control") {
-			t.Errorf("--control=%q accepted: %v %s", rel, err, out)
+		if err == nil || timedOut || !strings.Contains(string(out), "--") {
+			t.Errorf("%q accepted: %v %s", args, err, out)
 		}
 	}
 }
