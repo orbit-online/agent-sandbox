@@ -1,26 +1,20 @@
 package rules
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 )
 
-// The filters of one source by name: the command line's, the bus's own, or a grant's the broker sent (live)
+// The filters of one source by name: the command line's or the bus's own
 type Set struct {
 	byName map[string][]*Filter
-	// The grant's id for a live set, empty for a static one
-	id string
 }
 
 func newSet() *Set {
 	return &Set{byName: map[string][]*Filter{}}
 }
-
-func (rs *Set) Live() bool { return rs.id != "" }
 
 // The names the set mentions
 func (rs *Set) Names() []string {
@@ -29,15 +23,6 @@ func (rs *Set) Names() []string {
 		out = append(out, name)
 	}
 	return out
-}
-
-// Its filters, counted
-func (rs *Set) size() int {
-	n := 0
-	for _, fs := range rs.byName {
-		n += len(fs)
-	}
-	return n
 }
 
 // Checks a rule's name: a well-known name, exact (no ".*" wildcards, which xdg-dbus-proxy takes)
@@ -76,7 +61,7 @@ func (rs *Set) addPolicy(name string, p Policy) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
-	rs.byName[name] = append(rs.byName[name], &Filter{policy: p, types: All, Set: rs})
+	rs.byName[name] = append(rs.byName[name], &Filter{policy: p, types: All})
 	return nil
 }
 
@@ -91,7 +76,7 @@ func (rs *Set) addRule(arg string, t Kind) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
-	f := &Filter{policy: Talk, types: t, Set: rs}
+	f := &Filter{policy: Talk, types: t}
 	method := rule
 	if at := strings.IndexByte(rule, '@'); at >= 0 {
 		method = rule[:at]
@@ -144,47 +129,7 @@ func (rs *Set) add(a Args) error {
 			if err := o.add(arg); err != nil {
 				return fmt.Errorf("--%s: %w", o.flag, err)
 			}
-			if rs.size() > MaxLiveEntries && rs.Live() {
-				return fmt.Errorf("%d rules in a set at most", MaxLiveEntries)
-			}
 		}
 	}
 	return nil
-}
-
-// Entries in one live set, so adding one costs each client a bounded number of the proxy's own calls
-const MaxLiveEntries = 64
-
-// ParseLive parses a live set, the grant id's: as Parse, with at most MaxLiveEntries rules, none for the bus itself, and
-// nothing the bus's policy refuses (internal/dbuspolicy), which the module and the broker check too: a broker that's
-// confused or a peer that isn't the broker can't add what the config can't declare. The static guards stay: nothing
-// in a set reaches the bus driver, so no monitoring, eavesdropping or bus calls beyond the static ones, and no
-// destination-less calls (those are refused before any rule is looked at). appID is the sandbox's
-func ParseLive(id string, a Args, bus, appID string) (*Set, error) {
-	rs := newSet()
-	rs.id = id
-	if err := rs.add(a); err != nil {
-		return nil, err
-	}
-	if rs.size() == 0 {
-		return nil, errors.New("A rule set without rules")
-	}
-	if rs.byName[BusName] != nil {
-		return nil, fmt.Errorf("%s: the bus itself takes no live rules", BusName)
-	}
-	set := dbuspolicy.Set{See: a.See, Talk: a.Talk, Own: a.Own, Call: byName(a.Call), Broadcast: byName(a.Broadcast)}
-	if err := dbuspolicy.Check(bus, appID, set); err != nil {
-		return nil, err
-	}
-	return rs, nil
-}
-
-// byName turns NAME=RULE arguments, parsed already, into rules by name
-func byName(args []string) map[string][]string {
-	out := map[string][]string{}
-	for _, a := range args {
-		name, rule, _ := strings.Cut(a, "=")
-		out[name] = append(out[name], rule)
-	}
-	return out
 }

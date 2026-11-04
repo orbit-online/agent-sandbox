@@ -63,11 +63,7 @@ Grants with lease `standing` come from the configuration and are there from
 the start. Its tools named `<capability>_<command>` run commands on the host:
 a call asks the user for a grant of the capability unless one covers it. Host
 sockets sit at fixed addresses under `/run/permissions/sockets/`: a
-connection without a grant is closed at once, so ask first. D-Bus
-capabilities add rules to a bus proxy while their grant lives; a revoke
-closes every bus connection that used them. A launcher with any on the system
-bus has it at `/run/dbus/system_bus_socket`, which reaches nothing without a
-grant: ask before connecting. A grant is the
+connection without a grant is closed at once, so ask first. A grant is the
 whole sandbox's and lasts its lease (an hour unless you ask otherwise);
 release it when you're done.
 
@@ -82,8 +78,8 @@ release it when you're done.
   portal (`NOTIFY_FORCE_PORTAL=1` for libnotify, `notify-send`); the
   notification server itself (`org.freedesktop.Notifications`) and anything
   else the desktop's processes export are out of reach. Links open in the
-  host browser via OpenURI. Processes running as a subuid can't connect to
-  either bus.
+  host browser via OpenURI. There is no system bus. Processes running as a
+  subuid can't connect to the session bus.
 - Own network namespace with a macvlan on the LAN (DHCP), so host-only
   services (VPN mesh, auth proxies, the host's `127.0.0.1`) are out of reach.
 - No SSH agent and no `~/.ssh`.

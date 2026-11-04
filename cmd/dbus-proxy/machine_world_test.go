@@ -19,9 +19,9 @@ import (
 	"pgregory.net/rapid"
 )
 
-// The world the state machine runs in (machine_test.go): a dbus-daemon of its own, a proxy with static rules and a
-// control socket, scripted services straight on the bus, clients speaking the wire through the proxy, an observer
-// asking the bus who owns what. The broker's end of the control socket is in machine_peers_test.go
+// The world the state machine runs in (machine_test.go): a dbus-daemon of its own, a proxy with static rules,
+// scripted services straight on the bus, clients speaking the wire through the proxy, an observer asking the bus who
+// owns what
 
 // How long a step may take to settle, and a connection to close
 const (
@@ -64,13 +64,12 @@ func lazyHelper() {
 }
 
 type world struct {
-	t       *rapid.T
-	dir     string
-	bus     string // the bus's address
-	addr    string // the proxy's
-	ctlPath string
-	obs     *party
-	svcs    []*party
+	t    *rapid.T
+	dir  string
+	bus  string // the bus's address
+	addr string // the proxy's
+	obs  *party
+	svcs []*party
 	// Each connection's role by its unique name
 	mu    sync.Mutex
 	roles map[string]string
@@ -120,7 +119,7 @@ func (w *world) startBus() {
 	w.bus = "unix:path=" + sock
 }
 
-// The proxy, in the test's process, with the static rules and a control socket
+// The proxy, in the test's process, with the static rules
 func (w *world) startProxy() {
 	sock := filepath.Join(w.dir, "proxy")
 	opts, err := docopt.ParseArgs(usage, append([]string{w.bus, sock, "--filter"}, staticArgs...), "")
@@ -140,20 +139,11 @@ func (w *world) startProxy() {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	w.ctlPath = filepath.Join(w.dir, "control")
-	cl, err := listen(w.ctlPath)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	done := make(chan struct{}, 2)
-	go func() { p.Serve(l); done <- struct{}{} }()
-	go func() { p.control("session", testApp).Serve(cl); done <- struct{}{} }()
+	done := make(chan struct{})
+	go func() { p.Serve(l); close(done) }()
 	w.t.Cleanup(func() {
 		l.Close()
-		cl.Close()
 		<-done
-		<-done
-		p.reg.KillAll()
 	})
 	w.addr = sock
 }

@@ -38,7 +38,7 @@ func (mc *machine) BusCall(t *rapid.T) {
 	case "RequestName", "ReleaseName":
 		arg = rapid.SampledFrom(clientNames).Draw(t, "name")
 	case "StartServiceByName":
-		arg = rapid.SampledFrom([]string{lazyName, lazyName, "org.test.Hidden", "org.test.See", "org.test.Live"}).Draw(t, "name")
+		arg = rapid.SampledFrom([]string{lazyName, lazyName, "org.test.Hidden", "org.test.See", "org.test.Other"}).Draw(t, "name")
 	case "AddMatch":
 		arg = rapid.SampledFrom(matchCatalog).Draw(t, "rule").rule
 	case "RemoveMatch":

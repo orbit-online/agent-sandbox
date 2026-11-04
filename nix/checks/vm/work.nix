@@ -60,10 +60,10 @@
       workstation.succeed(f"tr '\\0' '\\n' </proc/{app}/environ | grep -qx WAYLAND_DISPLAY=wayland-0")
       # The default launcher's in a unit and slice of its own
       assert cgroup(bwrap_info()["child-pid"]) == f"{user}/claude\\x2ddesktop.slice/claude-desktop-app.service/sandbox/app"
-      # The broker and the system-bus proxy, units of their own in the slice
+      # The broker, a unit of its own in the slice
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=60)
-      for unit in ["claude-desktop-work-permissions", "claude-desktop-work-system-bus"]:
-          assert cgroup(main_pid(unit)) == f"{work_slice}/{unit}.service", f"{unit} in {cgroup(main_pid(unit))}"
+      unit = "claude-desktop-work-permissions"
+      assert cgroup(main_pid(unit)) == f"{work_slice}/{unit}.service", f"{unit} in {cgroup(main_pid(unit))}"
       # The re-entries join the app's cgroup: claude:// and --shell
       assert in_work("cat /proc/self/cgroup").strip() == "0::/app"
       assert sandbox_shell("cat /proc/self/cgroup").strip().splitlines()[-1] == "0::/app"
@@ -249,83 +249,9 @@
       out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect)}")
       assert out.strip() == "ping", f"the standing grant back after a restart: {out!r}"
 
-      # D-Bus grants, on the daemon started again: the system-bus proxy runs as a unit of its own, its socket at
-      # /run/dbus/system_bus_socket inside on a read-only bind, reaching nothing before a grant. A grant passes the next
-      # call, its revoke refuses the next one and closes the connection that used it
-      workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-system-bus", timeout=30)
-      in_work("test -S /run/dbus/system_bus_socket")
-      status, _ = workstation.execute(work_cmd("touch /run/dbus/x"))
-      assert status != 0, "the sandbox can write to /run/dbus"
-      # The system-bus proxy's bwrap holds its own control socket's directory, not the session proxy's next to it
-      bwrap_pid = workstation.succeed("systemctl --user -M alice@ show -P MainPID claude-desktop-work-system-bus").strip()
-      proxy_pid = workstation.succeed(f"pgrep -P {bwrap_pid}").split()[0]
-      held = workstation.succeed(f"ls /proc/{proxy_pid}/root/run/user/1000/claude-desktop/dbus-control-work").split()
-      assert held == ["system"], f"the system-bus proxy sees {held} of the control directories"
-      run_dbus = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/dbus " in l]
-      assert len(run_dbus) == 1 and " ro," in run_dbus[0], f"/run/dbus where the app runs: {run_dbus}"
-      def hostname():
-          return workstation.execute(work_cmd(
-              f"{gdbus} call --system --dest org.freedesktop.hostname1 --object-path /org/freedesktop/hostname1"
-              " --method org.freedesktop.DBus.Properties.Get org.freedesktop.hostname1 Hostname"
-          ) + " 2>&1")
-      def clipboard():
-          return workstation.execute(work_cmd(
-              f"{gdbus} call --session --dest org.kde.klipper --object-path /klipper"
-              " --method org.kde.klipper.klipper.getClipboardContents"
-          ) + " 2>&1")
-      status, out = hostname()
-      assert status != 0 and "ServiceUnknown" in out, f"hostnamed before a grant: {status} {out}"
-      status, out = clipboard()
-      assert status != 0 and "secret" not in out, f"the clipboard before a grant: {status} {out}"
-      granted("hostname", "hostname", {}, "read the host name")
-      status, out = hostname()
-      assert status == 0 and "'workstation'" in out, f"hostnamed under a grant: {status} {out}"
-      granted("clipboard", "clipboard", {}, "read the clipboard")
-      status, out = clipboard()
-      assert status == 0 and "secret-clipboard" in out, f"the clipboard under a grant: {status} {out}"
-      # A connection that used the grant, held open: the revoke closes it
-      script = (f"{gdbus} monitor --system --dest org.freedesktop.hostname1 >/home/alice/monitor.out 2>&1;"
-                " echo $? >/home/alice/monitor.exit")
-      workstation.succeed(f"systemd-run --user -M alice@ --unit monitor --"
-                          f" /etc/profiles/per-user/alice/bin/claude-desktop-work --exec sh -c {shlex.quote(script)}")
-      # Once its GetNameOwner of the name, judged under the grant, is answered
-      workstation.wait_until_succeeds(f"grep -qE 'is owned by|does not have an owner' {work_home}/monitor.out", timeout=30)
-      dbus_grants = {g["capability"]: g["id"] for g in control({"op": "state"})["grants"]}
-      for cap in ["hostname", "clipboard"]:
-          control({"op": "revoke", "grant": dbus_grants[cap]})
-      workstation.wait_until_succeeds(f"test -s {work_home}/monitor.exit", timeout=30)
-      status, out = hostname()
-      assert status != 0 and "ServiceUnknown" in out, f"hostnamed after the revoke: {status} {out}"
-      status, out = clipboard()
-      assert status != 0 and "secret" not in out, f"the clipboard after the revoke: {status} {out}"
-
-      # polkit's subject for a call through the system-bus proxy is the proxy: a process of alice's in a user unit,
-      # outside any login session. polkit 127 then takes the uid's graphical session (sd_uid_get_display, in
-      # polkitbackendsessionmonitor-systemd.c), so a call through a grant is judged as alice's active session when she
-      # has one, allow_active included, as any process of hers outside a session is. The proxied answer matches the
-      # host's for a process of hers in a user unit: challenge without a graphical session, yes once one is active
-      granted("reboot", "reboot", {}, "ask whether the host may reboot")
-      def can_reboot():
-          cmd = (f"{gdbus} call --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1"
-                 " --method org.freedesktop.login1.Manager.CanReboot")
-          host = workstation.execute(alice_cmd(cmd) + " 2>&1")[1].strip()
-          proxied = workstation.execute(work_cmd(cmd) + " 2>&1")[1].strip()
-          print(f"CanReboot: through the proxy {proxied!r}, on the host {host!r}")
-          return proxied, host
-      proxied, host = can_reboot()
-      assert proxied == host == "('challenge',)", f"CanReboot without a graphical session: through the proxy {proxied}, on the host {host}"
-      workstation.succeed(
-          "systemd-run --unit fake-session -p PAMName=login -p User=alice -p TTYPath=/dev/tty3"
-          " -E XDG_SESSION_TYPE=wayland -E XDG_SESSION_CLASS=user -- /run/current-system/sw/bin/sleep infinity"
-      )
-      workstation.wait_until_succeeds("loginctl show-user alice -P Display | grep -q .", timeout=30)
-      display = workstation.succeed("loginctl show-user alice -P Display").strip()
-      workstation.succeed("chvt 3")
-      workstation.wait_until_succeeds(f"loginctl show-session {display} -P Active | grep -qx yes", timeout=30)
-      proxied, host = can_reboot()
-      assert proxied == host == "('yes',)", f"CanReboot with an active graphical session: through the proxy {proxied}, on the host {host}"
-      workstation.succeed("systemctl stop fake-session")
-      control({"op": "revoke", "grant": {g["capability"]: g["id"] for g in control({"op": "state"})["grants"]}["reboot"]})
+      # No system bus inside: D-Bus grants and the system-bus proxy aren't built (docs/permissions.md, D-Bus)
+      status, _ = workstation.execute(work_cmd("test -e /run/dbus/system_bus_socket"))
+      assert status != 0, "the work sandbox has a system bus socket"
 
       # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
       # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds
@@ -337,8 +263,6 @@
       workstation.wait_until_fails(f"test -e /proc/{work_pid}", timeout=30)
       # The daemon ends with its sandbox
       workstation.wait_until_fails("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=30)
-      # And the system-bus proxy
-      workstation.wait_until_fails("systemctl --user -M alice@ is-active claude-desktop-work-system-bus", timeout=30)
       # The default sandbox runs on
       assert in_sandbox("readlink /proc/self/ns/net").strip() == app_netns
 ''

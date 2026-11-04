@@ -9,11 +9,11 @@ import (
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 )
 
-// The state machine's reference model (machine_test.go): what each client may see and send under the static rules
-// and the live sets in force, models/proxy.als's state. Unique names are the parties' roles (svc0, c1), well-known
+// The state machine's reference model (machine_test.go): what each client may see and send under the rules,
+// models/proxy.als's state. Unique names are the parties' roles (svc0, c1), well-known
 // names have dots. The rule matching itself is rules.go's, which rules_test.go checks against xdg-dbus-proxy's
 // semantics; the model owns everything that changes over time: the sets in force, the names each client's proxy
-// learned, pending calls both ways, which sets a client used, the bus's owners and match rules.
+// learned, pending calls both ways, the bus's owners and match rules.
 
 const (
 	lazyName  = "org.test.Lazy"
@@ -26,28 +26,12 @@ const (
 var staticArgs = []string{"--talk=org.test.Talk", "--call=org.test.Call=org.test.Iface.Echo@/org/test",
 	"--see=org.test.See", "--talk=" + lazyName, "--own=org.test.Own"}
 
-// The live sets the broker adds, each valid under the session bus's policy
-var setCatalog = []map[string][]string{
-	{"talk": {"org.test.Live"}},
-	{"call": {"org.test.Live=org.test.Iface.Echo"}, "broadcast": {"org.test.Live=org.test.Sig.Ping"}},
-	{"talk": {"org.test.W.A"}},
-	{"own": {testApp + ".Live"}},
-	{"see": {"org.test.Hidden"}},
-}
-
 // Names services take, names clients ask for, and every name a call may go to
 var (
-	svcNames    = []string{"org.test.Talk", "org.test.Call", "org.test.See", "org.test.Hidden", "org.test.Live", "org.test.W.A", lazyName}
-	clientNames = []string{"org.test.Own", testApp + ".Live", "org.test.Talk", "org.test.Hidden"}
-	allNames    = append(append([]string{}, svcNames...), "org.test.Own", testApp+".Live")
+	svcNames    = []string{"org.test.Talk", "org.test.Call", "org.test.See", "org.test.Hidden", lazyName}
+	clientNames = []string{"org.test.Own", "org.test.Talk", "org.test.Hidden"}
+	allNames    = append(append([]string{}, svcNames...), "org.test.Own")
 )
-
-// A live set in force: its id, catalog entry and the RuleSet the model looks names up in
-type refSet struct {
-	id  string
-	idx int
-	rs  *rules.Set
-}
 
 // What one client's proxy knows of a unique name: its own policy and the names it was seen owning (names.go)
 type refID struct {
@@ -75,8 +59,6 @@ type refClient struct {
 	role            string
 	helloed, closed bool
 	table           map[string]*refID
-	watched         map[*refSet]bool   // live sets whose names the proxy watches for it
-	used            map[*refSet]bool   // live sets a message it sent or got was judged under
 	pending         map[uint32]refCall // its calls let through awaiting a reply, by serial
 	peer            map[peerKey]bool   // calls to it awaiting its reply
 	sent            []uint32           // serials it used
@@ -97,8 +79,8 @@ type refSvc struct {
 }
 
 type model struct {
+	rules   *rules.Rules
 	static  *rules.Set
-	live    []*refSet
 	owners  map[string]string // well-known name -> role
 	clients map[string]*refClient
 	svcs    map[string]*refSvc
@@ -106,7 +88,6 @@ type model struct {
 	// The calls between connections the bus awaits a reply to: it refuses another with the same caller, serial and
 	// callee, and forgets one when the callee answers or either leaves
 	busPending map[busKey]bool
-	setSeq     int
 	// What each party should receive in this step, as rec() writes it
 	want map[string][]string
 }
@@ -130,33 +111,15 @@ func newModel() *model {
 	if err != nil {
 		panic(err)
 	}
-	return &model{static: rs, owners: map[string]string{}, clients: map[string]*refClient{}, svcs: map[string]*refSvc{},
+	return &model{rules: rules.New(rs), static: rs, owners: map[string]string{}, clients: map[string]*refClient{}, svcs: map[string]*refSvc{},
 		want: map[string][]string{}, busPending: map[busKey]bool{}}
 }
 
 func (m *model) newClient(role string) *refClient {
-	c := &refClient{role: role, table: map[string]*refID{}, watched: map[*refSet]bool{}, used: map[*refSet]bool{},
+	c := &refClient{role: role, table: map[string]*refID{},
 		pending: map[uint32]refCall{}, peer: map[peerKey]bool{}, matches: map[string]int{}}
 	m.clients[role] = c
 	return c
-}
-
-// The rules in force
-func (m *model) rules() *rules.Rules {
-	sets := []*rules.Set{m.static}
-	for _, s := range m.live {
-		sets = append(sets, s.rs)
-	}
-	return rules.New(sets...)
-}
-
-func (m *model) setOf(rs *rules.Set) *refSet {
-	for _, s := range m.live {
-		if s.rs == rs {
-			return s
-		}
-	}
-	return nil
 }
 
 func (c *refClient) id(role string) *refID {
@@ -183,8 +146,7 @@ func (c *refClient) addOwned(role, name string) {
 	}
 }
 
-// The policy and filters of a name for client c, as its proxy's lookup has them, marking the live sets it touches
-// as used
+// The policy and filters of a name for client c, as its proxy's lookup has them
 func (m *model) lookup(c *refClient, name string) (rules.Policy, []*rules.Filter) {
 	var p rules.Policy
 	var fs []*rules.Filter
@@ -192,7 +154,7 @@ func (m *model) lookup(c *refClient, name string) (rules.Policy, []*rules.Filter
 	case name == "":
 		return rules.Talk, []*rules.Filter{rules.MatchAll(rules.Talk)}
 	case strings.Contains(name, "."):
-		p, fs = m.rules().Lookup(name)
+		p, fs = m.rules.Lookup(name)
 	default:
 		e := c.table[name]
 		if e == nil {
@@ -203,31 +165,17 @@ func (m *model) lookup(c *refClient, name string) (rules.Policy, []*rules.Filter
 			fs = append(fs, rules.MatchAll(p))
 		}
 		for _, o := range e.owned {
-			op, ofs := m.rules().Lookup(o)
+			op, ofs := m.rules.Lookup(o)
 			p = max(p, op)
 			fs = append(fs, ofs...)
-		}
-	}
-	for _, f := range fs {
-		if s := m.setOf(f.Set); s != nil {
-			c.used[s] = true
 		}
 	}
 	return p, fs
 }
 
-// Whether the proxy's match rules for c cover a NameOwnerChanged of name: the static rules' names, and those of the
-// live sets it watches
-func (m *model) watches(c *refClient, name string) bool {
-	if slices.Contains(rules.New(m.static).Names(), name) {
-		return true
-	}
-	for s := range c.watched {
-		if slices.Contains(s.rs.Names(), name) {
-			return true
-		}
-	}
-	return false
+// Whether the proxy's match rules cover a NameOwnerChanged of name: the rules' names
+func (m *model) watches(name string) bool {
+	return slices.Contains(m.rules.Names(), name)
 }
 
 // lookupNames is what the proxy does when it starts watching names (lookupNames): the owner of each

@@ -1,12 +1,9 @@
 // Package judge is one client connection's state and what it makes of each message, without I/O: FromClient and
 // FromBus say what to do with a message (forward it, drop it or replace it) and which calls of the proxy's own go to
-// the bus. One mutex covers everything a verdict reads or writes, the rules in force, the live sets marked used, the
-// unique names and the calls awaiting replies, so a live set removed while a message is judged either applies to it
-// whole or not at all (models/proxy.als, D1)
+// the bus. One mutex covers everything a verdict reads or writes, the unique names and the calls awaiting replies
 package judge
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 
@@ -75,13 +72,10 @@ type peerCall struct {
 	serial uint32
 }
 
-// ErrRevoked ends a connection that used a live set when the set is removed
-var ErrRevoked = errors.New("A live rule set the connection used was removed")
-
 // Judge is one client connection's state
 type Judge struct {
-	current func() *rules.Rules // The rules in force now
-	unixFDs bool                // Whether the client negotiated file descriptors
+	rules   *rules.Rules
+	unixFDs bool // Whether the client negotiated file descriptors
 
 	mu         sync.Mutex
 	awaitBus   map[uint32]expect     // Calls to the bus side awaiting a reply, by the client's (or proxy's) serial
@@ -89,28 +83,16 @@ type Judge struct {
 	names      *nameTable
 	fakeSerial uint32
 	helloSeen  bool
-	// Closed once the owners of the names looked up are known (after Hello, after a live set is added), or nil when
-	// there are none; syncing counts the GetNameOwner replies still out
+	// Closed once the owners of the rules' names are known after Hello, or nil when there are none; syncing counts
+	// the GetNameOwner replies still out
 	synced  chan struct{}
 	syncing int
-	// The rules this message is judged by, taken under mu as it's judged: a live set added or removed applies from
-	// the next message
-	cur *rules.Rules
-	// The live sets a message the client sent or got was judged under, which a set's removal closes the connection
-	// for; the live sets added or removed since the client's last message, whose names it hasn't looked up or
-	// stopped watching yet; and the match rules watching each set's names
-	used     map[*rules.Set]bool
-	newSets  []*rules.Set
-	goneSets []*rules.Set
-	matches  map[*rules.Set][]string
 }
 
-// New is the state of a connection judged by the rules current returns, whose client negotiated file descriptors or
-// not
-func New(current func() *rules.Rules, unixFDs bool) *Judge {
-	return &Judge{current: current, unixFDs: unixFDs, awaitBus: map[uint32]expect{},
-		awaitPeer: map[peerCall]struct{}{}, names: newNameTable(), fakeSerial: MaxClientSerial,
-		used: map[*rules.Set]bool{}, matches: map[*rules.Set][]string{}}
+// New is the state of a connection judged by r, whose client negotiated file descriptors or not
+func New(r *rules.Rules, unixFDs bool) *Judge {
+	return &Judge{rules: r, unixFDs: unixFDs, awaitBus: map[uint32]expect{}, awaitPeer: map[peerCall]struct{}{},
+		names: newNameTable(), fakeSerial: MaxClientSerial}
 }
 
 // Records a reply expected from the bus side; called with mu held. A serial already awaiting its reply ends the
@@ -144,17 +126,7 @@ func (j *Judge) fakeCall(out *[][]byte, m *dbus.Message, e expect) error {
 	return nil
 }
 
-// The policy and filters for a name by the rules the message is judged by; called with mu held. A live set with a
-// filter for the name counts as used, whatever the verdict: its removal ends the connection
+// The policy and filters for a name; called with mu held
 func (j *Judge) lookup(name string) (rules.Policy, []*rules.Filter) {
-	if j.cur == nil {
-		j.cur = j.current()
-	}
-	p, fs := j.names.lookup(j.cur, name)
-	for _, f := range fs {
-		if f.Set != nil && f.Set.Live() {
-			j.used[f.Set] = true
-		}
-	}
-	return p, fs
+	return j.names.lookup(j.rules, name)
 }

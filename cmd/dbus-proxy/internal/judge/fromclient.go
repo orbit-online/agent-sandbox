@@ -121,7 +121,6 @@ func (j *Judge) FromClient(m *wire.Message) (Action, error) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.cur = j.current()
 	var calls [][]byte
 	a, err := j.judgeClient(m, &calls)
 	a.Calls = calls
@@ -229,13 +228,5 @@ func (j *Judge) rewrite(m *wire.Message, reply *dbus.Message) (Action, error) {
 // After Hello: watch every name the rules mention and ask who owns it now, so its owner's unique name gets its
 // policy, and hold the client until the answers came
 func (j *Judge) initialNameOps(fakes *[][]byte) error {
-	for _, rs := range j.cur.Live() {
-		if err := j.lookupSet(rs, fakes); err != nil {
-			return err
-		}
-	}
-	// Those added since the client's message were taken with the rules above, under the same mu
-	j.newSets = nil
-	_, err := j.lookupNames(j.cur.Names(), fakes)
-	return err
+	return j.lookupNames(j.rules.Names(), fakes)
 }

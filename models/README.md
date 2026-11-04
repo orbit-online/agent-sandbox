@@ -377,27 +377,23 @@ process whose principal is in the Sandbox domain, at any time.
 ### D-Bus proxy (`proxy.als`)
 
 The proxy (`cmd/dbus-proxy`) between the sandbox's clients and the bus,
-with the broker's live rule sets. Its state: each client's calls awaiting
-replies (`awaitBus`) and the calls to it awaiting its replies
+under the static rules nixpak passes it. Its state: each client's calls
+awaiting replies (`awaitBus`) and the calls to it awaiting its replies
 (`awaitPeer`), the names' owners and what the proxy saw each unique name
-own, the static rules and the live sets, the clients held while their
-proxy looks up a set's owners, the rules each client's last message was
-judged by, and the sets each client used. The attacker is every client
-(any destination, any serial, any reply, eavesdropping match rules);
-peers own names, call clients and reply, asked or forged.
+own. The attacker is every client (any destination, any serial, any
+reply, eavesdropping match rules); peers own names, call clients and
+reply, asked or forged.
 
-- D1. Nothing reaches a name or method outside the rules in force: a call
-  reaches its destination, and a NameOwnerChanged a client, only when
-  the static rules and the live sets in force when the proxy reads it
-  allow it. Owners looked up for a set that went meanwhile give nothing.
+- D1. Nothing reaches a name or method outside the rules: a call reaches
+  its destination only when the rules let the client call it there, by
+  the name or by its owner's unique name.
 - D2. A reply only answers a call let through: no two calls let through
   await replies on one serial, a reply reaches a client only for a serial
   awaiting one and, for a call to the bus, only from the bus, and a
   client's reply reaches only a peer whose call to it awaits one.
-- D3. A removed set's clients are closed: every client a message it sent
-  or got was judged under the set (a rule for its destination, sender or
-  name, whatever the verdict) loses its connection with the set's removal,
-  alone or with the broker's connection.
+- D3. Retired with D-Bus grants (2026-11-04): a removed live rule set's
+  clients were closed. Live rule sets aren't built
+  (`docs/permissions.md`, D-Bus).
 - D4. No eavesdropping: no client gets a call addressed to another.
 
 ## Not modelled
@@ -435,7 +431,7 @@ check: that's the user's own mount and ceiling configuration.
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
 | `protocol.als` | 3 | P1-P17 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
-| `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1-D4, each with a run for its premise and a revert check per guard enforcing it |
+| `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine
 against the proxy between a real `dbus-daemon` and clients speaking the
@@ -445,20 +441,15 @@ serials, call the bus (owners, names listed, owned, released and started,
 match rules eavesdropping or not, `BecomeMonitor`, a second Hello) and
 reply, asked or not; services take and release names, call clients,
 reply, forge replies (to a start the bus holds pending too) and
-broadcast; the broker adds and removes sets, alone or right before a
-client's message, and drops its connection. After every step what
-arrived at each end, the connections closed and every name's owner match
-a reference model. Each step settles there, so a set removed while a
-client's lookups for it are in flight (`D1inflight`) is left to a second
-machine, `cmd/dbus-proxy/internal/judge/machine_test.go`, which drives one
-connection's judge without sockets, the bus a queue answered in order:
-the client says Hello and calls names and peers, the broker adds and
-removes sets (the rules swapped before the judge hears of it, as the
-registry does), names change hands, and the bus answers one message at a
-time or forges replies. It checks D1 (calls and NameOwnerChanged, and
-D3's close for a set a call relied on) and D2 after every step. The
-end-to-end machine has calls and replies between clients, which
-`proxy.als` has between a client and a peer only.
+broadcast. After every step what arrived at each end, the connections
+closed and every name's owner match a reference model. A second machine,
+`cmd/dbus-proxy/internal/judge/machine_test.go`, drives one connection's
+judge without sockets, the bus a queue answered in order, so replies and
+owners' changes interleave in any order: the client says Hello and calls
+names and peers, names change hands, and the bus answers one message at a
+time or forges replies. It checks D1 (calls and NameOwnerChanged) and D2
+after every step. The end-to-end machine has calls and replies between
+clients, which `proxy.als` has between a client and a peer only.
 
 The broker's Go tests run the protocol model's actions as `rapid` state
 machines against the broker (`cmd/permissions-broker/machine*_test.go`,

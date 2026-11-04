@@ -1,5 +1,5 @@
-// Package rules is the proxy's rules: rule sets parsed from xdg-dbus-proxy's arguments, on the command line or in a
-// live set the permissions broker adds, the rules in force looked up by name, and xdg-dbus-proxy's matching
+// Package rules is the proxy's rules: rule sets parsed from xdg-dbus-proxy's arguments on the command line, the rules
+// looked up by name, and xdg-dbus-proxy's matching
 package rules
 
 import "strings"
@@ -32,8 +32,6 @@ type Filter struct {
 	pathSubtree bool // The path ended in "/*"; "@/*" leaves path empty and covers every path
 	iface       string
 	member      string
-	// The rule set it came from; nil for the filters a unique name gets from its own policy
-	Set *Set
 }
 
 var matchAll = map[Policy]*Filter{
@@ -81,12 +79,11 @@ func AnyMatches(fs []*Filter, t Kind, path, iface, member string) bool {
 func MatchAll(p Policy) *Filter { return matchAll[p] }
 
 // Whether a broadcast from a sender with these filters reaches the client. xdg-dbus-proxy passes every broadcast of a
-// name with TALK, and any rule gives a name TALK, so a static --call or --broadcast rule lets all the name's broadcasts
-// through: kept for compatibility, as nixpak's configs rely on it. A live set's call and broadcast rules don't: only
-// what its broadcast rules match passes, or everything with its see, talk or own
+// name with TALK, and any rule gives a name TALK, so a --call or --broadcast rule lets all the name's broadcasts
+// through: kept for compatibility, as nixpak's configs rely on it
 func BroadcastPasses(fs []*Filter, path, iface, member string) bool {
 	for _, f := range fs {
-		if f.policy >= Talk && (f.Set == nil || !f.Set.Live() || f.types == All) {
+		if f.policy >= Talk {
 			return true
 		}
 	}

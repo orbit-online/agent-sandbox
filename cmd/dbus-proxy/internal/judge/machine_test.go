@@ -2,9 +2,7 @@ package judge
 
 import (
 	"flag"
-	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -14,13 +12,12 @@ import (
 )
 
 // A stateful property test of one connection's Judge without sockets or a bus: rapid drives the judge with
-// models/proxy.als's actions, the bus played by a queue of what it sends back, answered one at a time in order, so a
-// live set can be added and removed while the proxy's lookups of its names are in flight, which the end-to-end
-// machine (../../machine*_test.go) can't time. After every step: D1, a call forwarded to a destination only when the
-// rules in force then let the client call one of its names, through every name the bus ever saw its unique name own
-// (the proxy's table is sticky), and a NameOwnerChanged only for a name they let it see; a set removed ends the
-// connection when it let a call through; D2, a reply forwarded only to a call let through and awaiting one, and to a
-// call to the bus only from the bus. 1000 sequences take a second; more with -rapid.checks
+// models/proxy.als's actions, the bus played by a queue of what it sends back, answered one at a time in order, so
+// replies and owners' changes interleave in any order the bus could send them. After every step: D1, a call forwarded
+// to a destination only when the rules let the client call one of its names, through every name the bus ever saw its
+// unique name own (the proxy's table is sticky), and a NameOwnerChanged only for a name they let it see; D2, a reply
+// forwarded only to a call let through and awaiting one, and to a call to the bus only from the bus. 1000 sequences
+// take a second; more with -rapid.checks
 func TestJudgeMachine(t *testing.T) {
 	// Cheap without sockets: 1000 sequences unless the command line says otherwise
 	set := false
@@ -44,51 +41,36 @@ var (
 type busMsg func() *dbus.Message
 
 type judgeMachine struct {
-	cur     atomic.Pointer[rules.Rules]
-	static  *rules.Set
-	catalog []*rules.Set
-	live    []*rules.Set
-	j       *Judge
-	hello   bool
-	serial  uint32
+	rules  *rules.Rules
+	j      *Judge
+	hello  bool
+	serial uint32
 	// The bus: who owns each name now, every name each unique name ever owned, the names a match rule watches and
 	// what it has yet to send
 	owner   map[string]string
 	owned   map[string]map[string]bool
 	watched map[string]int
 	queue   []busMsg
-	// The calls let through awaiting a reply, by serial: whether to the bus. The live sets a forwarded call needed
-	pending  map[uint32]bool
-	reliedOn map[*rules.Set]bool
+	// The calls let through awaiting a reply, by serial: whether to the bus
+	pending map[uint32]bool
 }
 
 func newJudgeMachine(t *rapid.T) *judgeMachine {
-	parse := func(id string, a rules.Args) *rules.Set {
-		rs, err := rules.ParseLive(id, a, "session", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return rs
-	}
-	static, err := rules.Parse(rules.Args{Talk: []string{"org.test.Talk"}})
+	static, err := rules.Parse(rules.Args{Talk: []string{"org.test.Talk"}, See: []string{"org.test.A"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &judgeMachine{static: static, catalog: []*rules.Set{
-		parse("a", rules.Args{Talk: []string{"org.test.A"}}),
-		parse("b", rules.Args{Talk: []string{"org.test.B"}, See: []string{"org.test.A"}}),
-	}, owner: map[string]string{}, owned: map[string]map[string]bool{}}
-	m.cur.Store(rules.New(static))
+	m := &judgeMachine{rules: rules.New(static), owner: map[string]string{}, owned: map[string]map[string]bool{}}
 	m.connect()
 	return m
 }
 
 // A new connection, after the last one ended
 func (m *judgeMachine) connect() {
-	m.j = New(m.cur.Load, true)
+	m.j = New(m.rules, true)
 	m.hello, m.serial = false, 0
 	m.watched, m.queue = map[string]int{}, nil
-	m.pending, m.reliedOn = map[uint32]bool{}, map[*rules.Set]bool{}
+	m.pending = map[uint32]bool{}
 }
 
 func parsed(t *rapid.T, msg *dbus.Message, serial uint32) *wire.Message {
@@ -115,13 +97,13 @@ func reply(serial uint32, sender string, body ...any) *dbus.Message {
 	return &dbus.Message{Type: dbus.TypeMethodReply, Headers: h, Body: body}
 }
 
-// The policy of a well-known name under the rules in force
+// The policy of a well-known name
 func (m *judgeMachine) policy(name string) rules.Policy {
-	p, _ := m.cur.Load().Lookup(name)
+	p, _ := m.rules.Lookup(name)
 	return p
 }
 
-// Whether the rules in force let the client call dest: the bus, itself, a well-known name with talk, or a unique name
+// Whether the rules let the client call dest: the bus, itself, a well-known name with talk, or a unique name
 // that ever owned one
 func (m *judgeMachine) allowed(dest string) bool {
 	if dest == busName || dest == self {
@@ -173,13 +155,8 @@ func (m *judgeMachine) busTakes(t *rapid.T, calls [][]byte) {
 	}
 }
 
-// What the client sends: Sync first, as the proxy's reader does, and nothing while the client is held
+// What the client sends: nothing while the client is held, as the proxy's reader does
 func (m *judgeMachine) send(t *rapid.T, msg *dbus.Message) (Action, uint32) {
-	calls, err := m.j.Sync()
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.busTakes(t, calls)
 	if m.j.Held() != nil {
 		t.Skip("held")
 	}
@@ -217,14 +194,7 @@ func (m *judgeMachine) Call(t *rapid.T) {
 	switch a.Verdict {
 	case Forward:
 		if !m.allowed(dest) {
-			t.Fatalf("D1: a call to %s passed outside the rules in force", dest)
-		}
-		for _, rs := range m.live {
-			m.cur.Store(m.cur.Load().Without(rs))
-			if !m.allowed(dest) {
-				m.reliedOn[rs] = true
-			}
-			m.cur.Store(m.cur.Load().With(rs))
+			t.Fatalf("D1: a call to %s passed outside the rules", dest)
 		}
 		m.pending[serial] = false
 	case Replace:
@@ -232,33 +202,6 @@ func (m *judgeMachine) Call(t *rapid.T) {
 		m.queue = append(m.queue, func() *dbus.Message { return reply(serial, busName) })
 	case Drop:
 		t.Fatal("A call awaiting a reply dropped")
-	}
-}
-
-// AddSet and RemoveSet: the broker changes the live sets, the registry's way: the rules first, then the connection
-func (m *judgeMachine) AddSet(t *rapid.T) {
-	rs := rapid.SampledFrom(m.catalog).Draw(t, "set")
-	if slices.Contains(m.live, rs) {
-		t.Skip("live")
-	}
-	m.live = append(m.live, rs)
-	m.cur.Store(m.cur.Load().With(rs))
-	m.j.AddSet(rs)
-}
-
-func (m *judgeMachine) RemoveSet(t *rapid.T) {
-	if len(m.live) == 0 {
-		t.Skip("none")
-	}
-	rs := rapid.SampledFrom(m.live).Draw(t, "set")
-	m.live = slices.DeleteFunc(m.live, func(s *rules.Set) bool { return s == rs })
-	m.cur.Store(m.cur.Load().Without(rs))
-	if m.j.RemoveSet(rs) {
-		m.connect()
-		return
-	}
-	if m.reliedOn[rs] {
-		t.Fatalf("A set a call relied on was removed and the connection kept")
 	}
 }
 
@@ -329,7 +272,7 @@ func (m *judgeMachine) fromBus(t *rapid.T, msg *dbus.Message) {
 		return
 	}
 	if name, _ := arg0(w); m.policy(name) < rules.See {
-		t.Fatalf("D1: NameOwnerChanged of %s passed outside the rules in force", name)
+		t.Fatalf("D1: NameOwnerChanged of %s passed outside the rules", name)
 	}
 }
 

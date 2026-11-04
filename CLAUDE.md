@@ -22,8 +22,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (at most 64 cgroups, 4 deep), which it sees alone and writable at
   `/sys/fs/cgroup`. The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
   `cgrun.sh` (`cgrun` on the sandbox's PATH) runs a job in a `sandbox/cgrun-<pid>/`
-  with a memory limit. The broker, its host command calls and the system-bus
-  proxy are units in the slice too. Then
+  with a memory limit. The broker and its host command calls are units in
+  the slice too. Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
   `<!-- memo: FILTER -->` marker, the marked ones going into the memo store `/etc/claude/environment.memo`
@@ -43,8 +43,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `go.mod`, `cmd/`, `internal/`: one Go module for the Go helpers below,
   each in `cmd/<binary>`, with `internal/` for what they share (`proc`: the
   pid behind a pidfd and whether it still runs; `dbuspolicy`: what a D-Bus rule
-  set may not hold, per bus, from `policy.json`, which the module reads too
-  and the broker and the proxy embed). Their packages in
+  set may not hold, per bus, from `policy.json`, which the broker embeds for
+  its `dbus` kind, until that goes too). Their packages in
   `nix/packages/<binary>/` build it with `subPackages`, from a source
   filtered to `go.mod`, `go.sum`, the binary's directory (its own `internal/`
   packages included) and the `internal/` packages it uses, each with its own `vendorHash` (Go vendors only what the
@@ -65,18 +65,14 @@ single-user Nix store, and an environment doc for the Claude running inside.
   messages and their file descriptors, bounded, parsing the header, decoding a
   body where needed, encoding, each side's write queue, and the budget of bytes
   and file descriptors the clients share), `sasl` (SASL toward both sides),
-  `rules` (rule sets from the command line and live ones, xdg-dbus-proxy's
-  matching, the lookup of a name in the rules in force), `judge` (one
-  connection's state and its verdict on each message each way, without I/O:
-  forward, drop or replace, and the proxy's own calls to the bus; one mutex
-  over the rules in force, the used live sets, the unique names and the
-  pending replies) and `control` (the control socket the permissions broker
-  adds and removes live rule sets on, `--control`, its peer check, and the
-  registry of the rules in force and the connections they apply to). Package
-  main: `main.go` (arguments, `--fd`, `--pid`), `proxy.go` (listening, the
-  accept loop), `client.go` (a connection's goroutines, doing what the judge
-  says) and `address.go` (bus addresses). With D-Bus capabilities on the system bus, `bwrap-subid.sh`
-  starts a second instance for the system bus as a unit of its own.
+  `rules` (rule sets from the command line, xdg-dbus-proxy's matching, the
+  lookup of a name in the rules) and `judge` (one connection's state and its
+  verdict on each message each way, without I/O: forward, drop or replace,
+  and the proxy's own calls to the bus, the hold after Hello; one mutex over
+  the unique names and the pending replies). Package main: `main.go`
+  (arguments, `--fd`), `proxy.go` (listening, the accept loop, the peer's
+  uid), `client.go` (a connection's goroutines, doing what the judge says)
+  and `address.go` (bus addresses).
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
@@ -205,11 +201,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
-  broker, of a host command, host socket or D-Bus capability it has, none of folders), the assertions on D-Bus
-  capabilities (a name of their own, 1 to 64 rules the proxy takes, no wildcard, and the shared policy: a refused
-  name, the portal's ScreenCast and a `*.Get` rule, own of a host program's name and of another
-  launcher's, polkit and login1's every method on the system bus, own there; its names of its own and
-  the tray's, and an explicit login1 call, accepted), the assertions on host sockets (a
+  broker, of a host command or host socket it has, none of folders), the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
   glob that could match one),
@@ -232,16 +224,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   set the pid, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
   references in the closure), `cgrun` on the sandbox's PATH. The launchers' slices: each wrapper's `SLICE`, work's
-  `APP_UNIT`, its app unit execing nixpak's launcher, its broker's and system-bus proxy's
+  `APP_UNIT`, its app unit execing nixpak's launcher, its broker's
   slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; its
-  D-Bus capabilities: `--control` (in `session/`), `--bus` and `--app-id` in the session proxy's arguments, the system-bus proxy started by its bwrap and
-  bound read-only at `/run/dbus`, both control sockets and the capabilities in the broker's config; none
-  of it for the default launcher), and its `.desktop` file (name, Exec, the
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; no
+  `/run/dbus`, `--control` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
   handler, `StartupWMClass` matching the `desktopName` its asar gets, which
   the default launcher's keeps from upstream).
@@ -279,46 +269,28 @@ modules and a user alice (the `home-manager` input exists only for it).
   (`limits_test.go`): a client over the memory budget disconnected while another goes
   on, queued file descriptors past a client's share, and accepting again after
   running out of file descriptors (the test binary as the proxy, with a low
-  `RLIMIT_NOFILE`); and bus addresses. Live rule sets
-  (`control_test.go`, `control_args_test.go`): a set added applying to the
-  next message (by the owner's unique name too), a removal refusing the next
-  one and ending the connections that used it (their names dropped on the
-  bus) but not the others, the broker's disconnect dropping every set and a
-  next broker's applying, live call and broadcast rules passing only matching
-  broadcasts, sets refused (the bus driver, a wildcard, no rules,
-  too many, a bad id or name, an unknown op, past 32 sets, a line past 64
-  KiB, what the bus's policy refuses), a peer of another uid and a second broker refused, which
-  connection a removal ends, each way of using a set alone (`liveuse_test.go`: a broadcast received, a name
-  owned and dropped, a name's owner asked, names listed, a NameOwnerChanged received), each direction taking
-  the rules there are as its message is judged, the match rules for a removed set's names removed, and
-  `--control` and `--pid` as the module passes them (the socket 0600 in a 0700
-  directory, a path not clean or not relative or a bus not named refused, the exit with the pid). A stateful
+  `RLIMIT_NOFILE`); and bus addresses. A stateful
   property test (`machine*_test.go`, `pgregory.net/rapid`) runs random sequences of `models/proxy.als`'s actions
-  against the proxy with static rules and a control socket, between a `dbus-daemon` of its own (with an activatable
+  against the proxy with static rules, between a `dbus-daemon` of its own (with an activatable
   name whose start stays pending until someone takes the name: the test binary as `DBUS_PROXY_LAZY`), two services
   straight on the bus and up to three clients speaking the wire: clients connecting, saying Hello (twice) and hanging
   up, calls to names allowed and hidden and to unique names with fresh, reused and forged serials (and a call
   carrying a reply serial), calls to the bus (owners, names listed, owned, released and started, match rules with and
   without eavesdropping, `BecomeMonitor`), replies to calls asked and not; services taking and releasing names,
-  calling clients, replying, forging replies to clients' pending calls (a pending start included) and broadcasting;
-  the broker adding and removing live sets, alone or right before a client's next message, and its connection
-  dropping. Each step runs to quiescence (barriers through each connection, the bus dropping a connection that
-  closed), then what arrived at each end, the connections closed, the replies on the control socket and every name's
-  owner match a reference model (`machine_model_test.go`, `machine_bus_test.go`: the rules in force, each client's
-  name table, pending calls both ways, the sets each client used, the bus's owners, match rules and pending calls;
-  D1-D4). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
+  calling clients, replying, forging replies to clients' pending calls (a pending start included) and broadcasting.
+  Each step runs to quiescence (barriers through each connection, the bus dropping a connection that closed), then
+  what arrived at each end, the connections closed and every name's owner match a reference model
+  (`machine_model_test.go`, `machine_bus_test.go`: each client's name table, pending calls both ways, the bus's
+  owners, match rules and pending calls; D1, D2 and D4). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
   -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`), a failure again with the `-rapid.seed` it prints.
   The `internal/` packages' tests, each alone: `wire` (a fuzz test of the header parser against godbus's decoder,
   run longer with `go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s`; serial 0, file descriptors per message,
   pending and claimed, bodies left undecoded, the budget, and what readers and senders hold of it), `sasl` (`Serve`
   on a socket pair: EXTERNAL accepted with and without an initial response, file descriptors as negotiated,
-  refusals, the command and line caps), `rules` (the rule parser, wildcards refused, the lookup, a live set's
-  limits and policy), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
+  refusals, the command and line caps), `rules` (the rule parser, wildcards refused, the lookup), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
   forgotten, a reply only to its caller; the eavesdrop match, the bounded name table; and a stateful property test,
-  `machine_test.go`, that drives one connection's judge with the bus as a queue answered in order, so live sets
-  come and go while the lookups of their names are in flight, checking D1 and D2 after every step, 1000 sequences
-  in about a second) and `control` (a removal swapping the rules before it tells the connections, and ending only
-  those that used the set).
+  `machine_test.go`, that drives one connection's judge with the bus as a queue answered in order, checking D1 and
+  D2 after every step, 1000 sequences in about a second).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations (one past what a duration holds refused), parameter validation, consent (denied, allowed, a live grant
   covering the same request only, by value: keys in any order, -0 for 0), the requests the state machines once
@@ -504,17 +476,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   server that the test answers on `control.sock`: the host socket again, a folder
   mounted read-only, nodev and nosuid where the app runs and one with a mount
   beneath it refused; a SIGKILL of the daemon closing its connections and ending its
-  folder grant, the standing grants alone back under new ids after its restart, the overview in its state, D-Bus
-  grants on the restarted daemon (the system-bus proxy's unit, holding only its own control directory,
-  `/run/dbus/system_bus_socket` a socket on a read-only
-  bind, hostnamed's `Hostname` on the system bus and the fake Plasma's clipboard on the session bus refused before a
-  grant, passed under one and refused after the revoke, which closes a held `gdbus monitor`; polkit through a grant
-  of login1's `CanReboot`: `challenge` without a graphical session of alice's, `yes` with an active one, as for a
-  process of hers in a user unit on the host; the VM has polkit for it), the Permissions window
-  staying up against it, the state machine tests run live (below), the daemon and the system-bus proxy ending with the
+  folder grant, the standing grants alone back under new ids after its restart, the overview in its state, no
+  system bus socket inside, the Permissions window
+  staying up against it, the state machine tests run live (below), the daemon ending with the
   sandbox; its cgroups: the app's unit delegated, nothing in its root or in `sandbox/`, nixpak's launcher in
   `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
-  launcher's in a unit and slice of its own, the broker, the system-bus proxy and a host command call units in the
+  launcher's in a unit and slice of its own, the broker and a host command call units in the
   slice, both re-entries in `app/`; inside, `/sys/fs/cgroup` the sandbox's subtree alone, writable, without a unit's
   name; `cgrun` giving a job a cgroup of its own with its `memory.max`, killing one past 64M with the app running
   on, and removing the cgroup; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a

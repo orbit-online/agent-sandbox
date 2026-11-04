@@ -1,9 +1,6 @@
 package rules
 
-import (
-	"fmt"
-	"testing"
-)
+import "testing"
 
 // Rules parse as xdg-dbus-proxy's filter_new_from_rule, its quirk included: "a.b.C" is member C of interface a.b
 func TestParseRule(t *testing.T) {
@@ -26,7 +23,7 @@ func TestParseRule(t *testing.T) {
 			t.Fatalf("%q: %v", tc.rule, err)
 		}
 		got := *rs.byName["org.x.Y"][0]
-		tc.want.policy, tc.want.types, tc.want.Set = Talk, Call, rs
+		tc.want.policy, tc.want.types = Talk, Call
 		if got != tc.want {
 			t.Errorf("%q: got %+v, want %+v", tc.rule, got, tc.want)
 		}
@@ -56,36 +53,5 @@ func TestRuleLookup(t *testing.T) {
 		if p, _ := r.Lookup(name); p != want {
 			t.Errorf("%s: got %d, want %d", name, p, want)
 		}
-	}
-}
-
-// A live set: the command line's syntax, at least one rule and at most MaxLiveEntries, nothing for the bus itself and
-// nothing the bus's policy refuses
-func TestParseLive(t *testing.T) {
-	const app = "com.nixpak.ClaudeDesktop"
-	many := make([]string, MaxLiveEntries+1)
-	for i := range many {
-		many[i] = fmt.Sprintf("org.test.N%d", i)
-	}
-	for name, a := range map[string]Args{
-		"no rules":        {},
-		"the bus":         {Talk: []string{BusName}},
-		"a call to it":    {Call: []string{BusName + "=*"}},
-		"too many":        {See: many},
-		"a wildcard":      {Talk: []string{"org.test.A.*"}},
-		"refused":         {Talk: []string{"org.freedesktop.secrets"}},
-		"not its own":     {Own: []string{"org.test.A"}},
-		"not a NAME=RULE": {Call: []string{"org.test.A"}},
-	} {
-		if _, err := ParseLive("g", a, "session", app); err == nil {
-			t.Errorf("%s: accepted", name)
-		}
-	}
-	rs, err := ParseLive("g", Args{See: many[:MaxLiveEntries-1], Own: []string{app + ".Helper"}}, "session", app)
-	if err != nil || !rs.Live() || len(rs.Names()) != MaxLiveEntries {
-		t.Errorf("A set of %d rules: %v", MaxLiveEntries, err)
-	}
-	if p, _ := New(rs).Lookup(app + ".Helper"); p != Own {
-		t.Errorf("Own of the app's name: %v", p)
 	}
 }

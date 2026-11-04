@@ -26,7 +26,6 @@ func (j *Judge) FromBus(m *wire.Message) (Action, error) {
 
 // Decides under mu, as judgeClient does
 func (j *Judge) judgeBus(m *wire.Message, fakes *[][]byte) (Action, error) {
-	j.cur = j.current()
 	if isReply(m) {
 		rs, _ := m.ReplySerial()
 		e, ok := j.awaitBus[rs]

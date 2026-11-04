@@ -6,12 +6,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/control"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
@@ -20,10 +17,10 @@ import (
 // Listens for clients of one bus and applies one set of rules
 type Proxy struct {
 	bus    []*net.UnixAddr
-	reg    *control.Registry // The rules in force and the clients past authentication
+	rules  *rules.Rules
 	log    *slog.Logger
 	budget *wire.Budget
-	uid    int // The uid a client and the broker must have
+	uid    int // The uid a client must have
 
 	mu      sync.Mutex
 	clients int
@@ -32,18 +29,13 @@ type Proxy struct {
 // Clients connected at once; the app opens a handful
 const maxClients = 256
 
-func NewProxy(address string, rules *rules.Rules) (*Proxy, error) {
+func NewProxy(address string, r *rules.Rules) (*Proxy, error) {
 	addrs, err := parseAddress(address)
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{bus: addrs, reg: control.NewRegistry(rules), log: slog.Default(), budget: wire.NewBudget(),
+	return &Proxy{bus: addrs, rules: r, log: slog.Default(), budget: wire.NewBudget(),
 		uid: os.Getuid()}, nil
-}
-
-// The control socket's server, for live sets checked against bus's policy and the sandbox's app ID
-func (p *Proxy) control(bus, appID string) *control.Server {
-	return &control.Server{Registry: p.reg, Bus: bus, AppID: appID, UID: p.uid, Log: p.log}
 }
 
 // Accepts clients until the listener closes. Out of file descriptors or memory, it waits and tries again, as
@@ -99,30 +91,21 @@ func listen(path string) (*net.UnixListener, error) {
 	return l, nil
 }
 
-// Listens on the control socket at rel beneath $XDG_RUNTIME_DIR, as nixpak passes dbus.args unexpanded: a clean
-// relative path, its directory made 0700 and the socket bound under umask 077, then made 0600, the mode the doc names
-func listenControl(rel string) (*net.UnixListener, error) {
-	run := os.Getenv("XDG_RUNTIME_DIR")
-	if !filepath.IsAbs(run) {
-		return nil, errors.New("--control needs $XDG_RUNTIME_DIR")
-	}
-	if rel == "" || filepath.IsAbs(rel) || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "..") {
-		return nil, fmt.Errorf("--control %q: a clean path relative to $XDG_RUNTIME_DIR", rel)
-	}
-	path := filepath.Join(run, rel)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	old := unix.Umask(0o077)
-	l, err := listen(path)
-	unix.Umask(old)
+// The uid of the process at the other end of conn, from SO_PEERCRED
+func peerUID(conn *net.UnixConn) (int, error) {
+	raw, err := conn.SyscallConn()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	// Bound 0700; connecting takes write permission only
-	if err := os.Chmod(path, 0o600); err != nil {
-		l.Close()
-		return nil, err
+	var cred *unix.Ucred
+	var cerr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, cerr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil {
+		return 0, err
 	}
-	return l, nil
+	if cerr != nil {
+		return 0, cerr
+	}
+	return int(cred.Uid), nil
 }

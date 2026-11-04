@@ -138,29 +138,6 @@ let
                   maxValidity = "PT8H";
                 };
               };
-              # D-Bus rule sets: a property of hostnamed on the system bus, the fake Plasma's clipboard on the session
-              # bus, which the static rules refuse
-              dbus.hostname = {
-                description = "read the host name";
-                bus = "system";
-                call."org.freedesktop.hostname1" = [ "org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1" ];
-              };
-              # A polkit-checked answer through the system-bus proxy: login1's CanReboot says whether polkit would let
-              # the caller reboot without asking (reboot: allow_active yes, allow_any and allow_inactive auth_admin_keep)
-              dbus.reboot = {
-                description = "ask whether the host may reboot";
-                bus = "system";
-                # gdbus introspects the object for the method's signature first
-                call."org.freedesktop.login1" = [
-                  "org.freedesktop.login1.Manager.CanReboot@/org/freedesktop/login1"
-                  "org.freedesktop.DBus.Introspectable.Introspect@/org/freedesktop/login1"
-                ];
-              };
-              dbus.clipboard = {
-                description = "read the clipboard";
-                bus = "session";
-                call."org.kde.klipper" = [ "org.kde.klipper.klipper.getClipboardContents@/klipper" ];
-              };
               grants = [
                 { capability = "test"; }
                 { capability = "echo"; }
@@ -189,8 +166,6 @@ let
       # The test instrumentation's 2 panics the VM on any OOM, a cgroup's included, which cgrun's subtest makes
       boot.kernel.sysctl."vm.panic_on_oom" = 0;
       users.users.alice.linger = true;
-      # For the polkit check through the system-bus proxy (work.nix); desktops have it
-      security.polkit.enable = true;
       users.users.bob.isNormalUser = true;
       home-manager.useUserPackages = true;
       environment.systemPackages = [ pkgs.libcap ];

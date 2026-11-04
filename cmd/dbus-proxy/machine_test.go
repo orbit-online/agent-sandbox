@@ -17,7 +17,7 @@ import (
 // dbus-daemon and clients speaking the wire (machine_world_test.go), and after every step compares what arrived at
 // each end, which connections closed and who owns each name with the reference model (machine_model_test.go,
 // machine_bus_test.go). Each step runs to quiescence first. The actions: clients (machine_clients_test.go), the bus's
-// calls (machine_buscalls_test.go), services and the broker (machine_peers_test.go).
+// calls (machine_buscalls_test.go) and services (machine_peers_test.go).
 //
 // The package build runs 50 sequences of about 30 steps; more with -rapid.checks=1000 -rapid.steps=100 (or
 // RAPID_CHECKS and RAPID_STEPS), a failure again with -rapid.seed or -rapid.failfile as rapid prints them.
@@ -28,9 +28,8 @@ func TestProxyMachine(t *testing.T) {
 		// rapid sorts the actions by name and draws earlier ones more often: named by this order, the attacker's
 		// sequencing moves come first
 		actions := map[string]func(*rapid.T){"": all[""]}
-		for i, a := range []string{"Call", "ChangeThenCall", "BusCall", "ForgeReply", "Start", "Hello", "AddSet",
-			"Connect", "RemoveSet", "Acquire", "CallClient", "Reply", "ServiceReply", "Broadcast", "Release",
-			"BrokerGone", "Disconnect"} {
+		for i, a := range []string{"Call", "BusCall", "ForgeReply", "Start", "Hello", "Connect", "Acquire",
+			"CallClient", "Reply", "ServiceReply", "Broadcast", "Release", "Disconnect"} {
 			actions[fmt.Sprintf("%02d%s", i, a)] = all[a]
 		}
 		rt.Repeat(actions)
@@ -54,10 +53,7 @@ type machine struct {
 	m       *model
 	clients map[string]*party
 	nclient int
-	brk     *broker
 	tok     int
-	// Names a call goes to more often, those of a set that just changed
-	prefer []string
 }
 
 func newMachine(t *rapid.T) *machine {
@@ -68,7 +64,6 @@ func newMachine(t *rapid.T) *machine {
 		s.drain()
 	}
 	w.obs.drain()
-	mc.brk = w.dialBroker()
 	// A client registered and one connected to start with
 	mc.hello(t, mc.connect())
 	mc.connect()

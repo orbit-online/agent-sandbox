@@ -49,7 +49,7 @@ func (m *model) replyTo(t *refClient, sender string, rs uint32) (refCall, bool) 
 // for names it may see; their new owners take on the name's rules (passNameOwnerChanged)
 func (m *model) nameOwnerChanged(name, old, new string) {
 	for _, c := range m.registered() {
-		if !m.watches(c, name) {
+		if !m.watches(name) {
 			continue
 		}
 		if p, _ := m.lookup(c, name); p < rules.See {
@@ -85,8 +85,7 @@ func (m *model) released(name, role string, lost bool) {
 	m.nameOwnerChanged(name, role, "")
 }
 
-// leave: connections left the bus, all at once (a removal ends every client that used the set before the bus
-// tells anyone). Their names go, and the bus answers the calls they hadn't with NoReply
+// leave: connections left the bus. Their names go, and the bus answers the calls they hadn't with NoReply
 func (m *model) leave(roles ...string) {
 	var gone []string
 	for _, role := range roles {

@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/control"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/sasl"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
@@ -54,7 +53,7 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 // Checks the peer, connects to the bus and authenticates both sides
 func (c *client) connect() error {
 	c.clientR = wire.NewReader(c.conn, c.acct)
-	peer, err := control.PeerUID(c.conn)
+	peer, err := peerUID(c.conn)
 	if err != nil {
 		return err
 	}
@@ -90,7 +89,7 @@ func (c *client) connect() error {
 
 // Forwards both ways until either side ends or breaks a rule, then closes both
 func (c *client) run() {
-	c.j = judge.New(c.p.reg.Current, c.unixFDs)
+	c.j = judge.New(c.p.rules, c.unixFDs)
 	c.toClient = wire.NewSender(c.conn, c.acct)
 	c.toBus = wire.NewSender(c.bus, c.acct)
 	done := make(chan struct{})
@@ -105,7 +104,6 @@ func (c *client) run() {
 			c.toBus.Close()
 		})
 	}
-	defer c.p.reg.Register(c.j, func() { stop("live rules", judge.ErrRevoked) })()
 	var wg sync.WaitGroup
 	for _, f := range []struct {
 		side string
@@ -126,28 +124,18 @@ func (c *client) run() {
 }
 
 func (c *client) readClient(done chan struct{}) error {
-	held := func() error {
-		if h := c.j.Held(); h != nil {
-			select {
-			case <-h:
-			case <-done:
-				return wire.ErrClosed
-			}
-		}
-		return nil
-	}
 	for {
 		m, err := c.clientR.ReadMessage()
 		if err != nil {
 			return err
 		}
-		// The names of live sets added since, before the message is judged by them
-		calls, err := c.j.Sync()
-		if err == nil {
-			err = sendAll(c.toBus, calls)
-		}
-		if err == nil {
-			err = held()
+		// After Hello, the client's next message waits until the proxy knows who owns the rules' names
+		if h := c.j.Held(); h != nil {
+			select {
+			case <-h:
+			case <-done:
+				err = wire.ErrClosed
+			}
 		}
 		if err == nil {
 			var a judge.Action
@@ -157,10 +145,6 @@ func (c *client) readClient(done chan struct{}) error {
 		}
 		m.CloseFDs()
 		m.Release()
-		if err == nil {
-			// Hold the client's next message until the proxy knows who owns the names it looked up
-			err = held()
-		}
 		if err != nil {
 			return err
 		}

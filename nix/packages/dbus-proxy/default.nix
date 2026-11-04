@@ -7,14 +7,13 @@
 buildGoModule {
   pname = "dbus-proxy";
   version = "0.1.0";
-  # The root module's go.mod, the binary's package and what it uses from internal/, so other changes don't rebuild it
+  # The root module's go.mod and the binary's package, so other changes don't rebuild it
   src = lib.fileset.toSource {
     root = ../../..;
     fileset = lib.fileset.unions [
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/dbus-proxy
-      ../../../internal/dbuspolicy
     ];
   };
   # The binary and its own internal/ packages, whose tests run too

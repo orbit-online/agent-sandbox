@@ -58,8 +58,8 @@ func (mc *machine) connect() string {
 	return role
 }
 
-// Hello: a client registers; a second Hello is refused. The proxy watches the static rules' names and the live sets'
-// and looks up their owners (initialNameOps)
+// Hello: a client registers; a second Hello is refused. The proxy watches the rules' names and looks up their owners
+// (initialNameOps)
 func (mc *machine) Hello(t *rapid.T) {
 	var fresh []string
 	for _, r := range mc.open() {
@@ -89,11 +89,7 @@ func (mc *machine) hello(t *rapid.T, role string) {
 	c.helloed = true
 	c.raise(role, rules.Talk)
 	m := mc.m
-	m.lookupNames(c, rules.New(m.static).Names())
-	for _, s := range m.live {
-		c.watched[s] = true
-		m.lookupNames(c, s.rs.Names())
-	}
+	m.lookupNames(c, m.rules.Names())
 	m.rec(role, "S NameAcquired bus -> %s [%s]", role, role)
 }
 
@@ -168,9 +164,6 @@ func (mc *machine) Call(t *rapid.T) {
 	role := pick(t, mc.registered(), "client")
 	c, p := mc.m.clients[role], mc.clients[role]
 	dest := rapid.SampledFrom(mc.destinations()).Draw(t, "dest")
-	if len(mc.prefer) > 0 && rapid.IntRange(0, 3).Draw(t, "changed") > 0 {
-		dest = rapid.SampledFrom(mc.prefer).Draw(t, "name")
-	}
 	member := rapid.SampledFrom([]string{"Echo", "Other"}).Draw(t, "member")
 	tok := mc.token()
 	msg := echoCall(mc.busNameOf(dest), member, tok)

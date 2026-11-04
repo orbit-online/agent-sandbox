@@ -16,7 +16,7 @@ func testJudge(t *testing.T, args ...string) *Judge {
 		t.Fatal(err)
 	}
 	r := rules.New(rs)
-	return New(func() *rules.Rules { return r }, false)
+	return New(r, false)
 }
 
 // A message as the proxy would read it
@@ -54,7 +54,7 @@ func TestBusReplyOnlyFromBus(t *testing.T) {
 	if a.Verdict != Drop {
 		t.Error("A peer's reply to a call to the bus passed")
 	}
-	if p, _ := j.names.lookup(j.current(), ":1.66"); p >= rules.Talk {
+	if p, _ := j.names.lookup(j.rules, ":1.66"); p >= rules.Talk {
 		t.Error("A peer's reply to Hello raised it to TALK")
 	}
 	if _, ok := j.awaitBus[7]; !ok {

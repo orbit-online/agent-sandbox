@@ -9,14 +9,13 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
-	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 	"golang.org/x/sys/unix"
 )
 
 const usage = `dbus-proxy - Filter a sandbox's D-Bus traffic, taking xdg-dbus-proxy's arguments
 
 Usage:
-  dbus-proxy [--fd=<fd>] [--control=<path> --bus=<bus> [--app-id=<id>]] [--pid=<pid>] <address> <path> --filter [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
+  dbus-proxy [--fd=<fd>] <address> <path> --filter [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
   dbus-proxy --help
 
 Listens on <path> and connects each client to the bus at <address>. The subset
@@ -33,15 +32,6 @@ of xdg-dbus-proxy's arguments nixpak passes, with their meaning:
 Names are exact (xdg-dbus-proxy's ".*" wildcards aren't taken); a path may end
 in "/*" for its subtree.
 The client can't monitor the bus or eavesdrop, whatever the rules.
-
-  --control=<path>      Take live rule sets from the permissions broker on a
-                        socket at <path>, relative to $XDG_RUNTIME_DIR (mode
-                        0600, its directory made 0700); see control.go
-  --bus=<bus>           session or system: the policy live sets are checked
-                        against (internal/dbuspolicy)
-  --app-id=<id>         The sandbox's app ID, which live sets may own names
-                        below (none without it)
-  --pid=<pid>           Exit when process <pid> does
 `
 
 // The rules from the command line
@@ -70,16 +60,6 @@ func syncFD(fd int) error {
 	}
 }
 
-// Waits for the process behind pidfd to end
-func waitPidfd(pidfd int) error {
-	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
-	for {
-		if _, err := unix.Poll(fds, -1); err == nil || !errors.Is(err, unix.EINTR) {
-			return err
-		}
-	}
-}
-
 func run(opts docopt.Opts) error {
 	rs, err := parseRules(opts)
 	if err != nil {
@@ -91,32 +71,7 @@ func run(opts docopt.Opts) error {
 	if err != nil {
 		return err
 	}
-	served := make(chan error, 4)
-	if s, ok := opts["--pid"].(string); ok {
-		// Taken before listening: whoever waits for the socket knows the pid was watched while it lived
-		pid, err := strconv.Atoi(s)
-		if err != nil || pid <= 0 {
-			return fmt.Errorf("Invalid --pid %q", s)
-		}
-		pidfd, err := unix.PidfdOpen(pid, 0)
-		if err != nil {
-			return fmt.Errorf("Watch --pid %d: %w", pid, err)
-		}
-		go func() { served <- waitPidfd(pidfd) }()
-	}
-	if rel, ok := opts["--control"].(string); ok {
-		bus, _ := opts.String("--bus")
-		appID, _ := opts.String("--app-id")
-		if _, ok := dbuspolicy.Buses[bus]; !ok {
-			return fmt.Errorf("Invalid --bus %q: session or system", bus)
-		}
-		cl, err := listenControl(rel)
-		if err != nil {
-			return err
-		}
-		defer cl.Close()
-		go func() { served <- p.control(bus, appID).Serve(cl) }()
-	}
+	served := make(chan error, 2)
 	l, err := listen(path)
 	if err != nil {
 		return err

@@ -7,8 +7,10 @@ Permissions window (`nix/packages/permissions-window/`) and folder mounts (`perm
 grant covers and the window's redesign; the first half of step 3 (2026-11-03): plugins, their service units and tools
 and session leases removed, folders built into the broker, and host sockets at stable addresses
 (`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Then the Go D-Bus proxy with
-static rules (step 5), the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03), and live rules with the
-system-bus instance (step 7, 2026-11-03: `permissions.dbus`). Not built yet: device grants. Steps lists the order.
+static rules (step 5) and the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03). Live rules with the
+system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and removed 2026-11-04 until a capability needs
+them: nothing declared one, and the proxy and module are smaller without them (D-Bus keeps the design). Not built yet:
+device grants. Steps lists the order.
 
 ## Why
 
@@ -42,8 +44,8 @@ went wrong with it:
   addresses that don't change. Authorization happens at call or connection time.
 - Everything else runs inside the sandbox: ordinary MCP servers over granted primitives (a socket, a folder, a device,
   a D-Bus name).
-- A Go D-Bus proxy with live rules replaces xdg-dbus-proxy, nixpak's session-bus proxy included: one D-Bus gate for
-  the session and system buses.
+- A Go D-Bus proxy replaces xdg-dbus-proxy, nixpak's session-bus proxy included. Live rules on it and on a system-bus
+  instance are designed (D-Bus) but not built.
 - A notification for every request (reason, Allow, Deny, Options), and a Permissions window from the launcher's
   desktop actions, next to "New shell", listing what's granted and what can be.
 - Leases: once, until the screen locks, for a duration. Grants end on their lease, on revoke, on release from inside
@@ -123,8 +125,8 @@ host (user, no capabilities)                       sandbox
   it picks at random; sockets get the stable names their declarations give.
 - `permissions-mcp`, the same binary as an MCP server, run inside the sandbox from the module's MCP servers. A client
   of `request.sock`.
-- The D-Bus proxies, Go, the same module: the session-bus proxy nixpak starts, and a second instance for the system
-  bus that the launcher starts. The broker sets their live rules over a control socket each (D-Bus).
+- The D-Bus proxy, Go, the same module: the session-bus proxy nixpak starts, with static rules. The design's second
+  instance for the system bus and the broker's live rules over a control socket aren't built (D-Bus).
 - The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
   action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
   rest. It is a client only: all state lives in the daemon. Above the grants it shows, read-only, what the
@@ -166,8 +168,7 @@ unit, so normally gone already), and starts with its standing grants alone. Leas
 rather than extended; Claude asks again. It finds the grant directory shared by the daemon before it (its mountinfo says
 so) and takes it over.
 
-Grants end with the daemon, a crash included: the connections it splices close with it, the D-Bus proxies drop its rule
-sets when its connection to them closes, the units host command calls run in are bound to its unit (`BindsTo=`), so
+Grants end with the daemon, a crash included: the connections it splices close with it, the units host command calls run in are bound to its unit (`BindsTo=`), so
 systemd stops them when it stops or fails, and its unit's `ExecStopPost=` (`permissions-broker cleanup`, which systemd
 runs after a crash too) detaches the folder grants and removes their mountpoints. Credentials a host command printed
 stay valid until they expire: they can't be taken back. A daemon starting runs the same cleanup first, in case it didn't
@@ -211,7 +212,7 @@ is granted and declared in the launcher's `permissions` options:
 - `socket` (`permissions.sockets`): host sockets, each reachable at a stable address inside (the first design's
   `service`, which named what ran behind the socket rather than what was granted);
 - `mount` (`permissions.folders`, later devices): a folder or device node mounted in the sandbox's namespaces;
-- `dbus` (`permissions.dbus`): rules added to a D-Bus proxy.
+- `dbus` (`permissions.dbus`): rules added to a D-Bus proxy. Not built: removed 2026-11-04 (D-Bus).
 
 ### Declared host commands
 
@@ -475,7 +476,7 @@ that's the ceiling's choice, and one to avoid.
 ### D-Bus
 
 A proxy written here replaces xdg-dbus-proxy. Like it, the proxy parses what the sandbox sends on the host, inside
-a bwrap. Unlike it, it is in Go and takes rule sets while it runs.
+a bwrap, by rules fixed at its start. Unlike it, it is in Go.
 
 The session bus: the module keeps nixpak's `dbus.enable` and calls nixpak with a `pkgs` whose `xdg-dbus-proxy` is
 the new proxy (its binary under that name). Then nixpak's launcher still starts it in the wrapper that carries
@@ -517,9 +518,14 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   over is disconnected. Out of file descriptors, the proxy waits and accepts again.
 
 Kept for compatibility: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a `--call` or
-`--broadcast` rule lets every broadcast of the name through (the module's rules rely on it). Live rule sets don't:
-their call and broadcast rules pass only the broadcasts a broadcast rule matches, and their see, talk and own what
-those static policies pass.
+`--broadcast` rule lets every broadcast of the name through (the module's rules rely on it).
+
+#### Live rules and the system bus (not built: removed 2026-11-04 until a capability needs it)
+
+Built 2026-11-03 and removed the next day: nothing declared a D-Bus capability, all of the sandbox's D-Bus use is
+nixpak's static config, and the proxy, module and models are smaller without the live layer. The design stays here for
+when one is needed. Live rule sets would differ from static ones in one more way: their call and broadcast rules pass
+only the broadcasts a broadcast rule matches, and their see, talk and own what those static policies pass.
 
 The system bus: a second instance, for a launcher with D-Bus capabilities on the system bus. `bwrap-subid.sh` starts
 it as the transient user unit `claude-desktop[-<name>]-system-bus` before it execs nixpak's bwrap, and waits up to five
@@ -846,7 +852,7 @@ The first design's steps are built (Status). The rewrite's:
 6. The sandbox on the new proxy: VM test that OpenURI, a portal notification and the tray still work, and a call
    outside the rules is refused. Built.
 7. Live rules: D-Bus capabilities as grants on the session proxy and the system-bus instance. Tests: a grant and a
-   revoke applied to the next message. Built.
+   revoke applied to the next message. Built 2026-11-03, removed 2026-11-04 until a capability needs it (Status).
 8. Consumers: the home SSH and kubectl plugins ported to declared host commands; windows-vm's tools listed before any
    grant, a call asking once for the VM and later calls not, a revoke
    making the next call ask again; the portal, notifications and the tray still working.
@@ -989,4 +995,8 @@ Each can be revisited.
     launchers' names: the policy is the same for every launcher and needs no list of them.
 42. The proxies' calls are judged by polkit as the user's graphical session (D-Bus), which nothing here can change: the
     proxy runs as the user, and polkit's fallback applies to every process of the user's outside a session. Documented,
-    and the VM test pins it, rather than refused.
+    and the VM test pinned it, rather than refused.
+43. D-Bus grants are removed until a capability needs one (2026-11-04): nothing declared one, and all of the sandbox's
+    D-Bus use is nixpak's static config. The proxy keeps its static rules; the live layer (the control socket, live sets
+    in the judge, `permissions.dbus`, the system-bus proxy and `/run/dbus`) goes, and decisions 11, 15, 32 and 38 to 42
+    describe the design, not what's built. The broker's `dbus` kind goes in a later commit.
