@@ -25,11 +25,11 @@ import (
 // on a timer (TestInstanceGone, TestSocketInstances), the connection budget (TestSpliceBudget), renames beneath a
 // ceiling (attach_test.go, swap_test.go) and the sandbox's end.
 //
-// The package build runs 50 sequences; more with -rapid.checks=1000 -rapid.steps=100 (or RAPID_CHECKS and
+// The package build runs 150 sequences; more with -rapid.checks=1000 -rapid.steps=100 (or RAPID_CHECKS and
 // RAPID_STEPS), a failure again with -rapid.seed or -rapid.failfile as rapid prints them.
 func TestBrokerMachine(t *testing.T) {
 	f := newFixture(t)
-	rapidDefault(t, "rapid.checks", "50")
+	rapidDefault(t, "rapid.checks", "150")
 	// Instances are looked for at requests, answers and grants only: the model has no timers of their own
 	old := instanceEvery
 	instanceEvery = 1000 * time.Hour
@@ -71,13 +71,18 @@ type machine struct {
 	otherLocks map[string]func()
 	// Connections to the consoles the sandbox keeps open
 	conns []*openConn
+	// The instances' names this iteration may make: a and b, which the standing grants name, and drawn ones
+	names []string
 }
 
 func newMachine(t *rapid.T, f *fixture) *machine {
 	w := newWorld(t, f)
 	mc := &machine{w: w, clk: newFakeClock(), caps: w.capabilities(), ev: &events{ended: map[string]bool{}},
 		otherLocks: map[string]func(){}}
-	mc.m = newModel(mc.clk.now(), w.cfg.Grants)
+	others := rapid.SliceOfNDistinct(rapid.Custom(drawInstanceName), 1, 3, rapid.ID[string]).
+		Filter(func(ns []string) bool { return !slices.Contains(ns, "a") && !slices.Contains(ns, "b") }).Draw(t, "instances")
+	mc.names = append([]string{"a", "b"}, others...)
+	mc.m = newModel(mc.clk.now(), worldOracle(mc.caps), w.ceiling(), w.cfg.Grants)
 	mc.setListed([]string{"a", "b"})
 	mc.startBroker(t)
 	t.Cleanup(func() {
@@ -114,7 +119,7 @@ func (mc *machine) startBroker(t *rapid.T) {
 	m.listen()
 	n := 0
 	for _, k := range m.standing {
-		if !m.passes(k.cap, k.params, mc.w.root) || !m.lockFree(k.cap, k.params) {
+		if len(m.reach(k.cap, decode(k.params))) > 0 || !m.lockFree(k.cap, decode(k.params)) {
 			continue
 		}
 		if n == len(made) {
@@ -187,11 +192,31 @@ func (mc *machine) grantedCount() int {
 
 var hexID = regexp.MustCompile(`\b[0-9a-f]{16}\b`)
 
+// compressRuns writes a run of one character past 16 as the character and its count, so a failure with a boundary
+// length's string reads
+func compressRuns(s string) string {
+	var b strings.Builder
+	r := []rune(s)
+	for i := 0; i < len(r); {
+		j := i
+		for j < len(r) && r[j] == r[i] {
+			j++
+		}
+		if j-i > 16 {
+			fmt.Fprintf(&b, "%c×%d", r[i], j-i)
+		} else {
+			b.WriteString(string(r[i:j]))
+		}
+		i = j
+	}
+	return b.String()
+}
+
 // fatalf fails with the same message whenever rapid replays the case, which it needs to minimise it: the iteration's
 // directory and the broker's random ids left out, grants named by the order they were made
 func (mc *machine) fatalf(t *rapid.T, format string, args ...any) {
 	t.Helper()
-	msg := strings.ReplaceAll(fmt.Sprintf(format, args...), mc.w.dir, "…")
+	msg := compressRuns(strings.ReplaceAll(fmt.Sprintf(format, args...), mc.w.dir, "…"))
 	t.Fatal(hexID.ReplaceAllStringFunc(msg, func(id string) string {
 		if g := mc.m.grants[id]; g != nil {
 			return "g" + strconv.Itoa(g.seq)

@@ -94,13 +94,17 @@ func newWorld(t *rapid.T, f *fixture) *world {
 	w := &world{f: f, t: t, dir: dir, root: filepath.Join(dir, "ceiling"), outside: filepath.Join(dir, "outside"),
 		echoes: map[string]*echoServer{}}
 	t.Cleanup(w.close)
-	for _, d := range []string{w.root + "/x", w.root + "/w", w.outside, dir + "/grants", dir + "/inside"} {
+	for _, d := range append(ceilingDirs(w.root), w.outside, dir+"/grants", dir+"/inside") {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// A link the sandbox could have planted beneath the ceiling, leading out of it
+	if err := os.Symlink(w.outside, w.root+"/x/link"); err != nil {
+		t.Fatal(err)
+	}
 	w.cfg = config{Launcher: "test", GrantDir: dir + "/grants", ControlSocket: dir + "/control.sock",
-		SandboxGrantDir: dir + "/inside", Window: []string{"window"}, Grants: standingGrants,
+		SandboxGrantDir: dir + "/inside", Window: []string{"window"}, Grants: standingGrants, Denied: []string{w.root + "/d/secret"},
 		DBusControl: map[string]string{"session": dir + "/dbus.sock"}}
 	w.proxy = startProxyStandIn(t, dir+"/dbus.sock")
 	w.startStandIn()
@@ -226,18 +230,20 @@ func (w *world) script(name, body string) []string {
 // capabilities makes the capabilities
 func (w *world) capabilities() map[string]*capability {
 	glob := filepath.Join(w.dir, "instances", "*", "console.sock")
-	name := json.RawMessage(`{"type": "string", "description": "the VM", "instances": "` + glob + `"}`)
+	name := json.RawMessage(fmt.Sprintf(declVMName, glob))
 	vm := &capability{Name: capVM, Type: "command", Description: "a VM", Exclusive: true,
-		Params: map[string]json.RawMessage{"name": name,
-			"ro": json.RawMessage(`{"type": "boolean", "description": "read-only"}`)},
+		Params:   map[string]json.RawMessage{"name": name, "ro": json.RawMessage(declRO)},
 		Commands: map[string]*hostcmd.Command{"start": {Description: "start it", Run: w.script("start", "cat")}}}
 	console := &capability{Name: capConsole, Type: "socket", Description: "a VM's console",
 		Params: map[string]json.RawMessage{"name": name}}
 	token := &capability{Name: capToken, Type: "command", Description: "a token",
-		Params: map[string]json.RawMessage{"scope": json.RawMessage(`{"type": "string", "description": "its scope"}`),
-			"csr": json.RawMessage(`{"type": "string", "opaque": true, "description": "a CSR"}`)},
-		Commands: map[string]*hostcmd.Command{"issue": {Description: "issue one", Run: w.script("run", "cat"),
-			MaxValidity: "PT30M"}}}
+		Params: map[string]json.RawMessage{"scope": json.RawMessage(declScope), "csr": json.RawMessage(declCSR),
+			"slot": json.RawMessage(declSlot)},
+		Commands: map[string]*hostcmd.Command{
+			"issue": {Description: "issue one", Run: w.script("run", "cat"), MaxValidity: "PT30M"},
+			"sign": {Description: "sign something", Run: w.script("sign", "cat"), MaxValidity: "PT30M",
+				Arguments: rawArgs(signArgs)},
+		}}
 	bus := &capability{Name: capBus, Type: "dbus", Description: "a portal",
 		DBus: &dbusgrant.Config{Name: capBus, Bus: "session", Talk: []string{"org.test.Portal"}}}
 	caps := map[string]*capability{}
@@ -341,11 +347,32 @@ func (w *world) listening() map[string]bool {
 	return names
 }
 
-// lockHolders reads the exclusive locks: the launcher holding each of the VMs
-func lockHolders() map[string]string {
+// ceilingDirs are the folders beneath the ceiling's root: a source read-only, w beneath it read-write, d with a denied
+// folder beneath it
+func ceilingDirs(root string) []string {
+	var dirs []string
+	for _, d := range []string{"", "x", "x/sub", "w", "w/sub", "d", "d/secret"} {
+		dirs = append(dirs, filepath.Join(root, d))
+	}
+	return dirs
+}
+
+// ceiling is the folders' ceiling as the oracle reads the config: the sources, the denied folder, and the folders
+// there are beneath, x/link being a link
+func (w *world) ceiling() *ceiling {
+	c := &ceiling{sources: []folderSource{{path: w.root}, {path: w.root + "/w", rw: true}},
+		denied: []string{w.root + "/d/secret"}, folders: map[string]bool{}}
+	for _, d := range ceilingDirs(w.root) {
+		c.folders[d] = true
+	}
+	return c
+}
+
+// lockHolders reads the exclusive locks: the launcher holding each of the VMs names
+func lockHolders(names []string) map[string]string {
 	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
 	held := map[string]string{}
-	for _, n := range []string{"a", "b", "c"} {
+	for _, n := range names {
 		key, _ := json.Marshal(map[string]string{"name": n})
 		if data, err := os.ReadFile(filepath.Join(dir, capVM+"-"+hashOf(key))); err == nil {
 			held[n] = strings.TrimSpace(string(data))

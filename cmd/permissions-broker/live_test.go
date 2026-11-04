@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -66,6 +67,9 @@ type liveEnv struct {
 	lockSess      string
 	sb            *sandbox
 	desc          map[string]string // the capabilities' descriptions
+	// The capabilities as the oracle reads their declarations, and the folders' ceiling
+	caps    map[string]*oracleCap
+	ceiling *ceiling
 }
 
 func newLiveEnv(t *testing.T) *liveEnv {
@@ -85,6 +89,13 @@ func newLiveEnv(t *testing.T) *liveEnv {
 	}
 	for _, c := range res.Capabilities {
 		lv.desc[c.ID] = c.Description
+	}
+	lv.caps = oracleCaps(res.Capabilities)
+	// The folders there are beneath the ceiling: the test script's /srv/notes and its sub. /srv/mounted has a mount
+	// beneath it, and the mount crosses none
+	lv.ceiling = &ceiling{denied: cfg.Denied, folders: map[string]bool{lv.root: true, lv.root + "/sub": true}}
+	for _, s := range cfg.Folders {
+		lv.ceiling.sources = append(lv.ceiling.sources, folderSource{path: filepath.Clean(s.Path), rw: s.RW})
 	}
 	for _, c := range []string{liveCmd, liveSock, liveFolder} {
 		if lv.desc[c] == "" {
@@ -129,7 +140,7 @@ func newLiveMachine(t *rapid.T, lv *liveEnv) *liveMachine {
 	mc.ev = lv.watch()
 	t.Cleanup(func() { close(mc.ev.stop) })
 	mc.restartDaemon(t)
-	mc.m = newModel(time.Now(), lv.cfg.Grants)
+	mc.m = newModel(time.Now(), lv.caps, lv.ceiling, lv.cfg.Grants)
 	mc.m.shared, mc.m.shareAsked, mc.m.lockOK = true, true, lv.lockSess != ""
 	mc.started(t)
 	mc.anonymous(t)
@@ -203,7 +214,7 @@ func (mc *liveMachine) start(t *rapid.T, name, exe, mode string) *liveProc {
 // same failure as it shrinks
 func (mc *liveMachine) fatalf(t *rapid.T, format string, args ...any) {
 	t.Helper()
-	t.Fatal(hexID.ReplaceAllStringFunc(fmt.Sprintf(format, args...), func(id string) string {
+	t.Fatal(hexID.ReplaceAllStringFunc(compressRuns(fmt.Sprintf(format, args...)), func(id string) string {
 		if g := mc.m.grants[id]; g != nil {
 			return "g" + strconv.Itoa(g.seq)
 		}

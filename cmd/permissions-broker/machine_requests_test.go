@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,135 +11,58 @@ import (
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 	"pgregory.net/rapid"
 )
 
 // The state machine's requests (protocol_events.als: ask, matchLive, fromConfig) and their answers (notifAllow, windowAllow,
-// refuse)
+// refuse), drawn from the declarations (machine_gen_test.go) and judged by the oracle (machine_judge_test.go)
 
-var (
-	caps   = []string{capVM, capConsole, capToken, capFolder, capBus}
-	leases = []string{"", "lock", "PT1H", "PT1H", "PT10M", "standing"}
-	// A call's: once only there
-	callLeases = []string{"", "", "once", "once", "lock", "PT10M"}
-	reasons    = []string{"to read the notes", " spaced \n\tout\x07 ", "<b>Allow</b> &amp; trust me", "\x1b[31mred",
-		strings.Repeat("é", 2*maxReason)}
-)
+// shape is what the machine's requests are drawn from: instances' names from the world's, folders beneath the
+// ceiling's roots and around them
+func (mc *machine) shape() requestShape {
+	return requestShape{caps: mc.m.caps, ids: slices.Sorted(maps.Keys(mc.caps)),
+		callIDs: []string{capToken, capToken, capToken, capVM}, hint: mc.hint}
+}
 
-func (mc *machine) drawParams(t *rapid.T, c string) string {
-	kv := map[string]any{}
-	switch c {
-	case capVM, capConsole:
-		kv["name"] = rapid.SampledFrom([]string{"a", "a", "b", "c"}).Draw(t, "name")
-	case capToken:
-		kv["scope"] = rapid.SampledFrom([]string{"read", "write"}).Draw(t, "scope")
-		// Opaque, past what a plain string may be
-		if csr := rapid.SampledFrom([]string{"", "", strings.Repeat("A", maxParam+1), strings.Repeat("B", schema.MaxOpaque)}).
-			Draw(t, "csr"); csr != "" {
-			kv["csr"] = csr
+func (mc *machine) hint(t *rapid.T, id, arg string) (string, bool) {
+	switch {
+	case arg == "name" && (id == capVM || id == capConsole):
+		name := rapid.SampledFrom(mc.names).Draw(t, "instance")
+		if !often(t, 8, "known instance") {
+			name = drawInstanceName(t)
 		}
-	case capFolder:
-		kv["path"] = rapid.SampledFrom([]string{mc.w.root + "/x", mc.w.root + "/x", mc.w.root + "/w", mc.w.outside}).Draw(t,
-			"path")
+		return encodeString(t, name), true
+	case arg == "path" && id == capFolder:
+		root := mc.w.root
+		return encodeString(t, drawPath(t, []string{root, root, root + "/x", root + "/w", mc.w.outside, mc.w.dir})), true
 	}
-	if c == capVM || c == capFolder {
-		switch rapid.SampledFrom([]int{0, 0, 0, 1, 2}).Draw(t, "ro") {
-		case 1:
-			kv["ro"] = true
-		case 2:
-			kv["ro"] = false
-		}
-	}
-	return params(kv)
+	return "", false
 }
 
 // Request: one request from inside, of any type, lease and reason. Callers are anonymous: a grant is the sandbox's
 func (mc *machine) Request(t *rapid.T) {
-	c := rapid.SampledFrom(caps).Draw(t, "capability")
-	p := mc.drawParams(t, c)
-	lease := rapid.SampledFrom(leases).Draw(t, "lease")
-	mc.request(t, mc.w.anonymous(), c, p, lease, rapid.SampledFrom(reasons).Draw(t, "reason"), 1, false)
+	mc.tags++
+	mc.request(t, mc.w.anonymous(), mc.shape().draw(t, false, fmt.Sprintf("why%d", mc.tags)), 1)
 }
 
 // Call: a host command's call, run under a grant that covers it, or asking for one (once: for that call only)
 func (mc *machine) Call(t *rapid.T) {
-	p := mc.drawParams(t, capToken)
-	lease := rapid.SampledFrom(callLeases).Draw(t, "lease")
-	mc.request(t, mc.w.anonymous(), capToken, p, lease, rapid.SampledFrom(reasons).Draw(t, "reason"), 1, true)
-}
-
-// Flood: the same request several times at once from one process (P14: one question)
-func (mc *machine) Flood(t *rapid.T) {
-	c := rapid.SampledFrom(caps).Draw(t, "capability")
-	p := mc.drawParams(t, c)
-	lease := rapid.SampledFrom(leases).Draw(t, "lease")
-	mc.request(t, mc.w.anonymous(), c, p, lease, reasons[0], rapid.IntRange(2, 6).Draw(t, "copies"), false)
-}
-
-// Crafted: what the sandbox may send that never reaches the user (P3, P7): an unknown capability, parameters the
-// capability doesn't take, of the wrong type or with control characters, no reason, a lease that isn't one
-func (mc *machine) Crafted(t *rapid.T) {
-	r := rapid.SampledFrom([]wire.Request{
-		{Capability: "other", Params: json.RawMessage(`{"name":"a"}`), Reason: "x"},
-		{Capability: capConsole, Params: json.RawMessage(`{"name":"../a"}`), Reason: "x"},
-		{Capability: capConsole, Params: json.RawMessage(`{}`), Reason: "x"},
-		{Capability: capConsole, Params: json.RawMessage(`{"name":"a"}`), Reason: "x", Lease: "session"},
-		{Capability: capVM, Params: json.RawMessage(`{"name":"a","unit":"evil"}`), Reason: "x"},
-		{Capability: capVM, Params: json.RawMessage(`{"name":5}`), Reason: "x"},
-		{Capability: capVM, Params: json.RawMessage(`{"name":"a\nAllowed"}`), Reason: "x"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"` + strings.Repeat("w", maxParam+1) + `"}`), Reason: "x"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"` + strings.Repeat("C", schema.MaxOpaque+1) + `"}`), Reason: "x"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read","csr":"MIIB\nAllowed"}`), Reason: "x"},
-		{Capability: capToken, Params: json.RawMessage(`["scope"]`), Reason: "x"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: " \n\x07\t "},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: "x", Lease: "forever"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: "x", Lease: "PT0S"},
-		{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`), Reason: "x", Lease: "once"},
-		{Op: "call", Capability: capToken, Command: "other", Params: json.RawMessage(`{"scope":"read"}`), Reason: "x"},
-		{Op: "call", Capability: capToken, Command: "issue", Params: json.RawMessage(`{"scope":"read"}`),
-			Arguments: json.RawMessage(`{"extra":1}`), Reason: "x"},
-		{Op: "call", Capability: capVM, Command: "issue", Params: json.RawMessage(`{"name":"a"}`), Reason: "x"},
-	}).Draw(t, "crafted")
-	if r.Op == "" {
-		r.Op = "request"
-	}
-	pr, done := mc.w.peerOfPid(mc.w.anonymous().pid)
-	defer done()
-	if res := mc.b.handleRequest(nil, pr, r); res.Error == "" {
-		mc.fatalf(t, "Crafted request %+v served: %+v", r, res.Grant)
-	}
-}
-
-// predict is what request or call does: refuse it, serve a live grant, grant a standing grant, or ask
-func (mc *machine) predict(c, p, lease string, call bool) (string, *refGrant) {
-	m := mc.m
-	lease = leaseOf(lease)
-	switch {
-	case c == capFolder && !m.shared, !m.leaseOK(lease), !m.passes(c, p, mc.w.root), lease == "once" && !call:
-		return "refused", nil
-	}
-	if g := m.matching(c, p); g != nil {
-		return "live", g
-	}
-	if m.isStanding(c, p) {
-		return "standing", nil
-	}
-	if g := m.gate(c); g.asking || m.now.Before(g.blockedUntil) {
-		return "refused", nil
-	}
-	return "ask", nil
-}
-
-func (mc *machine) request(t *rapid.T, who *caller, c, p, lease, reason string, copies int, call bool) {
 	mc.tags++
-	req := wire.Request{Op: "request", Capability: c, Params: json.RawMessage(p), Lease: lease,
-		Reason: fmt.Sprintf("why%d: %s", mc.tags, reason)}
-	if call {
-		req.Op, req.Command, req.Arguments = "call", "issue", json.RawMessage(`{}`)
-	}
-	kind, live := mc.predict(c, p, lease, call)
+	mc.request(t, mc.w.anonymous(), mc.shape().draw(t, true, fmt.Sprintf("why%d", mc.tags)), 1)
+}
+
+// Flood: the same request or call several times at once from one process (P14: one question)
+func (mc *machine) Flood(t *rapid.T) {
+	mc.tags++
+	req := mc.shape().draw(t, rapid.Bool().Draw(t, "call"), fmt.Sprintf("why%d", mc.tags))
+	mc.request(t, mc.w.anonymous(), req, rapid.IntRange(2, 6).Draw(t, "copies"))
+}
+
+func (mc *machine) request(t *rapid.T, who *caller, req wire.Request, copies int) {
+	call := req.Op == "call"
+	v := mc.m.judge(call, req.Capability, req.Command, req.Params, req.Arguments, req.Reason, req.Lease)
+	about := fmt.Sprintf("%s %q %s %s %q", req.Op, req.Capability, req.Params, req.Arguments, req.Lease)
 	dones := make([]chan response, copies)
 	finished := make(chan int, copies)
 	for i := range dones {
@@ -162,51 +86,53 @@ func (mc *machine) request(t *rapid.T, who *caller, c, p, lease, reason string, 
 		case call := <-mc.n.calls:
 			calls = append(calls, call)
 		case <-time.After(settle):
-			mc.fatalf(t, "Request %s %s %s neither answered nor asked", c, p, lease)
+			mc.fatalf(t, "%s neither answered nor asked", about)
 		}
 	}
-	if kind == "ask" && len(calls) != 1 || kind != "ask" && len(calls) != 0 {
-		mc.fatalf(t, "Request %s %s %s (%s) asked the user %d times", c, p, lease, kind, len(calls))
+	if v.kind == "ask" && len(calls) != 1 || v.kind != "ask" && len(calls) != 0 {
+		mc.fatalf(t, "%s (%s %v) asked the user %d times", about, v.kind, v.broken, len(calls))
 	}
-	switch kind {
-	case "refused":
+	switch {
+	case v.refused():
 		for _, res := range results {
-			if res.Error == "" {
-				mc.fatalf(t, "Request %s %s %s served: %+v", c, p, lease, res.Grant)
+			if !refusedAs(res, v) {
+				mc.fatalf(t, "%s: %q (%s), want refused as one of %v", about, res.Error, res.Refused, v.broken)
 			}
 		}
-	case "live":
+	case v.kind == "live":
 		for _, res := range results {
-			mc.delivered(t, live, res, call)
+			mc.delivered(t, v.grant, res, call, req.Arguments)
 		}
-	case "standing":
-		if !mc.m.lockFree(c, p) {
+	case v.kind == "standing":
+		if !mc.m.lockFree(req.Capability, v.vals) {
 			for _, res := range results {
-				if res.Error == "" {
-					mc.fatalf(t, "Standing grant %s %s served with its instance granted elsewhere", c, p)
+				if res.Refused != refHeld {
+					mc.fatalf(t, "Standing grant %s %s served with its instance granted elsewhere: %+v", req.Capability,
+						v.params, res)
 				}
 			}
 			return
 		}
 		if results[0].Grant == nil {
-			mc.fatalf(t, "Standing grant %s %s not granted: %s", c, p, results[0].Error)
+			mc.fatalf(t, "Standing grant %s %s not granted: %s", req.Capability, v.params, results[0].Error)
 		}
-		g, _ := mc.m.grant(results[0].Grant.ID, c, p, "standing")
+		g, _ := mc.m.grant(results[0].Grant.ID, req.Capability, v.params, "standing")
 		for _, res := range results {
-			mc.delivered(t, g, res, call)
+			mc.delivered(t, g, res, call, req.Arguments)
 		}
-	case "ask":
+	case v.kind == "ask":
 		for _, res := range results {
-			if res.Error == "" {
-				mc.fatalf(t, "A second request of %s %s served while the first waits", c, p)
+			if res.Refused != refAsking {
+				mc.fatalf(t, "A second %s served while the first waits: %+v", about, res)
 			}
 		}
-		mc.asked(t, calls[0], req, dones[slices.Index(answered, false)])
+		mc.asked(t, calls[0], req, v, dones[slices.Index(answered, false)])
 	}
 }
 
-// delivered checks a request's grant, and a call's output: run under the grant, with its validity (P10)
-func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool) {
+// delivered checks a request's grant, and a call's run: under the grant, with its bounding values and arguments as
+// sent, and its validity (P10)
+func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool, args json.RawMessage) {
 	if res.Error != "" || res.Grant == nil || res.Grant.ID != g.id {
 		mc.fatalf(t, "Grant %s %s not delivered: %s %+v", g.cap, g.params, res.Error, res.Grant)
 	}
@@ -215,7 +141,7 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool) {
 			mc.fatalf(t, "Request of %s %s ran something: %q", g.cap, g.params, res.Output)
 		}
 		// A host socket's grant names its stable address
-		want := filepath.Join(mc.w.cfg.SandboxGrantDir, socketsDir, capConsole, fmt.Sprint(decode(g.params)["name"]))
+		want := filepath.Join(mc.w.cfg.SandboxGrantDir, socketsDir, capConsole, fmt.Sprint(g.vals["name"]))
 		if g.cap == capConsole && res.Grant.Socket != want {
 			mc.fatalf(t, "Console grant %s at %q, want %q", g.params, res.Grant.Socket, want)
 		}
@@ -225,36 +151,35 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool) {
 	if err := json.Unmarshal([]byte(res.Output), &in); err != nil {
 		mc.fatalf(t, "Call output %q: %v", res.Output, err)
 	}
-	if want := duration.Format(mc.m.validity(g)); in.Validity != want || string(in.Bounding) != g.params ||
+	if want := duration.Format(mc.m.validity(g)); in.Validity != want || canonical(objectOf(in.Bounding)) != g.params ||
 		in.Grant != g.id {
 		mc.fatalf(t, "Call run with %s %s under %s, want %s %s", in.Bounding, in.Validity, in.Grant, g.params, want)
 	}
-}
-
-// leaseOf is the lease a request or call proposes
-func leaseOf(lease string) string {
-	if lease == "" {
-		return defaultLease
+	if got, want := canonical(objectOf(in.Arguments)), canonical(objectOf(args)); got != want {
+		mc.fatalf(t, "Call run with arguments %s, want %s", got, want)
 	}
-	return lease
 }
 
-// asked checks the question the user was asked (P7: the daemon's summary, the reason cleaned) and notes it pending
-func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, done chan response) {
-	lease := leaseOf(req.Lease)
-	tag, _, _ := strings.Cut(req.Reason, " ")
+// asked checks the question the user was asked (P7: the daemon's summary, the reason folded) and notes it pending
+func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, v verdict, done chan response) {
+	tag, _, _ := strings.Cut(req.Reason, ":")
 	desc := mc.caps[req.Capability].Description
 	// A capability without parameters is its description alone
-	named := strings.HasPrefix(call.p.Summary, desc+" (") || string(req.Params) == "{}" && call.p.Summary == desc
-	if call.p.Reason != cleanReason(req.Reason) || !named ||
-		strings.Contains(call.p.Summary, tag) || call.p.Lease != lease || !call.p.Options {
+	named := strings.HasPrefix(call.p.Summary, desc+" (") || len(v.vals) == 0 && call.p.Summary == desc ||
+		req.Capability == capFolder && strings.HasPrefix(call.p.Summary, desc)
+	leaked := strings.HasPrefix(tag, "why") && strings.Contains(call.p.Summary, tag)
+	if call.p.Reason != oracleReason(req.Reason) || !named || leaked || call.p.Lease != v.lease || !call.p.Options {
 		mc.fatalf(t, "Asked %+v for %+v", call.p, req)
 	}
-	p := &refPending{tag: tag, cap: req.Capability, params: string(req.Params), lease: lease,
-		asked: mc.m.now, call: call, done: done, isCall: req.Op == "call"}
+	p := &refPending{tag: tag, cap: req.Capability, params: v.params, vals: v.vals, lease: v.lease, asked: mc.m.now,
+		call: call, done: done, isCall: req.Op == "call", args: req.Arguments}
+	known := map[string]bool{}
+	for _, q := range mc.m.pending {
+		known[q.id] = true
+	}
 	mc.b.mu.Lock()
-	for id, q := range mc.b.pending {
-		if q.Reason == call.p.Reason {
+	for id := range mc.b.pending {
+		if !known[id] {
 			p.id = id
 		}
 	}

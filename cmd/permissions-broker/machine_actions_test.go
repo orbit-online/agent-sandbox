@@ -14,13 +14,13 @@ import (
 // share), the environment (instances, the other launcher) and the attacker's reach for control.sock.
 // protocol_events.als and protocol_system.als. Connections to host sockets are in machine_connect_test.go
 
-// drawGrant picks a live grant's id, or one that isn't
+// drawGrant picks a live grant's id, one that ended, or garbage
 func (mc *machine) drawGrant(t *rapid.T) string {
-	ids := []string{"0123456789abcdef"}
+	var live []string
 	for _, g := range mc.m.ordered() {
-		ids = append(ids, g.id)
+		live = append(live, g.id)
 	}
-	return ids[rapid.IntRange(0, len(ids)-1).Draw(t, "grant")]
+	return drawGrantID(t, live, mc.m.stale)
 }
 
 // Release: release from inside, which ends the grant
@@ -31,8 +31,8 @@ func (mc *machine) Release(t *rapid.T) {
 	done()
 	g := mc.m.grants[id]
 	if g == nil {
-		if res.Error == "" {
-			mc.fatalf(t, "Released %s, which isn't granted", id)
+		if res.Refused != refNoGrant {
+			mc.fatalf(t, "Released %q, which isn't granted: %+v", id, res)
 		}
 		return
 	}
@@ -40,8 +40,7 @@ func (mc *machine) Release(t *rapid.T) {
 		mc.fatalf(t, "Release %s: %s", id, res.Error)
 	}
 	mc.m.endedByUser(g)
-	delete(mc.m.grants, id)
-	mc.waitEnded(t, id)
+	mc.waitEnded(t, mc.m.endWhere(func(o *refGrant) bool { return o == g })...)
 }
 
 // Lock: the screen locks or the machine sleeps; lock leases end (P9)
@@ -89,8 +88,8 @@ func (mc *machine) Revoke(t *rapid.T) {
 	res := mc.b.handleControl(nil, mc.w.host, wire.Request{Op: "revoke", Grant: id})
 	g := mc.m.grants[id]
 	if g == nil {
-		if res.Error == "" {
-			mc.fatalf(t, "Revoked %s, which isn't granted", id)
+		if res.Refused != refNoGrant {
+			mc.fatalf(t, "Revoked %q, which isn't granted: %+v", id, res)
 		}
 		return
 	}
@@ -98,8 +97,7 @@ func (mc *machine) Revoke(t *rapid.T) {
 		mc.fatalf(t, "Revoke %s: %s", id, res.Error)
 	}
 	mc.m.endedByUser(g)
-	delete(mc.m.grants, id)
-	mc.waitEnded(t, id)
+	mc.waitEnded(t, mc.m.endWhere(func(o *refGrant) bool { return o == g })...)
 }
 
 // Restart: the daemon dies and systemd starts it again. What it had dies with it: its grants, timers, listeners and
@@ -115,7 +113,7 @@ func (mc *machine) Restart(t *rapid.T) {
 	}
 	mc.view.die()
 	m := mc.m
-	clear(m.grants)
+	m.endWhere(func(*refGrant) bool { return true })
 	clear(m.gates)
 	clear(m.ended)
 	m.pending, m.lockOK, m.shareAsked = nil, false, m.shared
@@ -152,7 +150,7 @@ func (mc *machine) ShareFromElsewhere(t *rapid.T) {
 // along
 func (mc *machine) Instances(t *rapid.T) {
 	var names []string
-	for _, n := range []string{"a", "b", "c"} {
+	for _, n := range mc.names {
 		if rapid.Bool().Draw(t, "listed "+n) {
 			names = append(names, n)
 		}
@@ -163,7 +161,7 @@ func (mc *machine) Instances(t *rapid.T) {
 
 // OtherLauncher: another launcher's daemon takes or lets go of an instance of the exclusive host commands (P13)
 func (mc *machine) OtherLauncher(t *rapid.T) {
-	n := rapid.SampledFrom([]string{"a", "b", "c"}).Draw(t, "instance")
+	n := rapid.SampledFrom(mc.names).Draw(t, "instance")
 	if mc.m.other[n] {
 		mc.otherLocks[n]()
 		delete(mc.otherLocks, n)
@@ -171,7 +169,7 @@ func (mc *machine) OtherLauncher(t *rapid.T) {
 		return
 	}
 	unlock, err := mc.caps[capVM].exclusiveLock("other", json.RawMessage(params(map[string]any{"name": n})))
-	free := mc.m.lockFree(capVM, params(map[string]any{"name": n})) && mc.m.listed[n]
+	free := mc.m.lockFree(capVM, map[string]any{"name": n}) && mc.m.isInstance(capVM, map[string]any{"name": n})
 	if free != (err == nil) {
 		mc.fatalf(t, "The other launcher took %s: %v, want it free %v", n, err, free)
 	}

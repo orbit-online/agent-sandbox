@@ -4,11 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
-	"strings"
 	"time"
-	"unicode"
-
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 )
 
 // The reference the state machine tests check the broker against: a small model of its grants, leases, gates, standing
@@ -16,7 +12,9 @@ import (
 // protocol_events.als
 
 type refGrant struct {
+	// params as the model keys them (canonical), vals their values
 	id, cap, params, lease string
+	vals                   map[string]any
 	expires                time.Time
 	// Its place in the order grants were made, which draws go by: ids are random
 	seq int
@@ -24,6 +22,7 @@ type refGrant struct {
 
 type refPending struct {
 	tag, cap, params string
+	vals             map[string]any
 	// The lease the notification offers
 	lease string
 	// A host command's call, not a request
@@ -33,7 +32,9 @@ type refPending struct {
 	optionsAt time.Time
 	call      *askCall
 	done      chan response
-	id        string // the broker's
+	// A call's arguments as sent
+	args json.RawMessage
+	id   string // the broker's
 }
 
 type refGate struct {
@@ -45,9 +46,12 @@ type refGate struct {
 type storeKey struct{ cap, params string }
 
 type model struct {
-	now    time.Time
-	grants map[string]*refGrant
-	gates  map[string]*refGate
+	// The capabilities as declared, and the folders' ceiling
+	caps    map[string]*oracleCap
+	ceiling *ceiling
+	now     time.Time
+	grants  map[string]*refGrant
+	gates   map[string]*refGate
 	// The config's standing grants, and those the user ended in this daemon's life
 	standing []storeKey
 	ended    map[storeKey]bool
@@ -63,13 +67,15 @@ type model struct {
 	// What the user allowed, by capability and parameters (P1)
 	consented map[storeKey]bool
 	made      int
+	// Grants that ended, whose ids release and revoke may still name
+	stale []string
 }
 
-func newModel(now time.Time, standing []standingConfig) *model {
-	m := &model{now: now, grants: map[string]*refGrant{}, gates: map[string]*refGate{}, listed: map[string]bool{},
+func newModel(now time.Time, caps map[string]*oracleCap, ceil *ceiling, standing []standingConfig) *model {
+	m := &model{caps: caps, ceiling: ceil, now: now, grants: map[string]*refGrant{}, gates: map[string]*refGate{}, listed: map[string]bool{},
 		other: map[string]bool{}, consented: map[storeKey]bool{}, ended: map[storeKey]bool{}, listening: map[string]bool{}}
 	for _, s := range standing {
-		m.standing = append(m.standing, storeKey{s.Capability, string(s.Params)})
+		m.standing = append(m.standing, storeKey{s.Capability, canonical(objectOf(s.Params))})
 	}
 	return m
 }
@@ -94,52 +100,11 @@ func (m *model) gate(c string) *refGate {
 	return m.gates[c]
 }
 
-// params builds parameters as validate encodes them: an object with sorted keys
-func params(kv map[string]any) string {
-	data, _ := json.Marshal(kv)
-	return string(data)
-}
+// params is the model's key of parameters kv: canonical
+func params(kv map[string]any) string { return canonical(kv) }
 
-func decode(p string) map[string]any {
-	var m map[string]any
-	_ = json.Unmarshal([]byte(p), &m)
-	return m
-}
-
-// passes is the ceiling (P3): the instance there, the folder beneath the ceiling root, read-write only
-// beneath its rw root
-func (m *model) passes(cap, p, root string) bool {
-	kv := decode(p)
-	switch cap {
-	case capVM, capConsole:
-		name, _ := kv["name"].(string)
-		return m.listed[name]
-	case capFolder:
-		path, _ := kv["path"].(string)
-		ro, set := kv["ro"].(bool)
-		if path != root+"/x" && path != root+"/w" {
-			return false
-		}
-		return !set || ro || path == root+"/w"
-	}
-	return true
-}
-
-func validLease(lease string) bool {
-	if lease == "lock" || lease == "once" {
-		return true
-	}
-	_, err := duration.Parse(lease)
-	return err == nil
-}
-
-// leaseOK is checkLease: a lock lease needs the lock watched
-func (m *model) leaseOK(lease string) bool {
-	if lease == "lock" {
-		return m.lockOK
-	}
-	return validLease(lease)
-}
+// decode reads a key's values back
+func decode(p string) map[string]any { return objectOf(json.RawMessage(p)) }
 
 func (m *model) matching(cap, p string) *refGrant {
 	for _, g := range m.grants {
@@ -158,13 +123,14 @@ func (m *model) ordered() []*refGrant {
 }
 
 // lockFree is the exclusive lock (P13): no grant of the instance here or at the other launcher
-func (m *model) lockFree(cap, p string) bool {
-	if cap != capVM {
+func (m *model) lockFree(cap string, vals map[string]any) bool {
+	c := m.caps[cap]
+	if c == nil || !c.exclusive {
 		return true
 	}
-	name := decode(p)["name"]
+	name := vals[c.instanceArg]
 	for _, g := range m.grants {
-		if g.cap == capVM && decode(g.params)["name"] == name {
+		if g.cap == cap && g.vals[c.instanceArg] == name {
 			return false
 		}
 	}
@@ -175,15 +141,16 @@ func (m *model) lockFree(cap, p string) bool {
 // grant makes a grant live, as the broker's grant: false when the lock is held. A console grant listens at the
 // instances' consoles there are
 func (m *model) grant(id, cap, p, lease string) (*refGrant, bool) {
-	if !m.lockFree(cap, p) || lease == "lock" && !m.lockOK {
+	vals := decode(p)
+	if !m.lockFree(cap, vals) || lease == "lock" && !m.lockOK {
 		return nil, false
 	}
 	if cap == capConsole {
 		m.listen()
 	}
 	m.made++
-	g := &refGrant{id: id, cap: cap, params: p, lease: lease, seq: m.made}
-	if d, err := duration.Parse(lease); err == nil {
+	g := &refGrant{id: id, cap: cap, params: p, vals: vals, lease: lease, seq: m.made}
+	if d, ok := oracleDuration(lease); ok {
 		g.expires = m.now.Add(d)
 	}
 	m.grants[id] = g
@@ -194,7 +161,9 @@ func (m *model) grant(id, cap, p, lease string) (*refGrant, bool) {
 func (m *model) listen() {
 	clear(m.listening)
 	for n := range m.listed {
-		m.listening[n] = true
+		if m.isInstance(capConsole, map[string]any{"name": n}) {
+			m.listening[n] = true
+		}
 	}
 }
 
@@ -204,6 +173,7 @@ func (m *model) endWhere(f func(*refGrant) bool) []string {
 	for id, g := range m.grants {
 		if f(g) {
 			delete(m.grants, id)
+			m.stale = append(m.stale, id)
 			ended = append(ended, id)
 		}
 	}
@@ -228,20 +198,12 @@ func (m *model) dropPending(p *refPending) {
 	m.pending = slices.DeleteFunc(m.pending, func(q *refPending) bool { return q == p })
 }
 
-// validity is what a host command's call is given (P10): its maxValidity, or what's left of a duration lease if less
+// validity is what a host command's call is given (P10): its maxValidity, or what's left of a duration lease if less;
+// none without either
 func (m *model) validity(g *refGrant) time.Duration {
-	if !g.expires.IsZero() && g.expires.Sub(m.now) < maxValidity {
-		return g.expires.Sub(m.now)
+	v := m.caps[g.cap].maxValidity
+	if left := g.expires.Sub(m.now); !g.expires.IsZero() && (v == 0 || left < v) {
+		v = left
 	}
-	return maxValidity
-}
-
-// cleanReason is the reason as the notification shows it (P7): whitespace and control characters collapsed, at most
-// maxReason characters
-func cleanReason(r string) string {
-	r = strings.Join(strings.FieldsFunc(r, func(c rune) bool { return unicode.IsSpace(c) || unicode.IsControl(c) }), " ")
-	if rs := []rune(r); len(rs) > maxReason {
-		r = string(rs[:maxReason]) + "…"
-	}
-	return r
+	return v
 }

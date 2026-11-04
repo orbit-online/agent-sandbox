@@ -34,7 +34,7 @@ func (mc *machine) NotifyAllow(t *rapid.T) {
 	p := mc.drawPending(t, true)
 	before := mc.grantedCount()
 	p.call.answer <- "allow"
-	mc.allowed(t, p, p.lease, p.params, mc.waitDone(t, p), before)
+	mc.allowed(t, p, "", nil, mc.waitDone(t, p), before)
 }
 
 // NotifyDeny: Deny on the notification
@@ -60,14 +60,15 @@ func (mc *machine) NotifyOptions(t *rapid.T) {
 }
 
 // WindowAnswer: an answer in the window, while the notification is up or after Options: deny, or allow with any lease,
-// the parameters narrowed or not
+// the parameters narrowed or not (drawn as a request's are: the window is the host's, but its answer is checked again)
 func (mc *machine) WindowAnswer(t *rapid.T) {
 	p := mc.drawPending(t, false)
 	ans := wire.Request{Op: "answer", Pending: p.id, Allow: rapid.Bool().Draw(t, "allow")}
 	if ans.Allow {
-		ans.Lease = rapid.SampledFrom(leases).Draw(t, "lease")
+		ans.Lease = drawLease(t)
 		if rapid.Bool().Draw(t, "narrow") {
-			ans.Params = json.RawMessage(mc.drawParams(t, p.cap))
+			h := func(t *rapid.T, arg string) (string, bool) { return mc.hint(t, p.cap, arg) }
+			ans.Params = drawObject(t, mc.m.caps[p.cap].params, oracleMaxParam, false, often(t, 7, "valid"), h)
 		}
 	}
 	before := mc.grantedCount()
@@ -79,68 +80,44 @@ func (mc *machine) WindowAnswer(t *rapid.T) {
 		mc.refused(t, p, res)
 		return
 	}
-	lease, params := ans.Lease, p.params
-	if lease == "" {
-		lease = p.lease
-	}
-	if len(ans.Params) > 0 {
-		params = string(ans.Params)
-	}
-	mc.allowed(t, p, lease, params, res, before)
+	mc.allowed(t, p, ans.Lease, ans.Params, res, before)
 }
 
 // refused: a request denied, or not answered in time. The third in a row blocks the capability (P14)
 func (mc *machine) refused(t *rapid.T, p *refPending, res response) {
 	mc.m.dropPending(p)
 	mc.m.closeGate(p.cap, false)
-	if res.Error == "" {
-		mc.fatalf(t, "Request %s %s granted on a refusal", p.cap, p.params)
+	if res.Refused != refDenied {
+		mc.fatalf(t, "Request %s %s on a refusal: %+v", p.cap, p.params, res)
 	}
 }
 
-// allowed: the user allowed p with a lease and parameters, checked again (P3, P9) before the grant. before is how many
-// grants were made before the answer
-func (mc *machine) allowed(t *rapid.T, p *refPending, lease, params string, res response, before int) {
+// allowed: the user allowed p with a lease and parameters (none: the request's), checked again (P3, P9) before the
+// grant. before is how many grants were made before the answer
+func (mc *machine) allowed(t *rapid.T, p *refPending, lease string, params json.RawMessage, res response, before int) {
 	m := mc.m
+	v := m.answered(p, lease, params)
 	m.dropPending(p)
 	m.closeGate(p.cap, true)
-	refuse := func(why string) {
-		if res.Error == "" {
-			mc.fatalf(t, "Allowed %s %s %s served (%s): %+v", p.cap, params, lease, why, res.Grant)
-		}
-	}
-	switch {
-	case !m.leaseOK(lease), lease == "once" && !p.isCall:
-		refuse("no such lease now")
-		return
-	case (p.cap == capToken || p.cap == capVM) && params != p.params:
-		refuse("a host command grant's bounding values changed")
-		return
-	case !m.passes(p.cap, params, mc.w.root):
-		refuse("above the ceiling")
-		return
-	}
-	g := m.matching(p.cap, params)
-	if g != nil {
-		m.consented[storeKey{p.cap, params}] = true
-		mc.delivered(t, g, res, p.isCall)
-		return
-	}
 	made := mc.grantedSince(before)
-	if !m.lockFree(p.cap, params) {
-		refuse("its instance is granted")
-		if len(made) > 0 {
-			mc.fatalf(t, "Allowed %s %s granted with its instance granted", p.cap, params)
+	if v.refused() {
+		if !refusedAs(res, v) || len(made) > 0 {
+			mc.fatalf(t, "Allowed %s %s %q %s: %q (%s), grants %v; want refused as one of %v", p.cap, p.params, lease,
+				params, res.Error, res.Refused, made, v.broken)
 		}
+		return
+	}
+	m.consented[storeKey{p.cap, v.params}] = true
+	if v.kind == "live" {
+		mc.delivered(t, v.grant, res, p.isCall, p.args)
 		return
 	}
 	if len(made) != 1 {
-		mc.fatalf(t, "Allowed %s %s %s made grants %v: %s", p.cap, params, lease, made, res.Error)
+		mc.fatalf(t, "Allowed %s %s %s made grants %v: %s", p.cap, v.params, v.lease, made, res.Error)
 	}
-	m.consented[storeKey{p.cap, params}] = true
-	g, _ = m.grant(made[0], p.cap, params, lease)
-	mc.delivered(t, g, res, p.isCall)
-	if lease == "once" {
+	g, _ := m.grant(made[0], p.cap, v.params, v.lease)
+	mc.delivered(t, g, res, p.isCall, p.args)
+	if v.lease == "once" {
 		// Made for the call, ended once it's answered
 		mc.waitEnded(t, m.endWhere(func(o *refGrant) bool { return o == g })...)
 	}

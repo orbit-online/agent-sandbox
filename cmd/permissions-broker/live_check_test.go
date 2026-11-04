@@ -58,7 +58,7 @@ func (mc *liveMachine) compare(t *rapid.T) error {
 	var folders []string
 	for id, r := range m.grants {
 		g := got[id]
-		if g.Capability != r.cap || string(g.Params) != r.params || g.Lease != r.lease {
+		if g.Capability != r.cap || canonical(objectOf(g.Params)) != r.params || g.Lease != r.lease {
 			return fmt.Errorf("Grant %s is %s %s %s, want %s %s %s", id, g.Capability, g.Params, g.Lease, r.cap, r.params, r.lease)
 		}
 		if d := g.Expires.Sub(r.expires); g.Expires.IsZero() != r.expires.IsZero() || d < -5*time.Second || d > 5*time.Second {
@@ -81,7 +81,8 @@ func (mc *liveMachine) compare(t *rapid.T) error {
 	}
 	for i, p := range st.Pending {
 		r := m.pending[i]
-		if p.ID != r.id || p.Capability != r.cap || string(p.Params) != r.params || p.Lease != r.lease || p.Options {
+		if p.ID != r.id || p.Capability != r.cap || canonical(objectOf(p.Params)) != r.params || p.Lease != r.lease ||
+			p.Options {
 			return fmt.Errorf("Pending %d: %s %s %s %s, want %s %s %s %s", i, p.ID, p.Capability, p.Params, p.Lease, r.id,
 				r.cap, r.params, r.lease)
 		}

@@ -152,7 +152,7 @@ func TestCallOnceExclusive(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Error(err)
 	}
-	if locks := lockHolders(); len(locks) != 0 {
+	if locks := lockHolders([]string{"a", "b", "c"}); len(locks) != 0 {
 		t.Errorf("Locks left: %v", locks)
 	}
 }

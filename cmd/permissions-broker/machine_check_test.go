@@ -35,7 +35,7 @@ func (mc *machine) Check(t *rapid.T) {
 	}
 	for id, r := range m.grants {
 		s := got[id]
-		if s.g.Capability != r.cap || string(s.g.Params) != r.params || s.g.Lease != r.lease ||
+		if s.g.Capability != r.cap || canonical(objectOf(s.g.Params)) != r.params || s.g.Lease != r.lease ||
 			!s.g.Expires.Equal(r.expires) {
 			mc.fatalf(t, "Grant %s is %s %s %s until %v, want %s %s %s until %v", id, s.g.Capability, s.g.Params, s.g.Lease,
 				s.g.Expires, r.cap, r.params, r.lease, r.expires)
@@ -62,7 +62,7 @@ func (mc *machine) Check(t *rapid.T) {
 	mc.checkConns(t)
 	mc.checkWindow(t)
 	// P14: one question per capability, and the refusal block
-	for _, c := range caps {
+	for _, c := range slices.Sorted(maps.Keys(mc.caps)) {
 		g, r := gates[c], m.gate(c)
 		if g.asking != r.asking || g.refused != r.refused || !g.blockedUntil.Equal(r.blockedUntil) {
 			mc.fatalf(t, "Gate of %s: %+v, want %+v", c, g, *r)
@@ -85,7 +85,7 @@ func (mc *machine) checkDelivery(t *rapid.T) {
 	for id, g := range mc.m.grants {
 		switch g.cap {
 		case capVM:
-			locks[decode(g.params)["name"].(string)] = "test"
+			locks[g.vals["name"].(string)] = "test"
 		case capFolder:
 			folders = append(folders, id)
 		}
@@ -110,7 +110,7 @@ func (mc *machine) checkDelivery(t *rapid.T) {
 	if !slices.Equal(points, folders) {
 		mc.fatalf(t, "Mountpoints %v, want %v", points, folders)
 	}
-	if held := lockHolders(); !maps.Equal(held, locks) {
+	if held := lockHolders(mc.names); !maps.Equal(held, locks) {
 		mc.fatalf(t, "Exclusive locks %v, want %v", held, locks)
 	}
 	if got := mc.w.listening(); !maps.Equal(got, mc.m.listening) {
@@ -139,7 +139,7 @@ func (mc *machine) checkWindow(t *rapid.T) {
 	}
 	for i, p := range res.Pending {
 		r := mc.m.pending[i]
-		if p.ID != r.id || p.Capability != r.cap || string(p.Params) != r.params || p.Lease != r.lease || p.Options != r.options {
+		if p.ID != r.id || p.Capability != r.cap || canonical(objectOf(p.Params)) != r.params || p.Lease != r.lease || p.Options != r.options {
 			mc.fatalf(t, "Pending %d: %s %s %s %s options %v, want %s %s %s %s options %v", i, p.ID, p.Capability, p.Params,
 				p.Lease, p.Options, r.id, r.cap, r.params, r.lease, r.options)
 		}
@@ -158,7 +158,7 @@ func checkStandingView(m *model, views []standingGrant) error {
 		if g := m.matching(k.cap, k.params); g != nil && g.lease == "standing" {
 			live = g.id
 		}
-		if v.Capability != k.cap || string(v.Params) != k.params || v.Ended != m.ended[k] || v.Grant != live {
+		if v.Capability != k.cap || canonical(objectOf(v.Params)) != k.params || v.Ended != m.ended[k] || v.Grant != live {
 			return fmt.Errorf("The window shows standing grant %s %s ended %v live %q, want %v ended %v live %q",
 				v.Capability, v.Params, v.Ended, v.Grant, k, m.ended[k], live)
 		}

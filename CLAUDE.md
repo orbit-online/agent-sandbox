@@ -298,9 +298,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   in about a second) and `control` (a removal swapping the rules before it tells the connections, and ending only
   those that used the set).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
-  durations, parameter validation, consent (denied, allowed, a live grant
-  covering the same request only), host commands (the schema subset's
-  keywords, a long enum said as a count, declarations refused for an undescribed or reserved argument, a
+  durations (one past what a duration holds refused), parameter validation, consent (denied, allowed, a live grant
+  covering the same request only, by value: keys in any order, -0 for 0), the requests the state machines once
+  sampled as examples, each refused with its category or served (`refusal_test.go`), host commands (the schema subset's
+  keywords, numbers against bounds and enums exactly, numbers written one way in parameters, a long enum said as a count, declarations refused for an undescribed or reserved argument, a
   bad name, result, timeout or glob; instances from a glob; the scope's parts
   in `state`, unrestricted first, and the bounding values by description; a call checked
   before the user is asked and told the scope, the window getting the call asking with its arguments whole
@@ -376,7 +377,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   without `$XDG_RUNTIME_DIR`); a glob match that is a link, lies through a linked directory or isn't a socket no
   instance; a declared socket swapped for a link after the grant, also between the check and the connect, a
   `/proc/self/root` alias and a file not connected to; an instance name past 80 characters no instance and refused
-  for its length, one of 80 reachable through a long grant directory; a sync that looked before a grant's not
+  for its length, one of 80 reachable through a long grant directory, one of 60 é (120 bytes) no instance; a sync that looked before a grant's not
   closing its listener; a revoke during the connect closing the host's end whole; a grant without an address
   refused; no address made through a link; a stale address taken over; the addresses closed when the daemon
   ends. `internal/dbuspolicy` (built with the broker for its tests): each name, method, own and system-bus
@@ -391,9 +392,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
   protocol model's actions against the broker on the stand-in sandbox, with
   a fake clock, with standing grants of a host socket by instance, the exclusive host commands, another host
-  command and a D-Bus rule set in its config, the last pushed to a stand-in for the proxy's control socket: requests of each type and host command calls (once leases
-  included) from an anonymous caller, floods and crafted requests, answers on the
-  notification and in the window, releases, lock events,
+  command and a D-Bus rule set in its config, the last pushed to a stand-in for the proxy's control socket: requests of each type and host command calls
+  from an anonymous caller, and floods of them, with their inputs generated from the declarations' grammar
+  (`machine_gen*_test.go`, `machine_decls_test.go`: capability and command names and near-misses of them,
+  parameters and a command's arguments using every keyword of the schema subset, with values at and past each
+  limit, of other types, keys missing or extra, unicode, control characters, odd number and string encodings and
+  objects that aren't, leases, reasons, instance names and folder paths; `TestGeneratorShares` keeps each kind's
+  valid share between a fifth and nine tenths), each judged by an oracle written from `docs/permissions.md`
+  (`machine_oracle_test.go`, `machine_judge_test.go`) without the broker's own checks: refused with a category
+  (`refused` in the answer, `refusal.go`) of a rule it breaks and nothing else changed, or served by a live grant,
+  granted as a standing grant or asked; answers on the
+  notification and in the window (leases and narrowed parameters generated too), releases of live, ended and made-up grant ids, lock events,
   time passing, revoke, a restart (granting the standing grants whose instance is there and the locks, ended ones
   too), `share`, the instances changing (an instance gone closing its console's connections), connections to the
   instances' consoles (echoed from the host under a live grant, closed at once otherwise, kept open and closed
@@ -401,10 +410,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   After every step the broker's grants and gates, its
   mounts, locks, host socket addresses and open connections, the proxy's live rule sets and the window's view (the standing grants, ended
   and live, included) match a reference model
-  (P1-P4, P6, P7, P9-P14, P16, P17; `models/README.md` lists the model's actions they leave to other tests). `go test` runs 50
-  sequences of about 30 steps (half a minute or less); more with
-  `-rapid.checks=1000 -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`),
-  a failure again with the `-rapid.seed` it prints.
+  (P1-P4, P6, P7, P9-P14, P16, P17; `models/README.md` lists the model's actions they leave to other tests). `go test` runs 150
+  sequences of about 30 steps (about 25 seconds); more with
+  `-rapid.checks=1000 -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`, about three minutes),
+  a failure again with the `-rapid.seed` it prints. Each of these broken on its own fails the extended run, and
+  mostly the default one: a length limit off by one, the control-character check, a type check, the multiline rule,
+  the integer check, the lease parser taking zero, an enum check.
 - `permissions-window`: the package build runs, offscreen in Plasma's
   style, its Go tests (`window_test.go`: the operations against a fake
   `control.sock`, and the Qt glue, checked in `TestMain` since Qt wants the
@@ -501,9 +512,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   alice, with a copy of itself inside the sandbox (through the launcher's
   re-entry) as the caller on `request.sock` and the client of the echo socket.
   The daemon has standing grants of the test host command and the echo socket.
-  The actions: requests of each type (the host command and the host socket, calls of the host command,
-  folders beneath `/srv/notes` and outside it) and lease, floods, crafted
-  requests and `share` from inside, connections to the echo socket (kept open while their grant lives), the
+  The actions: requests and calls generated as above from the declarations the daemon lists (folders beneath
+  `/srv/notes`, outside it and `/srv/mounted`; no lease shorter than an hour) and judged by the same oracle,
+  floods, and `share` from inside, connections to the echo socket (kept open while their grant lives), the
   user's answers and revoke through `control.sock`, releases, `systemctl restart`
   (the standing grants back),
   and logind's Lock of a graphical session of alice's made for

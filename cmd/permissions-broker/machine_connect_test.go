@@ -34,13 +34,13 @@ const maxOpen = 3
 // it sends comes back from the host; otherwise the connection is closed at once, or there's nothing to connect to
 // where the broker doesn't listen
 func (mc *machine) Connect(t *rapid.T) {
-	n := rapid.SampledFrom([]string{"a", "b", "c"}).Draw(t, "instance")
+	n := rapid.SampledFrom(mc.names).Draw(t, "instance")
 	addr := filepath.Join(mc.w.cfg.GrantDir, socketsDir, capConsole, n)
 	conn, err := hostsock.DialPath(addr, settle)
 	if !mc.m.listening[n] {
 		if err == nil {
 			conn.Close()
-			mc.fatalf(t, "Connected to the console of %s, where the broker doesn't listen", n)
+			mc.fatalf(t, "Connected to the console of %q, where the broker doesn't listen", n)
 		}
 		return
 	}
