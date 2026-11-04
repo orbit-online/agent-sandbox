@@ -32,33 +32,29 @@ func (c *client) holdFor(n int) {
 	}
 }
 
-// Watches the names a live set mentions and asks who owns them, as initialNameOps does at Hello, holding the client
-// until the owners are known: a call by an owner's unique name right after the set is added passes too. Called with
-// mu held
-func (c *client) lookupSet(rs *RuleSet, fakes *[][]byte) error {
-	wildcard := false
-	for name, subtree := range rs.names() {
-		match := ownerMatch(name, subtree)
+// Watches names and asks who owns them, holding the client until the owners are known: a call by an owner's unique
+// name right after Hello or after a set is added passes too. Returns the match rules. Called with mu held
+func (c *client) lookupNames(names []string, fakes *[][]byte) ([]string, error) {
+	var matches []string
+	for _, name := range names {
+		match := ownerMatch(name)
 		if err := c.fakeCall(fakes, busCall("AddMatch", match), expect{kind: expectFakeMatch}); err != nil {
-			return err
+			return nil, err
 		}
-		c.matches[rs] = append(c.matches[rs], match)
-		if subtree {
-			wildcard = true
-			continue
-		}
+		matches = append(matches, match)
 		if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name, sync: true}); err != nil {
-			return err
+			return nil, err
 		}
 		c.holdFor(1)
 	}
-	if wildcard {
-		if err := c.fakeCall(fakes, busCall("ListNames"), expect{kind: expectFakeList}); err != nil {
-			return err
-		}
-		c.holdFor(1)
-	}
-	return nil
+	return matches, nil
+}
+
+// lookupNames for a live set's names, whose match rules go when the set does
+func (c *client) lookupSet(rs *RuleSet, fakes *[][]byte) error {
+	matches, err := c.lookupNames(rs.names(), fakes)
+	c.matches[rs] = append(c.matches[rs], matches...)
+	return err
 }
 
 // Before the client's next message is judged: looks up the names of the live sets added since and stops watching

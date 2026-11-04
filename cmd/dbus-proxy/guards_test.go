@@ -167,11 +167,11 @@ func TestFDsDuringAuth(t *testing.T) {
 	}
 }
 
-// A call right after Hello to the owner of a name under a wildcard waits until the proxy knows that owner
-func TestWildcardHold(t *testing.T) {
+// A call right after Hello to the owner of a name the rules mention waits until the proxy knows that owner
+func TestHelloHold(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus, "org.test.Svc.Sub")
-	conn := dialRaw(t, startProxy(t, bus, "--talk=org.test.Svc.*"))
+	conn := dialRaw(t, startProxy(t, bus, "--talk=org.test.Svc.Sub"))
 	hello, _ := encodeNew(busCall("Hello"), 1)
 	echo, _ := encodeNew(echoTo(svc.Names()[0]), 2)
 	conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\nBEGIN\r\n"))
@@ -179,6 +179,6 @@ func TestWildcardHold(t *testing.T) {
 	rc := &rawClient{t: t, conn: conn, r: newReader(conn, nil)}
 	rc.r.readLine()
 	if r := rc.waitReply(2); r.Type != dbus.TypeMethodReply {
-		t.Errorf("Call to the wildcard name's owner right after Hello: %q", r.header(dbus.FieldErrorName))
+		t.Errorf("Call to the name's owner right after Hello: %q", r.header(dbus.FieldErrorName))
 	}
 }

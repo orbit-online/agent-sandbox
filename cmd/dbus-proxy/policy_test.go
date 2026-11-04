@@ -66,20 +66,6 @@ func TestTalk(t *testing.T) {
 	wantErr(t, "RequestName without own", err, errServiceUnknown)
 }
 
-// A name under a wildcard, owned before the client connects: the proxy finds its owner through ListNames
-func TestTalkWildcard(t *testing.T) {
-	bus := startBus(t)
-	svc := startService(t, bus, "org.test.Svc.Sub")
-	c := connect(t, startProxy(t, bus, "--talk=org.test.Svc.*"))
-	for _, dest := range []string{"org.test.Svc.Sub", svc.Names()[0]} {
-		if _, err := call(c, dest, "/org/test", svcIface+".Echo", "hi"); err != nil {
-			t.Errorf("Call %s: %v", dest, err)
-		}
-	}
-	_, err := call(c, "org.test.Other", "/org/test", svcIface+".Echo", "hi")
-	wantErr(t, "call outside the wildcard", err, errServiceUnknown)
-}
-
 // --own lets the client take a name, and only that one
 func TestOwn(t *testing.T) {
 	bus := startBus(t)

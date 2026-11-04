@@ -209,10 +209,8 @@ func parseLiveSet(req controlRequest, bus, appID string) (*RuleSet, error) {
 	if rs.size() == 0 {
 		return nil, errors.New("A rule set without rules")
 	}
-	for name, subtree := range rs.names() {
-		if name == busName || subtree && strings.HasPrefix(busName, name+".") {
-			return nil, fmt.Errorf("%s: the bus itself takes no live rules", name)
-		}
+	if rs.byName[busName] != nil {
+		return nil, fmt.Errorf("%s: the bus itself takes no live rules", busName)
 	}
 	set := dbuspolicy.Set{See: req.See, Talk: req.Talk, Own: req.Own, Call: byName(req.Call), Broadcast: byName(req.Broadcast)}
 	if err := dbuspolicy.Check(bus, appID, set); err != nil {

@@ -80,14 +80,10 @@ func busCall(member string, args ...any) *dbus.Message {
 	return m
 }
 
-// The match rule that tells the proxy who owns a name, or any name below it
-func ownerMatch(name string, subtree bool) string {
-	key := "arg0"
-	if subtree {
-		key = "arg0namespace"
-	}
+// The match rule that tells the proxy who owns a name
+func ownerMatch(name string) string {
 	return "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'," +
-		key + "='" + name + "'"
+		"arg0='" + name + "'"
 }
 
 func encodeNew(m *dbus.Message, serial uint32) ([]byte, error) {

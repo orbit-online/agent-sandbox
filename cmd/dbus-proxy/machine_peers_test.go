@@ -309,12 +309,7 @@ func (mc *machine) ChangeThenCall(t *rapid.T) {
 	mc.prefer = nil
 	for _, s := range append(before, mc.m.live...) {
 		if slices.Contains(before, s) != slices.Contains(mc.m.live, s) {
-			for n, sub := range s.rs.names() {
-				if sub {
-					n += ".A"
-				}
-				mc.prefer = append(mc.prefer, n)
-			}
+			mc.prefer = append(mc.prefer, s.rs.names()...)
 		}
 	}
 	defer func() { mc.prefer = nil }()

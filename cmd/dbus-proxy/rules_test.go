@@ -36,7 +36,7 @@ func TestParseRule(t *testing.T) {
 func TestRuleLookup(t *testing.T) {
 	rs := NewRuleSet()
 	for _, err := range []error{
-		rs.AddPolicy("org.foo.*", policySee),
+		rs.AddPolicy("org.foo", policySee),
 		rs.AddPolicy("org.foo.bar", policyOwn),
 		rs.AddPolicy("org.baz", policyTalk),
 	} {
@@ -44,9 +44,13 @@ func TestRuleLookup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Names are exact: xdg-dbus-proxy's wildcards are refused
+	if err := rs.AddPolicy("org.foo.*", policySee); err == nil {
+		t.Error("A wildcard accepted")
+	}
 	r := NewRules(rs)
 	for name, want := range map[string]policy{
-		"org.foo": policySee, "org.foo.x.y": policySee, "org.foobar": policyNone, "org.foo.bar": policyOwn,
+		"org.foo": policySee, "org.foo.x.y": policyNone, "org.foobar": policyNone, "org.foo.bar": policyOwn,
 		"org.baz": policyTalk, "org.baz.sub": policyNone, busName: policyTalk,
 	} {
 		if p, _ := r.lookup(name); p != want {

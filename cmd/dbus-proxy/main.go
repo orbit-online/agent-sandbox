@@ -35,7 +35,8 @@ of xdg-dbus-proxy's arguments nixpak passes, with their meaning:
   --call=<rule>         NAME=[METHOD][@PATH]: calls the client may make to NAME
   --broadcast=<rule>    NAME=[METHOD][@PATH]: broadcasts it gets from NAME
 
-A name may end in ".*" for the names below it, a path in "/*" for its subtree.
+Names are exact (xdg-dbus-proxy's ".*" wildcards aren't taken); a path may end
+in "/*" for its subtree.
 The client can't monitor the bus or eavesdrop, whatever the rules.
 
   --control=<path>      Take live rule sets from the permissions broker on a

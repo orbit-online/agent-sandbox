@@ -109,29 +109,11 @@ func (c *client) reply(m *message, e expect, fakes *[][]byte, drop func() ([]byt
 		return drop()
 	case expectFakeMatch:
 		return drop()
-	case expectFakeList:
-		if names, has := firstStrings(m); ok && has {
-			for _, name := range names {
-				if name == "" || name[0] == ':' {
-					continue
-				}
-				if p, _ := c.cur.lookup(name); p == policyNone {
-					continue
-				}
-				if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name, sync: true}); err != nil {
-					return nil, err
-				}
-				c.syncing++
-			}
-		}
-		c.syncing--
-		c.syncDone()
-		return drop()
 	}
 	return nil, nil
 }
 
-// Releases the client once every GetNameOwner of names under wildcards is answered; called with mu held
+// Releases the client once every GetNameOwner it waits for is answered; called with mu held
 func (c *client) syncDone() {
 	if c.syncing == 0 && c.synced != nil {
 		close(c.synced)

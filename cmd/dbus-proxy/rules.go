@@ -29,7 +29,6 @@ const (
 // One rule for a name: a policy, and for --call and --broadcast what a message must match (empty matches anything)
 type filter struct {
 	policy      policy
-	subtree     bool // The name ended in ".*": it covers the names below it too
 	types       filterType
 	hasPath     bool
 	path        string
@@ -95,13 +94,11 @@ func NewRuleSet() *RuleSet {
 
 func (rs *RuleSet) live() bool { return rs.id != "" }
 
-// The names the set mentions, each with whether a filter covers the names below it
-func (rs *RuleSet) names() map[string]bool {
-	out := map[string]bool{}
-	for name, fs := range rs.byName {
-		for _, f := range fs {
-			out[name] = out[name] || f.subtree
-		}
+// The names the set mentions
+func (rs *RuleSet) names() []string {
+	out := make([]string, 0, len(rs.byName))
+	for name := range rs.byName {
+		out = append(out, name)
 	}
 	return out
 }
@@ -115,13 +112,12 @@ func (rs *RuleSet) size() int {
 	return n
 }
 
-// Splits "org.foo.*" into the name and whether it covers the names below it, and checks the name
-func parseName(arg string) (string, bool, error) {
-	name, subtree := strings.CutSuffix(arg, ".*")
-	if strings.HasPrefix(name, ":") || !isBusName(name) {
-		return "", false, fmt.Errorf("Not a valid well-known bus name: %q", arg)
+// Checks a rule's name: a well-known name, exact (no ".*" wildcards, which xdg-dbus-proxy takes)
+func checkName(name string) error {
+	if !isBusName(name) {
+		return fmt.Errorf("Not a valid well-known bus name: %q", name)
 	}
-	return name, subtree, nil
+	return nil
 }
 
 // A well-known bus name as the D-Bus specification has it: two or more dot-separated elements of [A-Za-z0-9_-], none
@@ -148,12 +144,11 @@ func isBusName(name string) bool {
 }
 
 // --see, --talk or --own for NAME
-func (rs *RuleSet) AddPolicy(arg string, p policy) error {
-	name, subtree, err := parseName(arg)
-	if err != nil {
+func (rs *RuleSet) AddPolicy(name string, p policy) error {
+	if err := checkName(name); err != nil {
 		return err
 	}
-	rs.byName[name] = append(rs.byName[name], &filter{policy: p, subtree: subtree, types: filterAll, set: rs})
+	rs.byName[name] = append(rs.byName[name], &filter{policy: p, types: filterAll, set: rs})
 	return nil
 }
 
@@ -161,15 +156,14 @@ func (rs *RuleSet) AddPolicy(arg string, p policy) error {
 // does: METHOD "*" matches anything, otherwise it splits at its last dot into interface and member, a member of "*"
 // matching any (so "org.foo.Bar" is member Bar of interface org.foo, as there); PATH may end in "/*" for a subtree
 func (rs *RuleSet) AddRule(arg string, t filterType) error {
-	nameArg, rule, ok := strings.Cut(arg, "=")
+	name, rule, ok := strings.Cut(arg, "=")
 	if !ok {
 		return fmt.Errorf("Not a NAME=RULE: %q", arg)
 	}
-	name, subtree, err := parseName(nameArg)
-	if err != nil {
+	if err := checkName(name); err != nil {
 		return err
 	}
-	f := &filter{policy: policyTalk, subtree: subtree, types: t, set: rs}
+	f := &filter{policy: policyTalk, types: t, set: rs}
 	method := rule
 	if at := strings.IndexByte(rule, '@'); at >= 0 {
 		method = rule[:at]
@@ -223,42 +217,29 @@ func (r *Rules) without(rs *RuleSet) *Rules {
 	return out
 }
 
-// The highest policy and the filters that apply to a well-known name: the name's own, then those of its dot-prefixes
-// that cover the names below them, as xdg-dbus-proxy's flatpak_proxy_client_get_max_policy_and_matched
+// The highest policy and the filters that apply to a well-known name, from every set
 func (r *Rules) lookup(name string) (policy, []*filter) {
-	max := policyNone
+	p := policyNone
 	var matched []*filter
-	exact := true
-	for {
-		for _, rs := range r.sets {
-			for _, f := range rs.byName[name] {
-				if exact || f.subtree {
-					if f.policy > max {
-						max = f.policy
-					}
-					matched = append(matched, f)
-				}
-			}
+	for _, rs := range r.sets {
+		for _, f := range rs.byName[name] {
+			p = max(p, f.policy)
+			matched = append(matched, f)
 		}
-		exact = false
-		dot := strings.LastIndexByte(name, '.')
-		if dot < 0 {
-			return max, matched
-		}
-		name = name[:dot]
 	}
+	return p, matched
 }
 
-// The names the static sets mention other than the bus, each with whether a filter covers the names below it
-func (r *Rules) names() map[string]bool {
-	out := map[string]bool{}
+// The names the static sets mention other than the bus
+func (r *Rules) names() []string {
+	var out []string
 	for _, rs := range r.sets {
 		if rs.live() {
 			continue
 		}
-		for name, subtree := range rs.names() {
+		for _, name := range rs.names() {
 			if name != busName {
-				out[name] = out[name] || subtree
+				out = append(out, name)
 			}
 		}
 	}

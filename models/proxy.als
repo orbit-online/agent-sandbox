@@ -11,7 +11,7 @@
  *
  * Sources: cmd/dbus-proxy/*.go at f2faa0f (fromclient.go judgeClient and
  * verdict, frombus.go judgeBus and passNameOwnerChanged, client.go
- * expectFromBus, livesets.go lookup, syncSets, addSet and removeSet,
+ * expectFromBus, livesets.go lookup, lookupNames, syncSets, addSet and removeSet,
  * control.go serve).
  *
  * The attacker is every client: it registers, calls any destination
@@ -149,7 +149,8 @@ pred keepBus { Live' = Live and owner' = owner }
 // Events
 
 // hello: a client registers. The proxy watches the names of the rules
-// in force and asks who owns them (initialNameOps)
+// in force and asks who owns them, and holds the client's next message
+// until the answers came (initialNameOps, lookupNames), so it is one step
 pred hello[c: Client] {
   c not in Registered + Closed
   Registered' = Registered + c

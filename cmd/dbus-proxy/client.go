@@ -29,11 +29,10 @@ const (
 	expectRewrite   // A refused call sent as a Ping: the reply is swapped for the refusal
 	expectFakeMatch // The proxy's own AddMatch
 	expectFakeOwner // The proxy's own GetNameOwner of name
-	expectFakeList  // The proxy's own ListNames, for names under a wildcard
 )
 
 // A call awaiting its reply from the bus side. Calls to the bus driver, the proxy's own among them, take a reply
-// only from the bus; sync marks the proxy's own GetNameOwner of a name found under a wildcard
+// only from the bus; sync marks the proxy's own GetNameOwner of a name, which the client waits for
 type expect struct {
 	kind    expectKind
 	name    string
@@ -64,8 +63,8 @@ type client struct {
 	names      *nameTable
 	fakeSerial uint32
 	helloSeen  bool
-	// Closed once the owners of the names under wildcards are known (ListNames, then a GetNameOwner of each, all
-	// answered), or nil when there are none; syncing counts the GetNameOwner replies still out
+	// Closed once the owners of the names looked up are known (after Hello, after a live set is added), or nil when
+	// there are none; syncing counts the GetNameOwner replies still out
 	synced  chan struct{}
 	syncing int
 	acct    *account
@@ -223,7 +222,7 @@ func (c *client) readClient(done chan struct{}) error {
 		if err != nil {
 			return err
 		}
-		// Hold the client's next message until the proxy knows who owns the names under wildcards
+		// Hold the client's next message until the proxy knows who owns the names it looked up
 		c.mu.Lock()
 		synced := c.synced
 		c.mu.Unlock()

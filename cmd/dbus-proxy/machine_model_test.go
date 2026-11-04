@@ -28,7 +28,7 @@ var staticArgs = []string{"--talk=org.test.Talk", "--call=org.test.Call=org.test
 var setCatalog = []map[string][]string{
 	{"talk": {"org.test.Live"}},
 	{"call": {"org.test.Live=org.test.Iface.Echo"}, "broadcast": {"org.test.Live=org.test.Sig.Ping"}},
-	{"talk": {"org.test.W.*"}},
+	{"talk": {"org.test.W.A"}},
 	{"own": {testApp + ".Live"}},
 	{"see": {"org.test.Hidden"}},
 }
@@ -217,37 +217,20 @@ func (m *model) lookup(c *refClient, name string) (policy, []*filter) {
 // Whether the proxy's match rules for c cover a NameOwnerChanged of name: the static rules' names, and those of the
 // live sets it watches
 func (m *model) watches(c *refClient, name string) bool {
-	covers := func(names map[string]bool) bool {
-		for n, sub := range names {
-			if name == n || sub && strings.HasPrefix(name, n+".") {
-				return true
-			}
-		}
-		return false
-	}
-	if covers(NewRules(m.static).names()) {
+	if slices.Contains(NewRules(m.static).names(), name) {
 		return true
 	}
 	for s := range c.watched {
-		if covers(s.rs.names()) {
+		if slices.Contains(s.rs.names(), name) {
 			return true
 		}
 	}
 	return false
 }
 
-// lookupNames is what the proxy does when it starts watching a set's names (lookupSet, initialNameOps): the owner of
-// each name, and with a wildcard the owner of every name the rules give a policy
-func (m *model) lookupNames(c *refClient, names map[string]bool) {
-	for n, sub := range names {
-		if sub {
-			for name, owner := range m.owners {
-				if p, _ := m.rules().lookup(name); p != policyNone {
-					c.addOwned(owner, name)
-				}
-			}
-			continue
-		}
+// lookupNames is what the proxy does when it starts watching names (lookupNames): the owner of each
+func (m *model) lookupNames(c *refClient, names []string) {
+	for _, n := range names {
 		c.addOwned(m.owners[n], n)
 	}
 }

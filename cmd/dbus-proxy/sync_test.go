@@ -62,6 +62,8 @@ func TestBadArguments(t *testing.T) {
 		{"unix:path=/x", sock, "--filter", "--sloppy-names"},
 		{"unix:path=/x", sock, "--filter", "--talk=:1.2"},
 		{"unix:path=/x", sock, "--filter", "--talk=nodots"},
+		{"unix:path=/x", sock, "--filter", "--talk=org.test.X.*"},
+		{"unix:path=/x", sock, "--filter", "--call=org.test.X.*=*"},
 		{"unix:path=/x", sock, "--filter", "--call=org.test.X"},
 		{"unix:path=/x", sock, "--filter", "--call=org.test.X=*@bad"},
 		{"tcp:host=localhost", sock, "--filter"},

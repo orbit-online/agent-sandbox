@@ -235,8 +235,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   replies and eavesdropping (each test's control shows the proxy refusing
   what the bus would pass): a hidden name (not listed, no owner, a call unknown),
   `--see` (visible, a call denied), `--talk` (any call and its reply, by the
-  owner's unique name too, and under a wildcard owned before the client
-  connected), `--own`, `--call` rules (method and path, an interface on a `/*`
+  owner's unique name too), `--own`, `--call` rules (method and path, an interface on a `/*`
   subtree, `@/*`, `*`), `--broadcast` (none without a rule or with `--see`,
   and xdg-dbus-proxy's quirk of passing all of a ruled name's broadcasts),
   replies (let through to calls let through, refused unasked both ways, a call
@@ -251,7 +250,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   either way for a client that cancelled their negotiation, bus calls without
   an interface, with a non-string match rule or on another interface, a call
   without a destination, a caller made visible, another uid, file descriptors
-  during SASL, the hold after Hello until wildcard names' owners are known,
+  during SASL, the hold after Hello until the rules' names' owners are known,
   both pending-reply caps, SASL's command and line caps; the limits
   (`limits_test.go`): file descriptors per message and pending, bodies left
   undecoded, a client over the memory budget disconnected while another goes
@@ -259,14 +258,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   running out of file descriptors (the test binary as the proxy, with a low
   `RLIMIT_NOFILE`); state alone (`judge_test.go`): a peer's reply to a call to
   the bus dropped, a unique name that left forgotten, a reply only to its
-  caller; and the rule parser, name lookup, the eavesdrop match, bus
+  caller; and the rule parser (wildcards refused), name lookup, the eavesdrop match, bus
   addresses, the budget and the bounded name table. Live rule sets
   (`control_test.go`, `control_args_test.go`): a set added applying to the
   next message (by the owner's unique name too), a removal refusing the next
   one and ending the connections that used it (their names dropped on the
   bus) but not the others, the broker's disconnect dropping every set and a
   next broker's applying, live call and broadcast rules passing only matching
-  broadcasts, sets refused (the bus driver or a wildcard over it, no rules,
+  broadcasts, sets refused (the bus driver, a wildcard, no rules,
   too many, a bad id or name, an unknown op, past 32 sets, a line past 64
   KiB, what the bus's policy refuses), a peer of another uid and a second broker refused, which
   connection a removal ends, each way of using a set alone (`liveuse_test.go`: a broadcast received, a name

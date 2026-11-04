@@ -242,8 +242,7 @@ func (c *client) rewrite(m *message, reply *dbus.Message) ([]byte, error) {
 }
 
 // After Hello: watch every name the rules mention and ask who owns it now, so its owner's unique name gets its
-// policy; names under a wildcard need ListNames first, then a GetNameOwner of each, and the client waits for those.
-// The live sets' names as when a set is added
+// policy, and hold the client until the answers came
 func (c *client) initialNameOps(fakes *[][]byte) error {
 	for _, rs := range c.cur.live() {
 		if err := c.lookupSet(rs, fakes); err != nil {
@@ -252,24 +251,6 @@ func (c *client) initialNameOps(fakes *[][]byte) error {
 	}
 	// Those added since the client's message were taken with the rules above, under the same mu
 	c.newSets = nil
-	wildcard := false
-	for name, subtree := range c.cur.names() {
-		if err := c.fakeCall(fakes, busCall("AddMatch", ownerMatch(name, subtree)), expect{kind: expectFakeMatch}); err != nil {
-			return err
-		}
-		if subtree {
-			wildcard = true
-			continue
-		}
-		if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name}); err != nil {
-			return err
-		}
-	}
-	if wildcard {
-		if err := c.fakeCall(fakes, busCall("ListNames"), expect{kind: expectFakeList}); err != nil {
-			return err
-		}
-		c.holdFor(1)
-	}
-	return nil
+	_, err := c.lookupNames(c.cur.names(), fakes)
+	return err
 }

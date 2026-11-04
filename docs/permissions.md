@@ -506,7 +506,10 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
 - `--filter` is required (nixpak and `bwrap-subid.sh` always pass it): there is no mode that passes everything.
   Monitoring and eavesdropping are refused whatever the rules, and an `AddMatch` without an interface counts.
-- Names in `--see`/`--talk`/`--own`/`--call`/`--broadcast` and rule paths must be valid; a unique name that leaves
+- Names in `--see`/`--talk`/`--own`/`--call`/`--broadcast` are exact: xdg-dbus-proxy's `.*` wildcards are refused,
+  so the proxy never lists the bus's names to find their owners. After `Hello` the client's next message waits until
+  the proxy knows the owners of the names the rules mention, so a call by an owner's unique name right away passes.
+- Names and rule paths must be valid; a unique name that leaves
   the bus is dropped from the client's table, which is bounded, as are pending replies, SASL lines and clients.
 - Messages are at most 4 MiB (the sandbox's largest are icons; dbus-daemon's default is 32 MiB). Bytes (reader
   buffers, messages in hand, write queues) and file descriptors (received and not yet passed on) count against each
