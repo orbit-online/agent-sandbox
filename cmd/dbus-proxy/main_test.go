@@ -15,6 +15,7 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"golang.org/x/sys/unix"
 )
 
@@ -109,7 +110,7 @@ func startProxyWith(t *testing.T, bus string, tweak func(*Proxy), args ...string
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := NewProxy(bus, NewRules(rs))
+	p, err := NewProxy(bus, rules.New(rs))
 	if err != nil {
 		t.Fatal(err)
 	}

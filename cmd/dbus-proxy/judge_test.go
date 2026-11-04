@@ -4,19 +4,18 @@ import (
 	"testing"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 // A client's state alone, for what a real bus won't let a test arrange
 func testClient(t *testing.T, args ...string) *client {
 	t.Helper()
-	rs := NewRuleSet()
-	for _, a := range args {
-		if err := rs.AddPolicy(a, policySee); err != nil {
-			t.Fatal(err)
-		}
+	rs, err := rules.Parse(rules.Args{See: args})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return &client{p: &Proxy{rules: NewRules(rs)}, awaitBus: map[uint32]expect{},
+	return &client{p: &Proxy{rules: rules.New(rs)}, awaitBus: map[uint32]expect{},
 		awaitPeer: map[peerCall]struct{}{}, names: newNameTable()}
 }
 
@@ -55,7 +54,7 @@ func TestBusReplyOnlyFromBus(t *testing.T) {
 	if forged.Message != nil {
 		t.Error("A peer's reply to a call to the bus passed")
 	}
-	if p, _ := c.names.lookup(c.p.rules, ":1.66"); p >= policyTalk {
+	if p, _ := c.names.lookup(c.p.rules, ":1.66"); p >= rules.Talk {
 		t.Error("A peer's reply to Hello raised it to TALK")
 	}
 	if _, ok := c.awaitBus[7]; !ok {

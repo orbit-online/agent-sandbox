@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"pgregory.net/rapid"
 )
 
@@ -193,28 +194,14 @@ func (mc *machine) AddSet(t *rapid.T) {
 	m.setSeq++
 	id := fmt.Sprintf("s%d", m.setSeq)
 	req := map[string]any{"op": "add", "id": id}
-	rs := NewRuleSet()
-	rs.id = id
-	for k, v := range setCatalog[idx] {
+	e := setCatalog[idx]
+	for k, v := range e {
 		req[k] = v
-		for _, a := range v {
-			var err error
-			switch k {
-			case "see":
-				err = rs.AddPolicy(a, policySee)
-			case "talk":
-				err = rs.AddPolicy(a, policyTalk)
-			case "own":
-				err = rs.AddPolicy(a, policyOwn)
-			case "call":
-				err = rs.AddRule(a, filterCall)
-			case "broadcast":
-				err = rs.AddRule(a, filterBroadcast)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
+	}
+	rs, err := rules.ParseLive(id, rules.Args{See: e["see"], Talk: e["talk"], Own: e["own"], Call: e["call"],
+		Broadcast: e["broadcast"]}, "session", testApp)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if res := mc.brk.do(req); res == nil || !res.OK {
 		t.Fatalf("Add %v: %+v", req, res)
@@ -223,7 +210,7 @@ func (mc *machine) AddSet(t *rapid.T) {
 	m.live = append(m.live, s)
 	for _, c := range m.registered() {
 		c.watched[s] = true
-		m.lookupNames(c, rs.names())
+		m.lookupNames(c, rs.Names())
 	}
 }
 
@@ -309,7 +296,7 @@ func (mc *machine) ChangeThenCall(t *rapid.T) {
 	mc.prefer = nil
 	for _, s := range append(before, mc.m.live...) {
 		if slices.Contains(before, s) != slices.Contains(mc.m.live, s) {
-			mc.prefer = append(mc.prefer, s.rs.names()...)
+			mc.prefer = append(mc.prefer, s.rs.Names()...)
 		}
 	}
 	defer func() { mc.prefer = nil }()

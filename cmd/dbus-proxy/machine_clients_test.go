@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"pgregory.net/rapid"
 )
 
@@ -85,12 +86,12 @@ func (mc *machine) hello(t *rapid.T, role string) {
 	}
 	c.sent = append(c.sent, p.serial)
 	c.helloed = true
-	c.raise(role, policyTalk)
+	c.raise(role, rules.Talk)
 	m := mc.m
-	m.lookupNames(c, NewRules(m.static).names())
+	m.lookupNames(c, rules.New(m.static).Names())
 	for _, s := range m.live {
 		c.watched[s] = true
-		m.lookupNames(c, s.rs.names())
+		m.lookupNames(c, s.rs.Names())
 	}
 	m.rec(role, "S NameAcquired bus -> %s [%s]", role, role)
 }
@@ -191,10 +192,10 @@ func (mc *machine) Call(t *rapid.T) {
 	}
 	pol, fs := m.lookup(c, dest)
 	switch {
-	case pol < policySee:
+	case pol < rules.See:
 		refuse(errNameHasNoOwner)
 		return
-	case pol < policyTalk, pol != policyOwn && !anyMatches(fs, filterCall, "/org/test", svcIface, member):
+	case pol < rules.Talk, pol != rules.Own && !rules.AnyMatches(fs, rules.Call, "/org/test", svcIface, member):
 		refuse(errAccessDenied)
 		return
 	}

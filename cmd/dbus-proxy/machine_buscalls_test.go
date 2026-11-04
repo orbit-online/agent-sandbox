@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"pgregory.net/rapid"
 )
 
@@ -98,17 +99,17 @@ func (m *model) busCall(c *refClient, serial uint32, tok, member, arg string) {
 		return
 	}
 	// The name in the first argument and the policy the call needs of it (verdict, arg0Policy)
-	need := map[string]policy{"GetNameOwner": policySee, "NameHasOwner": policySee, "RequestName": policyOwn,
-		"ReleaseName": policyOwn, "StartServiceByName": policyTalk}[member]
-	if need != policyNone {
+	need := map[string]rules.Policy{"GetNameOwner": rules.See, "NameHasOwner": rules.See, "RequestName": rules.Own,
+		"ReleaseName": rules.Own, "StartServiceByName": rules.Talk}[member]
+	if need != rules.None {
 		pol, _ := m.lookup(c, arg)
 		switch {
-		case pol < policySee && member == "NameHasOwner":
+		case pol < rules.See && member == "NameHasOwner":
 			if m.letThrough(c, serial) {
 				m.rec(role, "R %s proxy [false]", tok)
 			}
 			return
-		case pol < policySee:
+		case pol < rules.See:
 			refuse(errNameHasNoOwner)
 			return
 		case pol < need:
@@ -132,7 +133,7 @@ func (m *model) busCall(c *refClient, serial uint32, tok, member, arg string) {
 	case "ListNames":
 		var seen []string
 		for _, n := range m.busNames() {
-			if pol, _ := m.lookup(c, n); pol >= policySee {
+			if pol, _ := m.lookup(c, n); pol >= rules.See {
 				seen = append(seen, n)
 			}
 		}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
@@ -130,7 +131,7 @@ func (w *world) startProxy() {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	p, err := NewProxy(w.bus, NewRules(rs))
+	p, err := NewProxy(w.bus, rules.New(rs))
 	if err != nil {
 		w.t.Fatal(err)
 	}

@@ -3,6 +3,8 @@ package main
 import (
 	"slices"
 	"strings"
+
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 )
 
 // The reference model's bus side: what the bus does when names change hands or a connection leaves, and what each
@@ -18,11 +20,11 @@ func (m *model) fromPeer(t *refClient, sender string, broadcast, call bool, seri
 	}
 	if broadcast {
 		_, fs := m.lookup(t, sender)
-		if !broadcastPasses(fs, path, iface, member) {
+		if !rules.BroadcastPasses(fs, path, iface, member) {
 			return false
 		}
 	}
-	t.raise(sender, policySee)
+	t.raise(sender, rules.See)
 	if call {
 		t.peer[peerKey{sender, serial}] = true
 	}
@@ -50,7 +52,7 @@ func (m *model) nameOwnerChanged(name, old, new string) {
 		if !m.watches(c, name) {
 			continue
 		}
-		if p, _ := m.lookup(c, name); p < policySee {
+		if p, _ := m.lookup(c, name); p < rules.See {
 			continue
 		}
 		c.addOwned(new, name)

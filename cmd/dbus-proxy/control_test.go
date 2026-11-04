@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 )
 
 // The app ID of the tests' sandbox, which live sets may own names below
@@ -186,7 +187,7 @@ func TestLiveSetRefused(t *testing.T) {
 	bus := startBus(t)
 	_, ctlPath := startLive(t, bus)
 	ctl := dialControl(t, ctlPath)
-	many := make([]string, maxSetEntries+1)
+	many := make([]string, rules.MaxLiveEntries+1)
 	for i := range many {
 		many[i] = "org.test.N" + string(rune('a'+i%26)) + strings.Repeat("x", i/26)
 	}

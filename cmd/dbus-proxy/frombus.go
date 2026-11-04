@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
@@ -62,13 +63,13 @@ func (c *client) judgeBus(m *wire.Message, fakes *[][]byte) ([]byte, error) {
 	sender := m.Header(dbus.FieldSender)
 	if m.Type == dbus.TypeSignal && m.Header(dbus.FieldDestination) == "" {
 		_, fs := c.lookup(sender)
-		if !broadcastPasses(fs, m.Header(dbus.FieldPath), m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)) {
+		if !rules.BroadcastPasses(fs, m.Header(dbus.FieldPath), m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)) {
 			return drop()
 		}
 	}
 	// A peer that sent the client something becomes visible to it, so it can follow the peer's lifetime
 	if sender != "" && sender[0] == ':' {
-		if err := c.names.raise(sender, policySee); err != nil {
+		if err := c.names.raise(sender, rules.See); err != nil {
 			return nil, err
 		}
 	}
@@ -88,7 +89,7 @@ func (c *client) reply(m *wire.Message, e expect, fakes *[][]byte, drop func() (
 	switch e.kind {
 	case expectHello:
 		if id, has := arg0(m); ok && has {
-			return nil, c.names.raise(id, policyTalk)
+			return nil, c.names.raise(id, rules.Talk)
 		}
 	case expectRewrite:
 		return wire.Encode(e.rewrite, m.Serial())
@@ -147,7 +148,7 @@ func (c *client) passNameOwnerChanged(m *wire.Message) bool {
 	if !ok1 || !ok2 || !ok3 || name == "" {
 		return false
 	}
-	if p, _ := c.lookup(name); p < policySee {
+	if p, _ := c.lookup(name); p < rules.See {
 		return false
 	}
 	if name[0] != ':' && newOwner != "" {
@@ -169,7 +170,7 @@ func (c *client) filterNames(m *wire.Message) ([]byte, error) {
 	}
 	seen := []string{}
 	for _, n := range names {
-		if p, _ := c.lookup(n); p >= policySee {
+		if p, _ := c.lookup(n); p >= rules.See {
 			seen = append(seen, n)
 		}
 	}

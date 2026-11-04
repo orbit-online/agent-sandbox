@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/sasl"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
@@ -72,14 +73,14 @@ type client struct {
 	acct    *wire.Account
 	// The rules this message is judged by, taken under mu as it's judged: a live set added or removed applies from
 	// the next message (livesets.go)
-	cur *Rules
+	cur *rules.Rules
 	// The live sets a message the client sent or got was judged under, which a set's removal closes the connection
 	// for; the live sets added or removed since the client's last message, whose names it hasn't looked up or
 	// stopped watching yet; and the match rules watching each set's names
-	used     map[*RuleSet]bool
-	newSets  []*RuleSet
-	goneSets []*RuleSet
-	matches  map[*RuleSet][]string
+	used     map[*rules.Set]bool
+	newSets  []*rules.Set
+	goneSets []*rules.Set
+	matches  map[*rules.Set][]string
 	// Ends the connection, from outside its goroutines
 	kill func()
 }
@@ -91,8 +92,8 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 		awaitBus:   map[uint32]expect{},
 		awaitPeer:  map[peerCall]struct{}{},
 		names:      newNameTable(),
-		used:       map[*RuleSet]bool{},
-		matches:    map[*RuleSet][]string{},
+		used:       map[*rules.Set]bool{},
+		matches:    map[*rules.Set][]string{},
 		fakeSerial: maxClientSerial,
 		log:        p.log,
 		acct:       p.budget.Account(),

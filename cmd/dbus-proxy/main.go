@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 	"golang.org/x/sys/unix"
@@ -53,7 +54,7 @@ The client can't monitor the bus or eavesdrop, whatever the rules.
 // Listens for clients of one bus and applies one set of rules
 type Proxy struct {
 	bus    []*net.UnixAddr
-	rules  *Rules
+	rules  *rules.Rules
 	log    *slog.Logger
 	budget *wire.Budget
 	uid    int // The uid a client must have
@@ -63,7 +64,7 @@ type Proxy struct {
 	conns   map[*client]bool // The clients past authentication, for live sets
 
 	// The rules with the live sets, once the control socket changed them (livesets.go); setsMu orders the changes
-	cur    atomic.Pointer[Rules]
+	cur    atomic.Pointer[rules.Rules]
 	setsMu sync.Mutex
 	// The bus and the sandbox's app ID, which live sets are checked against
 	policyBus, appID string
@@ -72,7 +73,7 @@ type Proxy struct {
 // Clients connected at once; the app opens a handful
 const maxClients = 256
 
-func NewProxy(address string, rules *Rules) (*Proxy, error) {
+func NewProxy(address string, rules *rules.Rules) (*Proxy, error) {
 	addrs, err := parseAddress(address)
 	if err != nil {
 		return nil, err
@@ -123,26 +124,10 @@ func (p *Proxy) Serve(l *net.UnixListener) error {
 }
 
 // The rules from the command line
-func parseRules(opts docopt.Opts) (*RuleSet, error) {
-	rs := NewRuleSet()
-	for _, o := range []struct {
-		flag string
-		add  func(string) error
-	}{
-		{"--see", func(a string) error { return rs.AddPolicy(a, policySee) }},
-		{"--talk", func(a string) error { return rs.AddPolicy(a, policyTalk) }},
-		{"--own", func(a string) error { return rs.AddPolicy(a, policyOwn) }},
-		{"--call", func(a string) error { return rs.AddRule(a, filterCall) }},
-		{"--broadcast", func(a string) error { return rs.AddRule(a, filterBroadcast) }},
-	} {
-		args, _ := opts[o.flag].([]string)
-		for _, a := range args {
-			if err := o.add(a); err != nil {
-				return nil, fmt.Errorf("%s: %w", o.flag, err)
-			}
-		}
-	}
-	return rs, nil
+func parseRules(opts docopt.Opts) (*rules.Set, error) {
+	arg := func(flag string) []string { a, _ := opts[flag].([]string); return a }
+	return rules.Parse(rules.Args{See: arg("--see"), Talk: arg("--talk"), Own: arg("--own"), Call: arg("--call"),
+		Broadcast: arg("--broadcast")})
 }
 
 // Listens at path, replacing what's there, as xdg-dbus-proxy does
@@ -220,7 +205,7 @@ func run(opts docopt.Opts) error {
 	}
 	address, _ := opts.String("<address>")
 	path, _ := opts.String("<path>")
-	p, err := NewProxy(address, NewRules(rs))
+	p, err := NewProxy(address, rules.New(rs))
 	if err != nil {
 		return err
 	}

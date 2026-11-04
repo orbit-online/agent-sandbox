@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
@@ -12,17 +13,17 @@ var errRevoked = errors.New("A live rule set the connection used was removed")
 
 // The policy and filters for a name by the rules the message is judged by; called with mu held. A live set with a
 // filter for the name counts as used, whatever the verdict: its removal ends the connection
-func (c *client) lookup(name string) (policy, []*filter) {
+func (c *client) lookup(name string) (rules.Policy, []*rules.Filter) {
 	if c.cur == nil {
 		c.cur = c.p.current()
 	}
 	p, fs := c.names.lookup(c.cur, name)
 	for _, f := range fs {
-		if f.set != nil && f.set.live() {
+		if f.Set != nil && f.Set.Live() {
 			if c.used == nil {
-				c.used = map[*RuleSet]bool{}
+				c.used = map[*rules.Set]bool{}
 			}
-			c.used[f.set] = true
+			c.used[f.Set] = true
 		}
 	}
 	return p, fs
@@ -55,8 +56,8 @@ func (c *client) lookupNames(names []string, fakes *[][]byte) ([]string, error) 
 }
 
 // lookupNames for a live set's names, whose match rules go when the set does
-func (c *client) lookupSet(rs *RuleSet, fakes *[][]byte) error {
-	matches, err := c.lookupNames(rs.names(), fakes)
+func (c *client) lookupSet(rs *rules.Set, fakes *[][]byte) error {
+	matches, err := c.lookupNames(rs.Names(), fakes)
 	c.matches[rs] = append(c.matches[rs], matches...)
 	return err
 }
@@ -129,7 +130,7 @@ func (p *Proxy) connected() []*client {
 }
 
 // The rules messages are judged by now
-func (p *Proxy) current() *Rules {
+func (p *Proxy) current() *rules.Rules {
 	if r := p.cur.Load(); r != nil {
 		return r
 	}
@@ -137,10 +138,10 @@ func (p *Proxy) current() *Rules {
 }
 
 // Adds a live set: every message judged from here on sees it. Each client looks up its names before its next message
-func (p *Proxy) addSet(rs *RuleSet) {
+func (p *Proxy) addSet(rs *rules.Set) {
 	p.setsMu.Lock()
 	defer p.setsMu.Unlock()
-	p.cur.Store(p.current().with(rs))
+	p.cur.Store(p.current().With(rs))
 	for _, c := range p.connected() {
 		c.mu.Lock()
 		c.newSets = append(c.newSets, rs)
@@ -151,10 +152,10 @@ func (p *Proxy) addSet(rs *RuleSet) {
 // Removes a live set and ends every connection that sent or got a message under it, which drops the names, match
 // rules and objects it set up on the bus. Returns how many it ended. Taken under each client's mu after the swap: a
 // message judged under the set before it finishes there, and one judged after sees the rules without it
-func (p *Proxy) removeSet(rs *RuleSet) int {
+func (p *Proxy) removeSet(rs *rules.Set) int {
 	p.setsMu.Lock()
 	defer p.setsMu.Unlock()
-	p.cur.Store(p.current().without(rs))
+	p.cur.Store(p.current().Without(rs))
 	ended := 0
 	for _, c := range p.connected() {
 		c.mu.Lock()

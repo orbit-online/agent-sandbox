@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"net"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 )
 
 // The control socket (--control): the permissions broker adds and removes live rule sets, one per D-Bus grant, by the
@@ -27,8 +26,6 @@ import (
 const (
 	maxControlLine = 64 << 10
 	maxLiveSets    = 32
-	// Entries in one set, so adding one costs each client a bounded number of the proxy's own calls
-	maxSetEntries = 64
 )
 
 var setID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -54,12 +51,12 @@ type control struct {
 	p    *Proxy
 	mu   sync.Mutex
 	busy bool
-	sets map[string]*RuleSet
+	sets map[string]*rules.Set
 }
 
 // Serves the control socket until it's closed
 func (p *Proxy) serveControl(l *net.UnixListener) error {
-	ctl := &control{p: p, sets: map[string]*RuleSet{}}
+	ctl := &control{p: p, sets: map[string]*rules.Set{}}
 	for {
 		conn, err := l.AcceptUnix()
 		if err != nil {
@@ -158,7 +155,8 @@ func (ctl *control) do(req controlRequest) (int, error) {
 		if len(ctl.sets) >= maxLiveSets {
 			return 0, fmt.Errorf("%d live rule sets at most", maxLiveSets)
 		}
-		rs, err := parseLiveSet(req, ctl.p.policyBus, ctl.p.appID)
+		rs, err := rules.ParseLive(req.ID, rules.Args{See: req.See, Talk: req.Talk, Own: req.Own, Call: req.Call,
+			Broadcast: req.Broadcast}, ctl.p.policyBus, ctl.p.appID)
 		if err != nil {
 			return 0, err
 		}
@@ -177,54 +175,4 @@ func (ctl *control) do(req controlRequest) (int, error) {
 		return n, nil
 	}
 	return 0, fmt.Errorf("Unknown op %q", req.Op)
-}
-
-// A live set from a request, with the command line's syntax. The static guards stay: nothing in a set reaches the bus
-// driver, so no monitoring, eavesdropping or bus calls beyond the static ones, and no destination-less calls (those are
-// refused before any rule is looked at). And the bus's policy, which the module and the broker check too
-// (internal/dbuspolicy): a broker that's confused or a peer that isn't the broker can't add what the config can't
-// declare
-func parseLiveSet(req controlRequest, bus, appID string) (*RuleSet, error) {
-	rs := NewRuleSet()
-	rs.id = req.ID
-	for _, o := range []struct {
-		args []string
-		add  func(string) error
-	}{
-		{req.See, func(a string) error { return rs.AddPolicy(a, policySee) }},
-		{req.Talk, func(a string) error { return rs.AddPolicy(a, policyTalk) }},
-		{req.Own, func(a string) error { return rs.AddPolicy(a, policyOwn) }},
-		{req.Call, func(a string) error { return rs.AddRule(a, filterCall) }},
-		{req.Broadcast, func(a string) error { return rs.AddRule(a, filterBroadcast) }},
-	} {
-		for _, a := range o.args {
-			if err := o.add(a); err != nil {
-				return nil, err
-			}
-			if rs.size() > maxSetEntries {
-				return nil, fmt.Errorf("%d rules in a set at most", maxSetEntries)
-			}
-		}
-	}
-	if rs.size() == 0 {
-		return nil, errors.New("A rule set without rules")
-	}
-	if rs.byName[busName] != nil {
-		return nil, fmt.Errorf("%s: the bus itself takes no live rules", busName)
-	}
-	set := dbuspolicy.Set{See: req.See, Talk: req.Talk, Own: req.Own, Call: byName(req.Call), Broadcast: byName(req.Broadcast)}
-	if err := dbuspolicy.Check(bus, appID, set); err != nil {
-		return nil, err
-	}
-	return rs, nil
-}
-
-// byName turns NAME=RULE arguments, parsed already, into rules by name
-func byName(args []string) map[string][]string {
-	out := map[string][]string{}
-	for _, a := range args {
-		name, rule, _ := strings.Cut(a, "=")
-		out[name] = append(out[name], rule)
-	}
-	return out
 }

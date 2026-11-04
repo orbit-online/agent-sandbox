@@ -1,6 +1,10 @@
 package main
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
+)
 
 const (
 	// Unique names a client's policy tracks
@@ -13,7 +17,7 @@ const (
 // well-known names it has owned while the proxy watched, whose rules apply to it too. Sticky, as in xdg-dbus-proxy: a
 // name released keeps its rules on its last owner, since a proxy can't drop them without racing
 type uniqueID struct {
-	policy policy
+	policy rules.Policy
 	owned  []string
 }
 
@@ -45,7 +49,7 @@ func (t *nameTable) entry(id string) (*uniqueID, error) {
 
 func (t *nameTable) evict() bool {
 	for i, id := range t.order {
-		if e := t.ids[id]; e.policy <= policySee && len(e.owned) == 0 {
+		if e := t.ids[id]; e.policy <= rules.See && len(e.owned) == 0 {
 			delete(t.ids, id)
 			t.order = append(t.order[:i:i], t.order[i+1:]...)
 			return true
@@ -55,7 +59,7 @@ func (t *nameTable) evict() bool {
 }
 
 // Raises a unique name's own policy, never lowers it
-func (t *nameTable) raise(id string, p policy) error {
+func (t *nameTable) raise(id string, p rules.Policy) error {
 	e, err := t.entry(id)
 	if err != nil {
 		return err
@@ -99,24 +103,24 @@ func (t *nameTable) forget(id string) {
 
 // The highest policy and the filters for a destination or sender: the bus's own talk for none, a unique name's own
 // policy and the rules of every name it owned, or a well-known name's rules
-func (t *nameTable) lookup(rules *Rules, name string) (policy, []*filter) {
+func (t *nameTable) lookup(r *rules.Rules, name string) (rules.Policy, []*rules.Filter) {
 	if name == "" {
-		return policyTalk, []*filter{matchAll[policyTalk]}
+		return rules.Talk, []*rules.Filter{rules.MatchAll(rules.Talk)}
 	}
 	if name[0] != ':' {
-		return rules.lookup(name)
+		return r.Lookup(name)
 	}
 	e, ok := t.ids[name]
 	if !ok {
-		return policyNone, nil
+		return rules.None, nil
 	}
 	p := e.policy
-	var fs []*filter
-	if p > policyNone {
-		fs = append(fs, matchAll[p])
+	var fs []*rules.Filter
+	if p > rules.None {
+		fs = append(fs, rules.MatchAll(p))
 	}
 	for _, owned := range e.owned {
-		op, ofs := rules.lookup(owned)
+		op, ofs := r.Lookup(owned)
 		p = max(p, op)
 		fs = append(fs, ofs...)
 	}

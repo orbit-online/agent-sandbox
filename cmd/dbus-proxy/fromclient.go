@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
@@ -57,15 +58,15 @@ func readsOthersTraffic(m *wire.Message) bool {
 func (c *client) verdict(m *wire.Message) verdict {
 	dest := m.Header(dbus.FieldDestination)
 	p, fs := c.lookup(dest)
-	if p < policySee {
+	if p < rules.See {
 		return hide
 	}
-	if p < policyTalk {
+	if p < rules.Talk {
 		return deny
 	}
 	iface, member := m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)
 	if dest != busName {
-		if p == policyOwn || anyMatches(fs, filterCall, m.Header(dbus.FieldPath), iface, member) {
+		if p == rules.Own || rules.AnyMatches(fs, rules.Call, m.Header(dbus.FieldPath), iface, member) {
 			return pass
 		}
 		return deny
@@ -100,10 +101,10 @@ func (c *client) verdict(m *wire.Message) verdict {
 }
 
 // The policy of the name in a bus call's first argument; none when it has no string there
-func (c *client) arg0Policy(m *wire.Message) policy {
+func (c *client) arg0Policy(m *wire.Message) rules.Policy {
 	name, ok := arg0(m)
 	if !ok || name == "" {
-		return policyNone
+		return rules.None
 	}
 	p, _ := c.lookup(name)
 	return p
@@ -187,7 +188,7 @@ func (c *client) judgeClient(m *wire.Message, fakes *[][]byte) ([]byte, error) {
 	v := c.verdict(m)
 	switch v {
 	case filterHasOwner, filterGetOwner:
-		if c.arg0Policy(m) < policySee {
+		if c.arg0Policy(m) < rules.See {
 			if v == filterGetOwner {
 				return c.rewrite(m, errorReply(m.Serial(), errNameHasNoOwner))
 			}
@@ -196,9 +197,9 @@ func (c *client) judgeClient(m *wire.Message, fakes *[][]byte) ([]byte, error) {
 	case validateMatch:
 		// readsOthersTraffic refused eavesdropping already
 	case validateOwn, validateSee, validateTalk:
-		need := map[verdict]policy{validateOwn: policyOwn, validateSee: policySee, validateTalk: policyTalk}[v]
+		need := map[verdict]rules.Policy{validateOwn: rules.Own, validateSee: rules.See, validateTalk: rules.Talk}[v]
 		if p := c.arg0Policy(m); p < need {
-			if p < policySee {
+			if p < rules.See {
 				v = hide
 			} else {
 				v = deny
@@ -245,13 +246,13 @@ func (c *client) rewrite(m *wire.Message, reply *dbus.Message) ([]byte, error) {
 // After Hello: watch every name the rules mention and ask who owns it now, so its owner's unique name gets its
 // policy, and hold the client until the answers came
 func (c *client) initialNameOps(fakes *[][]byte) error {
-	for _, rs := range c.cur.live() {
+	for _, rs := range c.cur.Live() {
 		if err := c.lookupSet(rs, fakes); err != nil {
 			return err
 		}
 	}
 	// Those added since the client's message were taken with the rules above, under the same mu
 	c.newSets = nil
-	_, err := c.lookupNames(c.cur.names(), fakes)
+	_, err := c.lookupNames(c.cur.Names(), fakes)
 	return err
 }

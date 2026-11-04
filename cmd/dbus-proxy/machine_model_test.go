@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 )
 
 // The state machine's reference model (machine_test.go): what each client may see and send under the static rules
@@ -44,12 +46,12 @@ var (
 type refSet struct {
 	id  string
 	idx int
-	rs  *RuleSet
+	rs  *rules.Set
 }
 
 // What one client's proxy knows of a unique name: its own policy and the names it was seen owning (names.go)
 type refID struct {
-	policy policy
+	policy rules.Policy
 	owned  []string
 }
 
@@ -95,7 +97,7 @@ type refSvc struct {
 }
 
 type model struct {
-	static  *RuleSet
+	static  *rules.Set
 	live    []*refSet
 	owners  map[string]string // well-known name -> role
 	clients map[string]*refClient
@@ -110,23 +112,23 @@ type model struct {
 }
 
 func newModel() *model {
-	rs := NewRuleSet()
-	for _, a := range staticArgs {
-		flag, arg, _ := strings.Cut(a, "=")
-		var err error
+	var a rules.Args
+	for _, arg := range staticArgs {
+		flag, v, _ := strings.Cut(arg, "=")
 		switch flag {
 		case "--talk":
-			err = rs.AddPolicy(arg, policyTalk)
+			a.Talk = append(a.Talk, v)
 		case "--see":
-			err = rs.AddPolicy(arg, policySee)
+			a.See = append(a.See, v)
 		case "--own":
-			err = rs.AddPolicy(arg, policyOwn)
+			a.Own = append(a.Own, v)
 		case "--call":
-			err = rs.AddRule(arg, filterCall)
+			a.Call = append(a.Call, v)
 		}
-		if err != nil {
-			panic(err)
-		}
+	}
+	rs, err := rules.Parse(a)
+	if err != nil {
+		panic(err)
 	}
 	return &model{static: rs, owners: map[string]string{}, clients: map[string]*refClient{}, svcs: map[string]*refSvc{},
 		want: map[string][]string{}, busPending: map[busKey]bool{}}
@@ -140,15 +142,15 @@ func (m *model) newClient(role string) *refClient {
 }
 
 // The rules in force
-func (m *model) rules() *Rules {
-	sets := []*RuleSet{m.static}
+func (m *model) rules() *rules.Rules {
+	sets := []*rules.Set{m.static}
 	for _, s := range m.live {
 		sets = append(sets, s.rs)
 	}
-	return NewRules(sets...)
+	return rules.New(sets...)
 }
 
-func (m *model) setOf(rs *RuleSet) *refSet {
+func (m *model) setOf(rs *rules.Set) *refSet {
 	for _, s := range m.live {
 		if s.rs == rs {
 			return s
@@ -166,7 +168,7 @@ func (c *refClient) id(role string) *refID {
 	return e
 }
 
-func (c *refClient) raise(role string, p policy) {
+func (c *refClient) raise(role string, p rules.Policy) {
 	if e := c.id(role); p > e.policy {
 		e.policy = p
 	}
@@ -183,31 +185,31 @@ func (c *refClient) addOwned(role, name string) {
 
 // The policy and filters of a name for client c, as its proxy's lookup has them, marking the live sets it touches
 // as used
-func (m *model) lookup(c *refClient, name string) (policy, []*filter) {
-	var p policy
-	var fs []*filter
+func (m *model) lookup(c *refClient, name string) (rules.Policy, []*rules.Filter) {
+	var p rules.Policy
+	var fs []*rules.Filter
 	switch {
 	case name == "":
-		return policyTalk, []*filter{matchAll[policyTalk]}
+		return rules.Talk, []*rules.Filter{rules.MatchAll(rules.Talk)}
 	case strings.Contains(name, "."):
-		p, fs = m.rules().lookup(name)
+		p, fs = m.rules().Lookup(name)
 	default:
 		e := c.table[name]
 		if e == nil {
-			return policyNone, nil
+			return rules.None, nil
 		}
 		p = e.policy
-		if p > policyNone {
-			fs = append(fs, matchAll[p])
+		if p > rules.None {
+			fs = append(fs, rules.MatchAll(p))
 		}
 		for _, o := range e.owned {
-			op, ofs := m.rules().lookup(o)
+			op, ofs := m.rules().Lookup(o)
 			p = max(p, op)
 			fs = append(fs, ofs...)
 		}
 	}
 	for _, f := range fs {
-		if s := m.setOf(f.set); s != nil {
+		if s := m.setOf(f.Set); s != nil {
 			c.used[s] = true
 		}
 	}
@@ -217,11 +219,11 @@ func (m *model) lookup(c *refClient, name string) (policy, []*filter) {
 // Whether the proxy's match rules for c cover a NameOwnerChanged of name: the static rules' names, and those of the
 // live sets it watches
 func (m *model) watches(c *refClient, name string) bool {
-	if slices.Contains(NewRules(m.static).names(), name) {
+	if slices.Contains(rules.New(m.static).Names(), name) {
 		return true
 	}
 	for s := range c.watched {
-		if slices.Contains(s.rs.names(), name) {
+		if slices.Contains(s.rs.Names(), name) {
 			return true
 		}
 	}
