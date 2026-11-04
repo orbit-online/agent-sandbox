@@ -309,7 +309,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   leases in hours and minutes; a granted request's reason on the grant; a once grant covering only
   its call and refused to a request; a failing call's exit and stderr,
   recorded with opaque arguments by digest and its capability; image and text results, too much
-  output stopping the unit; the unit's properties and a revoke stopping it;
+  output stopping the unit; the unit's properties (the launcher's slice too) and a revoke stopping it;
   the validity; a grant ending with its instance; the MCP tools listed from
   the declarations and a call through them, also before the daemon
   listens), a request or window answer naming no instance

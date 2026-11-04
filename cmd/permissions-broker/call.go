@@ -125,6 +125,10 @@ func (b *broker) runCall(c *capability, name string, cmd *hostcmd.Command, g *gr
 	if b.cfg.Unit != "" {
 		runArgs = append(runArgs, "--property=BindsTo="+b.cfg.Unit, "--property=After="+b.cfg.Unit)
 	}
+	// The launcher's slice, under its memory limits
+	if b.cfg.Slice != "" {
+		runArgs = append(runArgs, "--slice="+b.cfg.Slice)
+	}
 	runArgs = append(append(runArgs, "--"), cmd.Run...)
 	in, _ := json.Marshal(hostcmd.Input{Capability: c.id(), Command: name, Grant: g.ID, Bounding: g.Params, Arguments: args,
 		Validity: duration.Format(validity)})

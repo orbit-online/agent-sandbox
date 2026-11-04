@@ -16,7 +16,9 @@ type config struct {
 	GrantDir      string `json:"grantDir"`
 	ControlSocket string `json:"controlSocket"`
 	// The daemon's systemd unit, which call units are bound to
-	Unit            string   `json:"unit"`
+	Unit string `json:"unit"`
+	// The launcher's slice, which call units join
+	Slice           string   `json:"slice"`
 	SandboxGrantDir string   `json:"sandboxGrantDir"`
 	Window          []string `json:"window"`
 	// Never granted as an attach source, whatever a ceiling says: every launcher's state directory and runtime

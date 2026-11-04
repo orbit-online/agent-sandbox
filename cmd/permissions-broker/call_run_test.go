@@ -61,11 +61,12 @@ func TestCallResults(t *testing.T) {
 	}
 }
 
-// The unit: the user's, collected, bounded by the timeout, bound to the daemon's. A revoke stops a running call's
+// The unit: the user's, collected, bounded by the timeout, bound to the daemon's, in the launcher's slice. A revoke stops a running call's
 // unit, and its output isn't handed out
 func TestCallUnit(t *testing.T) {
 	b, c, _ := commandBroker(t, "sleep 1; cat", "allow")
 	b.cfg.Unit = "permissions.service"
+	b.cfg.Slice = `claude\x2ddesktop.slice`
 	c.Commands["run"].Timeout = "PT90S"
 	log := fakeSystemd(t)
 	done := make(chan error, 1)
@@ -86,7 +87,8 @@ func TestCallUnit(t *testing.T) {
 	}
 	data, _ := os.ReadFile(log)
 	for _, want := range []string{"--user --quiet --pipe --collect --unit=perm-test_call-",
-		"--property=RuntimeMaxSec=90 --property=BindsTo=permissions.service --property=After=permissions.service -- /",
+		"--property=RuntimeMaxSec=90 --property=BindsTo=permissions.service --property=After=permissions.service" +
+			` --slice=claude\x2ddesktop.slice -- /`,
 		"systemctl --user stop perm-test_call-"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("No %q in %s", want, data)
