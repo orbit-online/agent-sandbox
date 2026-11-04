@@ -448,10 +448,16 @@ reply, forge replies (to a start the bus holds pending too) and
 broadcast; the broker adds and removes sets, alone or right before a
 client's message, and drops its connection. After every step what
 arrived at each end, the connections closed and every name's owner match
-a reference model. Not there: a set removed while a client's lookups for
-it are in flight (`D1inflight`): each step settles, so the lookups are
-answered within the step that adds the set or before the client's next
-message. The machine has calls and replies between clients, which
+a reference model. Each step settles there, so a set removed while a
+client's lookups for it are in flight (`D1inflight`) is left to a second
+machine, `cmd/dbus-proxy/internal/judge/machine_test.go`, which drives one
+connection's judge without sockets, the bus a queue answered in order:
+the client says Hello and calls names and peers, the broker adds and
+removes sets (the rules swapped before the judge hears of it, as the
+registry does), names change hands, and the bus answers one message at a
+time or forges replies. It checks D1 (calls and NameOwnerChanged, and
+D3's close for a set a call relied on) and D2 after every step. The
+end-to-end machine has calls and replies between clients, which
 `proxy.als` has between a client and a peer only.
 
 The broker's Go tests run the protocol model's actions as `rapid` state
@@ -465,7 +471,7 @@ and S6 and S9. Model actions without a machine action: `startCall` and
 a call waiting for its slot or running across a revoke is left to
 `TestCallEndedBeforeStart`, `TestNoOutputAfterEnd` and `TestCallUnit`),
 `instanceGone` (the machines set `instanceEvery` to 1000 h;
-`TestInstanceGone`), `mature` and `forge` (`notify_test.go`), `env`'s
+`TestInstanceGone`), `mature` and `forge` (`cmd/permissions-broker/internal/notify/notify_test.go`), `env`'s
 renames (`attach_test.go`, `swap_test.go`), `stopPost` on its own
 (`Restart` runs the start's cleanup instead) and `sandboxEnd`. The live
 machine also has no `Advance` (`tick`, `expire`, `unblock`), `Instances`

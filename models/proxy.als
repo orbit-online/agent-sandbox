@@ -6,12 +6,13 @@
  * bugs: a serial reused between a call and its reply, and a rule set
  * changing while a lookup was in flight. So the model is the proxy's
  * state and the order of events, with the rule matching itself reduced
- * to a relation (rules.go and rules_test.go hold xdg-dbus-proxy's
+ * to a relation (internal/rules and its tests hold xdg-dbus-proxy's
  * semantics).
  *
- * Sources: cmd/dbus-proxy/*.go at f2faa0f (fromclient.go judgeClient and
- * verdict, frombus.go judgeBus and passNameOwnerChanged, client.go
- * expectFromBus, livesets.go lookup, lookupNames, syncSets, addSet and removeSet,
+ * Sources: cmd/dbus-proxy/internal at ef3390e (judge: fromclient.go
+ * FromClient, judgeClient and verdict, frombus.go FromBus, judgeBus and
+ * passNameOwnerChanged, judge.go expectFromBus and lookup, livesets.go
+ * lookupNames, Sync and RemoveSet; control: registry.go Add and Remove,
  * control.go serve).
  *
  * The attacker is every client: it registers, calls any destination
@@ -32,7 +33,7 @@
  * Abstracted: a rule set is the methods it lets a client call on each
  * name, and the names it mentions (any rule lets a client see its name);
  * own rules are folded into calls. A unique name stands for its
- * connection, and the proxy's table of what each owned (names.go) is
+ * connection, and the proxy's table of what each owned (judge/names.go) is
  * `known`, sticky as xdg-dbus-proxy's. Broadcasts, file descriptors,
  * budgets and SASL are other tests' (README.md, D-Bus proxy).
  */
@@ -66,10 +67,10 @@ sig Client extends Party {
   var pend: Serial -> lone Dest,
   // Calls to it awaiting its reply (awaitPeer): caller and serial
   var asked: Party -> Serial,
-  // Who the proxy saw owning which name (names.go)
+  // Who the proxy saw owning which name (judge/names.go)
   var known: Party -> Name,
   // The live sets whose names it watches, and those whose owners it
-  // is still looking up (syncSets, lookupSet)
+  // is still looking up (Sync, lookupSet)
   var watching: set RuleSet,
   var inflight: set RuleSet,
   // The live sets the proxy marked as used: a removal ends it
@@ -98,9 +99,9 @@ one sig
   ReplyAwaited,  // judgeBus: a reply only to a serial in awaitBus
   BusSender,     // judgeBus: a reply to a call to the bus only from the bus
   PeerAwaited,   // judgeClient: a client's reply only to a call in awaitPeer, to its caller
-  Refresh,       // fromClient, judgeBus: c.cur = c.p.current() before judging
-  MarkUsed,      // client.lookup: a live set with a filter for the name is used
-  CloseOnRemove, // removeSet: the connections that used the set end
+  Refresh,       // FromClient, judgeBus: j.cur = j.current() before judging
+  MarkUsed,      // Judge.lookup: a live set with a filter for the name is used
+  CloseOnRemove, // Registry.Remove: the connections that used the set end
   NoEavesdrop    // readsOthersTraffic: eavesdropping match rules refused
   extends Guard {}
 
@@ -284,7 +285,7 @@ pred owned[g: set Guard, n: Name, p: lone Party] {
 
 // addSet: the broker adds a live set. Each registered client's proxy
 // looks up the owners of its names before the client's next message,
-// which waits for the answers (syncSets)
+// which waits for the answers (Sync, Held)
 pred addSet[rs: RuleSet] {
   rs not in Static + Live
   Live' = Live + rs

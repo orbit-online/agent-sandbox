@@ -1,6 +1,7 @@
 package judge
 
 import (
+	"flag"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -19,8 +20,16 @@ import (
 // rules in force then let the client call one of its names, through every name the bus ever saw its unique name own
 // (the proxy's table is sticky), and a NameOwnerChanged only for a name they let it see; a set removed ends the
 // connection when it let a call through; D2, a reply forwarded only to a call let through and awaiting one, and to a
-// call to the bus only from the bus. Run longer with -rapid.checks=1000 -rapid.steps=200
+// call to the bus only from the bus. 1000 sequences take a second; more with -rapid.checks
 func TestJudgeMachine(t *testing.T) {
+	// Cheap without sockets: 1000 sequences unless the command line says otherwise
+	set := false
+	flag.Visit(func(f *flag.Flag) { set = set || f.Name == "rapid.checks" })
+	if !set {
+		old := flag.Lookup("rapid.checks").Value.String()
+		_ = flag.Set("rapid.checks", "1000")
+		t.Cleanup(func() { _ = flag.Set("rapid.checks", old) })
+	}
 	rapid.Check(t, func(rt *rapid.T) { rt.Repeat(rapid.StateMachineActions(newJudgeMachine(rt))) })
 }
 

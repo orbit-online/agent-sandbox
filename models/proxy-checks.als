@@ -12,8 +12,8 @@ open proxy
 // call reaches its destination only when the static rules and the live
 // sets in force now let the client call that method there, and a
 // NameOwnerChanged only for a name they let it see. The proxy judges each
-// message by the rules there are when it reads it (Refresh: c.cur =
-// c.p.current() in fromClient and judgeBus), so a set removed applies to
+// message by the rules there are when it reads it (Refresh: j.cur =
+// j.current() in FromClient and judgeBus), so a set removed applies to
 // the next message, and owners looked up for a set removed meanwhile give
 // nothing (looked).
 assert D1rules { system[Guard] implies always no Overreached }
@@ -82,7 +82,7 @@ run D2premise {
 // or got was judged under a set (a filter for its destination, sender or
 // name, whatever the verdict) has its connection ended by the set's
 // removal, alone or with the broker's connection (MarkUsed:
-// client.lookup; CloseOnRemove: removeSet).
+// Judge.lookup; CloseOnRemove: Registry.Remove).
 assert D3closeOnRemove { system[Guard] implies always no Kept }
 check D3closeOnRemove for 3 but 2 Client, 1 Peer, 2 Name, 1 Method, 2 Serial, 2 RuleSet, 1..6 steps expect 0
 

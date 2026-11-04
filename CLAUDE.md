@@ -48,19 +48,22 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`docs/permissions.md`, D-Bus), taking the subset of its arguments nixpak
   passes (`dbus-proxy --help`). The module hands it to nixpak as
   `pkgs.xdg-dbus-proxy` (the package links `bin/xdg-dbus-proxy` to it), so
-  nixpak's launcher starts it as the session-bus proxy. `main.go`
-  (arguments, listening, `--fd`), `address.go` (bus addresses), `sasl.go`
-  (SASL toward both sides), `wire.go` (reading messages and their file
-  descriptors, bounded), `header.go` (parsing the header, decoding a body
-  where needed, encoding), `budget.go` (each client's share of bytes and file
-  descriptors and the whole proxy's), `sender.go` (each side's write queue),
-  `rules.go` (rule sets and xdg-dbus-proxy's matching), `names.go` (a client's
-  unique names and what they owned), `client.go` (a connection's lifecycle),
-  `fromclient.go` and `frombus.go` (the filtering each way), `busmsg.go` (the
-  messages the proxy makes up), `control.go` (the control socket the
-  permissions broker adds and removes live rule sets on, `--control`, and its
-  peer check) and `livesets.go` (a set's names looked up, the connections that
-  used it ended). With D-Bus capabilities on the system bus, `bwrap-subid.sh`
+  nixpak's launcher starts it as the session-bus proxy. Its packages in
+  `cmd/dbus-proxy/internal/`, each auditable on its own: `wire` (reading
+  messages and their file descriptors, bounded, parsing the header, decoding a
+  body where needed, encoding, each side's write queue, and the budget of bytes
+  and file descriptors the clients share), `sasl` (SASL toward both sides),
+  `rules` (rule sets from the command line and live ones, xdg-dbus-proxy's
+  matching, the lookup of a name in the rules in force), `judge` (one
+  connection's state and its verdict on each message each way, without I/O:
+  forward, drop or replace, and the proxy's own calls to the bus; one mutex
+  over the rules in force, the used live sets, the unique names and the
+  pending replies) and `control` (the control socket the permissions broker
+  adds and removes live rule sets on, `--control`, its peer check, and the
+  registry of the rules in force and the connections they apply to). Package
+  main: `main.go` (arguments, `--fd`, `--pid`), `proxy.go` (listening, the
+  accept loop), `client.go` (a connection's goroutines, doing what the judge
+  says) and `address.go` (bus addresses). With D-Bus capabilities on the system bus, `bwrap-subid.sh`
   starts a second instance for the system bus as a unit of its own.
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
@@ -230,8 +233,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   target below it, refusing a client outside one, a sibling userns, the
   client's own and another uid, and `dieWith` ending the broker when the
   parent it was given is gone already.
-- `dbus-proxy`: the package build runs its Go tests (`*_test.go`) with
-  `-race`, against a `dbus-daemon` of the test's that allows unrequested
+- `dbus-proxy`: the package build runs the Go tests of it and its
+  `internal/` packages with `-race`. Package main's go end to end, against a `dbus-daemon` of the test's that allows unrequested
   replies and eavesdropping (each test's control shows the proxy refusing
   what the bus would pass): a hidden name (not listed, no owner, a call unknown),
   `--see` (visible, a call denied), `--talk` (any call and its reply, by the
@@ -243,23 +246,18 @@ modules and a user alice (the `home-manager` input exists only for it).
   `BecomeMonitor` and eavesdropping match rules refused, file descriptors
   both ways, `--fd` (the byte, exit and the socket removed when it closes, as
   nixpak starts it), bad arguments refused (`--filter` missing too), libdbus's `dbus-send` as a
-  client, sd-bus's pipelined SASL, SASL refusals, an oversized message and a
-  message claiming file descriptors that never came; through a client
+  client, sd-bus's pipelined SASL, an oversized message; through a client
   speaking the wire itself (`raw_test.go`, `guards_test.go`): a serial reused while pending and
   a second Hello, serials 0 and past the client's range, file descriptors
   either way for a client that cancelled their negotiation, bus calls without
   an interface, with a non-string match rule or on another interface, a call
   without a destination, a caller made visible, another uid, file descriptors
   during SASL, the hold after Hello until the rules' names' owners are known,
-  both pending-reply caps, SASL's command and line caps; the limits
-  (`limits_test.go`): file descriptors per message and pending, bodies left
-  undecoded, a client over the memory budget disconnected while another goes
+  both pending-reply caps; the limits
+  (`limits_test.go`): a client over the memory budget disconnected while another goes
   on, queued file descriptors past a client's share, and accepting again after
   running out of file descriptors (the test binary as the proxy, with a low
-  `RLIMIT_NOFILE`); state alone (`judge_test.go`): a peer's reply to a call to
-  the bus dropped, a unique name that left forgotten, a reply only to its
-  caller; and the rule parser (wildcards refused), name lookup, the eavesdrop match, bus
-  addresses, the budget and the bounded name table. Live rule sets
+  `RLIMIT_NOFILE`); and bus addresses. Live rule sets
   (`control_test.go`, `control_args_test.go`): a set added applying to the
   next message (by the owner's unique name too), a removal refusing the next
   one and ending the connections that used it (their names dropped on the
@@ -288,6 +286,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   name table, pending calls both ways, the sets each client used, the bus's owners, match rules and pending calls;
   D1-D4). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
   -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`), a failure again with the `-rapid.seed` it prints.
+  The `internal/` packages' tests, each alone: `wire` (a fuzz test of the header parser against godbus's decoder,
+  run longer with `go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s`; serial 0, file descriptors per message,
+  pending and claimed, bodies left undecoded, the budget, and what readers and senders hold of it), `sasl` (`Serve`
+  on a socket pair: EXTERNAL accepted with and without an initial response, file descriptors as negotiated,
+  refusals, the command and line caps), `rules` (the rule parser, wildcards refused, the lookup, a live set's
+  limits and policy), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
+  forgotten, a reply only to its caller; the eavesdrop match, the bounded name table; and a stateful property test,
+  `machine_test.go`, that drives one connection's judge with the bus as a queue answered in order, so live sets
+  come and go while the lookups of their names are in flight, checking D1 and D2 after every step, 1000 sequences
+  in about a second) and `control` (a removal swapping the rules before it tells the connections, and ending only
+  those that used the set).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), host commands (the schema subset's
