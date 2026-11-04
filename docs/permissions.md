@@ -889,9 +889,16 @@ a daemon started again starts them afresh.
 The sandbox gets its cgroup subtree writable at `/sys/fs/cgroup`, for `cgrun`, only when the host's cgroup2 has
 `nsdelegate` (`bwrap-subid.sh` reads it from the mount's options at launch). Without it the kernel neither keeps the
 sandbox from writing its root's files nor checks process moves against its cgroup namespace, so the launcher binds
-the subtree read-only, logs a warning to the app unit's journal, and `cgrun` refuses, saying why. The caps on the
-sandbox's cgroups (64, 4 deep) sit on the unit's cgroup either way, out of the sandbox's reach: `nsdelegate` guards
-only the root of the writer's own cgroup namespace, so from a nested one the sandbox writes its root's files.
+the subtree read-only, logs a warning to the app unit's journal, and `cgrun` refuses, saying why. The read-only bind
+stops writes through `/sys/fs/cgroup` and no more: cgroup2 can be mounted from a user namespace that owns the cgroup
+namespace (`FS_USERNS_MOUNT`), so from nested user, mount and cgroup namespaces the sandbox mounts it afresh,
+writable, rooted at the new cgroup namespace's root, the cgroup its process is in. Without `nsdelegate` it can then
+change its own cgroups' limits and freeze or kill its own processes. That stays inside `sandbox/`: such a mount
+reaches neither `supervisor/` nor any cgroup outside the sandbox's subtree, and it can't clear `nsdelegate` either,
+since a cgroup2 mount sets the superblock's options only from the host's cgroup namespace
+(`apply_cgroup_root_flags`, below). The caps on the sandbox's cgroups (64, 4 deep) sit on the unit's cgroup either
+way, out of the sandbox's reach: `nsdelegate` guards only the root of the writer's own cgroup namespace, so from a
+nested one the sandbox writes its root's files.
 
 systemd mounts cgroup2 with `nsdelegate,memory_recursiveprot` (and `memory_hugetlb_accounting` where the kernel has
 it; `src/shared/mount-setup.c`), but the options belong to the one superblock: any later cgroup2 mount in the host's

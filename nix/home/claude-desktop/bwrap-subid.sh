@@ -75,7 +75,13 @@ subid)
   mkdir "$cg_root/sandbox" "$cg_root/sandbox/app"
   # Without nsdelegate, the kernel neither keeps the sandbox from its root's files nor checks moves against its
   # namespace (any cgroup2 mount in the host's cgroup namespace without the option clears it for all, as cilium's
-  # does): the sandbox gets its cgroup read-only, and no cgrun. systemd mounts it with nsdelegate
+  # does): the sandbox gets its cgroup bound read-only, which stops writes through /sys/fs/cgroup, and no cgrun.
+  # The bind doesn't keep it from its subtree: a cgroup2 mount of its own in nested user and cgroup namespaces
+  # (FS_USERNS_MOUNT) is writable, rooted at the new namespace's root, the cgroup the process is in. So the sandbox
+  # can change its own cgroups' limits and freeze or kill its own processes, and nothing outside sandbox/: not
+  # supervisor/, not the caps on the unit's cgroup. Nor can it clear nsdelegate: a cgroup2 mount sets the
+  # superblock's options only from the host's cgroup namespace (apply_cgroup_root_flags in kernel/cgroup/cgroup.c).
+  # systemd mounts it with nsdelegate
   cg_bind=--bind
   # The superblock's options, last on a cgroup2 mount's line: the same on every one
   cg_flags=
@@ -87,8 +93,9 @@ subid)
   if [[ ,$cg_flags, != *,nsdelegate,* ]]; then
     cg_bind=--ro-bind
     echo "claude-desktop: cgroup2 is mounted without nsdelegate (options: ${cg_flags:-none}), so the sandbox's" \
-      "cgroup is read-only and cgrun won't work in it. A cgroup2 mount in the host's cgroup namespace without the" \
-      "option clears it (cilium's at /run/cilium/cgroupv2 does). As root, 'mount -o" \
+      "cgroup is bound read-only and cgrun won't work in it. The sandbox can still write its own cgroups through" \
+      "a cgroup2 mount of its own, though nothing outside them. A cgroup2 mount in the host's cgroup namespace" \
+      "without the option clears it (cilium's at /run/cilium/cgroupv2 does). As root, 'mount -o" \
       "remount,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting /sys/fs/cgroup' restores systemd's" \
       "options; then start the app again" >&2
   fi

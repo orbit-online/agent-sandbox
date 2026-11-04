@@ -104,11 +104,9 @@
       # No process in its root, which holds controllers for its children
       refused("echo 0 >/sys/fs/cgroup/cgroup.procs")
       # The host's hierarchy under the bind stays hidden, and a cgroup2 mount of its own, in a cgroup namespace of its
-      # own, shows its own cgroup's subtree
+      # own, shows its own cgroup's subtree and nothing above it
       refused("unshare --user --map-current-user --mount umount /sys/fs/cgroup")
-      out = in_work("unshare --user --map-root-user --mount --cgroup sh -c"
-                    " 'd=$(mktemp -d) && mount -t cgroup2 none $d && ls $d'").split()
-      assert "cgroup.procs" in out and not [n for n in out if n.endswith((".slice", ".service", ".scope"))], out
+      fresh_cgroup2_mount(in_work, unit_root)
       # At most 64 cgroups below its root, app/ included
       out = in_work("sh -c 'n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done;"
                     " echo $n; rmdir /sys/fs/cgroup/d*'")

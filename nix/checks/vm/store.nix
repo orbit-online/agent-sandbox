@@ -81,6 +81,8 @@
       assert "ro" in top[5].split(","), top
       status, out = workstation.execute(sandbox_cmd("sh -c 'mkdir /sys/fs/cgroup/x'") + " 2>&1")
       assert status != 0, out
+      # The bind alone: a cgroup2 mount of its own still writes its subtree, and reaches nothing above it
+      fresh_cgroup2_mount(in_sandbox, f"/sys/fs/cgroup{cg}")
       # cgrun refuses, naming nsdelegate
       out = in_sandbox("sh -c 'cgrun --memory=64M -- echo ran 2>&1; echo exit=$?'")
       assert "without nsdelegate" in out and "ran" not in out.split() and out.strip().endswith("exit=1"), out

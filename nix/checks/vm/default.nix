@@ -234,6 +234,24 @@ let
             f"echo {shlex.quote(cmd)} | {env} /etc/profiles/per-user/alice/bin/claude-desktop --shell"
         ))
 
+    # A cgroup2 mount of the sandbox's own in nested user, mount and cgroup namespaces, which the bind at
+    # /sys/fs/cgroup doesn't stop with or without nsdelegate: rooted at the new cgroup namespace's root, sandbox/app/
+    # where the re-entry runs, so it writes there (a cgroup it makes shows up on the host) and shows nothing above it,
+    # neither supervisor/ nor the caps on the unit's cgroup, which stay as they were after it writes every cap it
+    # reaches. `run` runs a command in the sandbox, `unit_root` is the unit's cgroup on the host
+    def fresh_cgroup2_mount(run, unit_root):
+        root = f"{unit_root}/sandbox/app"
+        mount = ("d=$(mktemp -d) && mount -t cgroup2 none $d && mkdir $d/fresh-probe"
+                 " && find $d -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'"
+                 " && for f in $(find $d -name 'cgroup.max.*'); do echo max >$f 2>/dev/null; done; true")
+        inside = sorted(run("unshare --user --map-root-user --mount --cgroup sh -c " + shlex.quote(mount)).split())
+        host = sorted(workstation.succeed(f"find '{root}' -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'").split())
+        assert "fresh-probe" in host and inside == host, f"{inside}, on the host {host}"
+        assert not {"supervisor", "sandbox", "app"} & set(inside), inside
+        caps = [workstation.succeed(f"cat '{unit_root}/cgroup.max.{f}'").strip() for f in ["descendants", "depth"]]
+        assert caps == ["66", "5"], caps
+        workstation.succeed(f"rmdir '{root}/fresh-probe'")
+
     # The fake portal on alice's session bus, once it answers
     def start_portal():
         workstation.succeed("systemd-run --user -M alice@ --unit fake-portal -- ${lib.getExe fakePortal}")
