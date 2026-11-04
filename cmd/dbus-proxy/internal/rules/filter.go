@@ -1,5 +1,5 @@
-// Package rules is the proxy's rules: rule sets parsed from xdg-dbus-proxy's arguments on the command line, the rules
-// looked up by name, and xdg-dbus-proxy's matching
+// Package rules is the proxy's rules: the static rule set read from its JSON config, the rules looked up by name, and
+// xdg-dbus-proxy's matching
 package rules
 
 import "strings"
@@ -14,7 +14,7 @@ const (
 	Own
 )
 
-// What a filter from --call or --broadcast applies to; one from --see, --talk or --own applies to both
+// What a filter from a call or broadcast rule applies to; one from a policy applies to both
 type Kind uint8
 
 const (
@@ -23,7 +23,7 @@ const (
 	All = Call | Broadcast
 )
 
-// One rule for a name: a policy, and for --call and --broadcast what a message must match (empty matches anything)
+// One rule for a name: a policy, and for a call or broadcast rule what a message must match (empty matches anything)
 type Filter struct {
 	policy      Policy
 	types       Kind
@@ -79,8 +79,8 @@ func AnyMatches(fs []*Filter, t Kind, path, iface, member string) bool {
 func MatchAll(p Policy) *Filter { return matchAll[p] }
 
 // Whether a broadcast from a sender with these filters reaches the client. xdg-dbus-proxy passes every broadcast of a
-// name with TALK, and any rule gives a name TALK, so a --call or --broadcast rule lets all the name's broadcasts
-// through: kept for compatibility, as nixpak's configs rely on it
+// name with TALK, and any rule gives a name TALK, so a call or broadcast rule lets all the name's broadcasts
+// through: kept, as the module's rules rely on it
 func BroadcastPasses(fs []*Filter, path, iface, member string) bool {
 	for _, f := range fs {
 		if f.policy >= Talk {

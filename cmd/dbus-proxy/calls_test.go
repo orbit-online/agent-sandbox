@@ -7,7 +7,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-// --call rules: a method on a path, an interface's methods on a subtree, anything anywhere
+// Call rules: a method on a path, an interface's methods on a subtree, anything anywhere
 func TestCallRules(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
@@ -30,13 +30,13 @@ func TestCallRules(t *testing.T) {
 		{"*", "/other", "Echo", ""},
 		{"org.test.Other.*", "/org/test", "Echo", errAccessDenied},
 	} {
-		c := connect(t, startProxy(t, bus, "--call="+svcName+"="+tc.rule))
+		c := connect(t, startProxy(t, bus, ruled(svcName, "call", tc.rule)))
 		_, err := call(c, svcName, tc.path, svcIface+"."+tc.method, "x")
 		wantErr(t, tc.rule+" "+string(tc.path)+" "+tc.method, err, tc.want)
 	}
 }
 
-// --broadcast lets the name's broadcasts reach a client that asked for them; without a rule, or with --see, they don't
+// A broadcast rule lets the name's broadcasts reach a client that asked; without a rule, or with see, they don't
 func TestBroadcast(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
@@ -46,11 +46,11 @@ func TestBroadcast(t *testing.T) {
 		want bool
 	}{
 		{nil, "/org/test", false},
-		{[]string{"--see=" + svcName}, "/org/test", false},
-		{[]string{"--broadcast=" + svcName + "=org.test.Iface.Sig@/org/test"}, "/org/test", true},
+		{[]string{policy(svcName, "see")}, "/org/test", false},
+		{[]string{ruled(svcName, "broadcast", "org.test.Iface.Sig@/org/test")}, "/org/test", true},
 		// xdg-dbus-proxy's quirk, kept: any rule gives the name TALK, and TALK passes all its broadcasts
-		{[]string{"--broadcast=" + svcName + "=org.test.Iface.Sig@/org/test"}, "/other", true},
-		{[]string{"--talk=" + svcName}, "/other", true},
+		{[]string{ruled(svcName, "broadcast", "org.test.Iface.Sig@/org/test")}, "/other", true},
+		{[]string{policy(svcName, "talk")}, "/other", true},
 	} {
 		c := connect(t, startProxy(t, bus, tc.args...))
 		got := signals(c, 300*time.Millisecond)

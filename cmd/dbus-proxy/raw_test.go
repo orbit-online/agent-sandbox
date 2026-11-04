@@ -131,7 +131,7 @@ func TestSerialReuse(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
 	got := eavesdrop(svc)
-	rc := rawConnect(t, startProxy(t, bus, "--see="+svcName))
+	rc := rawConnect(t, startProxy(t, bus, policy(svcName, "see")))
 	rc.send(3, busCall("GetNameOwner", svcName), busCall("Hello"))
 	if !rc.closed() {
 		t.Error("Serial reuse didn't end the connection")
@@ -151,7 +151,7 @@ func TestSerialReuse(t *testing.T) {
 func TestSecondHello(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	rc := rawConnect(t, startProxy(t, bus, "--see="+svcName))
+	rc := rawConnect(t, startProxy(t, bus, policy(svcName, "see")))
 	rc.send(2, busCall("Hello"))
 	if r := rc.waitReply(2); r.Header(dbus.FieldErrorName) != errAccessDenied {
 		t.Errorf("Second Hello: %v %q", r.Type, r.Header(dbus.FieldErrorName))

@@ -3,7 +3,7 @@ package rules
 // The bus driver, which every client may talk to
 const BusName = "org.freedesktop.DBus"
 
-// The rule sets a proxy applies, looked up together: the bus's own and the command line's. Never changed once in use
+// The rule sets a proxy applies, looked up together: the bus's own and the config's. Never changed once in use
 type Rules struct {
 	sets []*Set
 }

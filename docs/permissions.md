@@ -9,8 +9,9 @@ and session leases removed, folders built into the broker, and host sockets at s
 (`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Then the Go D-Bus proxy with
 static rules (step 5) and the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03). Live rules with the
 system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and removed 2026-11-04 until a capability needs
-them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). Not built yet:
-device grants. Steps lists the order.
+them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). The
+proxy's static rules then moved from its argv to a JSON config the module writes from its `dbus` option (2026-11-04).
+Not built yet: device grants. Steps lists the order.
 
 ## Why
 
@@ -88,7 +89,8 @@ On kernel 6.18, bubblewrap 0.12.0, Claude Code 2.1.309 (`scripts/ns-inject-spike
    (`launcher/dbus_proxy.go`). Its launcher wrapper sets `XDG_DBUS_PROXY_EXE` at build time (`makeWrapper --set`) to
    a script of its own that runs `pkgs.xdg-dbus-proxy` in a bwrap with `/.flatpak-info`, because portals read
    `/proc/<caller>/root/.flatpak-info` and the caller they see is the proxy (`modules/launch.nix`). `dbus.args` are
-   passed literally, without expanding variables.
+   passed literally, without expanding variables; nixpak's `modules/dbus.nix` makes them from `dbus.policies` and
+   `dbus.rules`, as xdg-dbus-proxy's flags, and appends what else is set.
 10. godbus/dbus v5 decodes and encodes single wire messages with their file descriptors
     (`DecodeMessageWithFDs`, `Message.EncodeToWithFDs`, v5.2.4), which is what a filtering proxy needs.
 
@@ -483,9 +485,30 @@ the new proxy (its binary under that name). Then nixpak's launcher still starts 
 `/.flatpak-info` and waits on `--fd=3` (verified, 9); `XDG_DBUS_PROXY_EXE` can't be pointed elsewhere, since
 nixpak's wrapper sets it at build time.
 
-The proxy takes the argv subset nixpak passes: the bus address and the path to listen on, `--fd`, `--filter`, `--see`,
-`--talk`, `--own`, `--call` and `--broadcast`, with xdg-dbus-proxy's meaning (`[METHOD][@PATH]`, the path with an
-optional `/*`). It does SASL toward both sides, passes file descriptors, tracks unique and well-known names, lets
+The proxy takes the bus address and the path to listen on, `--fd` and `--filter` as nixpak passes them, and its rules
+from `--config=<file>`, which the module passes through nixpak's `dbus.args` and nothing else; nixpak's own
+`dbus.policies` and `dbus.rules` stay empty (the module asserts it), so xdg-dbus-proxy's rule flags never reach the
+proxy, which refuses them. The config is the module's `dbus` option without what's unset, an object of well-known names:
+
+```json
+{
+  "org.freedesktop.portal.Desktop": {
+    "call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"],
+    "broadcast": ["org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"]
+  },
+  "org.freedesktop.StatusNotifierItem-100-1": { "policy": "own" }
+}
+```
+
+Each name has a `policy` (`see`, `talk` or `own`, as xdg-dbus-proxy's), `call` and `broadcast` rules, or both. A rule is
+`[METHOD][@PATH]`, not empty: METHOD `*`, `IFACE.*` or `IFACE.MEMBER` (split at the last dot, as xdg-dbus-proxy does, so
+`org.foo.Bar` is member `Bar` of `org.foo`), PATH an object path, one ending in `/*` for it and its subtree, or `/*` for
+any. The proxy reads it strictly and refuses to start on anything else: a name that isn't well-known or is the bus
+driver's, a key twice, a field it doesn't know (in any case: encoding/json would take `Policy` for `policy`), a null, a
+name with neither policy nor rule, data after the object, and more than 64 KiB, 64 names or 64 rules in a list.
+`internal/spec` holds a model of the format, which the decoder's property test is held against.
+
+It does SASL toward both sides, passes file descriptors, tracks unique and well-known names, lets
 replies through to calls it let through, and filters match rules. It refuses what would let a client read traffic not
 addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those are the static rules, the ones the
 Overview lists.
@@ -512,7 +535,7 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
 - `--filter` is required (nixpak and `bwrap-subid.sh` always pass it): there is no mode that passes everything.
   Monitoring and eavesdropping are refused whatever the rules, and an `AddMatch` without an interface counts.
-- Names in `--see`/`--talk`/`--own`/`--call`/`--broadcast` are exact: xdg-dbus-proxy's `.*` wildcards are refused,
+- Names in the config are exact: xdg-dbus-proxy's `.*` wildcards are refused,
   so the proxy never lists the bus's names to find their owners. After `Hello` the client's next message waits until
   the proxy knows the owners of the names the rules mention, so a call by an owner's unique name right away passes.
 - Names and rule paths must be valid; a unique name that leaves
@@ -522,8 +545,8 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   client's share and a budget for the whole proxy (128 MiB, half the soft `RLIMIT_NOFILE`); a client that would go
   over is disconnected. Out of file descriptors, the proxy waits and accepts again.
 
-Kept for compatibility: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a `--call` or
-`--broadcast` rule lets every broadcast of the name through (the module's rules rely on it).
+Kept from xdg-dbus-proxy: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a call or
+broadcast rule lets every broadcast of the name through (the module's rules rely on it).
 
 #### Live rules and the system bus (not built: removed 2026-11-04 until a capability needs it)
 
@@ -584,7 +607,7 @@ permissions.dbus.timedate = {
 ```
 
 `see`, `talk` and `own` are lists of names, `call` and `broadcast` attribute sets of rule lists by name, as nixpak's
-`dbus.rules`. Names are exact: the proxy takes no `.*` wildcards, in live sets or on its command line. A grant adds its rule set under the grant's id; a revoke removes it. Either
+`dbus.rules`. Names are exact: the proxy takes no `.*` wildcards, in live sets or in its config. A grant adds its rule set under the grant's id; a revoke removes it. Either
 applies from the next message the proxy reads: the client's reader first looks up who owns the names the set mentions
 (as after `Hello`) and holds that message until the bus answered, so a call by the owner's unique name passes too. A revoke also closes every client connection that sent or received a message under the rule set: that drops
 its names, match rules and exported objects on the bus, which a removed rule alone would leave. The client sees its
@@ -838,7 +861,7 @@ settings and nixpak's, and the daemon passes it on unchanged as `overview` in co
 
 - `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
 - `devices`: from `devices` and `kvm`, each bound if present;
-- `dbus`: the proxy's policies and its call and broadcast rules;
+- `dbus`: the proxy's config, by name its policy and its call and broadcast rules;
 - `network`: its own network namespace with a macvlan on the LAN, which the module always sets up;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
@@ -1028,3 +1051,10 @@ Each can be revisited.
     D-Bus use is nixpak's static config. The proxy keeps its static rules; the live layer (the control socket, live sets
     in the judge, `permissions.dbus`, the system-bus proxy and `/run/dbus`) goes, and decisions 11, 15, 32 and 38 to 42
     describe the design, not what's built. The broker's `dbus` kind goes in a later commit.
+44. The proxy's static rules come from a JSON config (2026-11-04), read token by token so that a key twice or in
+    another case is refused, rather than with encoding/json's struct decoding alone. The format takes less than
+    xdg-dbus-proxy's argv did: no empty rule, no `@` without a path, no `//*`, no METHOD other than `*`, `IFACE.*` and
+    `IFACE.MEMBER`, no rule for the bus driver, and `--config` is required. The module checks the names and that each
+    has a policy or a rule; the rules' syntax is the proxy's to check, at launch. nixpak's `.flatpak-info` loses its
+    `[Session Bus Policy]` (the tray item's `own`), which it filled from `dbus.policies`: the VM test's portal,
+    notification and tray checks pass without it.

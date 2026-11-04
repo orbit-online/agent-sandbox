@@ -10,7 +10,7 @@ import (
 // NameOwnerChanged reaches the client for names it may see, and for their owner's unique name when it leaves
 func TestNameOwnerChanged(t *testing.T) {
 	bus := startBus(t)
-	c := connect(t, startProxy(t, bus, "--see=org.test.Seen"))
+	c := connect(t, startProxy(t, bus, policy("org.test.Seen", "see")))
 	got := signals(c, 500*time.Millisecond)
 	if err := c.AddMatchSignal(dbus.WithMatchSender(busName), dbus.WithMatchMember("NameOwnerChanged")); err != nil {
 		t.Fatal(err)

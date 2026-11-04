@@ -17,7 +17,7 @@ import (
 func TestLibdbusClient(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr := startProxy(t, bus, "--talk="+svcName)
+	addr := startProxy(t, bus, policy(svcName, "talk"))
 	out, err := exec.Command("dbus-send", "--bus="+addr, "--print-reply", "--dest="+svcName, "/org/test",
 		svcIface+".Echo", "string:from-libdbus").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "from-libdbus") {

@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Started as nixpak starts it (--fd=3 first, the rules, --filter last), the proxy writes a byte to the fd once it
-// listens and exits when the other end closes, removing its socket
+// Started as nixpak starts it (--fd=3 first, the module's --config, --filter last), the proxy writes a byte to the fd
+// once it listens and exits when the other end closes, removing its socket
 func TestSyncFD(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
@@ -20,7 +20,8 @@ func TestSyncFD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "--fd=3", bus, sock, "--talk="+svcName, "--call=org.test.X=*", "--filter")
+	cfg := configFile(t, policy(svcName, "talk"), ruled("org.test.X", "call", "*"))
+	cmd := exec.Command(os.Args[0], "--fd=3", bus, sock, "--config="+cfg, "--filter")
 	cmd.Env = append(os.Environ(), "DBUS_PROXY_MAIN=1")
 	cmd.ExtraFiles = []*os.File{w}
 	cmd.Stderr = os.Stderr
@@ -55,20 +56,26 @@ func TestSyncFD(t *testing.T) {
 	}
 }
 
-// Arguments the proxy doesn't take are refused, as are invalid names and rules
+// Arguments the proxy doesn't take are refused, xdg-dbus-proxy's rule flags among them, as are a config missing or
+// invalid (the rules package's tests have the rest)
 func TestBadArguments(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "proxy")
+	cfg := "--config=" + configFile(t, policy("org.test.X", "talk"))
+	bad := func(entries ...string) string { return "--config=" + configFile(t, entries...) }
 	for _, args := range [][]string{
-		{"unix:path=/x", sock, "--filter", "--sloppy-names"},
-		{"unix:path=/x", sock, "--filter", "--talk=:1.2"},
-		{"unix:path=/x", sock, "--filter", "--talk=nodots"},
-		{"unix:path=/x", sock, "--filter", "--talk=org.test.X.*"},
-		{"unix:path=/x", sock, "--filter", "--call=org.test.X.*=*"},
-		{"unix:path=/x", sock, "--filter", "--call=org.test.X"},
-		{"unix:path=/x", sock, "--filter", "--call=org.test.X=*@bad"},
-		{"tcp:host=localhost", sock, "--filter"},
+		{"unix:path=/x", sock, cfg, "--filter", "--sloppy-names"},
+		{"unix:path=/x", sock, cfg, "--filter", "--talk=org.test.X"},
+		{"unix:path=/x", sock, cfg, "--filter", "--call=org.test.X=*"},
+		{"unix:path=/x", sock, "--filter"},
+		{"unix:path=/x", sock, "--config=" + filepath.Join(t.TempDir(), "none.json"), "--filter"},
+		{"unix:path=/x", sock, bad(policy(":1.2", "talk")), "--filter"},
+		{"unix:path=/x", sock, bad(policy("org.test.X.*", "talk")), "--filter"},
+		{"unix:path=/x", sock, bad(policy("org.test.X", "all")), "--filter"},
+		{"unix:path=/x", sock, bad(ruled("org.test.X", "call", "*@bad")), "--filter"},
+		{"unix:path=/x", sock, bad(`"org.test.X": {"policy": "talk", "own": true}`), "--filter"},
+		{"tcp:host=localhost", sock, cfg, "--filter"},
 		// Without --filter xdg-dbus-proxy passes everything; this proxy always filters
-		{"unix:path=/x", sock, "--talk=org.test.X"},
+		{"unix:path=/x", sock, cfg},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

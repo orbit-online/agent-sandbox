@@ -26,11 +26,11 @@ func TestHidden(t *testing.T) {
 	wantErr(t, "GetNameOwner of a hidden name", err, errNameHasNoOwner)
 }
 
-// --see makes a name visible but no more: a call to it is denied rather than unknown
+// see makes a name visible but no more: a call to it is denied rather than unknown
 func TestSee(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--see="+svcName))
+	c := connect(t, startProxy(t, bus, policy(svcName, "see")))
 	if !hasOwner(t, c, svcName) {
 		t.Error("NameHasOwner false for a name the client may see")
 	}
@@ -44,11 +44,11 @@ func TestSee(t *testing.T) {
 	wantErr(t, "call to a seen name", err, errAccessDenied)
 }
 
-// --talk lets any call through, and its reply back; by the owner's unique name too
+// talk lets any call through, and its reply back; by the owner's unique name too
 func TestTalk(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--talk="+svcName))
+	c := connect(t, startProxy(t, bus, policy(svcName, "talk")))
 	var s string
 	for _, dest := range []string{svcName, svc.Names()[0]} {
 		for _, p := range []dbus.ObjectPath{"/org/test", "/other"} {
@@ -66,10 +66,10 @@ func TestTalk(t *testing.T) {
 	wantErr(t, "RequestName without own", err, errServiceUnknown)
 }
 
-// --own lets the client take a name, and only that one
+// own lets the client take a name, and only that one
 func TestOwn(t *testing.T) {
 	bus := startBus(t)
-	c := connect(t, startProxy(t, bus, "--own=org.test.Mine", "--see=org.test.Seen"))
+	c := connect(t, startProxy(t, bus, policy("org.test.Mine", "own"), policy("org.test.Seen", "see")))
 	r, err := c.RequestName("org.test.Mine", dbus.NameFlagDoNotQueue)
 	if err != nil || r != dbus.RequestNameReplyPrimaryOwner {
 		t.Fatalf("RequestName of an owned name: %v %v", r, err)

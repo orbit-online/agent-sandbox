@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docopt/docopt-go"
 	"github.com/godbus/dbus/v5"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
@@ -76,7 +75,7 @@ type world struct {
 	callToks map[string]string
 }
 
-func newWorld(t *rapid.T) *world {
+func newWorld(t *rapid.T, cfg []byte) *world {
 	dir, err := os.MkdirTemp("", "proxy-machine")
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +83,7 @@ func newWorld(t *rapid.T) *world {
 	w := &world{t: t, dir: dir, roles: map[string]string{}, callToks: map[string]string{}}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	w.startBus()
-	w.startProxy()
+	w.startProxy(cfg)
 	w.obs = w.direct("obs")
 	for i := range 2 {
 		w.svcs = append(w.svcs, w.direct(fmt.Sprintf("svc%d", i)))
@@ -120,14 +119,14 @@ func (w *world) startBus() {
 	w.bus = "unix:path=" + sock
 }
 
-// The proxy, in the test's process, with the static rules
-func (w *world) startProxy() {
+// The proxy, in the test's process, with the config cfg loaded as main loads it
+func (w *world) startProxy(cfg []byte) {
 	sock := filepath.Join(w.dir, "proxy")
-	opts, err := docopt.ParseArgs(usage, append([]string{w.bus, sock, "--filter"}, staticArgs...), "")
-	if err != nil {
+	file := filepath.Join(w.dir, "config.json")
+	if err := os.WriteFile(file, cfg, 0o600); err != nil {
 		w.t.Fatal(err)
 	}
-	rs, err := parseRules(opts)
+	rs, err := rules.Load(file)
 	if err != nil {
 		w.t.Fatal(err)
 	}

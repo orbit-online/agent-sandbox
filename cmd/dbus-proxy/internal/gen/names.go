@@ -1,7 +1,7 @@
 // Package gen generates D-Bus input for the proxy's property tests from the specification's grammar, valid and
 // invalid alike: names, signatures, header fields, bodies, whole messages and byte-level mutations of them, SASL
-// lines and live rule sets. Valid input leans to the unusual (long names, deep signatures, odd paths); invalid input
-// is mostly near misses of the grammar. What's valid is for internal/spec to decide, not the generator: the labels
+// lines and the proxy's configs. Valid input leans to the unusual (long names, deep signatures, odd paths); invalid
+// input is mostly near misses of the grammar. What's valid is for internal/spec to decide, not the generator: the labels
 // here only steer the mix
 package gen
 

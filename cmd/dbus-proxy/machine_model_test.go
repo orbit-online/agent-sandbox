@@ -6,14 +6,16 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/gen"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
+	"pgregory.net/rapid"
 )
 
 // The state machine's reference model (machine_test.go): what each client may see and send under the rules,
-// models/proxy.als's state. Unique names are the parties' roles (svc0, c1), well-known
-// names have dots. The rule matching itself is rules.go's, which rules_test.go checks against xdg-dbus-proxy's
-// semantics; the model owns everything that changes over time: the sets in force, the names each client's proxy
-// learned, pending calls both ways, the bus's owners and match rules.
+// models/proxy.als's state. Unique names are the parties' roles (svc0, c1), well-known names have dots. The rule
+// matching itself is internal/rules', which its tests check against internal/spec's model of the config; the model
+// owns everything that changes over time: the names each client's proxy learned, pending calls both ways, the bus's
+// owners and match rules.
 
 const (
 	lazyName  = "org.test.Lazy"
@@ -22,9 +24,10 @@ const (
 	pingMatch = "type='signal',interface='org.test.Sig',member='Ping'"
 )
 
-// The proxy's command line in the machine's world
-var staticArgs = []string{"--talk=org.test.Talk", "--call=org.test.Call=org.test.Iface.Echo@/org/test",
-	"--see=org.test.See", "--talk=" + lazyName, "--own=org.test.Own"}
+// The proxy's configs in the machine's world, from internal/gen: the world's names, paths, interfaces and members
+var configNames = gen.ConfigNames{Name: rapid.SampledFrom(allNames),
+	Path: rapid.SampledFrom([]string{"/org/test", "/org", "/"}), Iface: rapid.SampledFrom([]string{svcIface, sigIface,
+		"org.test"}), Member: rapid.SampledFrom([]string{"Echo", "Other", "Ping", "Iface"})}
 
 // Names services take, names clients ask for, and every name a call may go to
 var (
@@ -92,22 +95,9 @@ type model struct {
 	want map[string][]string
 }
 
-func newModel() *model {
-	var a rules.Args
-	for _, arg := range staticArgs {
-		flag, v, _ := strings.Cut(arg, "=")
-		switch flag {
-		case "--talk":
-			a.Talk = append(a.Talk, v)
-		case "--see":
-			a.See = append(a.See, v)
-		case "--own":
-			a.Own = append(a.Own, v)
-		case "--call":
-			a.Call = append(a.Call, v)
-		}
-	}
-	rs, err := rules.Parse(a)
+// The model of a proxy with the config cfg
+func newModel(cfg []byte) *model {
+	rs, err := rules.Decode(cfg)
 	if err != nil {
 		panic(err)
 	}

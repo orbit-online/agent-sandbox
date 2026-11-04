@@ -12,7 +12,7 @@ import (
 func TestReply(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--talk="+svcName))
+	c := connect(t, startProxy(t, bus, policy(svcName, "talk")))
 	r, err := call(c, svcName, "/org/test", svcIface+".Echo", "back")
 	var s string
 	if err != nil || r.Store(&s) != nil || s != "back" {

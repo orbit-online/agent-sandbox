@@ -30,3 +30,29 @@ func TestGeneratorsAgainstSpec(t *testing.T) {
 		}
 	})
 }
+
+// A config without misses from valid names is valid by the specification's model, and the near misses are mostly
+// refused
+func TestConfigAgainstSpec(t *testing.T) {
+	valid := ConfigNames{Name: WellKnownName().Filter(spec.WellKnownName), Path: ObjectPath().Filter(spec.Path),
+		Iface: InterfaceName().Filter(spec.Interface), Member: MemberName().Filter(spec.Member)}
+	refused, n := 0, 0
+	rapid.Check(t, func(t *rapid.T) {
+		if data := Config(valid, false).Draw(t, "valid"); !configOK(data) {
+			t.Fatalf("Valid config refused: %s", data)
+		}
+		if data := Config(valid, true).Draw(t, "any"); !configOK(data) {
+			refused++
+		}
+		n++
+	})
+	// A third are near misses, and a few of those (64 names or rules, whitespace short of the cap) are valid
+	if refused < n/5 || refused > n/2 {
+		t.Errorf("%d of %d configs refused", refused, n)
+	}
+}
+
+func configOK(data []byte) bool {
+	_, err := spec.ParseConfig(data)
+	return err == nil
+}

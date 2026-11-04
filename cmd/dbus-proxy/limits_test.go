@@ -37,7 +37,7 @@ func silentService(t *testing.T, bus string) {
 func TestPendingReplyCaps(t *testing.T) {
 	bus := startBus(t)
 	silentService(t, bus)
-	addr := startProxy(t, bus, "--talk="+svcName)
+	addr := startProxy(t, bus, policy(svcName, "talk"))
 	rc := rawConnect(t, addr)
 	var buf []byte
 	for i := 0; i <= judge.MaxPendingReplies; i++ {
@@ -63,7 +63,7 @@ func TestPendingReplyCaps(t *testing.T) {
 func TestMemoryBudget(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr := startProxyWith(t, bus, func(p *Proxy) { p.budget.MaxBytes = 1 << 20 }, "--talk="+svcName)
+	addr := startProxyWith(t, bus, func(p *Proxy) { p.budget.MaxBytes = 1 << 20 }, policy(svcName, "talk"))
 	rc := rawConnect(t, addr)
 	big := echoTo(svcName)
 	big.Body = []any{strings.Repeat("x", 2<<20)}
@@ -128,7 +128,8 @@ func TestAcceptEMFILE(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "proxy")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], bus, sock, "--filter", "--talk="+svcName)
+	cmd := exec.CommandContext(ctx, os.Args[0], bus, sock, "--filter",
+		"--config="+configFile(t, policy(svcName, "talk")))
 	cmd.Env = append(os.Environ(), "DBUS_PROXY_MAIN=1", "DBUS_PROXY_NOFILE=40")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

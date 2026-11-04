@@ -51,7 +51,7 @@ func driverCall(t *testing.T, serial uint32, iface, member string, args ...any) 
 // sets the environment, LD_PRELOAD included, of every service the bus activates later, and the rest of the driver's
 // interface may grow. Whatever the rules: a client with talk on everything it names
 func TestBusDriverDefaultDeny(t *testing.T) {
-	rs, err := rules.Parse(rules.Args{Own: []string{"org.test.A"}})
+	rs, err := rules.Decode([]byte(`{"org.test.A": {"policy": "own"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestMonitoringGuard(t *testing.T) {
 
 // The bus's Introspectable interface passes, whatever the member
 func TestBusIntrospectable(t *testing.T) {
-	j := testJudge(t)
+	j := testJudge(t, `{}`)
 	if got := refusal(t, j, driverCall(t, 10, "org.freedesktop.DBus.Introspectable", "Introspect")); got != "" {
 		t.Errorf("Introspect refused: %q", got)
 	}
@@ -99,7 +99,7 @@ func TestBusIntrospectable(t *testing.T) {
 // decoding (decoded, its half a million strings would cost as many allocations), and one whose rule is a string past
 // the cap is refused unread, though the rule itself asks for nothing
 func TestInspectCap(t *testing.T) {
-	j := testJudge(t)
+	j := testJudge(t, `{}`)
 	big := make([]string, (wire.MaxMessageSize-1024)/8)
 	m := driverCall(t, 10, busIface, "AddMatch", big)
 	if allocs := testing.AllocsPerRun(1, func() { m.DecodeBody(maxInspectBody); arg0(m) }); allocs > 100 {

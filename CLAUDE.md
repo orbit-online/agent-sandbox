@@ -55,15 +55,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
   and the FHS env run, maps the user's subuid range in and starts it.
 - `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
-  (`docs/permissions.md`, D-Bus), taking the subset of its arguments nixpak
-  passes (`dbus-proxy --help`). The module hands it to nixpak as
+  (`docs/permissions.md`, D-Bus), taking nixpak's argv and its rules from a
+  JSON config, the module's `dbus` option, which the module passes as
+  `--config` through nixpak's `dbus.args` (`dbus-proxy --help`). The module hands it to nixpak as
   `pkgs.xdg-dbus-proxy` (the package links `bin/xdg-dbus-proxy` to it), so
   nixpak's launcher starts it as the session-bus proxy. Its packages in
   `cmd/dbus-proxy/internal/`, each auditable on its own: `wire` (reading
   messages and their file descriptors, bounded, parsing the header, decoding a
   body where needed, encoding, each side's write queue, and the budget of bytes
   and file descriptors the clients share), `sasl` (SASL toward both sides),
-  `rules` (rule sets from the command line, xdg-dbus-proxy's matching, the
+  `rules` (the config, decoded strictly, xdg-dbus-proxy's matching, the
   lookup of a name in the rules) and `judge` (one connection's state and its
   verdict on each message each way, without I/O: forward, drop or replace,
   and the proxy's own calls to the bus, the hold after Hello; one mutex over
@@ -73,8 +74,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   and `address.go` (bus addresses). Two packages for the tests only:
   `spec` (a model of the D-Bus specification written from it alone: names,
   signatures, a message's header and body, the SASL server, and the proxy's
-  documented rules and verdicts on top) and `gen` (rapid generators from the
-  specification's grammar, valid and near misses, and byte-level mutations).
+  documented rules, config and verdicts on top) and `gen` (rapid generators from the
+  specification's grammar and of configs, valid and near misses, and byte-level mutations).
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
@@ -204,7 +205,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   broker, of a host command or host socket it has, none of folders), the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
-  glob that could match one),
+  glob that could match one), the `dbus` defaults (the portal's, with `tray` the tray item's name at the
+  launcher's pid and the watcher's, the user's rules merged in), the assertions on D-Bus rules (`sandbox`
+  setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing),
   and the assertion on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.
@@ -216,7 +219,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
   refused), nixpak's D-Bus proxy wrapper running our `dbus-proxy` (no
-  xdg-dbus-proxy in the closure), and nixpak's
+  xdg-dbus-proxy in the closure) with the bus address, the socket, `--config` and `--filter` as its argv for
+  both launchers, work's config the portal's rules alone and its overview the same, and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
   the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
@@ -231,7 +235,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   import, its pointer to memo, the store and memo's config in the FHS env,
   the store right after the embedded ones), its permissions broker (the
   read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; no
-  `/run/dbus`, `--control` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
+  `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, which the default launcher lacks, no `claude://`
   handler, `StartupWMClass` matching the `desktopName` its asar gets, which
   the default launcher's keeps from upstream).
@@ -249,15 +253,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   `internal/` packages with `-race`. Package main's go end to end, against a `dbus-daemon` of the test's that allows unrequested
   replies and eavesdropping (each test's control shows the proxy refusing
   what the bus would pass): a hidden name (not listed, no owner, a call unknown),
-  `--see` (visible, a call denied), `--talk` (any call and its reply, by the
-  owner's unique name too), `--own`, `--call` rules (method and path, an interface on a `/*`
-  subtree, `@/*`, `*`), `--broadcast` (none without a rule or with `--see`,
+  `see` (visible, a call denied), `talk` (any call and its reply, by the
+  owner's unique name too), `own`, call rules (method and path, an interface on a `/*`
+  subtree, `@/*`, `*`), broadcast rules (none without a rule or with `see`,
   and xdg-dbus-proxy's quirk of passing all of a ruled name's broadcasts),
   replies (let through to calls let through, refused unasked both ways, a call
   carrying a pending reply serial refused), NameOwnerChanged by policy,
   `BecomeMonitor` and eavesdropping match rules refused, file descriptors
   both ways, `--fd` (the byte, exit and the socket removed when it closes, as
-  nixpak starts it), bad arguments refused (`--filter` missing too), libdbus's `dbus-send` as a
+  nixpak starts it, with a config file), bad arguments refused (xdg-dbus-proxy's rule flags, `--config`
+  missing, unreadable or invalid, `--filter` missing), libdbus's `dbus-send` as a
   client, sd-bus's pipelined SASL, an oversized message; through a client
   speaking the wire itself (`raw_test.go`, `guards_test.go`): a serial reused while pending and
   a second Hello, serials 0 and past the client's range, file descriptors
@@ -271,7 +276,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   running out of file descriptors (the test binary as the proxy, with a low
   `RLIMIT_NOFILE`); and bus addresses. A stateful
   property test (`machine*_test.go`, `pgregory.net/rapid`) runs random sequences of `models/proxy.als`'s actions
-  against the proxy with static rules, between a `dbus-daemon` of its own (with an activatable
+  against the proxy with a config generated for each sequence from the world's names, paths, interfaces and members
+  (`internal/gen`, valid by `spec.ParseConfig`, loaded from a file as `main` loads it), between a `dbus-daemon` of its own (with an activatable
   name whose start stays pending until someone takes the name: the test binary as `DBUS_PROXY_LAZY`), two services
   straight on the bus and up to three clients speaking the wire: clients connecting, saying Hello (twice) and hanging
   up, calls to names allowed and hidden and to unique names with fresh, reused and forged serials (and a call
@@ -293,14 +299,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   IsValid and padding checks, the encode and decode caps; serial 0, file descriptors per message,
   pending and claimed, bodies left undecoded, the budget, and what readers and senders hold of it), `sasl` (`Serve`
   on a socket pair: EXTERNAL accepted with and without an initial response, file descriptors as negotiated,
-  refusals, the command and line caps; `TestSASLAgainstSpec`, generated input against `spec.SASLServer`), `rules` (the rule parser, wildcards refused, the lookup), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
+  refusals, the command and line caps; `TestSASLAgainstSpec`, generated input against `spec.SASLServer`), `rules` (rules parsed as xdg-dbus-proxy's, the lookup, configs refused by
+  example, and `TestConfigAgainstSpec`: 3000 generated configs, valid and near misses, taken exactly when
+  `spec.ParseConfig` takes them, then each name's policy, calls and broadcasts the model's), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
   forgotten, a reply only to its caller; the eavesdrop match, the bounded name and owned-name tables; the bus
   driver's default refusal, the monitoring guard on its own, Introspectable passing, the 4 KiB inspection cap; and a
   stateful property test, `machine_test.go`, that drives one connection's judge with the bus as a queue answered in
-  order, checking D1 and D2 after every step, with generated messages (`machine_gen_test.go`: grammar names and
+  order, with a config generated for each sequence, checking D1 and D2 after every step by `spec`'s model of it, with generated messages (`machine_gen_test.go`: grammar names and
   bodies, any bus driver method, mutations) judged against `spec.ProxyVerdict` down to the refusal's error name, 1000
   sequences in about a second; more with `-rapid.checks=20000 -rapid.steps=100`), `spec` (the specification's own
-  examples) and `gen` (what it means valid is, by `spec`).
+  examples) and `gen` (what it means valid is, by `spec`, configs too).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations (one past what a duration holds refused), parameter validation, consent (denied, allowed, a live grant
   covering the same request only, by value: keys in any order, -0 for 0), the requests the state machines once

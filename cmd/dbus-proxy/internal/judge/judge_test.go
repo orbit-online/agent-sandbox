@@ -8,10 +8,10 @@ import (
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
-// A connection's state alone, for what a real bus won't let a test arrange
-func testJudge(t *testing.T, args ...string) *Judge {
+// A connection's state alone, for what a real bus won't let a test arrange, with a config
+func testJudge(t *testing.T, config string) *Judge {
 	t.Helper()
-	rs, err := rules.Parse(rules.Args{See: args})
+	rs, err := rules.Decode([]byte(config))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func fakeMessage(t *testing.T, typ dbus.Type, serial uint32, headers map[dbus.He
 // A reply to a call to the bus is taken only from the bus: a peer's, with the serial of the client's pending
 // GetNameOwner, is dropped and the call stays pending
 func TestBusReplyOnlyFromBus(t *testing.T) {
-	j := testJudge(t)
+	j := testJudge(t, `{}`)
 	j.awaitBus[7] = expect{kind: expectHello, fromBus: true}
 	forged := fakeMessage(t, dbus.TypeMethodReply, 9, map[dbus.HeaderField]any{
 		dbus.FieldReplySerial: uint32(7), dbus.FieldSender: ":1.66"}, ":1.66")
@@ -64,7 +64,7 @@ func TestBusReplyOnlyFromBus(t *testing.T) {
 
 // A unique name the client may see is forgotten once it leaves the bus
 func TestForgetLeftName(t *testing.T) {
-	j := testJudge(t, "org.test.Seen")
+	j := testJudge(t, `{"org.test.Seen": {"policy": "see"}}`)
 	if err := j.names.addOwned(":1.5", "org.test.Seen"); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestForgetLeftName(t *testing.T) {
 
 // The client's reply goes only to the caller that's waiting for it
 func TestReplyToCaller(t *testing.T) {
-	j := testJudge(t)
+	j := testJudge(t, `{}`)
 	j.awaitPeer[peerCall{":1.7", 4}] = struct{}{}
 	for _, dest := range []string{":1.8", ""} {
 		h := map[dbus.HeaderField]any{dbus.FieldReplySerial: uint32(4), dbus.FieldDestination: dest}

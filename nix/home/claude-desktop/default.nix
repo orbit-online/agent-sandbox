@@ -419,6 +419,41 @@ let
       default = false;
       description = "Show a tray icon. Closing the window then hides the app instead of quitting it.";
     };
+    dbus = mkOption {
+      type = types.attrsOf (
+        types.submodule {
+          options = {
+            policy = mkOption {
+              type = types.nullOr (
+                types.enum [
+                  "see"
+                  "talk"
+                  "own"
+                ]
+              );
+              default = null;
+              description = "`see`: the name is visible. `talk`: any call to it and all its signals. `own`: the app may take the name.";
+            };
+            call = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              description = "Calls the app may make, each `[METHOD][@PATH]`: METHOD `*`, `IFACE.*` or `IFACE.MEMBER`, PATH an object path, ending in `/*` for its subtree too.";
+            };
+            broadcast = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              description = "Broadcasts the app gets, as `call`.";
+            };
+          };
+        }
+      );
+      defaultText = lib.literalMD "the portal's OpenURI, Settings and Notification, and with `tray` the tray's registration and the tray item's name";
+      description = ''
+        What the app reaches on the session bus through the D-Bus proxy (`dbus-proxy --help`), by well-known name,
+        exact: a policy, call and broadcast rules, or both. Any rule also makes the name visible and passes all its
+        signals. Talk reaches every object the name's owner exports, so prefer call rules.
+      '';
+    };
     extraPath = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -725,6 +760,36 @@ let
         "${config.home.homeDirectory}/.config/agent-memos/config.yaml".source = memoConfig;
         "/etc/claude/environment.memo".source = "${environment}/environment.memo";
       };
+      # Calls only, never "talk": the proxy filters by name, and talk reaches every object the name's owner exports
+      # (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see the name and
+      # get replies and the owner's signals (the proxy passes a name's broadcasts once it has any rule, and signals
+      # sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the owner's unique name
+      # against the rules of every name it holds, so no other name may get talk where one of these owners holds it. No
+      # org.freedesktop.Notifications: notifications go through the portal, which keys them by app ID, so the app
+      # can't replace or close another's (the permissions broker's), nor reach plasmashell
+      dbus = lib.mkMerge [
+        {
+          "org.freedesktop.portal.Desktop" = {
+            call = [
+              "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
+              "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
+              # libnotify with NOTIFY_FORCE_PORTAL; its GDBusProxy loads the interface's version with GetAll
+              "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
+              "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
+            ];
+            broadcast = [ "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop" ];
+          };
+        }
+        (lib.mkIf lcfg.tray {
+          # Chromium names it StatusNotifierItem-<pid>-<n>
+          "org.freedesktop.StatusNotifierItem-${toString (appPidOf name)}-1".policy = "own";
+          # What Chromium's StatusIconLinuxDbus calls
+          "org.kde.StatusNotifierWatcher".call = [
+            "org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem@/StatusNotifierWatcher"
+            "org.freedesktop.DBus.Properties.Get@/StatusNotifierWatcher"
+          ];
+        })
+      ];
     };
 
   # What one launcher builds from its settings, lcfg. name is null for the default launcher
@@ -736,6 +801,9 @@ let
       desktopFile = "claude-desktop${suffix}.desktop";
       stateDir = stateDirOf name;
       appPid = appPidOf name;
+      # The D-Bus proxy's config (dbus-proxy --help): dbus without what's unset
+      dbusRules = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null && v != [ ])) lcfg.dbus;
+      dbusArgs = [ "--config=${pkgs.writeText "dbus-proxy${suffix}.json" (builtins.toJSON dbusRules)}" ];
       bwrapHome = "${stateDir}/home";
       scratchpad = "${stateDir}/tmp-scratchpad";
       sandboxPackages = sandboxPackagesOf lcfg;
@@ -1015,37 +1083,9 @@ let
             # The wrapper finds its running sandbox by it
             flatpak.appId = lib.mkIf (name != null) "com.nixpak.ClaudeDesktop.${name}";
             app.package = package;
-            dbus.policies = lib.optionalAttrs lcfg.tray {
-              # Chromium names it StatusNotifierItem-<pid>-<n>
-              "org.freedesktop.StatusNotifierItem-${toString appPid}-1" = "own";
-            };
-            # Calls only, never "talk": the proxy filters by name, and talk reaches every object the name's owner
-            # exports (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see
-            # the name and get replies and the owner's signals (the proxy passes a name's broadcasts once it has any
-            # rule, and signals sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the
-            # owner's unique name against the rules of every name it holds, so no other name may get talk where one of
-            # these owners holds it. No org.freedesktop.Notifications: notifications go through the portal, which
-            # keys them by app ID, so the app can't replace or close another's (the permissions broker's), nor reach
-            # plasmashell
-            dbus.rules.call = {
-              "org.freedesktop.portal.Desktop" = [
-                "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
-                "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
-                # libnotify with NOTIFY_FORCE_PORTAL; its GDBusProxy loads the interface's version with GetAll
-                "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
-                "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
-              ];
-            }
-            // lib.optionalAttrs lcfg.tray {
-              # What Chromium's StatusIconLinuxDbus calls
-              "org.kde.StatusNotifierWatcher" = [
-                "org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem@/StatusNotifierWatcher"
-                "org.freedesktop.DBus.Properties.Get@/StatusNotifierWatcher"
-              ];
-            };
-            dbus.rules.broadcast."org.freedesktop.portal.Desktop" = [
-              "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
-            ];
+            # The proxy's rules, from dbus; nixpak's dbus.policies and dbus.rules would be its argv rules, which it
+            # doesn't take
+            dbus.args = dbusArgs;
             gpu = {
               enable = true;
               # Not "nixos": /run/opengl-driver links into the system closure
@@ -1153,10 +1193,7 @@ let
                 )
               );
               inherit devices;
-              dbus = {
-                inherit (nixpak.dbus) policies;
-                inherit (nixpak.dbus.rules) call broadcast;
-              };
+              dbus = dbusRules;
               network = "Its own network namespace, with a macvlan on the LAN that gets its address by DHCP: no host-only services, routes or abstract sockets";
               implicit =
                 lib.optional (socketsOn != [ ]) "Sockets: ${lib.concatMapStringsSep ", " (s: sockets.${s} or s) socketsOn}"
@@ -1335,7 +1372,12 @@ let
       };
     in
     {
-      inherit sandboxed netSetup claude-desktop;
+      inherit
+        sandboxed
+        netSetup
+        dbusArgs
+        claude-desktop
+        ;
     };
   # Whether path a is path b or holds it
   holds = a: b: a == b || lib.hasPrefix "${lib.removeSuffix "/" a}/" b;
@@ -1433,7 +1475,24 @@ in
               && l.sandboxed.config.pasta.package == l.netSetup;
             message = "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; ${opt} must not change bubblewrap.network or pasta";
           }
+          {
+            assertion =
+              let
+                d = l.sandboxed.config.dbus;
+              in
+              d.policies == { } && d.rules.call == { } && d.rules.broadcast == { } && d.args == l.dbusArgs;
+            message = "agent-sandbox.claude-desktop: ${opt} must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in ${lib.optionalString (name != "") "launchers.${name}."}dbus";
+          }
         ]
+        ++ lib.mapAttrsToList (n: r: {
+          # The rest the proxy checks when it starts
+          assertion =
+            lib.stringLength n <= 255
+            && n != "org.freedesktop.DBus"
+            && builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" n != null
+            && (r.policy != null || r.call != [ ] || r.broadcast != [ ]);
+          message = "agent-sandbox.claude-desktop: ${lib.optionalString (name != "") "launchers.${name}."}dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy or a rule";
+        }) (if name == "" then cfg else cfg.launchers.${name}).dbus
         ++ lib.optional (if name == "" then cfg else cfg.launchers.${name}).memo.enable {
           assertion = options ? programs.agent-memos.package && memoCfg.enable;
           message = "agent-sandbox.claude-desktop: ${

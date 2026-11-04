@@ -29,10 +29,11 @@ Item {
                                                    + (b.src && b.src !== b.path ? ", from " + b.src : "")
                                                    + (b.optional ? ", if there" : "") + ")"))
         add("devices", "Devices, if there", o.devices || [])
-        add("dbus", "D-Bus, through the proxy", [].concat(
-            Object.keys(d.policies || {}).map(n => n + ": " + d.policies[n]),
-            Object.keys(d.call || {}).map(n => n + ": calls " + d.call[n].join(", ")),
-            Object.keys(d.broadcast || {}).map(n => n + ": broadcasts " + d.broadcast[n].join(", "))))
+        // The proxy's config: by name, its policy, calls and broadcasts
+        add("dbus", "D-Bus, through the proxy", Object.keys(d).reduce((lines, n) => lines.concat(
+            d[n].policy ? [n + ": " + d[n].policy] : [],
+            (d[n].call || []).length > 0 ? [n + ": calls " + d[n].call.join(", ")] : [],
+            (d[n].broadcast || []).length > 0 ? [n + ": broadcasts " + d[n].broadcast.join(", ")] : []), []))
         add("network", "Network", o.network ? [o.network] : [])
         add("standing", "Standing grants", root.standing.map(g => g.summary + ": "
                                                              + (g.ended ? "ended until the broker starts again"

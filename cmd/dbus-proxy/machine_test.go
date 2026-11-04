@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/gen"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/spec"
 	"pgregory.net/rapid"
 )
 
@@ -57,8 +59,13 @@ type machine struct {
 }
 
 func newMachine(t *rapid.T) *machine {
-	w := newWorld(t)
-	mc := &machine{w: w, m: newModel(), clients: map[string]*party{}}
+	// A config of the world's names, which the specification's model of the config takes
+	cfg := gen.Config(configNames, false).Draw(t, "config")
+	if _, err := spec.ParseConfig(cfg); err != nil {
+		t.Fatalf("Config %s: %v", cfg, err)
+	}
+	w := newWorld(t, cfg)
+	mc := &machine{w: w, m: newModel(cfg), clients: map[string]*party{}}
 	for _, s := range w.svcs {
 		mc.m.svcs[s.role] = &refSvc{role: s.role, out: map[uint32]refCall{}}
 		s.drain()

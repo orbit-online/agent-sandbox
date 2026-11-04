@@ -1,7 +1,6 @@
 package judge
 
 import (
-	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"slices"
 
 	"github.com/godbus/dbus/v5"
@@ -30,15 +29,14 @@ func (v oracleView) Level(name string) spec.Level {
 	case name[0] == ':':
 		return spec.None
 	}
-	return spec.Level(v.m.policy(name))
+	return v.m.cfg.Level(name)
 }
 
 func (v oracleView) Calls(name, path, iface, member string) bool {
 	if name == self {
 		return true
 	}
-	_, fs := v.m.rules.Lookup(name)
-	return rules.AnyMatches(fs, rules.Call, path, iface, member)
+	return v.m.cfg.Calls(name, path, iface, member)
 }
 
 func (v oracleView) Asked(string, uint32) bool   { return false } // No peer calls the client here

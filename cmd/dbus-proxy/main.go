@@ -12,34 +12,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const usage = `dbus-proxy - Filter a sandbox's D-Bus traffic, taking xdg-dbus-proxy's arguments
+const usage = `dbus-proxy - Filter a sandbox's D-Bus traffic by static rules, started as xdg-dbus-proxy
 
 Usage:
-  dbus-proxy [--fd=<fd>] <address> <path> --filter [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
+  dbus-proxy [--fd=<fd>] <address> <path> --config=<file> --filter
   dbus-proxy --help
 
-Listens on <path> and connects each client to the bus at <address>. The subset
-of xdg-dbus-proxy's arguments nixpak passes, with their meaning:
+Listens on <path> and connects each client to the bus at <address>, passing what the rules let through:
 
-  --fd=<fd>             Write a byte to <fd> once listening, exit when it closes
-  --filter              Apply the rules below; required, as nixpak always passes it
-  --see=<name>          Let the client see <name>
-  --talk=<name>         Let the client call and signal <name>
-  --own=<name>          Let the client own <name>
-  --call=<rule>         NAME=[METHOD][@PATH]: calls the client may make to NAME
-  --broadcast=<rule>    NAME=[METHOD][@PATH]: broadcasts it gets from NAME
+  --fd=<fd>          Write a byte to <fd> once listening, exit when it closes
+  --config=<file>    The rules, JSON with an entry per well-known name:
+                       {"<name>": {"policy": "see"|"talk"|"own", "call": [RULE], "broadcast": [RULE]}}
+                     a policy, rules or both. RULE is [METHOD][@PATH]: METHOD "*", "IFACE.*" or
+                     "IFACE.MEMBER", PATH an object path, ending in "/*" for its subtree too
+  --filter           Required, as nixpak always passes it
 
-Names are exact (xdg-dbus-proxy's ".*" wildcards aren't taken); a path may end
-in "/*" for its subtree.
-The client can't monitor the bus or eavesdrop, whatever the rules.
+Names are exact; any rule gives its name talk's visibility and broadcasts. The client can't monitor the bus or
+eavesdrop, whatever the rules (docs/permissions.md, D-Bus).
 `
-
-// The rules from the command line
-func parseRules(opts docopt.Opts) (*rules.Set, error) {
-	arg := func(flag string) []string { a, _ := opts[flag].([]string); return a }
-	return rules.Parse(rules.Args{See: arg("--see"), Talk: arg("--talk"), Own: arg("--own"), Call: arg("--call"),
-		Broadcast: arg("--broadcast")})
-}
 
 // Tells the launcher the proxy is ready, then waits for it to close its end
 func syncFD(fd int) error {
@@ -61,7 +51,8 @@ func syncFD(fd int) error {
 }
 
 func run(opts docopt.Opts) error {
-	rs, err := parseRules(opts)
+	file, _ := opts.String("--config")
+	rs, err := rules.Load(file)
 	if err != nil {
 		return err
 	}

@@ -384,6 +384,78 @@ let
         "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; launchers.work.sandbox must not change bubblewrap.network or pasta"
       ];
     };
+    # The proxy's rules: the portal's, and with a tray its item's name and the watcher's; a launcher's own pid, and
+    # the user's merged in
+    testDbusDefaults = {
+      expr =
+        let
+          c =
+            (nixos (
+              enabled
+              // {
+                tray = true;
+                dbus."org.freedesktop.portal.Desktop".call = [ "org.freedesktop.portal.Email.*" ];
+                launchers.work.tray = true;
+              }
+            )).config.home-manager.users.alice.agent-sandbox.claude-desktop;
+        in
+        {
+          default = lib.attrNames c.dbus;
+          work = lib.attrNames c.launchers.work.dbus;
+          portal = lib.length c.dbus."org.freedesktop.portal.Desktop".call;
+          workPortal = lib.length c.launchers.work.dbus."org.freedesktop.portal.Desktop".call;
+        };
+      expected = {
+        default = [
+          "org.freedesktop.StatusNotifierItem-100-1"
+          "org.freedesktop.portal.Desktop"
+          "org.kde.StatusNotifierWatcher"
+        ];
+        work = [
+          "org.freedesktop.StatusNotifierItem-101-1"
+          "org.freedesktop.portal.Desktop"
+          "org.kde.StatusNotifierWatcher"
+        ];
+        portal = 5;
+        workPortal = 4;
+      };
+    };
+    # nixpak's own D-Bus rules would be argv the proxy refuses, and a name the proxy refuses fails at launch
+    testDbusAssertions = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            enabled
+            // {
+              sandbox.dbus.policies."org.test.A" = "talk";
+              dbus = {
+                "org.test.*".policy = "see";
+                "org.freedesktop.DBus".policy = "talk";
+                "org.test.Empty" = { };
+                "org.test.Fine".policy = "see";
+              };
+              launchers.work.sandbox.dbus.rules.call."org.test.A" = [ "*" ];
+            }
+          )
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in dbus"
+      ]
+      ++ map
+        (
+          n:
+          "agent-sandbox.claude-desktop: dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy or a rule"
+        )
+        [
+          "org.freedesktop.DBus"
+          "org.test.*"
+          "org.test.Empty"
+        ]
+      ++ [
+        "agent-sandbox.claude-desktop: launchers.work.sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in launchers.work.dbus"
+      ];
+    };
     # Each app gets a pid of its own, so their tray items don't clash on the session bus
     testLauncherTrays = {
       expr = failedAssertions (
@@ -950,18 +1022,25 @@ in
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []
-            and (.overview.dbus.call | has("org.freedesktop.portal.Desktop"))
-            and (.overview.dbus.broadcast | has("org.freedesktop.portal.Desktop"))
+            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 4 and (.broadcast | length) == 1
+              and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
             and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           # No live D-Bus layer: no proxy takes rules from the broker, and no system-bus proxy or /run/dbus
           for a in "$args" "$workArgs"; do
             ! jq -e 'any(.[]; . == "/run/dbus")' "$a" >/dev/null || { echo "$a binds /run/dbus" >&2; exit 1; }
           done
+          # The proxy's argv: the bus address, the socket, the module's config and --filter (nixpak adds --fd=3); work's
+          # config, without a tray, the portal's rules, as its overview shows them
           for c in "$paths" "$workClosure/store-paths"; do
-            ! jq -e 'any(.[] | strings; startswith("--control"))' "$(grep -- '-xdg-dbus-proxy-args\.json$' "$c")" >/dev/null ||
-              { echo "a session proxy has --control" >&2; exit 1; }
+            a=$(grep -- '-xdg-dbus-proxy-args\.json$' "$c")
+            jq -e 'length == 4 and (.[2] | test("^--config=/nix/store/[^/]+-dbus-proxy(-work)?\\.json$")) and .[3] == "--filter"' "$a" >/dev/null ||
+              { echo "the proxy's argv: $(<"$a")" >&2; exit 1; }
           done
+          dcfg=$(jq -r '.[2] | ltrimstr("--config=")' "$(grep -- '-xdg-dbus-proxy-args\.json$' "$workClosure/store-paths")")
+          jq -e 'keys == ["org.freedesktop.portal.Desktop"]' "$dcfg" >/dev/null || { echo "work's D-Bus config: $(<"$dcfg")" >&2; exit 1; }
+          jq -e --slurpfile o <(jq .overview.dbus "$pcfg") '. == $o[0]' "$dcfg" >/dev/null ||
+            { echo "work's overview doesn't show its D-Bus config" >&2; exit 1; }
           jq -e 'has("dbus") or has("dbusControl") | not' "$pcfg" >/dev/null ||
             { echo "work's broker config has D-Bus capabilities: $(<"$pcfg")" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||

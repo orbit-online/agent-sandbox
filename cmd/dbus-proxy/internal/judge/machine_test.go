@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/gen"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/spec"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"pgregory.net/rapid"
 )
@@ -15,7 +17,8 @@ import (
 // models/proxy.als's actions, the bus played by a queue of what it sends back, answered one at a time in order, so
 // replies and owners' changes interleave in any order the bus could send them. After every step: D1, a call forwarded
 // to a destination only when the rules let the client call one of its names, through every name the bus ever saw its
-// unique name own (the proxy's table is sticky), and a NameOwnerChanged only for a name they let it see; D2, a reply
+// unique name own (the proxy's table is sticky), and a NameOwnerChanged only for a name they let it see, by the
+// specification's model of a config generated for each sequence; D2, a reply
 // forwarded only to a call let through and awaiting one, and to a call to the bus only from the bus. 1000 sequences
 // take a second; more with -rapid.checks
 func TestJudgeMachine(t *testing.T) {
@@ -42,6 +45,7 @@ type busMsg func() *dbus.Message
 
 type judgeMachine struct {
 	rules    *rules.Rules
+	cfg      *spec.Config // The config as the specification's model reads it, for the checks
 	j        *Judge
 	hello    bool
 	selfTalk bool // The client's Hello was answered: its own name is TALK
@@ -64,11 +68,20 @@ type judgeMachine struct {
 }
 
 func newJudgeMachine(t *rapid.T) *judgeMachine {
-	static, err := rules.Parse(rules.Args{Talk: []string{"org.test.Talk"}, See: []string{"org.test.A"}})
+	// A config of the machine's names, its call's path, interface and member and the grammar's
+	data := gen.Config(gen.ConfigNames{Name: rapid.SampledFrom(wellKnown),
+		Path:   rapid.OneOf(rapid.SampledFrom([]string{"/", "/org"}), gen.ObjectPath().Filter(spec.Path)),
+		Iface:  rapid.OneOf(rapid.SampledFrom([]string{"org.test.I", "org.test"}), gen.InterfaceName().Filter(spec.Interface)),
+		Member: rapid.OneOf(rapid.SampledFrom([]string{"M", "I"}), gen.MemberName().Filter(spec.Member))}, false).Draw(t, "config")
+	cfg, err := spec.ParseConfig(data)
+	if err != nil {
+		t.Fatalf("Config %s: %v", data, err)
+	}
+	static, err := rules.Decode(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &judgeMachine{rules: rules.New(static), owner: map[string]string{}, owned: map[string]map[string]bool{}}
+	m := &judgeMachine{rules: rules.New(static), cfg: cfg, owner: map[string]string{}, owned: map[string]map[string]bool{}}
 	m.connect()
 	return m
 }
@@ -106,23 +119,17 @@ func reply(serial uint32, sender string, body ...any) *dbus.Message {
 	return &dbus.Message{Type: dbus.TypeMethodReply, Headers: h, Body: body}
 }
 
-// The policy of a well-known name
-func (m *judgeMachine) policy(name string) rules.Policy {
-	p, _ := m.rules.Lookup(name)
-	return p
-}
-
-// Whether the rules let the client call dest: the bus, itself, a well-known name with talk, or a unique name
-// that ever owned one
+// Whether the config lets the client make the machine's call (/, org.test.I.M) to dest: the bus, itself, a well-known
+// name that lets it, or a unique name that ever owned one
 func (m *judgeMachine) allowed(dest string) bool {
 	if dest == busName || dest == self {
 		return true
 	}
 	if dest[0] != ':' {
-		return m.policy(dest) >= rules.Talk
+		return m.cfg.Calls(dest, "/", "org.test.I", "M")
 	}
 	for n := range m.owned[dest] {
-		if m.policy(n) >= rules.Talk {
+		if m.cfg.Calls(n, "/", "org.test.I", "M") {
 			return true
 		}
 	}
@@ -305,7 +312,7 @@ func (m *judgeMachine) fromBus(t *rapid.T, msg *dbus.Message) {
 		}
 		return
 	}
-	if name, _ := arg0(w); m.policy(name) < rules.See {
+	if name, _ := arg0(w); m.cfg.Level(name) < spec.See {
 		t.Fatalf("D1: NameOwnerChanged of %s passed outside the rules", name)
 	}
 }

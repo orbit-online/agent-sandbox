@@ -173,7 +173,7 @@ func TestFDsDuringAuth(t *testing.T) {
 func TestHelloHold(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus, "org.test.Svc.Sub")
-	conn := dialRaw(t, startProxy(t, bus, "--talk=org.test.Svc.Sub"))
+	conn := dialRaw(t, startProxy(t, bus, policy("org.test.Svc.Sub", "talk")))
 	hello, _ := wire.Encode(busCall("Hello"), 1)
 	echo, _ := wire.Encode(echoTo(svc.Names()[0]), 2)
 	conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\nBEGIN\r\n"))

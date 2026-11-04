@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docopt/docopt-go"
 	"github.com/godbus/dbus/v5"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"golang.org/x/sys/unix"
@@ -91,22 +90,36 @@ func waitFor(t *testing.T, ok func() bool) {
 	t.Fatal("Timed out waiting")
 }
 
-// Starts a proxy in the test's process with xdg-dbus-proxy's arguments after <address> <path>, returning the
-// address clients connect to
-func startProxy(t *testing.T, bus string, args ...string) string {
+// A config's entry giving name a policy, for startProxy
+func policy(name, p string) string { return fmt.Sprintf(`%q: {"policy": %q}`, name, p) }
+
+// A config's entry giving name one rule of kind, "call" or "broadcast"
+func ruled(name, kind, rule string) string { return fmt.Sprintf(`%q: {%q: [%q]}`, name, kind, rule) }
+
+// A config of the entries given
+func config(entries ...string) string { return "{" + strings.Join(entries, ", ") + "}" }
+
+// A config file of the entries given, for the proxy run as a command
+func configFile(t *testing.T, entries ...string) string {
 	t.Helper()
-	return startProxyWith(t, bus, nil, args...)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(config(entries...)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Starts a proxy in the test's process with a config of the entries given, returning the address clients connect to
+func startProxy(t *testing.T, bus string, entries ...string) string {
+	t.Helper()
+	return startProxyWith(t, bus, nil, entries...)
 }
 
 // startProxy, with tweak applied to the proxy before it serves
-func startProxyWith(t *testing.T, bus string, tweak func(*Proxy), args ...string) string {
+func startProxyWith(t *testing.T, bus string, tweak func(*Proxy), entries ...string) string {
 	t.Helper()
 	sock := filepath.Join(t.TempDir(), "proxy")
-	opts, err := docopt.ParseArgs(usage, append([]string{bus, sock, "--filter"}, args...), "")
-	if err != nil {
-		t.Fatalf("Parse arguments: %v", err)
-	}
-	rs, err := parseRules(opts)
+	rs, err := rules.Decode([]byte(config(entries...)))
 	if err != nil {
 		t.Fatal(err)
 	}
