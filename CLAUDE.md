@@ -72,7 +72,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   the unique names and the pending replies). Package main: `main.go`
   (arguments, `--fd`), `proxy.go` (listening, the accept loop, the peer's
   uid), `client.go` (a connection's goroutines, doing what the judge says)
-  and `address.go` (bus addresses).
+  and `address.go` (bus addresses). Two packages for the tests only:
+  `spec` (a model of the D-Bus specification written from it alone: names,
+  signatures, a message's header and body, the SASL server, and the proxy's
+  documented rules and verdicts on top) and `gen` (rapid generators from the
+  specification's grammar, valid and near misses, and byte-level mutations).
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
@@ -266,7 +270,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   without a destination, a caller made visible, another uid, file descriptors
   during SASL, the hold after Hello until the rules' names' owners are known,
   both pending-reply caps; the limits
-  (`limits_test.go`): a client over the memory budget disconnected while another goes
+  (`limits_test.go`): `maxClients` connections and no more, a client over the memory budget disconnected while another goes
   on, queued file descriptors past a client's share, and accepting again after
   running out of file descriptors (the test binary as the proxy, with a low
   `RLIMIT_NOFILE`); and bus addresses. A stateful
@@ -281,16 +285,26 @@ modules and a user alice (the `home-manager` input exists only for it).
   Each step runs to quiescence (barriers through each connection, the bus dropping a connection that closed), then
   what arrived at each end, the connections closed and every name's owner match a reference model
   (`machine_model_test.go`, `machine_bus_test.go`: each client's name table, pending calls both ways, the bus's
-  owners, match rules and pending calls; D1, D2 and D4). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
+  owners, match rules and pending calls; D1, D2 and D4). Its `Generated` action (`machine_gen_test.go`) sends
+  messages from `internal/gen`, to the world's names and the grammar's and to the bus driver with any method, broken
+  at the header or the bytes; `spec.ProxyReads` and `spec.ProxyVerdict` predict whether the proxy reads it and
+  passes, refuses (which error), drops it or ends the connection, never consulting the proxy's parsers (one the proxy
+  would pass with a body that contradicts its signature isn't sent: the bus's reaction is the bus's). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
   -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`), a failure again with the `-rapid.seed` it prints.
   The `internal/` packages' tests, each alone: `wire` (a fuzz test of the header parser against godbus's decoder,
-  run longer with `go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s`; serial 0, file descriptors per message,
+  run longer with `go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s`; a property test of the reader against
+  `spec` on generated and mutated messages, `TestParseAgainstSpec`; the header's duplicate, wrong-type, unknown-field,
+  IsValid and padding checks, the encode and decode caps; serial 0, file descriptors per message,
   pending and claimed, bodies left undecoded, the budget, and what readers and senders hold of it), `sasl` (`Serve`
   on a socket pair: EXTERNAL accepted with and without an initial response, file descriptors as negotiated,
-  refusals, the command and line caps), `rules` (the rule parser, wildcards refused, the lookup), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
-  forgotten, a reply only to its caller; the eavesdrop match, the bounded name table; and a stateful property test,
-  `machine_test.go`, that drives one connection's judge with the bus as a queue answered in order, checking D1 and
-  D2 after every step, 1000 sequences in about a second).
+  refusals, the command and line caps; `TestSASLAgainstSpec`, generated input against `spec.SASLServer`), `rules` (the rule parser, wildcards refused, the lookup), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
+  forgotten, a reply only to its caller; the eavesdrop match, the bounded name and owned-name tables; the bus
+  driver's default refusal, the monitoring guard on its own, Introspectable passing, the 4 KiB inspection cap; and a
+  stateful property test, `machine_test.go`, that drives one connection's judge with the bus as a queue answered in
+  order, checking D1 and D2 after every step, with generated messages (`machine_gen_test.go`: grammar names and
+  bodies, any bus driver method, mutations) judged against `spec.ProxyVerdict` down to the refusal's error name, 1000
+  sequences in about a second; more with `-rapid.checks=20000 -rapid.steps=100`), `spec` (the specification's own
+  examples) and `gen` (what it means valid is, by `spec`).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations (one past what a duration holds refused), parameter validation, consent (denied, allowed, a live grant
   covering the same request only, by value: keys in any order, -0 for 0), the requests the state machines once

@@ -448,7 +448,11 @@ judge without sockets, the bus a queue answered in order, so replies and
 owners' changes interleave in any order: the client says Hello and calls
 names and peers, names change hands, and the bus answers one message at a
 time or forges replies. It checks D1 (calls and NameOwnerChanged) and D2
-after every step. The end-to-end machine has calls and replies between
+after every step. Both machines also send messages generated from the
+D-Bus specification's grammar (`cmd/dbus-proxy/internal/gen`), valid and
+broken, and predict the proxy's verdict with a model of the
+specification written from it alone (`cmd/dbus-proxy/internal/spec`),
+not with the proxy's parsers. The end-to-end machine has calls and replies between
 clients, which `proxy.als` has between a client and a peer only.
 
 The broker's Go tests run the protocol model's actions as `rapid` state

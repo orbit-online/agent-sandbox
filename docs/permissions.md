@@ -503,6 +503,11 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   to the bus counts only from the bus: otherwise one call's reply could be judged as another's (a GetNameOwner reply
   read as Hello's raises the name's owner to TALK). A client's reply goes only to the caller waiting for it, and a
   method call without a destination is refused.
+- A message is read only when the D-Bus specification takes its header (the destination and sender bus names, no
+  reserved local path or interface, a signature without empty structs or dict keys of a container type, nul padding),
+  and a body it looks into must hold valid values of its signature, or the call has no arguments as far as the proxy
+  is concerned. A serial awaiting a reply ends the connection on any call, one expecting no reply too: the bus
+  answers some of those. SASL lines are at most 16 KiB.
 - A reply is a reply by its type. xdg-dbus-proxy takes any message with a reply serial for one, so a method call
   carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
 - `--filter` is required (nixpak and `bwrap-subid.sh` always pass it): there is no mode that passes everything.
