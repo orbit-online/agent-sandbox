@@ -496,8 +496,7 @@ proxy, which refuses them. The config is the module's `dbus` option without what
 ```json
 {
   "org.freedesktop.portal.Desktop": {
-    "call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"],
-    "broadcast": ["org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"]
+    "call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"]
   },
   "org.freedesktop.StatusNotifierItem-100-1": { "policy": "own" }
 }
@@ -509,7 +508,8 @@ Each name has a `policy` (`see`, `talk` or `own`, as xdg-dbus-proxy's), `call` a
 any. The proxy reads it strictly and refuses to start on anything else: a name that isn't well-known or is the bus
 driver's, a key twice, a field it doesn't know (in any case: encoding/json would take `Policy` for `policy`), a null, a
 name with neither policy nor rule, data after the object, and more than 64 KiB, 64 names or 64 rules in a list.
-`internal/spec` holds a model of the format, which the decoder's property test is held against.
+`internal/spec` holds a model of the format, which the decoder's property test is held against. The module checks
+the names, the rules' syntax and the caps at eval, so a bad rule fails the build instead of the proxy's start.
 
 It does SASL toward both sides, passes file descriptors, tracks unique and well-known names, lets
 replies through to calls it let through, and filters match rules. It refuses what would let a client read traffic not
@@ -549,7 +549,12 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   over is disconnected. Out of file descriptors, the proxy waits and accepts again.
 
 Kept from xdg-dbus-proxy: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a call or
-broadcast rule lets every broadcast of the name through (the module's rules rely on it).
+broadcast rule lets every broadcast of the name through (the module's rules rely on it). In 0.1.7's
+`flatpak-proxy.c`, `filter_new_from_rule` makes every rule's filter TALK, and a broadcast passes at TALK before its
+broadcast rules are looked at; `filter_matches` matches nothing below TALK, so no broadcast rule ever decides. A
+broadcast rule only makes a name visible with its broadcasts, without calls; the module's portal rules need none, as
+their call rules pass the portal's `SettingChanged`. Filtering by the rule would break configs written for
+xdg-dbus-proxy, which the proxy's rules follow.
 
 #### Live rules and the system bus (not built: removed 2026-11-04 until a capability needs it)
 

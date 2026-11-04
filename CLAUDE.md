@@ -214,7 +214,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
   glob that could match one), the `dbus` defaults (the portal's, with `tray` the tray item's name at the
   launcher's pid and the watcher's, the user's rules merged in), the assertions on D-Bus rules (`sandbox`
-  setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing),
+  setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing, a rule it refuses
+  and its caps: 64 names, 64 rules a list, 64 KiB of config, each at and past the cap),
   and the assertion on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.

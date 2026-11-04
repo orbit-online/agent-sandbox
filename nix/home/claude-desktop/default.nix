@@ -456,7 +456,7 @@ let
             broadcast = mkOption {
               type = types.listOf types.str;
               default = [ ];
-              description = "Broadcasts the app gets, as `call`.";
+              description = "Rules as `call`'s, which filter nothing: like any rule, one here passes all of the name's broadcasts and makes it visible, as xdg-dbus-proxy's `--broadcast` does. For a name the app only listens to.";
             };
           };
         }
@@ -465,7 +465,7 @@ let
       description = ''
         What the app reaches on the session bus through the D-Bus proxy (`dbus-proxy --help`), by well-known name,
         exact: a policy, call and broadcast rules, or both. Any rule also makes the name visible and passes all its
-        signals. Talk reaches every object the name's owner exports, so prefer call rules.
+        broadcasts, whatever the rule says. Talk reaches every object the name's owner exports, so prefer call rules.
       '';
     };
     extraPath = mkOption {
@@ -776,8 +776,8 @@ let
       };
       # Calls only, never "talk": the proxy filters by name, and talk reaches every object the name's owner exports
       # (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see the name and
-      # get replies and the owner's signals (the proxy passes a name's broadcasts once it has any rule, and signals
-      # sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the owner's unique name
+      # get replies and the owner's signals (the proxy passes a name's broadcasts once it has any rule, Settings'
+      # SettingChanged included, and signals sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the owner's unique name
       # against the rules of every name it holds, so no other name may get talk where one of these owners holds it. No
       # org.freedesktop.Notifications: notifications go through the portal, which keys them by app ID, so the app
       # can't replace or close another's (the permissions broker's), nor reach plasmashell
@@ -791,7 +791,6 @@ let
               "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
               "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
             ];
-            broadcast = [ "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop" ];
           };
         }
         (lib.mkIf lcfg.tray {
@@ -1389,10 +1388,33 @@ let
       inherit
         sandboxed
         netSetup
+        dbusRules
         dbusArgs
         claude-desktop
         ;
     };
+  # A rule the D-Bus proxy takes (its rules package's parseRule): [METHOD][@PATH], not empty. METHOD `*`, `IFACE.*`
+  # or `IFACE.MEMBER`, split at the last dot, the interface of two elements or more and at most 255 bytes as the
+  # member; PATH an object path, or one ending in `/*` for its subtree too, `/*` for any
+  dbusRuleOk =
+    rule:
+    let
+      elem = "[A-Za-z_][A-Za-z0-9_]*";
+      parts = builtins.match "([^@]*)(@(.*))?" rule;
+      method = lib.elemAt parts 0;
+      path = lib.elemAt parts 2;
+      dotted = builtins.match "(${elem}(\\.${elem})+)\\.(\\*|${elem})" method;
+      methodOk =
+        method == "*"
+        || method == "" && path != null
+        || dotted != null && lib.stringLength (lib.elemAt dotted 0) <= 255 && lib.stringLength (lib.elemAt dotted 2) <= 255;
+      pathOk = path == null || path == "/*" || builtins.match "/|(/[A-Za-z0-9_]+)+(/\\*)?" path != null;
+    in
+    methodOk && pathOk;
+  # The proxy's caps on its config (MaxNames, MaxRules and MaxConfig there)
+  dbusMaxNames = 64;
+  dbusMaxRules = 64;
+  dbusMaxConfig = 64 * 1024;
   # Whether path a is path b or holds it
   holds = a: b: a == b || lib.hasPrefix "${lib.removeSuffix "/" a}/" b;
   # A launcher's enabled binds whose source holds or lies in a launcher's state dir, holds $XDG_RUNTIME_DIR (any
@@ -1507,6 +1529,28 @@ in
             && (r.policy != null || r.call != [ ] || r.broadcast != [ ]);
           message = "agent-sandbox.claude-desktop: ${lib.optionalString (name != "") "launchers.${name}."}dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy or a rule";
         }) (if name == "" then cfg else cfg.launchers.${name}).dbus
+        ++ lib.mapAttrsToList (
+          n: r:
+          let
+            bad = lib.filter (rule: !dbusRuleOk rule) (r.call ++ r.broadcast);
+          in
+          {
+            assertion = bad == [ ] && lib.length r.call <= dbusMaxRules && lib.length r.broadcast <= dbusMaxRules;
+            message = "agent-sandbox.claude-desktop: ${lib.optionalString (name != "") "launchers.${name}."}dbus.\"${n}\": at most ${toString dbusMaxRules} call and ${toString dbusMaxRules} broadcast rules, each [METHOD][@PATH] as dbus-proxy --help says${
+              lib.optionalString (bad != [ ]) ", not ${lib.concatMapStringsSep ", " builtins.toJSON bad}"
+            }";
+          }
+        ) (if name == "" then cfg else cfg.launchers.${name}).dbus
+        ++ [
+          {
+            assertion =
+              lib.length (lib.attrNames l.dbusRules) <= dbusMaxNames
+              && lib.stringLength (builtins.toJSON l.dbusRules) <= dbusMaxConfig;
+            message = "agent-sandbox.claude-desktop: ${lib.optionalString (name != "") "launchers.${name}."}dbus: at most ${toString dbusMaxNames} names and ${toString dbusMaxConfig} bytes of JSON, the D-Bus proxy's caps; it has ${
+              toString (lib.length (lib.attrNames l.dbusRules))
+            } and ${toString (lib.stringLength (builtins.toJSON l.dbusRules))}";
+          }
+        ]
         ++ lib.optional (if name == "" then cfg else cfg.launchers.${name}).memo.enable {
           assertion = options ? programs.agent-memos.package && memoCfg.enable;
           message = "agent-sandbox.claude-desktop: ${

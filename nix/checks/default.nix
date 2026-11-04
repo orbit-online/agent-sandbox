@@ -456,6 +456,71 @@ let
         "agent-sandbox.claude-desktop: launchers.work.sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in launchers.work.dbus"
       ];
     };
+    # The proxy's rule syntax and caps, at eval: a rule it refuses or a config past its caps fails here, not at launch.
+    # 64 rules a list and 64 names may be
+    testDbusRuleAssertions = {
+      expr = map (a: lib.head (lib.splitString "; it has" a.message)) (
+        failedAssertions (
+          nixos (
+            enabled
+            // {
+              dbus = {
+                "org.test.Good" = {
+                  call = [
+                    "*"
+                    "org.test.I.*"
+                    "org.test.I.M"
+                    "org.test.I.M@/"
+                    "@/a/b"
+                    "@/*"
+                    "org.test.I.M@/a_1/*"
+                    "*@/0"
+                    "org.test.I.${lib.strings.replicate 255 "m"}"
+                  ];
+                  broadcast = [ "org.test.I.S@/a" ];
+                };
+                "org.test.Bad" = {
+                  call = [
+                    ""
+                    "@"
+                    "org.test.I.M@"
+                    "@//*"
+                    "@/a/"
+                    "@/a/*/b"
+                    "org.test.I.M@/a@/b"
+                    "Iface.*"
+                    "org.test..M"
+                    "org.test.I.9M"
+                    "org.test.I.M-x"
+                    " *"
+                    "org.test.I.${lib.strings.replicate 256 "m"}"
+                  ];
+                  broadcast = [ "*.Get" ];
+                };
+                "org.test.Edge".call = lib.genList (_: "*") 64;
+                "org.test.Many".broadcast = lib.genList (_: "*") 65;
+                # Over 64 KiB in one rule
+                "org.test.Big".call = [ "@/${lib.strings.replicate (64 * 1024) "a"}" ];
+              };
+              # With the portal's, 65 names; the default launcher's 64 above and its own
+              launchers.work.dbus = lib.genAttrs (map (i: "org.test.N${toString i}") (lib.range 1 64)) (_: {
+                policy = "see";
+              });
+            }
+          )
+        )
+      );
+      expected =
+        let
+          rules = "at most 64 call and 64 broadcast rules, each [METHOD][@PATH] as dbus-proxy --help says";
+        in
+        [
+          ''agent-sandbox.claude-desktop: dbus."org.test.Bad": ${rules}, not "", "@", "org.test.I.M@", "@//*", "@/a/", "@/a/*/b", "org.test.I.M@/a@/b", "Iface.*", "org.test..M", "org.test.I.9M", "org.test.I.M-x", " *", "org.test.I.${lib.strings.replicate 256 "m"}", "*.Get"''
+          ''agent-sandbox.claude-desktop: dbus."org.test.Many": ${rules}''
+          "agent-sandbox.claude-desktop: dbus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
+          "agent-sandbox.claude-desktop: launchers.work.dbus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
+        ];
+    };
     # Each app gets a pid of its own, so their tray items don't clash on the session bus
     testLauncherTrays = {
       expr = failedAssertions (
@@ -1029,7 +1094,7 @@ in
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []
-            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 4 and (.broadcast | length) == 1
+            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 4 and (has("broadcast") | not)
               and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
             and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
