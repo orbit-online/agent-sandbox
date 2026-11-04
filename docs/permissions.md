@@ -884,6 +884,26 @@ running sandbox: otherwise it would hand the flag to the running app through nse
 URLs. With no sandbox running, the window says so. The recent decisions it lists are the daemon's, kept in memory:
 a daemon started again starts them afresh.
 
+### The sandbox's cgroups and nsdelegate
+
+The sandbox gets its cgroup subtree writable at `/sys/fs/cgroup`, for `cgrun`, only when the host's cgroup2 has
+`nsdelegate` (`bwrap-subid.sh` reads it from the mount's options at launch). Without it the kernel neither keeps the
+sandbox from writing its root's files nor checks process moves against its cgroup namespace, so the launcher binds
+the subtree read-only, logs a warning to the app unit's journal, and `cgrun` refuses, saying why. The caps on the
+sandbox's cgroups (64, 4 deep) sit on the unit's cgroup either way, out of the sandbox's reach: `nsdelegate` guards
+only the root of the writer's own cgroup namespace, so from a nested one the sandbox writes its root's files.
+
+systemd mounts cgroup2 with `nsdelegate,memory_recursiveprot` (and `memory_hugetlb_accounting` where the kernel has
+it; `src/shared/mount-setup.c`), but the options belong to the one superblock: any later cgroup2 mount in the host's
+cgroup namespace sets them anew from its own options (`apply_cgroup_root_flags` from `cgroup_get_tree` and
+`cgroup_reconfigure`, `kernel/cgroup/cgroup.c`). Cilium's `mount-cgroup` init container does that: it enters the
+host's cgroup and mount namespaces and mounts cgroup2 at `/run/cilium/cgroupv2` (`cgroup.hostRoot`) with no options,
+which clears `nsdelegate` for the whole machine. Either restore them after Cilium starts, as root,
+`mount -o remount,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting /sys/fs/cgroup` (the VM test runs it),
+which holds until something mounts cgroup2 again without them (Cilium's init container at the next boot, if not
+sooner), or point Cilium at systemd's mount instead of its own: `cgroup.autoMount.enabled=false`
+and `cgroup.hostRoot=/sys/fs/cgroup` in its Helm values. Then start the app again.
+
 ## Threat model
 
 `models/` holds the Alloy model of the sandbox and the broker's protocol, and the stateful property tests run its

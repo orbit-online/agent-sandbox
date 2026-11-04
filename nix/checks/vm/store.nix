@@ -57,4 +57,36 @@
       cg = workstation.succeed("systemctl --user -M alice@ show -P ControlGroup claude-desktop-app").strip()
       assert cg.endswith("/claude\\x2ddesktop.slice/claude-desktop-app.service"), cg
       assert workstation.succeed(f"cat '/sys/fs/cgroup{cg}/sandbox/app/cgroup.procs'").split(), f"nothing in {cg}/sandbox/app"
+
+  with subtest("Without nsdelegate, the sandbox's cgroup is read-only and cgrun says why"):
+      def cgroup2_flags():
+          return workstation.succeed("grep -m1 ' - cgroup2 ' /proc/self/mountinfo").split()[-1]
+      # systemd mounts cgroup2 with it
+      flags = cgroup2_flags()
+      assert "nsdelegate" in flags.split(","), flags
+      workstation.succeed("systemctl --user -M alice@ stop claude-desktop-app")
+      # As cilium's mount at /run/cilium/cgroupv2 does: another cgroup2 mount in the host's cgroup namespace without
+      # the option clears it for all
+      workstation.succeed("mkdir /run/test-cgroupv2 && mount -t cgroup2 none /run/test-cgroupv2")
+      assert "nsdelegate" not in cgroup2_flags().split(","), cgroup2_flags()
+      workstation.succeed("systemd-run --user -M alice@ --wait --pipe --quiet -- /etc/profiles/per-user/alice/bin/claude-desktop")
+      workstation.wait_until_succeeds("test $(wc -l <${sandboxHome}/stub-app.log) -ge 3", timeout=300)
+      # The launcher says so in its unit's journal, and starts the app
+      workstation.wait_until_succeeds(
+          "journalctl _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -q 'cgroup2 is mounted without nsdelegate'",
+          timeout=30)
+      workstation.succeed("systemctl --user -M alice@ is-active claude-desktop-app")
+      # Inside, its cgroup read-only
+      top = [l.split() for l in in_sandbox("cat /proc/self/mountinfo").splitlines() if l.split()[4] == "/sys/fs/cgroup"][-1]
+      assert "ro" in top[5].split(","), top
+      status, out = workstation.execute(sandbox_cmd("sh -c 'mkdir /sys/fs/cgroup/x'") + " 2>&1")
+      assert status != 0, out
+      # cgrun refuses, naming nsdelegate
+      out = in_sandbox("sh -c 'cgrun --memory=64M -- echo ran 2>&1; echo exit=$?'")
+      assert "without nsdelegate" in out and "ran" not in out.split() and out.strip().endswith("exit=1"), out
+      # The remount the warning names restores it
+      workstation.succeed("umount /run/test-cgroupv2")
+      warning = workstation.succeed("journalctl _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -o \"'mount -o [^']*'\"")
+      workstation.succeed(warning.strip().splitlines()[-1].strip("'"))
+      assert cgroup2_flags() == flags, f"{cgroup2_flags()}, was {flags}"
 ''

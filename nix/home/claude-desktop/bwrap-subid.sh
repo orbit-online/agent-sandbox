@@ -57,7 +57,9 @@ subid)
   # whose new cgroup namespace is rooted where its parent is, then the info fd's reader below moves the parent back
   # here and the child, still blocked, into app/. sandbox/ holds no process, so controllers can be enabled for its
   # children (cgrun), and the kernel's nsdelegate keeps the sandbox from writing its root's files (memory.max,
-  # cgroup.max.*) or moving a process out of it. It sees sandbox/ alone at /sys/fs/cgroup
+  # cgroup.max.*) or moving a process out of it. It sees sandbox/ alone at /sys/fs/cgroup.
+  # nsdelegate guards only the root of the writer's own cgroup namespace: from a nested one, rooted at app/, the
+  # sandbox writes sandbox/'s files. So the caps on its cgroups go on the unit's cgroup, which it has no path to
   # cgroup v2 alone: one line, 0::PATH
   cg_self=$(</proc/self/cgroup)
   cg_self=${cg_self#0::}
@@ -66,15 +68,35 @@ subid)
     exit 1
   }
   cg_root=/sys/fs/cgroup${cg_self%/supervisor}
+  # Without end, the sandbox's cgroups would cost the kernel memory without end: 64 below sandbox/, app/ included, 4
+  # deep, which are 66 and 5 from the unit's cgroup (supervisor/ and sandbox/ besides)
+  echo 66 >"$cg_root/cgroup.max.descendants"
+  echo 5 >"$cg_root/cgroup.max.depth"
   mkdir "$cg_root/sandbox" "$cg_root/sandbox/app"
-  # Without end, the sandbox's cgroups would cost the kernel memory without end
-  echo 64 >"$cg_root/sandbox/cgroup.max.descendants"
-  echo 4 >"$cg_root/sandbox/cgroup.max.depth"
+  # Without nsdelegate, the kernel neither keeps the sandbox from its root's files nor checks moves against its
+  # namespace (any cgroup2 mount in the host's cgroup namespace without the option clears it for all, as cilium's
+  # does): the sandbox gets its cgroup read-only, and no cgrun. systemd mounts it with nsdelegate
+  cg_bind=--bind
+  # The superblock's options, last on a cgroup2 mount's line: the same on every one
+  cg_flags=
+  while read -r line; do
+    [[ $line == *" - cgroup2 "* ]] || continue
+    cg_flags=${line##* }
+    break
+  done </proc/self/mountinfo
+  if [[ ,$cg_flags, != *,nsdelegate,* ]]; then
+    cg_bind=--ro-bind
+    echo "claude-desktop: cgroup2 is mounted without nsdelegate (options: ${cg_flags:-none}), so the sandbox's" \
+      "cgroup is read-only and cgrun won't work in it. A cgroup2 mount in the host's cgroup namespace without the" \
+      "option clears it (cilium's at /run/cilium/cgroupv2 does). As root, 'mount -o" \
+      "remount,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting /sys/fs/cgroup' restores systemd's" \
+      "options; then start the app again" >&2
+  fi
   # The controllers the unit got, for sandbox/ and below
   ctl=()
   for c in memory pids; do grep -qw "$c" "$cg_root/cgroup.controllers" && ctl+=("+$c"); done
   ((${#ctl[@]} == 0)) || echo "${ctl[*]}" >"$cg_root/cgroup.subtree_control"
-  args+=(--bind "$sock" /run/subid-broker.sock --bind "$cg_root/sandbox" /sys/fs/cgroup "$@")
+  args+=(--bind "$sock" /run/subid-broker.sock "$cg_bind" "$cg_root/sandbox" /sys/fs/cgroup "$@")
   ;;
 parent)
   user=$(id -un)

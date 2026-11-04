@@ -29,6 +29,19 @@ while (($#)); do
 done
 [[ -n $memory && $# -gt 0 ]] || usage
 
+# The launcher binds the sandbox's cgroup read-only when the host's cgroup2 lacks nsdelegate (bwrap-subid.sh), which
+# is also gone from the mount's options here then, unless the host's mount changed since
+flags=
+while read -r line; do
+  [[ $line == *" - cgroup2 "* ]] || continue
+  flags=${line##* }
+done </proc/self/mountinfo
+if [[ ,$flags, != *,nsdelegate,* || ! -w $root ]]; then
+  echo "cgrun: $root is read-only: the host mounted cgroup2 without nsdelegate (its options: ${flags:-none})" \
+    "when the app started, so the launcher kept the sandbox's cgroup read-only. The user can remount it with" \
+    "nsdelegate on the host (the launcher's journal says how) and start the app again" >&2
+  exit 1
+fi
 grep -qw memory "$root/cgroup.subtree_control" 2>/dev/null || {
   echo "cgrun: The memory controller isn't enabled in $root: not the sandbox's cgroup" >&2
   exit 1

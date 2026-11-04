@@ -74,6 +74,12 @@
       assert dirs == ["/sys/fs/cgroup/app"], dirs
       top = [l.split() for l in in_work("cat /proc/self/mountinfo").splitlines() if l.split()[4] == "/sys/fs/cgroup"][-1]
       assert top[3] == "/" and "rw" in top[5].split(","), top
+      # The host's cgroup2 with nsdelegate, which systemd sets, so the launcher bound it writable
+      flags = workstation.succeed("grep -m1 ' - cgroup2 ' /proc/self/mountinfo").split()[-1]
+      assert "nsdelegate" in flags.split(","), flags
+      # The caps on the sandbox's cgroups on the unit's: 64 below sandbox/, 4 deep, which the sandbox has no path to
+      caps = [workstation.succeed(f"cat '{unit_root}/cgroup.max.{f}'").strip() for f in ["descendants", "depth"]]
+      assert caps == ["66", "5"], caps
 
   with subtest("cgrun runs a job in a cgroup of its own, killed past its memory limit while the app runs on"):
       out = in_work("cgrun --memory=64M -- sh -c 'cat /proc/self/cgroup; cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'")
@@ -107,6 +113,20 @@
       out = in_work("sh -c 'n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done;"
                     " echo $n; rmdir /sys/fs/cgroup/d*'")
       assert out.strip() == "63", f"made {out.strip()} cgroups"
+      # At most 4 levels below its root
+      out = in_work("sh -c 'mkdir -p /sys/fs/cgroup/a/b/c/d && echo 4; mkdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null && echo 5;"
+                    " rmdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null;"
+                    " rmdir /sys/fs/cgroup/a/b/c/d /sys/fs/cgroup/a/b/c /sys/fs/cgroup/a/b /sys/fs/cgroup/a'")
+      assert out.split() == ["4"], f"made {out.split()} levels"
+      # nsdelegate guards only the root of the writer's own cgroup namespace: from a nested one, rooted at app/, the
+      # sandbox lifts sandbox/'s caps, and the unit's still hold
+      nested = ("echo max >/sys/fs/cgroup/cgroup.max.descendants && echo max >/sys/fs/cgroup/cgroup.max.depth && echo lifted;"
+                " n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done; echo $n;"
+                " rmdir /sys/fs/cgroup/d*; mkdir -p /sys/fs/cgroup/a/b/c/d && echo 4; mkdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null && echo 5;"
+                " rmdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null;"
+                " rmdir /sys/fs/cgroup/a/b/c/d /sys/fs/cgroup/a/b/c /sys/fs/cgroup/a/b /sys/fs/cgroup/a")
+      out = in_work("unshare --user --map-root-user --cgroup sh -c " + shlex.quote(nested))
+      assert out.split() == ["lifted", "63", "4"], out
 
   with subtest("The work launcher's broker"):
       # The permissions broker: its daemon runs, its grant directory is read-only inside, shared in the sandbox's

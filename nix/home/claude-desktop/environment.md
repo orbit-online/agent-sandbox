@@ -111,7 +111,10 @@ remove it.
   using every core), for example `cgrun --memory=24G -- nix flake check -L
   --max-jobs 4 --cores 4`; long property or fuzz runs and Alloy too. Size the
   limit a little above the job's measured peak; the repo's CLAUDE.md may
-  name it.
+  name it. When the host mounts cgroup2 without `nsdelegate`, the launcher
+  binds the sandbox's cgroup read-only and `cgrun` refuses, saying so: run
+  the job without it, at those `--max-jobs` and `--cores`, and tell the user
+  (the launcher's journal says how to fix the host).
 
 ## Nix
 <!-- memo: topic={nix,sandbox} -->

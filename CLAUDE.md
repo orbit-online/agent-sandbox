@@ -19,8 +19,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `Delegate=yes` and `DelegateSubgroup=supervisor`. `bwrap-subid.sh` lays out
   the cgroups below it: nixpak's launcher and the host side in `supervisor/`,
   the sandbox in `sandbox/app/`, its cgroup namespace rooted at `sandbox/`
-  (at most 64 cgroups, 4 deep), which it sees alone and writable at
-  `/sys/fs/cgroup`. The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
+  (at most 64 cgroups, 4 deep, capped on the unit's cgroup, out of its reach),
+  which it sees alone at `/sys/fs/cgroup`: writable when the host's cgroup2 has
+  `nsdelegate`, read-only with a warning in the journal otherwise
+  (`docs/permissions.md`, Launcher). The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
   `cgrun.sh` (`cgrun` on the sandbox's PATH) runs a job in a `sandbox/cgrun-<pid>/`
   with a memory limit. The broker and its host command calls are units in
   the slice too. Then
@@ -456,8 +458,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   `vm` builds them all. Each boots the same two machines (built once) and
   runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
-  network, `store` its store dir swapped or without a record and `--shell`
-  starting the app, `work` the launcher `work` next to the default one with
+  network, `store` its store dir swapped or without a record, `--shell`
+  starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
+  journal's warning, the cgroup read-only, `cgrun` refusing, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
   its permissions broker, `live` the broker's state machine tests, `loop` the
   default launcher launched and stopped 100 times, none failing (about 4 minutes; it prints
   the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
@@ -510,10 +513,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
   launcher's in a unit and slice of its own, the broker and a host command call units in the
   slice, both re-entries in `app/`; inside, `/sys/fs/cgroup` the sandbox's subtree alone, writable, without a unit's
-  name; `cgrun` giving a job a cgroup of its own with its `memory.max`, killing one past 64M with the app running
+  name, the host's cgroup2 with `nsdelegate`, the caps (66 and 5) on the unit's cgroup; `cgrun` giving a job a cgroup of its own with its `memory.max`, killing one past 64M with the app running
   on, and removing the cgroup; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
-  process in its root, unmounting the bind from a nested user namespace and a 64th cgroup, and a cgroup2 mount of its
-  own in a nested cgroup namespace showing its own subtree), its own `/etc/hosts`, the closure's GC root on the
+  process in its root, unmounting the bind from a nested user namespace, a 64th cgroup and a fifth level, both still
+  refused after it lifts `sandbox/`'s own caps from a nested cgroup namespace rooted at `app/` (which nsdelegate allows),
+  and a cgroup2 mount of its own in a nested cgroup namespace showing its own subtree), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`
