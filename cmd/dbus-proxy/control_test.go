@@ -86,7 +86,7 @@ func echo(conn *dbus.Conn, dest string) error {
 func TestLiveAddRemove(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	c, c2 := connect(t, addr), connect(t, addr)
 	ctl := dialControl(t, ctlPath)
 	wantErr(t, "before the grant", echo(c, svcName), errServiceUnknown)
@@ -108,7 +108,7 @@ func TestLiveAddRemove(t *testing.T) {
 func TestLiveRemoveCloses(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	used, other := connect(t, addr), connect(t, addr)
 	ctl := dialControl(t, ctlPath)
 	ctl.must(t, map[string]any{"op": "add", "id": "g1", "talk": []string{svcName}, "own": []string{testApp + ".Live"}})
@@ -138,7 +138,7 @@ func TestLiveRemoveCloses(t *testing.T) {
 func TestLiveBrokerGone(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	c := connect(t, addr)
 	ctl := dialControl(t, ctlPath)
 	ctl.must(t, map[string]any{"op": "add", "id": "g1", "talk": []string{svcName}})
@@ -157,7 +157,7 @@ func TestLiveBrokerGone(t *testing.T) {
 func TestLiveBroadcastStrict(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	c := connect(t, addr)
 	ctl := dialControl(t, ctlPath)
 	ctl.must(t, map[string]any{"op": "add", "id": "g1",
@@ -184,7 +184,7 @@ func TestLiveBroadcastStrict(t *testing.T) {
 // What a set may not hold, and the bounds
 func TestLiveSetRefused(t *testing.T) {
 	bus := startBus(t)
-	_, ctlPath := startLive(t, bus, "--filter")
+	_, ctlPath := startLive(t, bus)
 	ctl := dialControl(t, ctlPath)
 	many := make([]string, maxSetEntries+1)
 	for i := range many {
@@ -232,10 +232,10 @@ func TestLiveSetRefused(t *testing.T) {
 // A peer of another uid, and a second broker while one is connected, are refused
 func TestLiveControlPeer(t *testing.T) {
 	bus := startBus(t)
-	_, ctlPath := startLive(t, bus, "--filter")
+	_, ctlPath := startLive(t, bus)
 	other := filepath.Join(t.TempDir(), "other")
 	var p *Proxy
-	startProxyWith(t, bus, func(pp *Proxy) { p = pp; pp.uid = os.Getuid() + 1 }, "--filter")
+	startProxyWith(t, bus, func(pp *Proxy) { p = pp; pp.uid = os.Getuid() + 1 })
 	l, err := listen(other)
 	if err != nil {
 		t.Fatal(err)

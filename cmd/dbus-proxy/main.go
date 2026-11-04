@@ -21,14 +21,14 @@ import (
 const usage = `dbus-proxy - Filter a sandbox's D-Bus traffic, taking xdg-dbus-proxy's arguments
 
 Usage:
-  dbus-proxy [--fd=<fd>] [--control=<path> --bus=<bus> [--app-id=<id>]] [--pid=<pid>] <address> <path> [--filter] [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
+  dbus-proxy [--fd=<fd>] [--control=<path> --bus=<bus> [--app-id=<id>]] [--pid=<pid>] <address> <path> --filter [--see=<name>]... [--talk=<name>]... [--own=<name>]... [--call=<rule>]... [--broadcast=<rule>]...
   dbus-proxy --help
 
 Listens on <path> and connects each client to the bus at <address>. The subset
 of xdg-dbus-proxy's arguments nixpak passes, with their meaning:
 
   --fd=<fd>             Write a byte to <fd> once listening, exit when it closes
-  --filter              Apply the rules below; without it every message passes
+  --filter              Apply the rules below; required, as nixpak always passes it
   --see=<name>          Let the client see <name>
   --talk=<name>         Let the client call and signal <name>
   --own=<name>          Let the client own <name>
@@ -36,7 +36,7 @@ of xdg-dbus-proxy's arguments nixpak passes, with their meaning:
   --broadcast=<rule>    NAME=[METHOD][@PATH]: broadcasts it gets from NAME
 
 A name may end in ".*" for the names below it, a path in "/*" for its subtree.
-With or without --filter, the client can't monitor the bus or eavesdrop.
+The client can't monitor the bus or eavesdrop, whatever the rules.
 
   --control=<path>      Take live rule sets from the permissions broker on a
                         socket at <path>, relative to $XDG_RUNTIME_DIR (mode
@@ -52,7 +52,6 @@ With or without --filter, the client can't monitor the bus or eavesdrop.
 type Proxy struct {
 	bus    []*net.UnixAddr
 	rules  *Rules
-	filter bool
 	log    *slog.Logger
 	budget *budget
 	uid    int // The uid a client must have
@@ -71,12 +70,12 @@ type Proxy struct {
 // Clients connected at once; the app opens a handful
 const maxClients = 256
 
-func NewProxy(address string, rules *Rules, filter bool) (*Proxy, error) {
+func NewProxy(address string, rules *Rules) (*Proxy, error) {
 	addrs, err := parseAddress(address)
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{bus: addrs, rules: rules, filter: filter, log: slog.Default(), budget: newBudget(), uid: os.Getuid()}, nil
+	return &Proxy{bus: addrs, rules: rules, log: slog.Default(), budget: newBudget(), uid: os.Getuid()}, nil
 }
 
 // Accepts clients until the listener closes. Out of file descriptors or memory, it waits and tries again, as
@@ -219,8 +218,7 @@ func run(opts docopt.Opts) error {
 	}
 	address, _ := opts.String("<address>")
 	path, _ := opts.String("<path>")
-	filter, _ := opts.Bool("--filter")
-	p, err := NewProxy(address, NewRules(rs), filter)
+	p, err := NewProxy(address, NewRules(rs))
 	if err != nil {
 		return err
 	}

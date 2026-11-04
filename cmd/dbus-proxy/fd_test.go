@@ -11,7 +11,7 @@ import (
 func TestFDPassing(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--filter", "--talk="+svcName))
+	c := connect(t, startProxy(t, bus, "--talk="+svcName))
 	if !c.SupportsUnixFDs() {
 		t.Fatal("The proxy didn't agree to pass file descriptors")
 	}

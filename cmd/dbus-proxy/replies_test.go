@@ -12,7 +12,7 @@ import (
 func TestReply(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--filter", "--talk="+svcName))
+	c := connect(t, startProxy(t, bus, "--talk="+svcName))
 	r, err := call(c, svcName, "/org/test", svcIface+".Echo", "back")
 	var s string
 	if err != nil || r.Store(&s) != nil || s != "back" {
@@ -68,7 +68,7 @@ func TestUnaskedReply(t *testing.T) {
 		t.Fatalf("Control: the bus delivered %d unasked replies, want 1", n)
 	}
 
-	c := connect(t, startProxy(t, bus, "--filter"))
+	c := connect(t, startProxy(t, bus))
 	c.Send(unaskedReply(target.Names()[0], 4243), nil)
 	if n := countType(got(300*time.Millisecond), dbus.TypeMethodReply, ""); n != 0 {
 		t.Errorf("Client's unasked reply reached the bus side %d times", n)
@@ -90,7 +90,7 @@ func TestReplySerialOnCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	svcGot := eavesdrop(svc)
-	c := connect(t, startProxy(t, bus, "--filter"))
+	c := connect(t, startProxy(t, bus))
 	clientGot := eavesdrop(c)
 	// A peer calls the client, which never answers
 	peer := connect(t, bus)

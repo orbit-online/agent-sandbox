@@ -104,7 +104,7 @@ run D3premise {
 
 // D4. No eavesdropping: a client gets no call addressed to another
 // (NoEavesdrop: readsOthersTraffic refuses eavesdropping match rules and
-// BecomeMonitor, with and without --filter).
+// BecomeMonitor, whatever the rules).
 assert D4noEavesdrop { system[Guard] implies always no Overheard }
 check D4noEavesdrop for 3 but 2 Client, 1 Peer, 2 Name, 1 Method, 2 Serial, 2 RuleSet, 1..6 steps expect 0
 

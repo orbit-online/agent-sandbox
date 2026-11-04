@@ -101,7 +101,7 @@ func startProxy(t *testing.T, bus string, args ...string) string {
 func startProxyWith(t *testing.T, bus string, tweak func(*Proxy), args ...string) string {
 	t.Helper()
 	sock := filepath.Join(t.TempDir(), "proxy")
-	opts, err := docopt.ParseArgs(usage, append([]string{bus, sock}, args...), "")
+	opts, err := docopt.ParseArgs(usage, append([]string{bus, sock, "--filter"}, args...), "")
 	if err != nil {
 		t.Fatalf("Parse arguments: %v", err)
 	}
@@ -109,8 +109,7 @@ func startProxyWith(t *testing.T, bus string, tweak func(*Proxy), args ...string
 	if err != nil {
 		t.Fatal(err)
 	}
-	filter, _ := opts.Bool("--filter")
-	p, err := NewProxy(bus, NewRules(rs), filter)
+	p, err := NewProxy(bus, NewRules(rs))
 	if err != nil {
 		t.Fatal(err)
 	}

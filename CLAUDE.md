@@ -241,10 +241,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   and xdg-dbus-proxy's quirk of passing all of a ruled name's broadcasts),
   replies (let through to calls let through, refused unasked both ways, a call
   carrying a pending reply serial refused), NameOwnerChanged by policy,
-  `BecomeMonitor` and eavesdropping match rules refused with and without
-  `--filter`, file descriptors both ways, `--fd` (the byte, exit and the
-  socket removed when it closes, as nixpak starts it), everything passing
-  without `--filter`, bad arguments refused, libdbus's `dbus-send` as a
+  `BecomeMonitor` and eavesdropping match rules refused, file descriptors
+  both ways, `--fd` (the byte, exit and the socket removed when it closes, as
+  nixpak starts it), bad arguments refused (`--filter` missing too), libdbus's `dbus-send` as a
   client, sd-bus's pipelined SASL, SASL refusals, an oversized message and a
   message claiming file descriptors that never came; through a client
   speaking the wire itself (`raw_test.go`, `guards_test.go`): a serial reused while pending and

@@ -11,7 +11,7 @@ import (
 func TestHidden(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--filter"))
+	c := connect(t, startProxy(t, bus))
 	if hasOwner(t, c, svcName) {
 		t.Error("NameHasOwner true for a hidden name")
 	}
@@ -30,7 +30,7 @@ func TestHidden(t *testing.T) {
 func TestSee(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--filter", "--see="+svcName))
+	c := connect(t, startProxy(t, bus, "--see="+svcName))
 	if !hasOwner(t, c, svcName) {
 		t.Error("NameHasOwner false for a name the client may see")
 	}
@@ -48,7 +48,7 @@ func TestSee(t *testing.T) {
 func TestTalk(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	c := connect(t, startProxy(t, bus, "--filter", "--talk="+svcName))
+	c := connect(t, startProxy(t, bus, "--talk="+svcName))
 	var s string
 	for _, dest := range []string{svcName, svc.Names()[0]} {
 		for _, p := range []dbus.ObjectPath{"/org/test", "/other"} {
@@ -70,7 +70,7 @@ func TestTalk(t *testing.T) {
 func TestTalkWildcard(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus, "org.test.Svc.Sub")
-	c := connect(t, startProxy(t, bus, "--filter", "--talk=org.test.Svc.*"))
+	c := connect(t, startProxy(t, bus, "--talk=org.test.Svc.*"))
 	for _, dest := range []string{"org.test.Svc.Sub", svc.Names()[0]} {
 		if _, err := call(c, dest, "/org/test", svcIface+".Echo", "hi"); err != nil {
 			t.Errorf("Call %s: %v", dest, err)
@@ -83,7 +83,7 @@ func TestTalkWildcard(t *testing.T) {
 // --own lets the client take a name, and only that one
 func TestOwn(t *testing.T) {
 	bus := startBus(t)
-	c := connect(t, startProxy(t, bus, "--filter", "--own=org.test.Mine", "--see=org.test.Seen"))
+	c := connect(t, startProxy(t, bus, "--own=org.test.Mine", "--see=org.test.Seen"))
 	r, err := c.RequestName("org.test.Mine", dbus.NameFlagDoNotQueue)
 	if err != nil || r != dbus.RequestNameReplyPrimaryOwner {
 		t.Fatalf("RequestName of an owned name: %v %v", r, err)

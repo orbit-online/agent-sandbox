@@ -504,7 +504,8 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   method call without a destination is refused.
 - A reply is a reply by its type. xdg-dbus-proxy takes any message with a reply serial for one, so a method call
   carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
-- Monitoring and eavesdropping are refused without `--filter` too, and an `AddMatch` without an interface counts.
+- `--filter` is required (nixpak and `bwrap-subid.sh` always pass it): there is no mode that passes everything.
+  Monitoring and eavesdropping are refused whatever the rules, and an `AddMatch` without an interface counts.
 - Names in `--see`/`--talk`/`--own`/`--call`/`--broadcast` and rule paths must be valid; a unique name that leaves
   the bus is dropped from the client's table, which is bounded, as are pending replies, SASL lines and clients.
 - Messages are at most 4 MiB (the sandbox's largest are icons; dbus-daemon's default is 32 MiB). Bytes (reader

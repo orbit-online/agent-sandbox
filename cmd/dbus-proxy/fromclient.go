@@ -35,7 +35,7 @@ func isBusCall(m *message) bool {
 		m.header(dbus.FieldInterface) == busIface
 }
 
-// Refused with and without --filter: what lets a client read traffic not addressed to it. The bus resolves a call
+// Refused whatever the rules: what lets a client read traffic not addressed to it. The bus resolves a call
 // without an interface by its member, so those count too
 func readsOthersTraffic(m *message) bool {
 	if m.Type != dbus.TypeMethodCall || m.header(dbus.FieldDestination) != busName {
@@ -149,7 +149,7 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		// Only to a call the client got, and to its caller
 		rs, _ := m.replySerial()
 		call := peerCall{m.header(dbus.FieldDestination), rs}
-		if _, ok := c.awaitPeer[call]; !ok && c.p.filter {
+		if _, ok := c.awaitPeer[call]; !ok {
 			return drop()
 		}
 		delete(c.awaitPeer, call)
@@ -172,9 +172,6 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 	}
 	if readsOthersTraffic(m) {
 		return refuse(errAccessDenied)
-	}
-	if !c.p.filter {
-		return nil, nil
 	}
 	kind := expectNormal
 	hello := isBusCall(m) && m.header(dbus.FieldMember) == "Hello"

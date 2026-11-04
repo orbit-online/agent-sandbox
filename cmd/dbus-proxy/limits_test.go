@@ -82,7 +82,7 @@ func TestMaxPendingFDs(t *testing.T) {
 // SASL: at most maxAuthCommands commands, lines at most maxAuthLine long
 func TestSASLLimits(t *testing.T) {
 	bus := startBus(t)
-	addr := startProxy(t, bus, "--filter")
+	addr := startProxy(t, bus)
 	conn := dialRaw(t, addr)
 	conn.Write([]byte("\x00" + strings.Repeat("ERROR\r\n", maxAuthCommands+8)))
 	r := newReader(conn, nil)
@@ -123,7 +123,7 @@ func silentService(t *testing.T, bus string) {
 func TestPendingReplyCaps(t *testing.T) {
 	bus := startBus(t)
 	silentService(t, bus)
-	addr := startProxy(t, bus, "--filter", "--talk="+svcName)
+	addr := startProxy(t, bus, "--talk="+svcName)
 	rc := rawConnect(t, addr)
 	var buf []byte
 	for i := 0; i <= maxPendingReplies; i++ {
@@ -163,7 +163,7 @@ func TestBodyNotDecoded(t *testing.T) {
 func TestMemoryBudget(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr := startProxyWith(t, bus, func(p *Proxy) { p.budget.maxBytes = 1 << 20 }, "--filter", "--talk="+svcName)
+	addr := startProxyWith(t, bus, func(p *Proxy) { p.budget.maxBytes = 1 << 20 }, "--talk="+svcName)
 	rc := rawConnect(t, addr)
 	big := echoTo(svcName)
 	big.Body = []any{strings.Repeat("x", 2<<20)}
@@ -185,7 +185,7 @@ func TestMemoryBudget(t *testing.T) {
 func TestQueuedFDs(t *testing.T) {
 	bus := startBus(t)
 	const share = 256
-	rc := rawConnectWith(t, startProxyWith(t, bus, func(p *Proxy) { p.budget.clientFDs = share }, "--filter"),
+	rc := rawConnectWith(t, startProxyWith(t, bus, func(p *Proxy) { p.budget.clientFDs = share }),
 		"\x00AUTH EXTERNAL "+hexUID(os.Getuid())+"\r\nNEGOTIATE_UNIX_FD\r\nBEGIN\r\n")
 	peer := connect(t, bus)
 	r, w, _ := os.Pipe()

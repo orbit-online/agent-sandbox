@@ -13,7 +13,7 @@ import (
 // Serials above maxClientSerial are the proxy's, and serial 0 is none: either ends the connection
 func TestClientSerials(t *testing.T) {
 	bus := startBus(t)
-	addr := startProxy(t, bus, "--filter")
+	addr := startProxy(t, bus)
 	for _, serial := range []uint32{maxClientSerial + 1, 0} {
 		rc := rawConnect(t, addr)
 		rc.send(serial, busCall("GetId"))
@@ -34,7 +34,7 @@ func rawWithoutFDs(t *testing.T, addr string) *rawClient {
 
 func TestUnnegotiatedFDs(t *testing.T) {
 	bus := startBus(t)
-	addr := startProxy(t, bus, "--filter")
+	addr := startProxy(t, bus)
 	rc := rawWithoutFDs(t, addr)
 	rc.sendFDs(2, busCall("GetId"), 1)
 	if !rc.closed() {
@@ -86,21 +86,18 @@ func TestBusCallsRefused(t *testing.T) {
 	if err := direct.BusObject().Call("AddMatch", 0, "eavesdrop=true").Err; err != nil {
 		t.Fatalf("Control: the bus refused an AddMatch without an interface: %v", err)
 	}
-	for _, args := range [][]string{nil, {"--filter"}} {
-		rc := rawConnect(t, startProxy(t, bus, args...))
-		for i, m := range []*dbus.Message{
-			noIface("AddMatch", "eavesdrop=true"),
-			noIface("BecomeMonitor", []string{}, uint32(0)),
-			busCall("AddMatch", uint32(1)),
-		} {
-			serial := uint32(10 + i)
-			rc.send(serial, m)
-			if r := rc.waitReply(serial); r.header(dbus.FieldErrorName) != errAccessDenied {
-				t.Errorf("%v %s(%v): got %q", args, m.Headers[dbus.FieldMember], m.Body, r.header(dbus.FieldErrorName))
-			}
+	rc := rawConnect(t, startProxy(t, bus))
+	for i, m := range []*dbus.Message{
+		noIface("AddMatch", "eavesdrop=true"),
+		noIface("BecomeMonitor", []string{}, uint32(0)),
+		busCall("AddMatch", uint32(1)),
+	} {
+		serial := uint32(10 + i)
+		rc.send(serial, m)
+		if r := rc.waitReply(serial); r.header(dbus.FieldErrorName) != errAccessDenied {
+			t.Errorf("%s(%v): got %q", m.Headers[dbus.FieldMember], m.Body, r.header(dbus.FieldErrorName))
 		}
 	}
-	rc := rawConnect(t, startProxy(t, bus, "--filter"))
 	// A member the proxy handles on the bus's own interface, on another
 	for i, iface := range []string{"org.freedesktop.DBus.Properties", "org.test.Other"} {
 		m := busCall("ListNames")
@@ -112,24 +109,22 @@ func TestBusCallsRefused(t *testing.T) {
 	}
 }
 
-// A method call without a destination is refused by the proxy, with and without --filter
+// A method call without a destination is refused by the proxy
 func TestNoDestinationCall(t *testing.T) {
 	bus := startBus(t)
-	for _, args := range [][]string{nil, {"--filter"}} {
-		rc := rawConnect(t, startProxy(t, bus, args...))
-		m := echoTo("")
-		delete(m.Headers, dbus.FieldDestination)
-		rc.send(2, m)
-		if r := rc.waitReply(2); r.header(dbus.FieldErrorName) != errAccessDenied || r.header(dbus.FieldSender) != "" {
-			t.Errorf("%v: got %q from %q", args, r.header(dbus.FieldErrorName), r.header(dbus.FieldSender))
-		}
+	rc := rawConnect(t, startProxy(t, bus))
+	m := echoTo("")
+	delete(m.Headers, dbus.FieldDestination)
+	rc.send(2, m)
+	if r := rc.waitReply(2); r.header(dbus.FieldErrorName) != errAccessDenied || r.header(dbus.FieldSender) != "" {
+		t.Errorf("Got %q from %q", r.header(dbus.FieldErrorName), r.header(dbus.FieldSender))
 	}
 }
 
 // A peer that called the client becomes visible to it
 func TestCallerVisible(t *testing.T) {
 	bus := startBus(t)
-	c := connect(t, startProxy(t, bus, "--filter"))
+	c := connect(t, startProxy(t, bus))
 	peer := connect(t, bus)
 	if hasOwner(t, c, peer.Names()[0]) {
 		t.Fatal("A peer is visible before it called")
@@ -145,7 +140,7 @@ func TestCallerVisible(t *testing.T) {
 // A client with another uid is refused before SASL
 func TestPeerUID(t *testing.T) {
 	bus := startBus(t)
-	addr := startProxyWith(t, bus, func(p *Proxy) { p.uid = os.Getuid() + 1 }, "--filter")
+	addr := startProxyWith(t, bus, func(p *Proxy) { p.uid = os.Getuid() + 1 })
 	conn := dialRaw(t, addr)
 	conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\n"))
 	if line, err := newReader(conn, nil).readLine(); err == nil {
@@ -156,7 +151,7 @@ func TestPeerUID(t *testing.T) {
 // File descriptors sent along with SASL end the connection
 func TestFDsDuringAuth(t *testing.T) {
 	bus := startBus(t)
-	conn := dialRaw(t, startProxy(t, bus, "--filter"))
+	conn := dialRaw(t, startProxy(t, bus))
 	auth := []byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\n")
 	if err := unix.Sendmsg(rawFD(t, conn), auth, unix.UnixRights(int(os.Stdin.Fd())), nil, 0); err != nil {
 		t.Fatal(err)
@@ -176,7 +171,7 @@ func TestFDsDuringAuth(t *testing.T) {
 func TestWildcardHold(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus, "org.test.Svc.Sub")
-	conn := dialRaw(t, startProxy(t, bus, "--filter", "--talk=org.test.Svc.*"))
+	conn := dialRaw(t, startProxy(t, bus, "--talk=org.test.Svc.*"))
 	hello, _ := encodeNew(busCall("Hello"), 1)
 	echo, _ := encodeNew(echoTo(svc.Names()[0]), 2)
 	conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\nBEGIN\r\n"))

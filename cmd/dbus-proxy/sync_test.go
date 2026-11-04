@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -56,29 +55,18 @@ func TestSyncFD(t *testing.T) {
 	}
 }
 
-// Without --filter everything but eavesdropping passes: a call to a name without rules, every name listed
-func TestNoFilter(t *testing.T) {
-	bus := startBus(t)
-	startService(t, bus, "org.test.Extra")
-	c := connect(t, startProxy(t, bus))
-	if _, err := call(c, svcName, "/other", svcIface+".Echo", "x"); err != nil {
-		t.Errorf("Call without --filter: %v", err)
-	}
-	if names := listNames(t, c); !strings.Contains(names, " org.test.Extra ") {
-		t.Errorf("ListNames without --filter: %s", names)
-	}
-}
-
 // Arguments the proxy doesn't take are refused, as are invalid names and rules
 func TestBadArguments(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "proxy")
 	for _, args := range [][]string{
-		{"unix:path=/x", sock, "--sloppy-names"},
-		{"unix:path=/x", sock, "--talk=:1.2"},
-		{"unix:path=/x", sock, "--talk=nodots"},
-		{"unix:path=/x", sock, "--call=org.test.X"},
-		{"unix:path=/x", sock, "--call=org.test.X=*@bad"},
-		{"tcp:host=localhost", sock},
+		{"unix:path=/x", sock, "--filter", "--sloppy-names"},
+		{"unix:path=/x", sock, "--filter", "--talk=:1.2"},
+		{"unix:path=/x", sock, "--filter", "--talk=nodots"},
+		{"unix:path=/x", sock, "--filter", "--call=org.test.X"},
+		{"unix:path=/x", sock, "--filter", "--call=org.test.X=*@bad"},
+		{"tcp:host=localhost", sock, "--filter"},
+		// Without --filter xdg-dbus-proxy passes everything; this proxy always filters
+		{"unix:path=/x", sock, "--talk=org.test.X"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

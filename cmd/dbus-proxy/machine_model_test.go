@@ -21,7 +21,7 @@ const (
 )
 
 // The proxy's command line in the machine's world
-var staticArgs = []string{"--filter", "--talk=org.test.Talk", "--call=org.test.Call=org.test.Iface.Echo@/org/test",
+var staticArgs = []string{"--talk=org.test.Talk", "--call=org.test.Call=org.test.Iface.Echo@/org/test",
 	"--see=org.test.See", "--talk=" + lazyName, "--own=org.test.Own"}
 
 // The live sets the broker adds, each valid under the session bus's policy
@@ -111,7 +111,7 @@ type model struct {
 
 func newModel() *model {
 	rs := NewRuleSet()
-	for _, a := range staticArgs[1:] {
+	for _, a := range staticArgs {
 		flag, arg, _ := strings.Cut(a, "=")
 		var err error
 		switch flag {

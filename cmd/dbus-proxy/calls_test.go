@@ -30,7 +30,7 @@ func TestCallRules(t *testing.T) {
 		{"*", "/other", "Echo", ""},
 		{"org.test.Other.*", "/org/test", "Echo", errAccessDenied},
 	} {
-		c := connect(t, startProxy(t, bus, "--filter", "--call="+svcName+"="+tc.rule))
+		c := connect(t, startProxy(t, bus, "--call="+svcName+"="+tc.rule))
 		_, err := call(c, svcName, tc.path, svcIface+"."+tc.method, "x")
 		wantErr(t, tc.rule+" "+string(tc.path)+" "+tc.method, err, tc.want)
 	}
@@ -52,7 +52,7 @@ func TestBroadcast(t *testing.T) {
 		{[]string{"--broadcast=" + svcName + "=org.test.Iface.Sig@/org/test"}, "/other", true},
 		{[]string{"--talk=" + svcName}, "/other", true},
 	} {
-		c := connect(t, startProxy(t, bus, append([]string{"--filter"}, tc.args...)...))
+		c := connect(t, startProxy(t, bus, tc.args...))
 		got := signals(c, 300*time.Millisecond)
 		if err := c.AddMatchSignal(dbus.WithMatchInterface(svcIface)); err != nil {
 			t.Fatal(err)

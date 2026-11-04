@@ -16,7 +16,7 @@ func ends(t *testing.T, set map[string]any, use func(c *dbus.Conn, svc *dbus.Con
 	t.Helper()
 	bus := startBus(t)
 	svc := startService(t, bus)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	c := connect(t, addr)
 	ctl := dialControl(t, ctlPath)
 	set["op"], set["id"] = "add", "g"
@@ -93,7 +93,7 @@ func TestLiveUseListed(t *testing.T) {
 // bus's message takes the rules there are as it's judged
 func TestLiveUseNameOwnerChanged(t *testing.T) {
 	bus := startBus(t)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	c := connect(t, addr)
 	got := signals(c, 500*time.Millisecond)
 	if err := c.AddMatchSignal(dbus.WithMatchSender(busName), dbus.WithMatchMember("NameOwnerChanged")); err != nil {
@@ -122,7 +122,7 @@ func TestLiveUseNameOwnerChanged(t *testing.T) {
 func TestLiveClientRefresh(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr, ctlPath := startLive(t, bus, "--filter", "--see=org.test.Seen")
+	addr, ctlPath := startLive(t, bus, "--see=org.test.Seen")
 	c := connect(t, addr)
 	got := signals(c, 500*time.Millisecond)
 	if err := c.AddMatchSignal(dbus.WithMatchSender(busName), dbus.WithMatchMember("NameOwnerChanged")); err != nil {
@@ -146,7 +146,7 @@ func TestLiveClientRefresh(t *testing.T) {
 // watching them
 func TestLiveRemoveMatch(t *testing.T) {
 	bus := startBus(t)
-	addr, ctlPath := startLive(t, bus, "--filter")
+	addr, ctlPath := startLive(t, bus)
 	c := connect(t, addr)
 	monitor := connect(t, bus)
 	if _, err := call(monitor, busName, busPath, "org.freedesktop.DBus.Monitoring.BecomeMonitor",

@@ -19,7 +19,7 @@ import (
 func TestLibdbusClient(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr := startProxy(t, bus, "--filter", "--talk="+svcName)
+	addr := startProxy(t, bus, "--talk="+svcName)
 	out, err := exec.Command("dbus-send", "--bus="+addr, "--print-reply", "--dest="+svcName, "/org/test",
 		svcIface+".Echo", "string:from-libdbus").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "from-libdbus") {
@@ -32,7 +32,7 @@ func hexUID(uid int) string { return hex.EncodeToString([]byte(strconv.Itoa(uid)
 // sd-bus's way: EXTERNAL without an initial response, everything up to the first message in one write
 func TestPipelinedSASL(t *testing.T) {
 	bus := startBus(t)
-	conn := dialRaw(t, startProxy(t, bus, "--filter"))
+	conn := dialRaw(t, startProxy(t, bus))
 	hello, err := encodeNew(busCall("Hello"), 1)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestPipelinedSASL(t *testing.T) {
 // Another uid, a mechanism other than EXTERNAL and junk are refused
 func TestSASLRefused(t *testing.T) {
 	bus := startBus(t)
-	addr := startProxy(t, bus, "--filter")
+	addr := startProxy(t, bus)
 	for _, tc := range []struct{ send, want string }{
 		{"\x00AUTH EXTERNAL " + hexUID(os.Getuid()+1) + "\r\n", "REJECTED EXTERNAL"},
 		{"\x00AUTH EXTERNAL\r\nDATA " + hexUID(os.Getuid()+1) + "\r\n", "DATA"},
@@ -90,7 +90,7 @@ func TestSASLRefused(t *testing.T) {
 // After authenticating, a message longer than the limit ends the connection before the proxy reads it
 func TestMessageBounds(t *testing.T) {
 	bus := startBus(t)
-	addr := startProxy(t, bus, "--filter")
+	addr := startProxy(t, bus)
 	auth := "\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\nBEGIN\r\n"
 	long := make([]byte, 16)
 	copy(long, "l\x01\x00\x01")

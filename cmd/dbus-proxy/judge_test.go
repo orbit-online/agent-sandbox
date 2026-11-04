@@ -15,7 +15,7 @@ func testClient(t *testing.T, args ...string) *client {
 			t.Fatal(err)
 		}
 	}
-	return &client{p: &Proxy{rules: NewRules(rs), filter: true}, awaitBus: map[uint32]expect{},
+	return &client{p: &Proxy{rules: NewRules(rs)}, awaitBus: map[uint32]expect{},
 		awaitPeer: map[peerCall]struct{}{}, names: newNameTable()}
 }
 

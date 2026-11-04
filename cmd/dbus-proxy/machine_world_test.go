@@ -121,7 +121,7 @@ func (w *world) startBus() {
 // The proxy, in the test's process, with the static rules and a control socket
 func (w *world) startProxy() {
 	sock := filepath.Join(w.dir, "proxy")
-	opts, err := docopt.ParseArgs(usage, append([]string{w.bus, sock}, staticArgs...), "")
+	opts, err := docopt.ParseArgs(usage, append([]string{w.bus, sock, "--filter"}, staticArgs...), "")
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func (w *world) startProxy() {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	p, err := NewProxy(w.bus, NewRules(rs), true)
+	p, err := NewProxy(w.bus, NewRules(rs))
 	if err != nil {
 		w.t.Fatal(err)
 	}

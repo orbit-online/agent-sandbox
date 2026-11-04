@@ -130,7 +130,7 @@ func TestSerialReuse(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
 	got := eavesdrop(svc)
-	rc := rawConnect(t, startProxy(t, bus, "--filter", "--see="+svcName))
+	rc := rawConnect(t, startProxy(t, bus, "--see="+svcName))
 	rc.send(3, busCall("GetNameOwner", svcName), busCall("Hello"))
 	if !rc.closed() {
 		t.Error("Serial reuse didn't end the connection")
@@ -139,7 +139,7 @@ func TestSerialReuse(t *testing.T) {
 		t.Errorf("The service got %d calls", n)
 	}
 	// ListNames, then GetId on its serial: the ListNames reply mustn't pass unfiltered
-	rc = rawConnect(t, startProxy(t, bus, "--filter"))
+	rc = rawConnect(t, startProxy(t, bus))
 	rc.send(5, busCall("ListNames"), busCall("GetId"))
 	if !rc.closed() {
 		t.Error("Serial reuse didn't end the connection")
@@ -150,7 +150,7 @@ func TestSerialReuse(t *testing.T) {
 func TestSecondHello(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
-	rc := rawConnect(t, startProxy(t, bus, "--filter", "--see="+svcName))
+	rc := rawConnect(t, startProxy(t, bus, "--see="+svcName))
 	rc.send(2, busCall("Hello"))
 	if r := rc.waitReply(2); r.header(dbus.FieldErrorName) != errAccessDenied {
 		t.Errorf("Second Hello: %v %q", r.Type, r.header(dbus.FieldErrorName))

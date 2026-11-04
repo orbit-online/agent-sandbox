@@ -47,10 +47,7 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 		rs, _ := m.replySerial()
 		e, ok := c.awaitBus[rs]
 		if !ok {
-			if c.p.filter {
-				return drop()
-			}
-			return nil, nil
+			return drop()
 		}
 		if e.fromBus && m.header(dbus.FieldSender) != busName {
 			// Only the bus answers a call to the bus; this one stays pending for it
@@ -58,9 +55,6 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 		}
 		delete(c.awaitBus, rs)
 		return c.reply(m, e, fakes, drop)
-	}
-	if !c.p.filter {
-		return nil, nil
 	}
 	if isNameOwnerChanged(m) && !c.passNameOwnerChanged(m) {
 		return drop()
