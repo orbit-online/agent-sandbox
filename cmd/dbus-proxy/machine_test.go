@@ -28,8 +28,8 @@ func TestProxyMachine(t *testing.T) {
 		// rapid sorts the actions by name and draws earlier ones more often: named by this order, the attacker's
 		// sequencing moves come first
 		actions := map[string]func(*rapid.T){"": all[""]}
-		for i, a := range []string{"Call", "BusCall", "ForgeReply", "Start", "Hello", "Connect", "Acquire",
-			"CallClient", "Reply", "ServiceReply", "Broadcast", "Release", "Disconnect"} {
+		for i, a := range []string{"Call", "Generated", "BusCall", "ForgeReply", "Start", "Hello", "Connect",
+			"Acquire", "CallClient", "Reply", "ServiceReply", "Broadcast", "Release", "Disconnect"} {
 			actions[fmt.Sprintf("%02d%s", i, a)] = all[a]
 		}
 		rt.Repeat(actions)
@@ -104,7 +104,7 @@ func (mc *machine) Check(t *rapid.T) {
 		got := mc.received(mc.party(role))
 		want := mc.m.want[role]
 		slices.Sort(want)
-		if !slices.Equal(got, want) {
+		if !sameMessages(got, want) {
 			t.Fatalf("%s received\n  %s\nwant\n  %s", role, strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 		}
 	}
@@ -175,7 +175,11 @@ func (mc *machine) normal(p *party, m *inMsg) string {
 	case dbus.TypeError:
 		return fmt.Sprintf("E %s %s %s", tok(m.replySerial), sender, m.errName)
 	case dbus.TypeMethodCall:
+		// The machine's own calls carry their token first; a generated one's is by its sender and serial
 		t, _ := firstString(m.body)
+		if tok, ok := mc.w.callTok(m.sender, m.serial); ok && !isToken(t) {
+			t = tok
+		}
 		return fmt.Sprintf("C %s %s %s -> %s", m.member, t, sender, mc.w.role(m.dest))
 	}
 	dest := "*"

@@ -70,9 +70,10 @@ type world struct {
 	addr string // the proxy's
 	obs  *party
 	svcs []*party
-	// Each connection's role by its unique name
-	mu    sync.Mutex
-	roles map[string]string
+	// Each connection's role by its unique name, and the tokens of generated calls by sender and serial
+	mu       sync.Mutex
+	roles    map[string]string
+	callToks map[string]string
 }
 
 func newWorld(t *rapid.T) *world {
@@ -80,7 +81,7 @@ func newWorld(t *rapid.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &world{t: t, dir: dir, roles: map[string]string{}}
+	w := &world{t: t, dir: dir, roles: map[string]string{}, callToks: map[string]string{}}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	w.startBus()
 	w.startProxy()
