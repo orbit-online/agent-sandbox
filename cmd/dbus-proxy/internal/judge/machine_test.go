@@ -41,10 +41,18 @@ var (
 type busMsg func() *dbus.Message
 
 type judgeMachine struct {
-	rules  *rules.Rules
-	j      *Judge
-	hello  bool
-	serial uint32
+	rules    *rules.Rules
+	j        *Judge
+	hello    bool
+	selfTalk bool // The client's Hello was answered: its own name is TALK
+	// The serial of the client's Hello
+	helloSerial uint32
+	serial      uint32
+	// The refusals made up for the client's messages, by serial: the error the oracle says (machine_oracle_test.go)
+	refusals map[uint32]string
+	// The refused calls whose Ping awaits the bus's reply, and the ListNames calls awaiting theirs
+	rewrites  map[uint32]bool
+	listNames map[uint32]bool
 	// The bus: who owns each name now, every name each unique name ever owned, the names a match rule watches and
 	// what it has yet to send
 	owner   map[string]string
@@ -68,7 +76,8 @@ func newJudgeMachine(t *rapid.T) *judgeMachine {
 // A new connection, after the last one ended
 func (m *judgeMachine) connect() {
 	m.j = New(m.rules, true)
-	m.hello, m.serial = false, 0
+	m.hello, m.selfTalk, m.helloSerial, m.serial = false, false, 0, 0
+	m.refusals, m.rewrites, m.listNames = map[uint32]string{}, map[uint32]bool{}, map[uint32]bool{}
 	m.watched, m.queue = map[string]int{}, nil
 	m.pending = map[uint32]bool{}
 }
@@ -177,7 +186,7 @@ func (m *judgeMachine) Hello(t *rapid.T) {
 	if a.Verdict != Forward {
 		t.Fatalf("Hello: %v", a.Verdict)
 	}
-	m.hello = true
+	m.hello, m.helloSerial = true, serial
 	m.pending[serial] = true
 	m.queue = append(m.queue, func() *dbus.Message { return reply(serial, busName, self) })
 }
@@ -199,6 +208,7 @@ func (m *judgeMachine) Call(t *rapid.T) {
 		m.pending[serial] = false
 	case Replace:
 		// Refused: a Ping goes to the bus on the call's serial, whose reply becomes the refusal
+		m.rewrites[serial] = true
 		m.queue = append(m.queue, func() *dbus.Message { return reply(serial, busName) })
 	case Drop:
 		t.Fatal("A call awaiting a reply dropped")
@@ -246,7 +256,12 @@ func (m *judgeMachine) Reply(t *rapid.T) {
 	if rapid.Bool().Draw(t, "proxy's own") {
 		serial = MaxClientSerial + rapid.Uint32Range(1, 64).Draw(t, "own")
 	}
-	m.fromBus(t, reply(serial, rapid.SampledFrom(append([]string{busName}, peers...)).Draw(t, "sender")))
+	sender := rapid.SampledFrom(append([]string{busName}, peers...)).Draw(t, "sender")
+	if sender == busName && m.listNames[serial] {
+		// The bus answers ListNames with its names; the proxy ends a connection whose bus doesn't
+		t.Skip("ListNames")
+	}
+	m.fromBus(t, reply(serial, sender))
 }
 
 func (m *judgeMachine) fromBus(t *rapid.T, msg *dbus.Message) {
@@ -257,6 +272,22 @@ func (m *judgeMachine) fromBus(t *rapid.T, msg *dbus.Message) {
 		t.Fatal(err)
 	}
 	m.busTakes(t, a.Calls)
+	sender := w.Header(dbus.FieldSender)
+	if rs, ok := w.ReplySerial(); ok && sender == busName && m.rewrites[rs] {
+		// The bus's reply to a refusal's Ping, or a forged one in its place: it becomes the refusal
+		delete(m.rewrites, rs)
+		m.checkRefusal(t, rs, a)
+		return
+	}
+	if rs, ok := w.ReplySerial(); ok && a.Verdict == Replace {
+		// A ListNames reply, filtered
+		if toBus, ok := m.pending[rs]; !ok || !toBus || sender != busName {
+			t.Fatalf("D2: a reply to %d made up for the client unasked", rs)
+		}
+		delete(m.pending, rs)
+		delete(m.listNames, rs)
+		return
+	}
 	if a.Verdict != Forward {
 		return
 	}
@@ -269,6 +300,9 @@ func (m *judgeMachine) fromBus(t *rapid.T, msg *dbus.Message) {
 			t.Fatalf("D2: %s's reply to a call to the bus reached the client", w.Header(dbus.FieldSender))
 		}
 		delete(m.pending, rs)
+		if name, _ := arg0(w); rs == m.helloSerial && name == self {
+			m.selfTalk = true
+		}
 		return
 	}
 	if name, _ := arg0(w); m.policy(name) < rules.See {

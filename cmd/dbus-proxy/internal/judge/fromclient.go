@@ -171,6 +171,10 @@ func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 	switch v {
 	case filterHasOwner, filterGetOwner:
 		if j.arg0Policy(m) < rules.See {
+			if !generatesReply(m) {
+				// No reply expected: a Ping would await the bus's reply forever
+				return dropped, nil
+			}
 			if v == filterGetOwner {
 				return j.rewrite(m, errorReply(m.Serial(), ErrNameHasNoOwner))
 			}
