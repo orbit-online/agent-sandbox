@@ -3,6 +3,7 @@ package duration
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"time"
@@ -18,10 +19,15 @@ func Parse(s string) (time.Duration, error) {
 	}
 	var d time.Duration
 	for i, unit := range []time.Duration{time.Hour, time.Minute, time.Second} {
-		if m[i+1] != "" {
-			n, _ := strconv.Atoi(m[i+1])
-			d += time.Duration(n) * unit
+		if m[i+1] == "" {
+			continue
 		}
+		// Past what a Duration holds (292 years) it would wrap around: a lease of minutes for one of millions of hours
+		n, err := strconv.ParseInt(m[i+1], 10, 64)
+		if err != nil || n > (math.MaxInt64-int64(d))/int64(unit) {
+			return 0, fmt.Errorf("Too long a duration: %q", s)
+		}
+		d += time.Duration(n) * unit
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("Not a positive duration: %q", s)
