@@ -131,6 +131,13 @@ single-user Nix store, and an environment doc for the Claude running inside.
   opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
   paths to its own Qt's, Plasma's style and platform theme included: the
   host's may be another Qt.
+- `nix/patches/`: patches to what the module builds from its inputs, each
+  with a header saying why. `nixpak-launcher-reaper.patch` (meant for
+  upstream, in `git format-patch` form below the header) keeps nixpak's
+  launcher's child reaper off the children the launcher waits for itself,
+  which it could reap first, so the launcher panicked with `waitid: no child
+  processes`. The module applies it through `nixpakPkgs`, whose `callPackage`
+  patches the package nixpak builds from its `launcher/`.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker, rewritten for
   the broker as gateway (declared host tools, host sockets at stable
@@ -218,7 +225,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   the devices (`/dev/kvm` once, from `kvm` and `devices`) and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
-  refused), nixpak's D-Bus proxy wrapper running our `dbus-proxy` (no
+  refused), nixpak's launcher the patched one (its reaper's `Start` in the binary, one launcher in each
+  launcher's closure), nixpak's D-Bus proxy wrapper running our `dbus-proxy` (no
   xdg-dbus-proxy in the closure) with the bus address, the socket, `--config` and `--filter` as its argv for
   both launchers, work's config the portal's rules alone and its overview the same, and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
@@ -440,14 +448,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
-- `vm-launch`, `vm-store`, `vm-work`, `vm-live`: the NixOS VM test
-  (`nix/checks/vm/`, needs KVM), in four parts that Nix runs in parallel;
+- `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`: the NixOS VM test
+  (`nix/checks/vm/`, needs KVM), in five parts that Nix runs in parallel;
   `vm` builds them all. Each boots the same two machines (built once) and
   runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
   network, `store` its store dir swapped or without a record and `--shell`
   starting the app, `work` the launcher `work` next to the default one with
-  its permissions broker, `live` the broker's state machine tests. A router VM runs
+  its permissions broker, `live` the broker's state machine tests, `loop` the
+  default launcher launched and stopped 100 times, none failing (about 4 minutes; it prints
+  the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
+  some, see `nix/patches/`). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself, which listens on 443. On the
   workstation VM, alice launches the sandbox with a stub app

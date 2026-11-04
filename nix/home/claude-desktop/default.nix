@@ -63,10 +63,24 @@ let
   permissionsBroker = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   permissionsWindow = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-window;
   # nixpak's D-Bus proxy: its launcher runs pkgs.xdg-dbus-proxy in a wrapper whose path it sets at build time
-  # (docs/permissions.md, D-Bus), so the proxy comes in through the pkgs it gets. Only that attribute: nixpak's
-  # callPackage and everything else still see nixpkgs as is
+  # (docs/permissions.md, D-Bus), so the proxy comes in through the pkgs it gets. And nixpak's launcher, which it builds
+  # with this callPackage, with its reaper leaving alone the children it waits for (nix/patches/nixpak-launcher-reaper.patch).
+  # Everything else nixpak calls or takes sees nixpkgs as is
   nixpakPkgs = pkgs // {
     xdg-dbus-proxy = dbusProxy;
+    callPackage =
+      fn: args:
+      let
+        drv = pkgs.callPackage fn args;
+      in
+      if toString fn == "${inputs.nixpak}/launcher" then
+        drv.overrideAttrs (o: {
+          patches = (o.patches or [ ]) ++ [ ../../patches/nixpak-launcher-reaper.patch ];
+          # The patch is against nixpak's repo, the package's source its launcher/
+          patchFlags = [ "-p2" ];
+        })
+      else
+        drv;
   };
   # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
   commandsOf =

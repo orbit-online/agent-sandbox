@@ -1,0 +1,286 @@
+nixpak's launcher (nixpak/nixpak a7a1f41), meant for upstream as it stands below (git format-patch).
+
+The launcher is a child subreaper whose reaper goroutine reaps any exited child with wait4(-1, WNOHANG). It can reap
+the pasta child that StartPasta waits for with exec.Cmd.Run, which then fails with ECHILD and the launcher panics
+("panic: waitid: no child processes") before the sandbox starts. In the VM test 1 to 8 launches in 200 failed so; the
+patch leaves the children the launcher waits for itself to their exec.Cmd.Wait. The module applies it to nixpak's
+launcher package (nixpakPkgs in nix/home/claude-desktop/default.nix, with -p2: the package's source is launcher/), and
+the VM test's loop part checks it. Drop it once nixpak has the fix.
+
+From 0240fe88b5513574e123b6dee65e23e7bc442d64 Mon Sep 17 00:00:00 2001
+From: Anders Ingemann <aim@orbit.online>
+Date: Wed, 4 Nov 2026 15:36:21 +0100
+Subject: [PATCH] launcher: don't reap children that exec.Cmd.Wait waits for
+
+The child reaper runs wait4(-1, WNOHANG) on every SIGCHLD and reaps any
+child that has exited. The launcher also waits for some of its children
+itself with exec.Cmd.Wait: pasta (StartPasta), bwrap
+(WaitUntilParentExit, Close) and the D-Bus and Wayland proxies (Close).
+When the reaper gets to one of them first, exec.Cmd.Wait fails with
+ECHILD. In StartPasta this ends in
+
+    panic: waitid: no child processes
+
+WaitUntilParentExit panics the same way, and the proxies' Close ignore
+the error.
+
+Children the launcher waits for are now started with childReaper.Start,
+which records their pid under the reaper's mutex. The reaper looks at
+the next exited child with waitid(P_ALL, WEXITED|WNOWAIT) and reaps it
+only when its pid isn't recorded. childReaper.Wait drops the pid once
+exec.Cmd.Wait returns and triggers another sweep for the children that
+exited behind it.
+
+a970f21 ("Fix race-condition while waiting for child exit") handled the
+same race for the sandbox child by ignoring ECHILD. That doesn't work
+for pasta and bwrap, whose exit status the launcher uses.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ launcher/bubblewrap.go    |  6 +--
+ launcher/dbus_proxy.go    |  4 +-
+ launcher/pasta.go         |  2 +-
+ launcher/reaper.go        | 98 ++++++++++++++++++++++++++++++++++-----
+ launcher/wayland_proxy.go |  4 +-
+ 5 files changed, 95 insertions(+), 19 deletions(-)
+
+diff --git a/launcher/bubblewrap.go b/launcher/bubblewrap.go
+index b3c986f..bfda048 100644
+--- a/launcher/bubblewrap.go
++++ b/launcher/bubblewrap.go
+@@ -71,7 +71,7 @@ func StartBwrap(conf Config, flatpakMetadata FlatpakMetadata) (bwrap Bwrap) {
+ 	bwrap.InfoRead = bwrapInfoRead
+ 	bwrap.BlockWrite = bwrapBlockWrite
+ 
+-	if err := cmd.Start(); err != nil {
++	if err := childReaper.Start(cmd); err != nil {
+ 		panic(err)
+ 	}
+ 	defer func() {
+@@ -121,7 +121,7 @@ func (bwrap *Bwrap) NotifySandboxFinished() {
+ }
+ 
+ func (bwrap *Bwrap) WaitUntilParentExit() error {
+-	return bwrap.Cmd.Wait()
++	return childReaper.Wait(bwrap.Cmd)
+ }
+ 
+ func (bwrap *Bwrap) KillAndWaitUntilChildExit(kill bool) {
+@@ -150,7 +150,7 @@ func (bwrap *Bwrap) CloseChild() {
+ 
+ func (bwrap *Bwrap) Close() {
+ 	bwrap.Cmd.Process.Signal(syscall.SIGTERM)
+-	bwrap.Cmd.Wait()
++	childReaper.Wait(bwrap.Cmd)
+ 	bwrap.BlockWrite.Close()
+ 	bwrap.InfoRead.Close()
+ }
+diff --git a/launcher/dbus_proxy.go b/launcher/dbus_proxy.go
+index 0609dab..e781242 100644
+--- a/launcher/dbus_proxy.go
++++ b/launcher/dbus_proxy.go
+@@ -34,7 +34,7 @@ func StartDbusproxy(conf Config) (dbus Dbus) {
+ 	dbus.Cmd = cmd
+ 	dbus.SyncRead = dbusSyncRead
+ 
+-	if err := cmd.Start(); err != nil {
++	if err := childReaper.Start(cmd); err != nil {
+ 		panic(err)
+ 	}
+ 	defer func() {
+@@ -59,5 +59,5 @@ func (dbus *Dbus) WaitUntilStartup() {
+ 
+ func (dbus *Dbus) Close() {
+ 	dbus.SyncRead.Close()
+-	dbus.Cmd.Wait()
++	childReaper.Wait(dbus.Cmd)
+ }
+diff --git a/launcher/pasta.go b/launcher/pasta.go
+index fc83093..51655d4 100644
+--- a/launcher/pasta.go
++++ b/launcher/pasta.go
+@@ -14,7 +14,7 @@ func StartPasta(conf Config, pid int) {
+ 	pasta.Stdout = os.Stdout
+ 	pasta.Stderr = os.Stderr
+ 
+-	if err := pasta.Run(); err != nil {
++	if err := childReaper.Run(pasta); err != nil {
+ 		panic(err)
+ 	}
+ }
+diff --git a/launcher/reaper.go b/launcher/reaper.go
+index 69c4c2e..dc00d96 100644
+--- a/launcher/reaper.go
++++ b/launcher/reaper.go
+@@ -2,22 +2,35 @@ package main
+ 
+ import (
+ 	"os"
++	"os/exec"
+ 	"os/signal"
++	"sync"
++	"unsafe"
+ 
+ 	"golang.org/x/sys/unix"
+ )
+ 
+ type ChildReaper struct {
+ 	Signals chan os.Signal
++	// Held while the reaper reaps, and while a child it must leave alone starts
++	mu *sync.Mutex
++	// Children whose starter waits for them (exec.Cmd.Wait): reaping one would leave that wait with ECHILD
++	owned map[int]bool
+ }
+ 
++// The one the launcher runs
++var childReaper *ChildReaper
++
+ func StartChildReaper() (reaper ChildReaper) {
+ 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, uintptr(1), 0, 0, 0); err != nil {
+ 		panic(err)
+ 	}
+ 
+ 	reaper.Signals = make(chan os.Signal, 1)
++	reaper.mu = &sync.Mutex{}
++	reaper.owned = map[int]bool{}
+ 	reaper.Open()
++	childReaper = &reaper
+ 
+ 	go func() {
+ 		for {
+@@ -30,29 +43,88 @@ func StartChildReaper() (reaper ChildReaper) {
+ 	return
+ }
+ 
+-func (reaper *ChildReaper) Open() {
+-	signal.Notify(reaper.Signals, unix.SIGCHLD)
++// Start starts cmd as a child the caller waits for with Wait, which the reaper leaves alone
++func (reaper *ChildReaper) Start(cmd *exec.Cmd) error {
++	reaper.mu.Lock()
++	defer reaper.mu.Unlock()
++	if err := cmd.Start(); err != nil {
++		return err
++	}
++	reaper.owned[cmd.Process.Pid] = true
++	return nil
++}
++
++// Wait waits for a child Start started and hands its pid back to the reaper
++func (reaper *ChildReaper) Wait(cmd *exec.Cmd) error {
++	err := cmd.Wait()
++	reaper.mu.Lock()
++	delete(reaper.owned, cmd.Process.Pid)
++	reaper.mu.Unlock()
++	// Zombies queued behind this one, which the reaper's last pass stopped at
++	select {
++	case reaper.Signals <- unix.SIGCHLD:
++	default:
++	}
++	return err
++}
++
++func (reaper *ChildReaper) Run(cmd *exec.Cmd) error {
++	if err := reaper.Start(cmd); err != nil {
++		return err
++	}
++	return reaper.Wait(cmd)
++}
++
++// siginfo_t as waitid fills it for a child, as Go's internal/syscall/unix.SiginfoChild
++const is64bit = ^uint(0) >> 63
++
++type siginfoChild struct {
++	Signo  int32
++	Errno  int32
++	Code   int32
++	_      [is64bit]int32
++	Pid    int32
++	Uid    uint32
++	Status int32
++	_      [128 - (6+is64bit)*4]byte
+ }
+ 
+ func (reaper *ChildReaper) ReapChild(wait bool) bool {
+-	options := 0
++	reaper.mu.Lock()
++	defer reaper.mu.Unlock()
++
++	// Looks first (WNOWAIT): the next waitable child may be one whose starter waits for it
++	options := unix.WEXITED | unix.WNOWAIT
+ 	if !wait {
+-		options = unix.WNOHANG
++		options |= unix.WNOHANG
+ 	}
+ 
+ 	for {
+-		var status unix.WaitStatus
+-		var err error
+-		pid, err := unix.Wait4(-1, &status, options, nil)
+-		switch err {
+-		case nil:
+-			return pid > 0
++		var info siginfoChild
++		_, _, errno := unix.Syscall6(unix.SYS_WAITID, unix.P_ALL, 0, uintptr(unsafe.Pointer(&info)), uintptr(options), 0, 0)
++		switch errno {
++		case 0:
+ 		case unix.ECHILD:
+ 			return false
+ 		case unix.EINTR:
+ 			continue
+ 		default:
+-			panic(err)
++			panic(errno)
++		}
++		if info.Pid == 0 || reaper.owned[int(info.Pid)] {
++			return false
++		}
++		var status unix.WaitStatus
++		for {
++			_, err := unix.Wait4(int(info.Pid), &status, unix.WNOHANG, nil)
++			switch err {
++			case nil, unix.ECHILD:
++				return true
++			case unix.EINTR:
++				continue
++			default:
++				panic(err)
++			}
+ 		}
+ 	}
+ }
+@@ -64,6 +136,10 @@ func (reaper *ChildReaper) WaitAndReapAllChildren() {
+ 	reaper.Open()
+ }
+ 
++func (reaper *ChildReaper) Open() {
++	signal.Notify(reaper.Signals, unix.SIGCHLD)
++}
++
+ func (reaper *ChildReaper) Close() {
+ 	signal.Stop(reaper.Signals)
+ }
+diff --git a/launcher/wayland_proxy.go b/launcher/wayland_proxy.go
+index 6a73d61..896e8e5 100644
+--- a/launcher/wayland_proxy.go
++++ b/launcher/wayland_proxy.go
+@@ -23,7 +23,7 @@ func StartWaylandProxy(conf Config) (waylandProxy WaylandProxy) {
+ 
+ 	waylandProxy.Cmd = cmd
+ 
+-	if err := cmd.Start(); err != nil {
++	if err := childReaper.Start(cmd); err != nil {
+ 		panic(err)
+ 	}
+ 	defer func() {
+@@ -42,7 +42,7 @@ func (waylandProxy *WaylandProxy) WaitUntilStartup() {
+ 
+ func (waylandProxy *WaylandProxy) Close() {
+ 	waylandProxy.Cmd.Process.Signal(syscall.SIGTERM)
+-	waylandProxy.Cmd.Wait()
++	childReaper.Wait(waylandProxy.Cmd)
+ 
+ 	// Cleanup socket file if it still exists
+ 	os.Remove(waylandProxy.SocketPath)
+-- 
+2.54.0
+

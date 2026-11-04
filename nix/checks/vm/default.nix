@@ -303,4 +303,5 @@ lib.genAttrs [
   "store"
   "work"
   "live"
+  "loop"
 ] test

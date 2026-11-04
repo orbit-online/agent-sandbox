@@ -883,6 +883,13 @@ in
             grep -qF -- '${dbusProxy}/bin/xdg-dbus-proxy "$@"' "$exe" || { echo "$exe doesn't run ${dbusProxy}" >&2; exit 1; }
           done
           ! grep -qxF -- "${pkgs.xdg-dbus-proxy}" "$paths" || { echo "xdg-dbus-proxy is in the closure" >&2; exit 1; }
+          # nixpak's launcher is the one nixpak-launcher-reaper.patch made: its reaper has Start (a Go binary keeps its
+          # functions' names, stripped too), and no other launcher is in either closure
+          for c in "$paths" "$workClosure/store-paths"; do
+            nl=$(grep -E -- '-nixpak-launcher-[^/]*$' "$c")
+            [[ $(wc -l <<<"$nl") == 1 ]] || { echo "nixpak launchers in the closure: $nl" >&2; exit 1; }
+            grep -qaF 'main.(*ChildReaper).Start' "$nl/bin/launcher" || { echo "$nl is nixpak's launcher without the reaper patch" >&2; exit 1; }
+          done
 
           # The tray icon by the colour scheme, also on GNOME (an asar stores its files as they are)
           asar=$(grep -- '-claude-desktop-app\.asar$' "$paths")
