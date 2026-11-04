@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -51,9 +52,9 @@ type peerCall struct {
 type client struct {
 	p             *Proxy
 	conn, bus     *net.UnixConn
-	toClient      *sender
-	toBus         *sender
-	clientR, busR *reader
+	toClient      *wire.Sender
+	toBus         *wire.Sender
+	clientR, busR *wire.Reader
 	unixFDs       bool
 	log           *slog.Logger
 
@@ -67,7 +68,7 @@ type client struct {
 	// there are none; syncing counts the GetNameOwner replies still out
 	synced  chan struct{}
 	syncing int
-	acct    *account
+	acct    *wire.Account
 	// The rules this message is judged by, taken under mu as it's judged: a live set added or removed applies from
 	// the next message (livesets.go)
 	cur *Rules
@@ -93,29 +94,29 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 		matches:    map[*RuleSet][]string{},
 		fakeSerial: maxClientSerial,
 		log:        p.log,
-		acct:       p.budget.account(),
+		acct:       p.budget.Account(),
 	}
 	if err := c.connect(); err != nil {
 		c.log.Warn("Client refused", "err", err)
 		if c.bus != nil {
 			c.bus.Close()
 		}
-		c.clientR.close()
+		c.clientR.Close()
 		if c.busR != nil {
-			c.busR.close()
+			c.busR.Close()
 		}
 		return
 	}
 	defer func() {
-		c.clientR.close()
-		c.busR.close()
+		c.clientR.Close()
+		c.busR.Close()
 	}()
 	c.run()
 }
 
 // Checks the peer, connects to the bus and authenticates both sides
 func (c *client) connect() error {
-	c.clientR = newReader(c.conn, c.acct)
+	c.clientR = wire.NewReader(c.conn, c.acct)
 	cred, err := peerCred(c.conn)
 	if err != nil {
 		return err
@@ -127,7 +128,7 @@ func (c *client) connect() error {
 	if c.bus, err = dialBus(c.p.bus); err != nil {
 		return err
 	}
-	c.busR = newReader(c.bus, c.acct)
+	c.busR = wire.NewReader(c.bus, c.acct)
 	deadline := time.Now().Add(authTimeout)
 	c.conn.SetDeadline(deadline)
 	c.bus.SetDeadline(deadline)
@@ -143,7 +144,7 @@ func (c *client) connect() error {
 	if _, err := c.bus.Write([]byte("BEGIN\r\n")); err != nil {
 		return err
 	}
-	if len(c.clientR.fds) > 0 || len(c.busR.fds) > 0 {
+	if c.clientR.PendingFDs() > 0 || c.busR.PendingFDs() > 0 {
 		return fmt.Errorf("File descriptors during authentication")
 	}
 	c.conn.SetDeadline(time.Time{})
@@ -168,8 +169,8 @@ func peerCred(conn *net.UnixConn) (*unix.Ucred, error) {
 
 // Forwards both ways until either side ends or breaks a rule, then closes both
 func (c *client) run() {
-	c.toClient = newSender(c.conn, c.acct)
-	c.toBus = newSender(c.bus, c.acct)
+	c.toClient = wire.NewSender(c.conn, c.acct)
+	c.toBus = wire.NewSender(c.bus, c.acct)
 	done := make(chan struct{})
 	var once sync.Once
 	stop := func(side string, err error) {
@@ -178,8 +179,8 @@ func (c *client) run() {
 			close(done)
 			c.conn.Close()
 			c.bus.Close()
-			c.toClient.close()
-			c.toBus.close()
+			c.toClient.Close()
+			c.toBus.Close()
 		})
 	}
 	c.kill = func() { stop("live rules", errRevoked) }
@@ -192,8 +193,8 @@ func (c *client) run() {
 	}{
 		{"client", func() error { return c.readClient(done) }},
 		{"bus", c.readBus},
-		{"to client", c.toClient.run},
-		{"to bus", c.toBus.run},
+		{"to client", c.toClient.Run},
+		{"to bus", c.toBus.Run},
 	} {
 		wg.Add(1)
 		go func() {
@@ -206,19 +207,19 @@ func (c *client) run() {
 
 func (c *client) readClient(done chan struct{}) error {
 	for {
-		m, err := c.clientR.readMessage()
+		m, err := c.clientR.ReadMessage()
 		if err != nil {
 			return err
 		}
 		// The names of live sets added since, before the message is judged by them
 		if err := c.syncSets(done); err != nil {
-			m.closeFDs()
-			m.release()
+			m.CloseFDs()
+			m.Release()
 			return err
 		}
 		err = c.fromClient(m)
-		m.closeFDs()
-		m.release()
+		m.CloseFDs()
+		m.Release()
 		if err != nil {
 			return err
 		}
@@ -230,7 +231,7 @@ func (c *client) readClient(done chan struct{}) error {
 			select {
 			case <-synced:
 			case <-done:
-				return errClosed
+				return wire.ErrClosed
 			}
 		}
 	}
@@ -238,13 +239,13 @@ func (c *client) readClient(done chan struct{}) error {
 
 func (c *client) readBus() error {
 	for {
-		m, err := c.busR.readMessage()
+		m, err := c.busR.ReadMessage()
 		if err != nil {
 			return err
 		}
 		err = c.fromBus(m)
-		m.closeFDs()
-		m.release()
+		m.CloseFDs()
+		m.Release()
 		if err != nil {
 			return err
 		}
@@ -252,14 +253,12 @@ func (c *client) readBus() error {
 }
 
 // Passes a message on as it came; the sender owns its file descriptors from here
-func forward(s *sender, m *message) error {
-	data, err := m.encode()
+func forward(s *wire.Sender, m *wire.Message) error {
+	data, err := m.Encode()
 	if err != nil {
 		return fmt.Errorf("Encode message: %w", err)
 	}
-	fds := m.fds
-	m.fds = nil
-	return s.send(data, fds)
+	return s.Send(data, m.TakeFDs())
 }
 
 // Records a reply expected from the bus side; called with mu held. A serial already awaiting its reply ends the
@@ -283,7 +282,7 @@ func (c *client) fakeCall(out *[][]byte, m *dbus.Message, e expect) error {
 	}
 	c.fakeSerial++
 	e.fromBus = true
-	data, err := encodeNew(m, c.fakeSerial)
+	data, err := wire.Encode(m, c.fakeSerial)
 	if err != nil {
 		return err
 	}
@@ -294,9 +293,9 @@ func (c *client) fakeCall(out *[][]byte, m *dbus.Message, e expect) error {
 	return nil
 }
 
-func sendAll(s *sender, msgs [][]byte) error {
+func sendAll(s *wire.Sender, msgs [][]byte) error {
 	for _, data := range msgs {
-		if err := s.send(data, nil); err != nil {
+		if err := s.Send(data, nil); err != nil {
 			return err
 		}
 	}

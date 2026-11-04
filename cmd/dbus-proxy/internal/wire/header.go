@@ -1,4 +1,4 @@
-package main
+package wire
 
 import (
 	"bytes"
@@ -118,60 +118,4 @@ func cString(raw []byte, pos, n, end int) (string, error) {
 		return "", errors.New("Header string with a nul or invalid UTF-8")
 	}
 	return string(s), nil
-}
-
-// The body decoded, for the messages the proxy looks into: none larger than limit, so a client can't make the proxy
-// spend more on decoding than the bus driver's arguments take
-func (m *message) decodeBody(limit int) bool {
-	if m.decoded {
-		return m.Body != nil
-	}
-	m.decoded = true
-	if len(m.body) > limit || len(m.raw) == 0 {
-		return false
-	}
-	msg, err := decode(m.raw)
-	if err != nil {
-		return false
-	}
-	m.Body = msg.Body
-	return m.Body != nil
-}
-
-// godbus's decoder, which recovers its own panics; this guards against any it doesn't
-func decode(raw []byte) (msg *dbus.Message, err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			msg, err = nil, fmt.Errorf("Decoder panic: %v", p)
-		}
-	}()
-	return dbus.DecodeMessageWithFDs(bytes.NewReader(raw), nil)
-}
-
-// Encodes a message as forwarded: the header fields the proxy parsed and checked, re-encoded by godbus in the
-// original byte order, then the body as it came, so the bus routes by exactly the fields the proxy checked
-func (m *message) encode() ([]byte, error) {
-	hdr := &dbus.Message{Type: m.Type, Flags: m.Flags, Headers: m.Headers}
-	return encodeWith(hdr, m.order, m.serial, m.body)
-}
-
-// Encodes msg with the given serial; a non-nil body replaces msg's (empty) one
-func encodeWith(msg *dbus.Message, order binary.ByteOrder, serial uint32, body []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	if _, err := msg.EncodeToWithFDs(&buf, order); err != nil {
-		return nil, err
-	}
-	out := buf.Bytes()
-	order.PutUint32(out[8:12], serial)
-	if body != nil {
-		if len(msg.Body) != 0 {
-			return nil, errors.New("Message has a body already")
-		}
-		order.PutUint32(out[4:8], uint32(len(body)))
-		out = append(out, body...)
-	}
-	if len(out) > maxMessageSize {
-		return nil, fmt.Errorf("Message too long: %d bytes", len(out))
-	}
-	return out, nil
 }

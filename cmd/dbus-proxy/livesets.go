@@ -1,6 +1,10 @@
 package main
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
+)
 
 // A client's side of the live rule sets (control.go): which sets it used, and their names looked up when one is added
 
@@ -92,7 +96,7 @@ func (c *client) syncSets(done chan struct{}) error {
 		select {
 		case <-synced:
 		case <-done:
-			return errClosed
+			return wire.ErrClosed
 		}
 	}
 	return nil

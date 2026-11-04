@@ -1,4 +1,4 @@
-package main
+package wire
 
 import (
 	"bytes"
@@ -17,12 +17,19 @@ import (
 // with strings of valid UTF-8 and no nul, parseHeader takes too, unless a string's terminator isn't a nul, which
 // godbus doesn't check. Run longer with go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s
 func FuzzParseHeader(f *testing.F) {
-	for _, m := range []*dbus.Message{busCall("GetNameOwner", "org.test.A"), errorReply(7, errAccessDenied),
+	for _, m := range []*dbus.Message{
+		{Type: dbus.TypeMethodCall, Headers: map[dbus.HeaderField]dbus.Variant{
+			dbus.FieldPath:        dbus.MakeVariant(dbus.ObjectPath("/org/freedesktop/DBus")),
+			dbus.FieldDestination: dbus.MakeVariant("org.freedesktop.DBus"), dbus.FieldInterface: dbus.MakeVariant("org.freedesktop.DBus"),
+			dbus.FieldMember: dbus.MakeVariant("GetNameOwner"), dbus.FieldSignature: dbus.MakeVariant(dbus.SignatureOf(""))},
+			Body: []any{"org.test.A"}},
+		{Type: dbus.TypeError, Headers: map[dbus.HeaderField]dbus.Variant{
+			dbus.FieldReplySerial: dbus.MakeVariant(uint32(7)), dbus.FieldErrorName: dbus.MakeVariant("org.test.Error")}},
 		{Type: dbus.TypeSignal, Headers: map[dbus.HeaderField]dbus.Variant{
 			dbus.FieldPath: dbus.MakeVariant(dbus.ObjectPath("/a/b")), dbus.FieldInterface: dbus.MakeVariant("a.b"),
 			dbus.FieldMember: dbus.MakeVariant("C"), dbus.FieldSender: dbus.MakeVariant(":1.5"),
 			dbus.FieldUnixFDs: dbus.MakeVariant(uint32(1))}}} {
-		data, err := encodeNew(m, 1)
+		data, err := Encode(m, 1)
 		if err != nil {
 			f.Fatal(err)
 		}

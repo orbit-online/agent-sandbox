@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 // What a message from the client gets, after xdg-dbus-proxy's get_dbus_method_handler
@@ -22,39 +23,39 @@ const (
 	filterNameList
 )
 
-func generatesReply(m *message) bool {
+func generatesReply(m *wire.Message) bool {
 	return m.Type == dbus.TypeMethodCall && m.Flags&dbus.FlagNoReplyExpected == 0
 }
 
-func isReply(m *message) bool {
+func isReply(m *wire.Message) bool {
 	return m.Type == dbus.TypeMethodReply || m.Type == dbus.TypeError
 }
 
-func isBusCall(m *message) bool {
-	return m.Type == dbus.TypeMethodCall && m.header(dbus.FieldDestination) == busName &&
-		m.header(dbus.FieldInterface) == busIface
+func isBusCall(m *wire.Message) bool {
+	return m.Type == dbus.TypeMethodCall && m.Header(dbus.FieldDestination) == busName &&
+		m.Header(dbus.FieldInterface) == busIface
 }
 
 // Refused whatever the rules: what lets a client read traffic not addressed to it. The bus resolves a call
 // without an interface by its member, so those count too
-func readsOthersTraffic(m *message) bool {
-	if m.Type != dbus.TypeMethodCall || m.header(dbus.FieldDestination) != busName {
+func readsOthersTraffic(m *wire.Message) bool {
+	if m.Type != dbus.TypeMethodCall || m.Header(dbus.FieldDestination) != busName {
 		return false
 	}
-	iface, member := m.header(dbus.FieldInterface), m.header(dbus.FieldMember)
+	iface, member := m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)
 	if iface == "org.freedesktop.DBus.Monitoring" || (member == "BecomeMonitor" && (iface == "" || iface == busIface)) {
 		return true
 	}
 	if member == "AddMatch" && (iface == "" || iface == busIface) {
-		rule, ok := m.arg0()
+		rule, ok := arg0(m)
 		return !ok || isEavesdrop(rule)
 	}
 	return false
 }
 
 // The verdict for a call or signal from the client, by its destination's policy and the rules
-func (c *client) verdict(m *message) verdict {
-	dest := m.header(dbus.FieldDestination)
+func (c *client) verdict(m *wire.Message) verdict {
+	dest := m.Header(dbus.FieldDestination)
 	p, fs := c.lookup(dest)
 	if p < policySee {
 		return hide
@@ -62,9 +63,9 @@ func (c *client) verdict(m *message) verdict {
 	if p < policyTalk {
 		return deny
 	}
-	iface, member := m.header(dbus.FieldInterface), m.header(dbus.FieldMember)
+	iface, member := m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)
 	if dest != busName {
-		if p == policyOwn || anyMatches(fs, filterCall, m.header(dbus.FieldPath), iface, member) {
+		if p == policyOwn || anyMatches(fs, filterCall, m.Header(dbus.FieldPath), iface, member) {
 			return pass
 		}
 		return deny
@@ -99,8 +100,8 @@ func (c *client) verdict(m *message) verdict {
 }
 
 // The policy of the name in a bus call's first argument; none when it has no string there
-func (c *client) arg0Policy(m *message) policy {
-	name, ok := m.arg0()
+func (c *client) arg0Policy(m *wire.Message) policy {
+	name, ok := arg0(m)
 	if !ok || name == "" {
 		return policyNone
 	}
@@ -109,11 +110,11 @@ func (c *client) arg0Policy(m *message) policy {
 }
 
 // Handles a message from the client: forwarded, refused through a Ping whose reply becomes the refusal, or dropped
-func (c *client) fromClient(m *message) error {
+func (c *client) fromClient(m *wire.Message) error {
 	if m.Serial() > maxClientSerial {
 		return fmt.Errorf("Client serial %d is in the proxy's range", m.Serial())
 	}
-	if len(m.fds) > 0 && !c.unixFDs {
+	if len(m.FDs()) > 0 && !c.unixFDs {
 		return fmt.Errorf("File descriptors from a client that didn't negotiate them")
 	}
 	var fakes [][]byte
@@ -125,8 +126,8 @@ func (c *client) fromClient(m *message) error {
 		return err
 	}
 	if out != nil {
-		m.closeFDs()
-		if err := c.toBus.send(out, nil); err != nil {
+		m.CloseFDs()
+		if err := c.toBus.Send(out, nil); err != nil {
 			return err
 		}
 	} else if m.Message != nil {
@@ -139,16 +140,16 @@ func (c *client) fromClient(m *message) error {
 
 // Decides under mu. Returns the bytes to send instead of m, or nil with m left to forward, or nil with m.Message
 // cleared to drop it
-func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
+func (c *client) judgeClient(m *wire.Message, fakes *[][]byte) ([]byte, error) {
 	drop := func() ([]byte, error) {
-		m.closeFDs()
+		m.CloseFDs()
 		m.Message = nil
 		return nil, nil
 	}
 	if isReply(m) {
 		// Only to a call the client got, and to its caller
-		rs, _ := m.replySerial()
-		call := peerCall{m.header(dbus.FieldDestination), rs}
+		rs, _ := m.ReplySerial()
+		call := peerCall{m.Header(dbus.FieldDestination), rs}
 		if _, ok := c.awaitPeer[call]; !ok {
 			return drop()
 		}
@@ -161,12 +162,12 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		}
 		return c.rewrite(m, errorReply(m.Serial(), name))
 	}
-	if _, ok := m.replySerial(); ok {
+	if _, ok := m.ReplySerial(); ok {
 		// xdg-dbus-proxy takes any message with a reply serial for a reply, so a call carrying the serial of a
 		// pending call to the client would pass unchecked
 		return refuse(errAccessDenied)
 	}
-	if m.Type == dbus.TypeMethodCall && m.header(dbus.FieldDestination) == "" {
+	if m.Type == dbus.TypeMethodCall && m.Header(dbus.FieldDestination) == "" {
 		// The bus refuses them, or delivers them to monitors only; the proxy doesn't rely on that
 		return refuse(errAccessDenied)
 	}
@@ -174,7 +175,7 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		return refuse(errAccessDenied)
 	}
 	kind := expectNormal
-	hello := isBusCall(m) && m.header(dbus.FieldMember) == "Hello"
+	hello := isBusCall(m) && m.Header(dbus.FieldMember) == "Hello"
 	if hello {
 		if c.helloSeen {
 			// The bus would end the connection; refusing it here keeps a second Hello's reply from being taken
@@ -208,7 +209,7 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 	}
 	switch v {
 	case hide:
-		dest := m.header(dbus.FieldDestination)
+		dest := m.Header(dbus.FieldDestination)
 		if (dest != "" && dest[0] == ':') || m.Flags&dbus.FlagNoAutoStart != 0 {
 			return refuse(errNameHasNoOwner)
 		}
@@ -217,7 +218,7 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 		return refuse(errAccessDenied)
 	}
 	if generatesReply(m) {
-		e := expect{kind: kind, fromBus: m.header(dbus.FieldDestination) == busName}
+		e := expect{kind: kind, fromBus: m.Header(dbus.FieldDestination) == busName}
 		if err := c.expectFromBus(m.Serial(), e); err != nil {
 			return nil, err
 		}
@@ -230,8 +231,8 @@ func (c *client) judgeClient(m *message, fakes *[][]byte) ([]byte, error) {
 }
 
 // A refused call goes to the bus as a Ping with its serial; the reply to it becomes the refusal
-func (c *client) rewrite(m *message, reply *dbus.Message) ([]byte, error) {
-	data, err := encodeNew(ping(m.Flags), m.Serial())
+func (c *client) rewrite(m *wire.Message, reply *dbus.Message) ([]byte, error) {
+	data, err := wire.Encode(ping(m.Flags), m.Serial())
 	if err != nil {
 		return nil, err
 	}

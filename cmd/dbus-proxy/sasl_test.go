@@ -4,15 +4,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/godbus/dbus/v5"
-	"golang.org/x/sys/unix"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 // libdbus's client (dbus-send) through the proxy
@@ -33,23 +31,23 @@ func hexUID(uid int) string { return hex.EncodeToString([]byte(strconv.Itoa(uid)
 func TestPipelinedSASL(t *testing.T) {
 	bus := startBus(t)
 	conn := dialRaw(t, startProxy(t, bus))
-	hello, err := encodeNew(busCall("Hello"), 1)
+	hello, err := wire.Encode(busCall("Hello"), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	conn.Write(append([]byte("\x00AUTH EXTERNAL\r\nDATA\r\nNEGOTIATE_UNIX_FD\r\nBEGIN\r\n"), hello...))
-	r := newReader(conn, nil)
+	r := wire.NewReader(conn, nil)
 	for _, want := range []string{"DATA", "OK ", "AGREE_UNIX_FD"} {
-		line, err := r.readLine()
+		line, err := r.ReadLine()
 		if err != nil || !strings.HasPrefix(line, want) {
 			t.Fatalf("Got %q (%v), want %q", line, err, want)
 		}
 	}
-	m, err := r.readMessage()
+	m, err := r.ReadMessage()
 	if err != nil {
 		t.Fatalf("Hello reply: %v", err)
 	}
-	if id, _ := m.arg0(); !strings.HasPrefix(id, ":") {
+	if id, _ := arg0(m); !strings.HasPrefix(id, ":") {
 		t.Errorf("Hello reply %v", m.Message)
 	}
 }
@@ -66,13 +64,13 @@ func TestSASLRefused(t *testing.T) {
 	} {
 		conn := dialRaw(t, addr)
 		conn.Write([]byte(tc.send))
-		r := newReader(conn, nil)
-		line, err := r.readLine()
+		r := wire.NewReader(conn, nil)
+		line, err := r.ReadLine()
 		if err != nil || line != tc.want {
 			t.Errorf("%q: got %q (%v), want %q", tc.send, line, err, tc.want)
 		}
 		if tc.want == "DATA" {
-			if line, _ := r.readLine(); line != "REJECTED EXTERNAL" {
+			if line, _ := r.ReadLine(); line != "REJECTED EXTERNAL" {
 				t.Errorf("DATA with another uid: got %q", line)
 			}
 		}
@@ -81,7 +79,7 @@ func TestSASLRefused(t *testing.T) {
 	for _, send := range []string{"\x00BEGIN\r\n", "\x00AUTH EXTERNAL\x01\r\n", "x"} {
 		conn := dialRaw(t, addr)
 		conn.Write([]byte(send))
-		if _, err := newReader(conn, nil).readLine(); err == nil {
+		if _, err := wire.NewReader(conn, nil).ReadLine(); err == nil {
 			t.Errorf("%q: connection still open", send)
 		}
 	}
@@ -94,7 +92,7 @@ func TestMessageBounds(t *testing.T) {
 	auth := "\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\nBEGIN\r\n"
 	long := make([]byte, 16)
 	copy(long, "l\x01\x00\x01")
-	binary.LittleEndian.PutUint32(long[4:], maxMessageSize)
+	binary.LittleEndian.PutUint32(long[4:], wire.MaxMessageSize)
 	binary.LittleEndian.PutUint32(long[8:], 1)
 	binary.LittleEndian.PutUint32(long[12:], 8)
 
@@ -102,62 +100,13 @@ func TestMessageBounds(t *testing.T) {
 		conn := dialRaw(t, addr)
 		conn.Write([]byte(auth))
 		conn.Write(msg)
-		r := newReader(conn, nil)
-		if line, _ := r.readLine(); !strings.HasPrefix(line, "OK ") {
+		r := wire.NewReader(conn, nil)
+		if line, _ := r.ReadLine(); !strings.HasPrefix(line, "OK ") {
 			t.Fatalf("%s: auth: %q", name, line)
 		}
-		_, err := r.readMessage()
+		_, err := r.ReadMessage()
 		if err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Errorf("%s: the connection is still open: %v", name, err)
-		}
-	}
-}
-
-func withUnixFDs(m *dbus.Message, n uint32) *dbus.Message {
-	m.Headers[dbus.FieldUnixFDs] = dbus.MakeVariant(n)
-	return m
-}
-
-// A message claiming more file descriptors than arrived is refused; one that claims those that came gets them
-func TestFDClaim(t *testing.T) {
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, b := os.NewFile(uintptr(fds[0]), "a"), os.NewFile(uintptr(fds[1]), "b")
-	defer a.Close()
-	defer b.Close()
-	fc, err := net.FileConn(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fc.Close()
-	r := newReader(fc.(*net.UnixConn), nil)
-	defer r.close()
-	for _, tc := range []struct {
-		claim, send uint32
-		ok          bool
-	}{{1, 1, true}, {2, 1, false}} {
-		msg, err := encodeNew(withUnixFDs(busCall("Hello"), tc.claim), 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pass := make([]int, tc.send)
-		for i := range pass {
-			pass[i] = int(a.Fd())
-		}
-		if err := unix.Sendmsg(int(a.Fd()), msg, unix.UnixRights(pass...), nil, 0); err != nil {
-			t.Fatal(err)
-		}
-		m, err := r.readMessage()
-		if (err == nil) != tc.ok {
-			t.Errorf("Claim %d, send %d: %v", tc.claim, tc.send, err)
-		}
-		if m != nil {
-			if len(m.fds) != int(tc.claim) {
-				t.Errorf("Got %d fds, want %d", len(m.fds), tc.claim)
-			}
-			m.closeFDs()
 		}
 	}
 }

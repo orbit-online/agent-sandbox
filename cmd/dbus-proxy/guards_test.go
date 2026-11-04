@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -59,15 +60,15 @@ func TestUnnegotiatedFDs(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	rc.send(3, busCall("GetId"))
 	for {
-		m, err := rc.r.readMessage()
+		m, err := rc.r.ReadMessage()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if m.header(dbus.FieldMember) == "WithFD" || len(m.fds) > 0 {
+		if m.Header(dbus.FieldMember) == "WithFD" || len(m.FDs()) > 0 {
 			t.Error("File descriptors reached a client that didn't negotiate them")
 		}
-		m.closeFDs()
-		if rs, _ := m.replySerial(); rs == 3 {
+		m.CloseFDs()
+		if rs, _ := m.ReplySerial(); rs == 3 {
 			break
 		}
 	}
@@ -94,8 +95,8 @@ func TestBusCallsRefused(t *testing.T) {
 	} {
 		serial := uint32(10 + i)
 		rc.send(serial, m)
-		if r := rc.waitReply(serial); r.header(dbus.FieldErrorName) != errAccessDenied {
-			t.Errorf("%s(%v): got %q", m.Headers[dbus.FieldMember], m.Body, r.header(dbus.FieldErrorName))
+		if r := rc.waitReply(serial); r.Header(dbus.FieldErrorName) != errAccessDenied {
+			t.Errorf("%s(%v): got %q", m.Headers[dbus.FieldMember], m.Body, r.Header(dbus.FieldErrorName))
 		}
 	}
 	// A member the proxy handles on the bus's own interface, on another
@@ -103,8 +104,8 @@ func TestBusCallsRefused(t *testing.T) {
 		m := busCall("ListNames")
 		m.Headers[dbus.FieldInterface] = dbus.MakeVariant(iface)
 		rc.send(uint32(20+i), m)
-		if r := rc.waitReply(uint32(20 + i)); r.header(dbus.FieldErrorName) != errAccessDenied {
-			t.Errorf("%s.ListNames on the bus: got %q", iface, r.header(dbus.FieldErrorName))
+		if r := rc.waitReply(uint32(20 + i)); r.Header(dbus.FieldErrorName) != errAccessDenied {
+			t.Errorf("%s.ListNames on the bus: got %q", iface, r.Header(dbus.FieldErrorName))
 		}
 	}
 }
@@ -116,8 +117,8 @@ func TestNoDestinationCall(t *testing.T) {
 	m := echoTo("")
 	delete(m.Headers, dbus.FieldDestination)
 	rc.send(2, m)
-	if r := rc.waitReply(2); r.header(dbus.FieldErrorName) != errAccessDenied || r.header(dbus.FieldSender) != "" {
-		t.Errorf("Got %q from %q", r.header(dbus.FieldErrorName), r.header(dbus.FieldSender))
+	if r := rc.waitReply(2); r.Header(dbus.FieldErrorName) != errAccessDenied || r.Header(dbus.FieldSender) != "" {
+		t.Errorf("Got %q from %q", r.Header(dbus.FieldErrorName), r.Header(dbus.FieldSender))
 	}
 }
 
@@ -143,7 +144,7 @@ func TestPeerUID(t *testing.T) {
 	addr := startProxyWith(t, bus, func(p *Proxy) { p.uid = os.Getuid() + 1 })
 	conn := dialRaw(t, addr)
 	conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\n"))
-	if line, err := newReader(conn, nil).readLine(); err == nil {
+	if line, err := wire.NewReader(conn, nil).ReadLine(); err == nil {
 		t.Errorf("A client of another uid got %q", line)
 	}
 }
@@ -156,10 +157,10 @@ func TestFDsDuringAuth(t *testing.T) {
 	if err := unix.Sendmsg(rawFD(t, conn), auth, unix.UnixRights(int(os.Stdin.Fd())), nil, 0); err != nil {
 		t.Fatal(err)
 	}
-	hello, _ := encodeNew(busCall("Hello"), 1)
+	hello, _ := wire.Encode(busCall("Hello"), 1)
 	conn.Write(append([]byte("BEGIN\r\n"), hello...))
-	rc := &rawClient{t: t, conn: conn, r: newReader(conn, nil)}
-	if line, err := rc.r.readLine(); err != nil || !strings.HasPrefix(line, "OK ") {
+	rc := &rawClient{t: t, conn: conn, r: wire.NewReader(conn, nil)}
+	if line, err := rc.r.ReadLine(); err != nil || !strings.HasPrefix(line, "OK ") {
 		t.Fatalf("SASL: %q %v", line, err)
 	}
 	if !rc.closed() {
@@ -172,13 +173,13 @@ func TestHelloHold(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus, "org.test.Svc.Sub")
 	conn := dialRaw(t, startProxy(t, bus, "--talk=org.test.Svc.Sub"))
-	hello, _ := encodeNew(busCall("Hello"), 1)
-	echo, _ := encodeNew(echoTo(svc.Names()[0]), 2)
+	hello, _ := wire.Encode(busCall("Hello"), 1)
+	echo, _ := wire.Encode(echoTo(svc.Names()[0]), 2)
 	conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID(os.Getuid()) + "\r\nBEGIN\r\n"))
 	conn.Write(append(hello, echo...))
-	rc := &rawClient{t: t, conn: conn, r: newReader(conn, nil)}
-	rc.r.readLine()
+	rc := &rawClient{t: t, conn: conn, r: wire.NewReader(conn, nil)}
+	rc.r.ReadLine()
 	if r := rc.waitReply(2); r.Type != dbus.TypeMethodReply {
-		t.Errorf("Call to the name's owner right after Hello: %q", r.header(dbus.FieldErrorName))
+		t.Errorf("Call to the name's owner right after Hello: %q", r.Header(dbus.FieldErrorName))
 	}
 }

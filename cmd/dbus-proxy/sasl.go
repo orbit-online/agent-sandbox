@@ -7,6 +7,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 // Commands a client may send before BEGIN; real clients need a handful
@@ -14,12 +16,12 @@ const maxAuthCommands = 32
 
 // Authenticates to the bus with EXTERNAL as the proxy's own uid and returns the bus's GUID. The proxy's first byte
 // goes without credentials: dbus-daemon takes them from SO_PEERCRED
-func authBus(conn *net.UnixConn, r *reader, uid int) (string, error) {
+func authBus(conn *net.UnixConn, r *wire.Reader, uid int) (string, error) {
 	hexUID := hex.EncodeToString([]byte(strconv.Itoa(uid)))
 	if _, err := conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID + "\r\n")); err != nil {
 		return "", err
 	}
-	line, err := r.readLine()
+	line, err := r.ReadLine()
 	if err != nil {
 		return "", err
 	}
@@ -34,11 +36,11 @@ func authBus(conn *net.UnixConn, r *reader, uid int) (string, error) {
 }
 
 // Asks the bus to pass file descriptors
-func negotiateFDsBus(conn *net.UnixConn, r *reader) (bool, error) {
+func negotiateFDsBus(conn *net.UnixConn, r *wire.Reader) (bool, error) {
 	if _, err := conn.Write([]byte("NEGOTIATE_UNIX_FD\r\n")); err != nil {
 		return false, err
 	}
-	line, err := r.readLine()
+	line, err := r.ReadLine()
 	if err != nil {
 		return false, err
 	}
@@ -51,7 +53,7 @@ func negotiateFDsBus(conn *net.UnixConn, r *reader) (bool, error) {
 // passing when the client asks for it. Returns whether the client agreed to it
 type saslServer struct {
 	conn      *net.UnixConn
-	r         *reader
+	r         *wire.Reader
 	peerUID   int
 	guid      string
 	negotiate func() (bool, error)
@@ -76,10 +78,9 @@ func (s *saslServer) externalOK(hexID string) bool {
 }
 
 func (s *saslServer) run() (bool, error) {
-	if err := s.r.fill(1); err != nil {
+	if b, err := s.r.ReadByte(); err != nil {
 		return false, err
-	}
-	if s.r.consume(1)[0] != 0 {
+	} else if b != 0 {
 		return false, errors.New("Client's first byte is not nul")
 	}
 	const (
@@ -93,7 +94,7 @@ func (s *saslServer) run() (bool, error) {
 		if i >= maxAuthCommands {
 			return false, errors.New("Too many SASL commands")
 		}
-		line, err := s.r.readLine()
+		line, err := s.r.ReadLine()
 		if err != nil {
 			return false, err
 		}

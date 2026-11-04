@@ -13,6 +13,7 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
@@ -239,10 +240,10 @@ func (w *world) dial(role, path string) *party {
 }
 
 func (p *party) read() {
-	r := newReader(p.conn, nil)
-	defer r.close()
+	r := wire.NewReader(p.conn, nil)
+	defer r.Close()
 	for {
-		m, err := r.readMessage()
+		m, err := r.ReadMessage()
 		if err != nil {
 			p.mu.Lock()
 			p.closed = true
@@ -250,13 +251,13 @@ func (p *party) read() {
 			p.notify()
 			return
 		}
-		m.decodeBody(maxMessageSize)
-		in := &inMsg{typ: m.Type, sender: m.header(dbus.FieldSender), dest: m.header(dbus.FieldDestination),
-			path: m.header(dbus.FieldPath), iface: m.header(dbus.FieldInterface), member: m.header(dbus.FieldMember),
-			errName: m.header(dbus.FieldErrorName), serial: m.serial, body: m.Body}
-		in.replySerial, _ = m.replySerial()
-		m.closeFDs()
-		m.release()
+		m.DecodeBody(wire.MaxMessageSize)
+		in := &inMsg{typ: m.Type, sender: m.Header(dbus.FieldSender), dest: m.Header(dbus.FieldDestination),
+			path: m.Header(dbus.FieldPath), iface: m.Header(dbus.FieldInterface), member: m.Header(dbus.FieldMember),
+			errName: m.Header(dbus.FieldErrorName), serial: m.Serial(), body: m.Body}
+		in.replySerial, _ = m.ReplySerial()
+		m.CloseFDs()
+		m.Release()
 		p.mu.Lock()
 		p.got = append(p.got, in)
 		p.mu.Unlock()
@@ -273,7 +274,7 @@ func (p *party) notify() {
 
 // Sends a message with the given serial
 func (p *party) sendAs(serial uint32, m *dbus.Message) error {
-	data, err := encodeNew(m, serial)
+	data, err := wire.Encode(m, serial)
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-package main
+package wire
 
 import (
 	"errors"
@@ -9,7 +9,7 @@ import (
 )
 
 // What may wait to be written to one side, in bytes: one message of the largest size, or many smaller ones
-const maxQueued = maxMessageSize
+const maxQueued = MaxMessageSize
 
 type outMsg struct {
 	data []byte
@@ -18,8 +18,8 @@ type outMsg struct {
 
 // Writes messages to one side in the order they're queued, on a goroutine of its own, so a reader never blocks on
 // the side it reads from. A full queue blocks the reader that fills it, which stops reading its side in turn
-type sender struct {
-	acct   *account
+type Sender struct {
+	acct   *Account
 	conn   *net.UnixConn
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -28,18 +28,18 @@ type sender struct {
 	closed bool
 }
 
-var errClosed = errors.New("Connection closed")
+var ErrClosed = errors.New("Connection closed")
 
-func newSender(conn *net.UnixConn, acct *account) *sender {
-	s := &sender{conn: conn, acct: acct}
+func NewSender(conn *net.UnixConn, acct *Account) *Sender {
+	s := &Sender{conn: conn, acct: acct}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
 
-// Queues a message; its file descriptors belong to the sender from here, closed once written or dropped. They
-// stay on the client's account until then (the reader took them); the bytes are taken here. A client over its
+// Queues a message; its file descriptors belong to the Sender from here, closed once written or dropped. They
+// stay on the client's Account until then (the reader took them); the bytes are taken here. A client over its
 // share is refused, and its connection ends
-func (s *sender) send(data []byte, fds []int) error {
+func (s *Sender) Send(data []byte, fds []int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for !s.closed && s.bytes > 0 && s.bytes+len(data) > maxQueued {
@@ -47,7 +47,7 @@ func (s *sender) send(data []byte, fds []int) error {
 	}
 	if s.closed {
 		s.acct.closeFDs(fds)
-		return errClosed
+		return ErrClosed
 	}
 	if err := s.acct.take(len(data), 0); err != nil {
 		s.acct.closeFDs(fds)
@@ -59,8 +59,8 @@ func (s *sender) send(data []byte, fds []int) error {
 	return nil
 }
 
-// Stops the sender: queued messages are dropped and their file descriptors closed
-func (s *sender) close() {
+// Stops the Sender: queued messages are dropped and their file descriptors closed
+func (s *Sender) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
@@ -73,7 +73,7 @@ func (s *sender) close() {
 }
 
 // Writes until closed or a write fails
-func (s *sender) run() error {
+func (s *Sender) Run() error {
 	for {
 		s.mu.Lock()
 		for !s.closed && len(s.queue) == 0 {
@@ -81,7 +81,7 @@ func (s *sender) run() error {
 		}
 		if s.closed {
 			s.mu.Unlock()
-			return errClosed
+			return ErrClosed
 		}
 		m := s.queue[0]
 		s.queue[0] = outMsg{}
@@ -103,7 +103,7 @@ func (s *sender) run() error {
 }
 
 // The file descriptors go with the message's first bytes; whatever sendmsg left goes after
-func (s *sender) write(m outMsg) error {
+func (s *Sender) write(m outMsg) error {
 	data := m.data
 	if len(m.fds) > 0 {
 		n, _, err := s.conn.WriteMsgUnix(data, unix.UnixRights(m.fds...), nil)

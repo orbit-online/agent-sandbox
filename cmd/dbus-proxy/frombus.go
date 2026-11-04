@@ -1,15 +1,15 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 // Handles a message from the bus: a reply only to a call that was let through (or the proxy's own, which the client
 // never sees), broadcasts by the sender's rules, NameOwnerChanged by the name's policy, the rest passed on
-func (c *client) fromBus(m *message) error {
+func (c *client) fromBus(m *wire.Message) error {
 	var fakes [][]byte
 	c.mu.Lock()
 	out, err := c.judgeBus(m, &fakes)
@@ -21,35 +21,35 @@ func (c *client) fromBus(m *message) error {
 		return err
 	}
 	if out != nil {
-		m.closeFDs()
-		return c.toClient.send(out, nil)
+		m.CloseFDs()
+		return c.toClient.Send(out, nil)
 	}
 	if m.Message == nil {
 		return nil
 	}
-	if len(m.fds) > 0 && !c.unixFDs {
+	if len(m.FDs()) > 0 && !c.unixFDs {
 		// The client didn't negotiate file descriptors; the bus passes them only because the proxy did
-		m.closeFDs()
+		m.CloseFDs()
 		return nil
 	}
 	return forward(c.toClient, m)
 }
 
 // Decides under mu, returning as judgeClient does
-func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
+func (c *client) judgeBus(m *wire.Message, fakes *[][]byte) ([]byte, error) {
 	drop := func() ([]byte, error) {
-		m.closeFDs()
+		m.CloseFDs()
 		m.Message = nil
 		return nil, nil
 	}
 	c.cur = c.p.current()
 	if isReply(m) {
-		rs, _ := m.replySerial()
+		rs, _ := m.ReplySerial()
 		e, ok := c.awaitBus[rs]
 		if !ok {
 			return drop()
 		}
-		if e.fromBus && m.header(dbus.FieldSender) != busName {
+		if e.fromBus && m.Header(dbus.FieldSender) != busName {
 			// Only the bus answers a call to the bus; this one stays pending for it
 			return drop()
 		}
@@ -59,10 +59,10 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 	if isNameOwnerChanged(m) && !c.passNameOwnerChanged(m) {
 		return drop()
 	}
-	sender := m.header(dbus.FieldSender)
-	if m.Type == dbus.TypeSignal && m.header(dbus.FieldDestination) == "" {
+	sender := m.Header(dbus.FieldSender)
+	if m.Type == dbus.TypeSignal && m.Header(dbus.FieldDestination) == "" {
 		_, fs := c.lookup(sender)
-		if !broadcastPasses(fs, m.header(dbus.FieldPath), m.header(dbus.FieldInterface), m.header(dbus.FieldMember)) {
+		if !broadcastPasses(fs, m.Header(dbus.FieldPath), m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)) {
 			return drop()
 		}
 	}
@@ -83,21 +83,21 @@ func (c *client) judgeBus(m *message, fakes *[][]byte) ([]byte, error) {
 }
 
 // A reply to a call the proxy let through or made itself
-func (c *client) reply(m *message, e expect, fakes *[][]byte, drop func() ([]byte, error)) ([]byte, error) {
+func (c *client) reply(m *wire.Message, e expect, fakes *[][]byte, drop func() ([]byte, error)) ([]byte, error) {
 	ok := m.Type == dbus.TypeMethodReply
 	switch e.kind {
 	case expectHello:
-		if id, has := m.arg0(); ok && has {
+		if id, has := arg0(m); ok && has {
 			return nil, c.names.raise(id, policyTalk)
 		}
 	case expectRewrite:
-		return encodeNew(e.rewrite, m.Serial())
+		return wire.Encode(e.rewrite, m.Serial())
 	case expectListNames:
 		if ok {
 			return c.filterNames(m)
 		}
 	case expectFakeOwner:
-		if owner, has := m.arg0(); ok && has && owner != "" {
+		if owner, has := arg0(m); ok && has && owner != "" {
 			if err := c.names.addOwned(owner, e.name); err != nil {
 				return nil, err
 			}
@@ -122,23 +122,23 @@ func (c *client) syncDone() {
 }
 
 // The first argument when it's a string array; only for the bus's replies, which may be as long as a message
-func firstStrings(m *message) ([]string, bool) {
-	if !m.decodeBody(maxMessageSize) || len(m.Body) == 0 {
+func firstStrings(m *wire.Message) ([]string, bool) {
+	if !m.DecodeBody(wire.MaxMessageSize) || len(m.Body) == 0 {
 		return nil, false
 	}
 	s, ok := m.Body[0].([]string)
 	return s, ok
 }
 
-func isNameOwnerChanged(m *message) bool {
-	return m.Type == dbus.TypeSignal && m.header(dbus.FieldSender) == busName &&
-		m.header(dbus.FieldInterface) == busIface && m.header(dbus.FieldMember) == "NameOwnerChanged"
+func isNameOwnerChanged(m *wire.Message) bool {
+	return m.Type == dbus.TypeSignal && m.Header(dbus.FieldSender) == busName &&
+		m.Header(dbus.FieldInterface) == busIface && m.Header(dbus.FieldMember) == "NameOwnerChanged"
 }
 
 // NameOwnerChanged reaches the client only for names it may see; their new owners take on their rules. A unique name
 // that left is dropped from the table, since it never comes back
-func (c *client) passNameOwnerChanged(m *message) bool {
-	if !m.decodeBody(maxInspectBody) || len(m.Body) != 3 {
+func (c *client) passNameOwnerChanged(m *wire.Message) bool {
+	if !m.DecodeBody(maxInspectBody) || len(m.Body) != 3 {
 		return false
 	}
 	name, ok1 := m.Body[0].(string)
@@ -162,7 +162,7 @@ func (c *client) passNameOwnerChanged(m *message) bool {
 }
 
 // A ListNames or ListActivatableNames reply with only the names the client may see
-func (c *client) filterNames(m *message) ([]byte, error) {
+func (c *client) filterNames(m *wire.Message) ([]byte, error) {
 	names, ok := firstStrings(m)
 	if !ok {
 		return nil, fmt.Errorf("ListNames reply without a string array")
@@ -181,5 +181,5 @@ func (c *client) filterNames(m *message) ([]byte, error) {
 			out.Headers[f] = v
 		}
 	}
-	return encodeWith(out, binary.LittleEndian, m.Serial(), nil)
+	return wire.Encode(out, m.Serial())
 }

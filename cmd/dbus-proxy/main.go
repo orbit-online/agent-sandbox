@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 	"golang.org/x/sys/unix"
 )
@@ -54,7 +55,7 @@ type Proxy struct {
 	bus    []*net.UnixAddr
 	rules  *Rules
 	log    *slog.Logger
-	budget *budget
+	budget *wire.Budget
 	uid    int // The uid a client must have
 
 	mu      sync.Mutex
@@ -76,7 +77,7 @@ func NewProxy(address string, rules *Rules) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{bus: addrs, rules: rules, log: slog.Default(), budget: newBudget(), uid: os.Getuid()}, nil
+	return &Proxy{bus: addrs, rules: rules, log: slog.Default(), budget: wire.NewBudget(), uid: os.Getuid()}, nil
 }
 
 // Accepts clients until the listener closes. Out of file descriptors or memory, it waits and tries again, as

@@ -1,9 +1,8 @@
 package main
 
 import (
-	"encoding/binary"
-
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 const (
@@ -17,7 +16,18 @@ const (
 
 	// Serials above it are the proxy's own messages to the bus, as in xdg-dbus-proxy
 	maxClientSerial = ^uint32(0) - 65536
+	// The largest body of a bus driver call the proxy looks into: names are at most 255 bytes, match rules 1024
+	maxInspectBody = 4 << 10
 )
+
+// The first argument when it's a string, for a body no larger than maxInspectBody
+func arg0(m *wire.Message) (string, bool) {
+	if !m.DecodeBody(maxInspectBody) || len(m.Body) == 0 {
+		return "", false
+	}
+	s, ok := m.Body[0].(string)
+	return s, ok
+}
 
 // The messages the proxy makes up. Serials are set when they're encoded
 
@@ -84,10 +94,6 @@ func busCall(member string, args ...any) *dbus.Message {
 func ownerMatch(name string) string {
 	return "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'," +
 		"arg0='" + name + "'"
-}
-
-func encodeNew(m *dbus.Message, serial uint32) ([]byte, error) {
-	return encodeWith(m, binary.LittleEndian, serial, nil)
 }
 
 // Whether a match rule asks for messages not addressed to the client: any "eavesdrop" followed by "=", as

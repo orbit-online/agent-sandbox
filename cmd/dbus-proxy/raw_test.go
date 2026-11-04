@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -17,7 +18,7 @@ import (
 type rawClient struct {
 	t    *testing.T
 	conn *net.UnixConn
-	r    *reader
+	r    *wire.Reader
 	name string
 }
 
@@ -26,18 +27,18 @@ func rawConnectWith(t *testing.T, addr, sasl string) *rawClient {
 	t.Helper()
 	conn := dialRaw(t, addr)
 	conn.Write([]byte(sasl))
-	rc := &rawClient{t: t, conn: conn, r: newReader(conn, nil)}
-	t.Cleanup(rc.r.close)
+	rc := &rawClient{t: t, conn: conn, r: wire.NewReader(conn, nil)}
+	t.Cleanup(rc.r.Close)
 	for _, line := range strings.Split(strings.TrimSuffix(sasl, "\r\n"), "\r\n") {
 		if strings.HasPrefix(line, "\x00AUTH EXTERNAL ") || strings.HasPrefix(line, "AUTH EXTERNAL ") ||
 			strings.HasPrefix(line, "NEGOTIATE_UNIX_FD") || strings.HasPrefix(line, "CANCEL") {
-			if _, err := rc.r.readLine(); err != nil {
+			if _, err := rc.r.ReadLine(); err != nil {
 				t.Fatalf("SASL: %v", err)
 			}
 		}
 	}
 	rc.send(1, busCall("Hello"))
-	rc.name, _ = rc.waitReply(1).arg0()
+	rc.name, _ = arg0(rc.waitReply(1))
 	return rc
 }
 
@@ -50,7 +51,7 @@ func (rc *rawClient) send(serial uint32, ms ...*dbus.Message) {
 	rc.t.Helper()
 	var buf []byte
 	for _, m := range ms {
-		d, err := encodeNew(m, serial)
+		d, err := wire.Encode(m, serial)
 		if err != nil {
 			rc.t.Fatal(err)
 		}
@@ -65,7 +66,7 @@ func (rc *rawClient) send(serial uint32, ms ...*dbus.Message) {
 func (rc *rawClient) sendFDs(serial uint32, m *dbus.Message, n int) {
 	rc.t.Helper()
 	m.Headers[dbus.FieldUnixFDs] = dbus.MakeVariant(uint32(n))
-	d, err := encodeNew(m, serial)
+	d, err := wire.Encode(m, serial)
 	if err != nil {
 		rc.t.Fatal(err)
 	}
@@ -89,14 +90,14 @@ func rawFD(t *testing.T, conn *net.UnixConn) int {
 }
 
 // The next message replying to serial, skipping others
-func (rc *rawClient) waitReply(serial uint32) *message {
+func (rc *rawClient) waitReply(serial uint32) *wire.Message {
 	rc.t.Helper()
 	for {
-		m, err := rc.r.readMessage()
+		m, err := rc.r.ReadMessage()
 		if err != nil {
 			rc.t.Fatalf("Waiting for the reply to %d: %v", serial, err)
 		}
-		if rs, ok := m.replySerial(); ok && rs == serial {
+		if rs, ok := m.ReplySerial(); ok && rs == serial {
 			return m
 		}
 	}
@@ -106,11 +107,11 @@ func (rc *rawClient) waitReply(serial uint32) *message {
 func (rc *rawClient) closed() bool {
 	rc.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	for {
-		m, err := rc.r.readMessage()
+		m, err := rc.r.ReadMessage()
 		if err != nil {
 			return !errors.Is(err, os.ErrDeadlineExceeded)
 		}
-		m.closeFDs()
+		m.CloseFDs()
 	}
 }
 
@@ -152,11 +153,11 @@ func TestSecondHello(t *testing.T) {
 	svc := startService(t, bus)
 	rc := rawConnect(t, startProxy(t, bus, "--see="+svcName))
 	rc.send(2, busCall("Hello"))
-	if r := rc.waitReply(2); r.header(dbus.FieldErrorName) != errAccessDenied {
-		t.Errorf("Second Hello: %v %q", r.Type, r.header(dbus.FieldErrorName))
+	if r := rc.waitReply(2); r.Header(dbus.FieldErrorName) != errAccessDenied {
+		t.Errorf("Second Hello: %v %q", r.Type, r.Header(dbus.FieldErrorName))
 	}
 	rc.send(3, echoTo(svc.Names()[0]))
-	if r := rc.waitReply(3); r.header(dbus.FieldErrorName) != errAccessDenied {
-		t.Errorf("Call to a seen name's owner after a second Hello: %v %q", r.Type, r.header(dbus.FieldErrorName))
+	if r := rc.waitReply(3); r.Header(dbus.FieldErrorName) != errAccessDenied {
+		t.Errorf("Call to a seen name's owner after a second Hello: %v %q", r.Type, r.Header(dbus.FieldErrorName))
 	}
 }

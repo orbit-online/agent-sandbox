@@ -12,84 +12,20 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"golang.org/x/sys/unix"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
-// A reader on one end of a socket pair, the other end returned as a raw fd
-func readerPair(t *testing.T) (*reader, int) {
-	t.Helper()
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := os.NewFile(uintptr(fds[1]), "b")
-	fc, err := net.FileConn(f)
-	f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := newReader(fc.(*net.UnixConn), nil)
-	t.Cleanup(func() { r.close(); fc.Close(); unix.Close(fds[0]) })
-	fc.(*net.UnixConn).SetReadDeadline(time.Now().Add(3 * time.Second))
-	return r, fds[0]
-}
-
-func stdinFDs(n int) []int {
-	fds := make([]int, n)
-	for i := range fds {
-		fds[i] = int(os.Stdin.Fd())
-	}
-	return fds
-}
-
-// A message without a serial is refused as it's read
-func TestSerialZero(t *testing.T) {
-	r, w := readerPair(t)
-	msg, _ := encodeNew(busCall("Hello"), 0)
-	unix.Write(w, msg)
-	if _, err := r.readMessage(); err == nil {
-		t.Error("A message with serial 0 was read")
-	}
-}
-
-// A message may claim at most maxMessageFDs, even when that many arrived (in two sendmsgs)
-func TestMaxMessageFDs(t *testing.T) {
-	r, w := readerPair(t)
-	msg, err := encodeNew(withUnixFDs(busCall("Hello"), maxMessageFDs+1), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unix.Sendmsg(w, msg[:8], unix.UnixRights(stdinFDs(maxMessageFDs)...), nil, 0)
-	unix.Sendmsg(w, msg[8:], unix.UnixRights(stdinFDs(1)...), nil, 0)
-	if m, err := r.readMessage(); err == nil {
-		m.closeFDs()
-		t.Error("A message with more file descriptors than one sendmsg carries was read")
-	}
-}
-
-// File descriptors that no message claims stop at maxPendingFDs
-func TestMaxPendingFDs(t *testing.T) {
-	r, w := readerPair(t)
-	for i := 0; i*maxMessageFDs <= maxPendingFDs; i++ {
-		unix.Sendmsg(w, []byte("l"), unix.UnixRights(stdinFDs(maxMessageFDs)...), nil, 0)
-	}
-	_, err := r.readMessage()
-	if err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Errorf("Pending file descriptors past the limit: %v", err)
-	}
-}
-
-// SASL: at most maxAuthCommands commands, lines at most maxAuthLine long
+// SASL: at most maxAuthCommands commands, lines at most wire.MaxAuthLine long
 func TestSASLLimits(t *testing.T) {
 	bus := startBus(t)
 	addr := startProxy(t, bus)
 	conn := dialRaw(t, addr)
 	conn.Write([]byte("\x00" + strings.Repeat("ERROR\r\n", maxAuthCommands+8)))
-	r := newReader(conn, nil)
+	r := wire.NewReader(conn, nil)
 	n := 0
 	var err error
 	for err == nil {
-		_, err = r.readLine()
+		_, err = r.ReadLine()
 		if err == nil {
 			n++
 		}
@@ -99,8 +35,8 @@ func TestSASLLimits(t *testing.T) {
 	}
 
 	conn = dialRaw(t, addr)
-	conn.Write([]byte("\x00AUTH " + strings.Repeat("A", maxAuthLine)))
-	if _, err := newReader(conn, nil).readLine(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+	conn.Write([]byte("\x00AUTH " + strings.Repeat("A", wire.MaxAuthLine)))
+	if _, err := wire.NewReader(conn, nil).ReadLine(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("A SASL line past the limit: %v", err)
 	}
 }
@@ -127,7 +63,7 @@ func TestPendingReplyCaps(t *testing.T) {
 	rc := rawConnect(t, addr)
 	var buf []byte
 	for i := 0; i <= maxPendingReplies; i++ {
-		d, _ := encodeNew(echoTo(svcName), uint32(10+i))
+		d, _ := wire.Encode(echoTo(svcName), uint32(10+i))
 		buf = append(buf, d...)
 	}
 	go rc.conn.Write(buf)
@@ -145,29 +81,15 @@ func TestPendingReplyCaps(t *testing.T) {
 	}
 }
 
-// Bodies stay bytes unless the proxy looks into them
-func TestBodyNotDecoded(t *testing.T) {
-	r, w := readerPair(t)
-	msg, _ := encodeNew(echoTo(svcName), 1)
-	unix.Write(w, msg)
-	m, err := r.readMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.Body != nil || m.decoded {
-		t.Error("A body was decoded on reading")
-	}
-}
-
 // A client over its share of memory is disconnected; others go on
 func TestMemoryBudget(t *testing.T) {
 	bus := startBus(t)
 	startService(t, bus)
-	addr := startProxyWith(t, bus, func(p *Proxy) { p.budget.maxBytes = 1 << 20 }, "--talk="+svcName)
+	addr := startProxyWith(t, bus, func(p *Proxy) { p.budget.MaxBytes = 1 << 20 }, "--talk="+svcName)
 	rc := rawConnect(t, addr)
 	big := echoTo(svcName)
 	big.Body = []any{strings.Repeat("x", 2<<20)}
-	data, err := encodeNew(big, 2)
+	data, err := wire.Encode(big, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +107,7 @@ func TestMemoryBudget(t *testing.T) {
 func TestQueuedFDs(t *testing.T) {
 	bus := startBus(t)
 	const share = 256
-	rc := rawConnectWith(t, startProxyWith(t, bus, func(p *Proxy) { p.budget.clientFDs = share }),
+	rc := rawConnectWith(t, startProxyWith(t, bus, func(p *Proxy) { p.budget.ClientFDs = share }),
 		"\x00AUTH EXTERNAL "+hexUID(os.Getuid())+"\r\nNEGOTIATE_UNIX_FD\r\nBEGIN\r\n")
 	peer := connect(t, bus)
 	r, w, _ := os.Pipe()
