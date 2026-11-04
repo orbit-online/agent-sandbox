@@ -321,7 +321,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   durations (one past what a duration holds refused), parameter validation, consent (denied, allowed, a live grant
   covering the same request only, by value: keys in any order, -0 for 0), the requests the state machines once
   sampled as examples, each refused with its category or served (`refusal_test.go`), host commands (the schema subset's
-  keywords, numbers against bounds and enums exactly, numbers written one way in parameters, a long enum said as a count, declarations refused for an undescribed or reserved argument, a
+  keywords, numbers against bounds and enums exactly, numbers past what a float64 holds (rounding to 0 too) or written
+  in more than 800 digits or an exponent past ±400 refused, numbers written one way in parameters, a long enum said as a count, declarations refused for an undescribed or reserved argument, a
   bad name, result, timeout or glob; instances from a glob; the scope's parts
   in `state`, unrestricted first, and the bounding values by description; a call checked
   before the user is asked and told the scope, the window getting the call asking with its arguments whole
@@ -411,7 +412,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   from an anonymous caller, and floods of them, with their inputs generated from the declarations' grammar
   (`machine_gen*_test.go`, `machine_decls_test.go`: capability and command names and near-misses of them,
   parameters and a command's arguments using every keyword of the schema subset, with values at and past each
-  limit, of other types, keys missing or extra, unicode, control characters, odd number and string encodings and
+  limit, of other types, keys missing or extra, unicode, control characters, odd number and string encodings (numbers
+  at and past the edges of a float64 and of their digits and exponent) and
   objects that aren't, leases, reasons, instance names and folder paths; `TestGeneratorShares` keeps each kind's
   valid share between a fifth and nine tenths), each judged by an oracle written from `docs/permissions.md`
   (`machine_oracle_test.go`, `machine_judge_test.go`) without the broker's own checks: refused with a category

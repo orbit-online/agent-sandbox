@@ -115,6 +115,38 @@ func normalize(v any) any {
 	return v
 }
 
+// A number is written in at most maxNumberDigits digits, ahead of an exponent within ±maxNumberExponent. That writes
+// every float64: its exact decimal has at most 767 significant digits, and its range, from about 4.9e-324 to 1.8e308, is
+// well within the exponent. It also bounds the exact arithmetic on the number: big.Rat's parse, the bounds, and
+// Canonical, whose time grows with the square of the exponent (1e-9999999 underflows to a float64's 0, and would
+// take hours)
+const (
+	maxNumberDigits   = 800
+	maxNumberExponent = 400
+)
+
+// holdsFloat64 reports whether n, as JSON writes numbers, is within the bounds above and a value a float64 holds:
+// not past its range, nor so small that it rounds to 0
+func holdsFloat64(n json.Number) bool {
+	mantissa, exp, hasExp := strings.Cut(strings.ReplaceAll(string(n), "E", "e"), "e")
+	digits := 0
+	for _, c := range mantissa {
+		if '0' <= c && c <= '9' {
+			digits++
+		}
+	}
+	if digits > maxNumberDigits {
+		return false
+	}
+	if hasExp {
+		if e, err := strconv.Atoi(exp); err != nil || e < -maxNumberExponent || e > maxNumberExponent {
+			return false
+		}
+	}
+	f, err := strconv.ParseFloat(string(n), 64)
+	return err == nil && !math.IsInf(f, 0) && (f != 0 || !strings.ContainsAny(mantissa, "123456789"))
+}
+
 // CheckValue checks v, decoded with UseNumber, against s. A string without maxLength may be maxDefault characters
 // long, an opaque one maxOpaque
 func (s *Schema) CheckValue(v any, maxDefault int) error {
@@ -165,12 +197,14 @@ func (s *Schema) checkScalar(v any, maxDefault int) error {
 		}
 	case json.Number:
 		// A number a float64 holds, an integer as one of 64 bits
-		f, err := v.Float64()
-		if err != nil || math.IsInf(f, 0) {
+		if s.Type != "integer" && s.Type != "number" {
 			break
 		}
-		_, intErr := v.Int64()
-		if s.Type == "integer" && intErr != nil || s.Type != "integer" && s.Type != "number" {
+		if !holdsFloat64(v) {
+			return fmt.Errorf("must be a number a float64 holds, in at most %d digits and an exponent within ±%d",
+				maxNumberDigits, maxNumberExponent)
+		}
+		if _, err := v.Int64(); s.Type == "integer" && err != nil {
 			break
 		}
 		// Bounds exactly, not as float64s: 2.50000000000000001 is past 2.5, whatever a float64 rounds it to

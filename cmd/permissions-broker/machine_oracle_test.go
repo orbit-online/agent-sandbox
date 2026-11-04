@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -142,9 +143,22 @@ func (d *decl) stringOK(s string, limit int) bool {
 // must fit 64 bits
 var integerText = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 
+// A number as JSON writes it: the digits ahead of the exponent, and the exponent
+var numberText = regexp.MustCompile(`^-?([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+
 // numberValue is n's exact value, if it is a value of type typ: an integer as above, or a number a float64 holds
-// without overflowing (the docs leave the range open)
+// without overflowing or rounding to 0 (the docs leave the range open). Either written in at most 800 digits ahead of
+// an exponent within ±400, as the docs say
 func numberValue(typ string, n json.Number) (*big.Rat, bool) {
+	m := numberText.FindStringSubmatch(string(n))
+	if m == nil || len(m[1])+len(m[2]) > 800 {
+		return nil, false
+	}
+	if m[3] != "" {
+		if e, err := strconv.Atoi(m[3]); err != nil || e < -400 || e > 400 {
+			return nil, false
+		}
+	}
 	r, ok := new(big.Rat).SetString(string(n))
 	if !ok {
 		return nil, false
@@ -155,7 +169,10 @@ func numberValue(typ string, n json.Number) (*big.Rat, bool) {
 		return r, integerText.MatchString(string(n)) && r.Cmp(lo) >= 0 && r.Cmp(hi) <= 0
 	case "number":
 		limit := new(big.Rat).SetFloat64(math.MaxFloat64)
-		return r, new(big.Rat).Abs(r).Cmp(limit) <= 0
+		// Half the smallest float64, 2^-1075, rounds to 0 (to even), and so does anything smaller
+		half := new(big.Rat).SetFrac(big.NewInt(1), new(big.Int).Lsh(big.NewInt(1), 1075))
+		abs := new(big.Rat).Abs(r)
+		return r, abs.Cmp(limit) <= 0 && (abs.Sign() == 0 || abs.Cmp(half) > 0)
 	}
 	return nil, false
 }

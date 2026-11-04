@@ -104,6 +104,14 @@ func drawNumber(t *rapid.T, d *decl) string {
 	if d.max != nil {
 		hi = floorRat(d.max)
 	}
+	if d.Type == "number" && rapid.IntRange(0, 9).Draw(t, "edge") == 0 {
+		// At the edges of what a float64 holds and of a number's written digits and exponent, when within the bounds
+		n := rapid.SampledFrom([]string{"5e-324", "-4.9406564584124654E-324", "0e-400", "-0E+400",
+			"1." + strings.Repeat("0", 799)}).Draw(t, "edge form")
+		if r := ratOf(json.Number(n)); (d.min == nil || r.Cmp(d.min) >= 0) && (d.max == nil || r.Cmp(d.max) <= 0) {
+			return n
+		}
+	}
 	if d.Type == "number" && rapid.Bool().Draw(t, "fraction") {
 		// Hundredths within the bounds
 		n := rapid.Int64Range(lo*100, hi*100).Draw(t, "hundredths")
@@ -150,7 +158,7 @@ func floorRat(r *big.Rat) int64 { return new(big.Int).Div(r.Num(), r.Denom()).In
 // an exponent, past 64 bits or a float64, a hair from an enum member
 func drawBadNumber(t *rapid.T, d *decl) string {
 	hair := big.NewRat(1, 100000000000000000) // 1e-17: within a float64's rounding of most values
-	switch rapid.IntRange(0, 5).Draw(t, "past") {
+	switch rapid.IntRange(0, 6).Draw(t, "past") {
 	case 0:
 		if d.max != nil {
 			return new(big.Rat).Add(d.max, big.NewRat(1, 1)).FloatString(0)
@@ -167,6 +175,11 @@ func drawBadNumber(t *rapid.T, d *decl) string {
 	case 3:
 		return rapid.SampledFrom([]string{"9223372036854775808", "-9223372036854775809", "123456789012345678901234567890",
 			"1e309", "-1e400"}).Draw(t, "huge")
+	case 5:
+		// Past what a float64 holds the other way, or written past 800 digits or an exponent of ±400: 1e-9999999 rounds
+		// to 0, and costs the exact arithmetic hours
+		return rapid.SampledFrom([]string{"1e-400", "-2e-324", "1e-9999999", "0e-401", "0e9999999",
+			"0." + strings.Repeat("0", 800), "1." + strings.Repeat("0", 800)}).Draw(t, "tiny")
 	case 4:
 		if len(d.enum) > 0 {
 			r := ratOf(json.Number(fmt.Sprint(rapid.SampledFrom(d.enum).Draw(t, "member"))))

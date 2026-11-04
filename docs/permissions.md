@@ -266,7 +266,10 @@ permissions.commands.windows-vm = {
   to read in (a public key, a CSR), shown by its digest (Requests). Every argument needs a description; the consent is
   built from them. A call must give every free argument; a bounding argument it leaves out is a value of its own (the
   grant covers calls that leave it out too), except one with `instances`, which an instance must match. A free string
-  without `maxLength` may be 64 Ki characters. Bounding arguments are scalars on one line: no arrays, no `multiline`,
+  without `maxLength` may be 64 Ki characters. A number is one a float64 holds, neither past its range nor so small
+  it rounds to 0, written in at most 800 digits ahead of an exponent within ±400: that writes any float64 exactly
+  (at most 767 significant digits, from about 4.9e-324 to 1.8e308), and bounds the exact arithmetic the broker does
+  on it (`1e-9999999` would cost hours). Bounding arguments are scalars on one line: no arrays, no `multiline`,
   as the summary quotes them.
 - `result` is `text` (the default) or an image MIME type.
 - `maxValidity` (optional) caps the validity the command is told (below), for commands that issue credentials.

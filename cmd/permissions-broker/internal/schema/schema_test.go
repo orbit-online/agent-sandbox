@@ -30,8 +30,17 @@ func TestSchemaValues(t *testing.T) {
 		{`{"type": "integer", "maximum": 9007199254740992}`, []string{`9007199254740992`}, []string{`9007199254740993`}},
 		// Numbers against their bounds and enum exactly too: a hair past either is no float64 apart from it (found by
 		// the state machine's generated arguments)
-		{`{"type": "number", "minimum": -1.5, "maximum": 2.5}`, []string{`2.5`, `25e-1`, `-1.50`, `1e-400`},
+		{`{"type": "number", "minimum": -1.5, "maximum": 2.5}`, []string{`2.5`, `25e-1`, `-1.50`},
 			[]string{`2.50000000000000001`, `-1.50000000000000001`, `1e309`}},
+		// What a float64 holds, written in at most 800 digits and an exponent within ±400: its smallest value and an
+		// exact one of 767 significant digits, not a number that rounds to 0 nor one past the bounds, which would cost
+		// the exact arithmetic time quadratic in the exponent
+		{`{"type": "number", "minimum": -1, "maximum": 2}`,
+			[]string{`5e-324`, `-5e-324`, `0e-400`, `0e+400`, `0.` + strings.Repeat("0", 799), `1.` + strings.Repeat("0", 799),
+				`0.` + strings.Repeat("1", 767) + `e-300`, `1.7976931348623157e-308`},
+			[]string{`1e-400`, `2e-324`, `-1e-9999999`, `1e-9999999`, `0e-401`, `0e9999999`, `0.` + strings.Repeat("0", 800),
+				`1.` + strings.Repeat("0", 800), `1e99999999999999999999`}},
+		{`{"type": "number"}`, []string{`1.7976931348623157e308`, `1e308`}, []string{`1.8e308`, `1e-9999999`}},
 		{`{"type": "number", "enum": [1, 2.5, 1000]}`, []string{`2.50`, `1e3`, `1.0`},
 			[]string{`2.50000000000000001`, `1.00000000000000001`}},
 		{`{"type": "integer", "enum": [9007199254740992]}`, []string{`9007199254740992`}, []string{`9007199254740993`}},
