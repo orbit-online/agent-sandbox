@@ -37,3 +37,19 @@ func TestNameTableBound(t *testing.T) {
 		t.Errorf("Table full of talkers took another: %v", err)
 	}
 }
+
+// One unique name is recorded owning at most maxOwnedNames names; the next ends the connection
+func TestOwnedNamesBound(t *testing.T) {
+	nt := newNameTable()
+	for i := range maxOwnedNames {
+		if err := nt.addOwned(":1.5", fmt.Sprintf("org.test.N%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := nt.addOwned(":1.5", "org.test.N0"); err != nil {
+		t.Errorf("A name recorded again: %v", err)
+	}
+	if err := nt.addOwned(":1.5", "org.test.More"); err != errTooManyNames {
+		t.Errorf("Past the cap: %v", err)
+	}
+}

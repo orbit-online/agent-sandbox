@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,5 +148,57 @@ func TestAcceptEMFILE(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if _, err := call(connect(t, "unix:path="+sock), svcName, "/org/test", svcIface+".Echo", "x"); err != nil {
 		t.Errorf("Call after running out of file descriptors: %v", err)
+	}
+}
+
+// A bus that takes connections and never answers, so each client the proxy accepts stays in its SASL toward the bus
+func mutedBus(t *testing.T) (string, *atomic.Int32) {
+	path := filepath.Join(t.TempDir(), "bus")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n atomic.Int32
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+			n.Add(1)
+		}
+	}()
+	t.Cleanup(func() {
+		l.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	return "unix:path=" + path, &n
+}
+
+// maxClients connections at once: the next is closed as it's accepted, the others stay
+func TestMaxClients(t *testing.T) {
+	bus, dialed := mutedBus(t)
+	addr := startProxy(t, bus)
+	var clients []*net.UnixConn
+	for range maxClients {
+		clients = append(clients, dialRaw(t, addr))
+	}
+	waitFor(t, func() bool { return dialed.Load() == maxClients })
+	extra := dialRaw(t, addr)
+	if _, err := extra.Read(make([]byte, 1)); err != io.EOF {
+		t.Errorf("A client past the cap: %v", err)
+	}
+	clients[0].SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, err := clients[0].Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("A client under the cap: %v", err)
 	}
 }
