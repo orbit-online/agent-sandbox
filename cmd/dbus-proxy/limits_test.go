@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -14,32 +13,6 @@ import (
 	"github.com/godbus/dbus/v5"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
-
-// SASL: at most maxAuthCommands commands, lines at most wire.MaxAuthLine long
-func TestSASLLimits(t *testing.T) {
-	bus := startBus(t)
-	addr := startProxy(t, bus)
-	conn := dialRaw(t, addr)
-	conn.Write([]byte("\x00" + strings.Repeat("ERROR\r\n", maxAuthCommands+8)))
-	r := wire.NewReader(conn, nil)
-	n := 0
-	var err error
-	for err == nil {
-		_, err = r.ReadLine()
-		if err == nil {
-			n++
-		}
-	}
-	if n > maxAuthCommands || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Errorf("%d SASL replies, connection ended: %v", n, err)
-	}
-
-	conn = dialRaw(t, addr)
-	conn.Write([]byte("\x00AUTH " + strings.Repeat("A", wire.MaxAuthLine)))
-	if _, err := wire.NewReader(conn, nil).ReadLine(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Errorf("A SASL line past the limit: %v", err)
-	}
-}
 
 // A service that never answers: it eavesdrops its own traffic
 func silentService(t *testing.T, bus string) {

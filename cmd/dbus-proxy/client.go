@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/sasl"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 )
@@ -132,13 +133,12 @@ func (c *client) connect() error {
 	deadline := time.Now().Add(authTimeout)
 	c.conn.SetDeadline(deadline)
 	c.bus.SetDeadline(deadline)
-	guid, err := authBus(c.bus, c.busR, uid)
+	guid, err := sasl.Client(c.bus, c.busR, uid)
 	if err != nil {
 		return fmt.Errorf("Authenticate to the bus: %w", err)
 	}
-	server := &saslServer{conn: c.conn, r: c.clientR, peerUID: int(cred.Uid), guid: guid,
-		negotiate: func() (bool, error) { return negotiateFDsBus(c.bus, c.busR) }}
-	if c.unixFDs, err = server.run(); err != nil {
+	negotiate := func() (bool, error) { return sasl.NegotiateFDs(c.bus, c.busR) }
+	if c.unixFDs, err = sasl.Serve(c.conn, c.clientR, int(cred.Uid), guid, negotiate); err != nil {
 		return fmt.Errorf("Authenticate the client: %w", err)
 	}
 	if _, err := c.bus.Write([]byte("BEGIN\r\n")); err != nil {

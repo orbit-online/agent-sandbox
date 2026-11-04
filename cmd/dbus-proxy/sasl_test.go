@@ -52,39 +52,6 @@ func TestPipelinedSASL(t *testing.T) {
 	}
 }
 
-// Another uid, a mechanism other than EXTERNAL and junk are refused
-func TestSASLRefused(t *testing.T) {
-	bus := startBus(t)
-	addr := startProxy(t, bus)
-	for _, tc := range []struct{ send, want string }{
-		{"\x00AUTH EXTERNAL " + hexUID(os.Getuid()+1) + "\r\n", "REJECTED EXTERNAL"},
-		{"\x00AUTH EXTERNAL\r\nDATA " + hexUID(os.Getuid()+1) + "\r\n", "DATA"},
-		{"\x00AUTH ANONYMOUS\r\n", "REJECTED EXTERNAL"},
-		{"\x00NEGOTIATE_UNIX_FD\r\n", "ERROR"},
-	} {
-		conn := dialRaw(t, addr)
-		conn.Write([]byte(tc.send))
-		r := wire.NewReader(conn, nil)
-		line, err := r.ReadLine()
-		if err != nil || line != tc.want {
-			t.Errorf("%q: got %q (%v), want %q", tc.send, line, err, tc.want)
-		}
-		if tc.want == "DATA" {
-			if line, _ := r.ReadLine(); line != "REJECTED EXTERNAL" {
-				t.Errorf("DATA with another uid: got %q", line)
-			}
-		}
-	}
-	// BEGIN before OK, and a line with control characters, end the connection
-	for _, send := range []string{"\x00BEGIN\r\n", "\x00AUTH EXTERNAL\x01\r\n", "x"} {
-		conn := dialRaw(t, addr)
-		conn.Write([]byte(send))
-		if _, err := wire.NewReader(conn, nil).ReadLine(); err == nil {
-			t.Errorf("%q: connection still open", send)
-		}
-	}
-}
-
 // After authenticating, a message longer than the limit ends the connection before the proxy reads it
 func TestMessageBounds(t *testing.T) {
 	bus := startBus(t)

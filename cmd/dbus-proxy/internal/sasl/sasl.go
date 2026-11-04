@@ -1,10 +1,12 @@
-package main
+// Package sasl is the proxy's SASL: EXTERNAL toward the bus as the proxy's uid, and the server's half toward a client,
+// EXTERNAL for the uid of the client's socket
+package sasl
 
 import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
+	"io"
 	"strconv"
 	"strings"
 
@@ -12,11 +14,11 @@ import (
 )
 
 // Commands a client may send before BEGIN; real clients need a handful
-const maxAuthCommands = 32
+const MaxCommands = 32
 
-// Authenticates to the bus with EXTERNAL as the proxy's own uid and returns the bus's GUID. The proxy's first byte
-// goes without credentials: dbus-daemon takes them from SO_PEERCRED
-func authBus(conn *net.UnixConn, r *wire.Reader, uid int) (string, error) {
+// Client authenticates to the bus with EXTERNAL as uid, the proxy's own, and returns the bus's GUID. The proxy's first
+// byte goes without credentials: dbus-daemon takes them from SO_PEERCRED
+func Client(conn io.Writer, r *wire.Reader, uid int) (string, error) {
 	hexUID := hex.EncodeToString([]byte(strconv.Itoa(uid)))
 	if _, err := conn.Write([]byte("\x00AUTH EXTERNAL " + hexUID + "\r\n")); err != nil {
 		return "", err
@@ -35,8 +37,8 @@ func authBus(conn *net.UnixConn, r *wire.Reader, uid int) (string, error) {
 	return guid, nil
 }
 
-// Asks the bus to pass file descriptors
-func negotiateFDsBus(conn *net.UnixConn, r *wire.Reader) (bool, error) {
+// NegotiateFDs asks the bus to pass file descriptors, once Client succeeded
+func NegotiateFDs(conn io.Writer, r *wire.Reader) (bool, error) {
 	if _, err := conn.Write([]byte("NEGOTIATE_UNIX_FD\r\n")); err != nil {
 		return false, err
 	}
@@ -47,25 +49,29 @@ func negotiateFDsBus(conn *net.UnixConn, r *wire.Reader) (bool, error) {
 	return line == "AGREE_UNIX_FD", nil
 }
 
-// The server's half of SASL toward a client, after the D-Bus specification's state machine. EXTERNAL only, for the
-// uid the client's socket belongs to: what dbus-daemon would accept from the client through xdg-dbus-proxy, which
-// passes the client's SASL on and the proxy's credentials with it. negotiate asks the bus for file descriptor
-// passing when the client asks for it. Returns whether the client agreed to it
-type saslServer struct {
-	conn      *net.UnixConn
+// Serve is the server's half of SASL toward a client, after the D-Bus specification's state machine, up to BEGIN.
+// EXTERNAL only, for peerUID, the uid the client's socket belongs to: what dbus-daemon would accept from the client
+// through xdg-dbus-proxy, which passes the client's SASL on and the proxy's credentials with it. guid is the bus's;
+// negotiate asks the bus for file descriptor passing when the client asks for it. Returns whether they're passed
+func Serve(conn io.Writer, r *wire.Reader, peerUID int, guid string, negotiate func() (bool, error)) (bool, error) {
+	return (&server{conn, r, peerUID, guid, negotiate}).run()
+}
+
+type server struct {
+	conn      io.Writer
 	r         *wire.Reader
 	peerUID   int
 	guid      string
 	negotiate func() (bool, error)
 }
 
-func (s *saslServer) reply(line string) error {
+func (s *server) reply(line string) error {
 	_, err := s.conn.Write([]byte(line + "\r\n"))
 	return err
 }
 
 // The authorization identity EXTERNAL carries, hex-encoded ASCII decimal; empty means the socket's
-func (s *saslServer) externalOK(hexID string) bool {
+func (s *server) externalOK(hexID string) bool {
 	if hexID == "" {
 		return true
 	}
@@ -77,7 +83,7 @@ func (s *saslServer) externalOK(hexID string) bool {
 	return err == nil && strconv.Itoa(uid) == string(id) && uid == s.peerUID
 }
 
-func (s *saslServer) run() (bool, error) {
+func (s *server) run() (bool, error) {
 	if b, err := s.r.ReadByte(); err != nil {
 		return false, err
 	} else if b != 0 {
@@ -91,7 +97,7 @@ func (s *saslServer) run() (bool, error) {
 	state := waitAuth
 	unixFDs := false
 	for i := 0; ; i++ {
-		if i >= maxAuthCommands {
+		if i >= MaxCommands {
 			return false, errors.New("Too many SASL commands")
 		}
 		line, err := s.r.ReadLine()
