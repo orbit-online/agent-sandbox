@@ -109,7 +109,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `commands.go` (host command capabilities: bounding arguments, instance globs),
   `call.go` (a call: covered or asked, run as a transient unit, its output),
   `hostsockets.go` (listening at the host sockets' addresses), `splice.go`
-  (connections to them, spliced under a grant), `sandbox.go` (finding and pinning the sandbox), `members.go` (its processes by
+  (connections to them, spliced under a grant), `refusal.go` (the categories a
+  refused request or call names in its answer's `refused`), `sandbox.go` (finding and pinning the sandbox), `members.go` (its processes by
   user namespace), `folders.go` (the folders capability), `attach.go` (mounting,
   unmounting, cleanup) and `holders.go` (what still held ended grants). Each
   type's kind is in its type's file. Each `*_test.go` follows its file; tests

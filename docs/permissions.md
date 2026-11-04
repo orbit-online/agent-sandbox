@@ -667,6 +667,29 @@ description.
 `request` grants ahead of use: a folder, a host socket, or a host command capability before its first
 call (`params` holds the bounding values). `call` asks only when no grant covers it.
 
+A refused `request`, `call` or `release` (and the window's `revoke` on `control.sock`) answers with `error`, a message
+for people, and `refused`, its category, for clients and tests to go by instead of the message's text:
+
+| `refused`  | why                                                                                                   |
+|------------|-------------------------------------------------------------------------------------------------------|
+| `unknown`  | no such capability, a call of one that isn't host commands, or no such command                         |
+| `params`   | the bounding values: not an object, a key not declared, a value against its schema; or a host command grant's changed in the window |
+| `arguments`| a call's free arguments: not an object, one missing or not declared, a value against its schema        |
+| `reason`   | no reason left once whitespace and control characters are folded                                       |
+| `lease`    | none of `lock`, a positive duration, or `once` for a call; or `lock` while the lock isn't watched      |
+| `unshared` | folders before the sandbox's grant directory was shared                                                |
+| `ceiling`  | a folder no ceiling source covers, one it allows read-only only, or a denied one                       |
+| `instance` | no instance with these bounding values                                                                 |
+| `held`     | an exclusive instance another launcher holds                                                           |
+| `asking`   | the user hasn't answered the last request for the capability                                           |
+| `blocked`  | three refusals in a row: no requests for the capability for a while                                    |
+| `denied`   | the user said no, or didn't answer in time                                                             |
+| `failed`   | making the grant live failed: a mount, an address                                                      |
+| `nogrant`  | a release or revoke of a grant there isn't                                                             |
+| `gone`     | the caller ended before it was answered                                                                |
+
+Other errors (an unknown op, a peer refused by the socket) carry no `refused`.
+
 `reason` is required and goes into the notification as text: whitespace and control characters folded to single
 spaces, 300 characters, quoted, markup escaped. Parameter values are quoted in the summary, and a string value is at
 most 200 characters without control characters, so neither can pass itself off as more of the notification. An opaque
