@@ -109,7 +109,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req wire.Request) respon
 		err = fmt.Errorf("Unknown operation %q", req.Op)
 	}
 	if err != nil {
-		res.Error = err.Error()
+		res.Error, res.Refused = err.Error(), refusalOf(err)
 	}
 	return res
 }
@@ -156,7 +156,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req wire.Request) respon
 		err = fmt.Errorf("Unknown operation %q", req.Op)
 	}
 	if err != nil {
-		res.Error = err.Error()
+		res.Error, res.Refused = err.Error(), refusalOf(err)
 	}
 	return res
 }

@@ -69,7 +69,7 @@ func (c *capability) instancesOf(params json.RawMessage) ([]map[string]any, erro
 		}
 	}
 	if len(matched) == 0 {
-		return nil, fmt.Errorf("%s has no such instance: see list", c.id())
+		return nil, refusef(refInstance, "%s has no such instance: see list", c.id())
 	}
 	return matched, nil
 }
@@ -133,9 +133,9 @@ func (c *capability) exclusiveLock(launcher string, params json.RawMessage) (fun
 				drop()
 				holder, _ := os.ReadFile(name)
 				if h := strings.TrimSpace(string(holder)); h != "" {
-					return nil, fmt.Errorf("Granted to the launcher %s already", h)
+					return nil, refusef(refHeld, "Granted to the launcher %s already", h)
 				}
-				return nil, errors.New("Granted to the default launcher already")
+				return nil, refusef(refHeld, "Granted to the default launcher already")
 			}
 			if err != nil {
 				drop()

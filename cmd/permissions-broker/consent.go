@@ -18,11 +18,11 @@ import (
 func (b *broker) request(p peer, req wire.Request) (*grant, error) {
 	c, ok := b.caps[req.Capability]
 	if !ok {
-		return nil, fmt.Errorf("No capability %q: see list", req.Capability)
+		return nil, refusef(refUnknown, "No capability %q: see list", req.Capability)
 	}
 	params, err := c.validate(req.Params)
 	if err != nil {
-		return nil, err
+		return nil, refuse(refParams, err)
 	}
 	reason, err := foldReason(req.Reason)
 	if err != nil {
@@ -38,7 +38,7 @@ const defaultLease = "PT1H"
 func foldReason(r string) (string, error) {
 	reason := strings.Join(strings.FieldsFunc(r, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
 	if reason == "" {
-		return "", errors.New("Say why you need it: the user sees the reason")
+		return "", refusef(refReason, "Say why you need it: the user sees the reason")
 	}
 	if r := []rune(reason); len(r) > maxReason {
 		reason = string(r[:maxReason]) + "…"
@@ -56,13 +56,13 @@ type askingCall struct {
 // makes a grant nothing else finds. call is the call asking, nil for a request
 func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, lease string, call *askingCall) (*grant, error) {
 	if lease == "once" && call == nil {
-		return nil, errors.New("A once lease is for host command calls: ask for a duration")
+		return nil, refusef(refLease, "A once lease is for host command calls: ask for a duration")
 	}
 	if err := c.kind().usable(b); err != nil {
-		return nil, err
+		return nil, refuse(refUnshared, err)
 	}
 	if p.gone() {
-		return nil, errors.New("The caller is gone")
+		return nil, refusef(refGone, "The caller is gone")
 	}
 	if lease == "" {
 		lease = defaultLease
@@ -74,10 +74,10 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	// the user
 	summary, err := c.kind().describe(b, c, params)
 	if err != nil {
-		return nil, err
+		return nil, refuse(refCeiling, err)
 	}
 	if err := c.inList(params); err != nil {
-		return nil, err
+		return nil, refuse(refInstance, err)
 	}
 
 	// Already granted: a live grant, or a standing grant from the config with exactly these parameters, serves without
@@ -103,16 +103,16 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	answer, err := b.consent(c, params, summary, reason, lease, call)
 	unlockGate(answer.Allow)
 	if err != nil {
-		return nil, fmt.Errorf("Asking the user: %w", err)
+		return nil, refuse(refDenied, fmt.Errorf("Asking the user: %w", err))
 	}
 	if !answer.Allow {
 		b.logDecision(summary, reason, "denied")
-		return nil, errors.New("The user didn't allow it")
+		return nil, refusef(refDenied, "The user didn't allow it")
 	}
 	// Again, whether or not the answer changed the lease: the screen lock may have stopped being watched while the
 	// user was asked
 	if answer.Lease == "once" && call == nil {
-		return nil, errors.New("A once lease is for host command calls")
+		return nil, refusef(refLease, "A once lease is for host command calls")
 	}
 	if err := b.checkLease(answer.Lease); err != nil {
 		return nil, err
@@ -121,20 +121,20 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 	if len(answer.Params) > 0 && c.Type == "command" {
 		// The call needs these bounding values; the window may change only the lease
 		if p, err := c.validate(answer.Params); err != nil || string(p) != string(params) {
-			return nil, errors.New("A host command grant's parameters can't be changed: only its lease")
+			return nil, refusef(refParams, "A host command grant's parameters can't be changed: only its lease")
 		}
 	} else if len(answer.Params) > 0 {
 		if params, err = c.validate(answer.Params); err != nil {
-			return nil, err
+			return nil, refuse(refParams, err)
 		}
 		if summary, err = c.kind().describe(b, c, params); err != nil {
-			return nil, err
+			return nil, refuse(refCeiling, err)
 		}
 	}
 	// The instances may have changed while the user was asked (a VM shut down): checked at grant time. An attach
 	// grant's source is checked again when it's mounted
 	if err := c.inList(params); err != nil {
-		return nil, err
+		return nil, refuse(refInstance, err)
 	}
 	// A grant of the same may have appeared while the user was asked (the window narrowing to what's granted): that
 	// one serves, rather than a second of the same
@@ -191,9 +191,9 @@ func (b *broker) openGate(id string) (func(allowed bool), error) {
 	}
 	switch {
 	case g.asking:
-		return nil, errors.New("The user hasn't answered your last request for this yet")
+		return nil, refusef(refAsking, "The user hasn't answered your last request for this yet")
 	case b.now().Before(g.blockedUntil):
-		return nil, fmt.Errorf("The user turned down %d requests in a row: ask again after %s", maxRefusals,
+		return nil, refusef(refBlocked, "The user turned down %d requests in a row: ask again after %s", maxRefusals,
 			g.blockedUntil.Format(time.TimeOnly))
 	}
 	g.asking = true

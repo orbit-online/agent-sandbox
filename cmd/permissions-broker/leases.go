@@ -24,11 +24,11 @@ func (b *broker) checkLease(lease string) error {
 		ok := b.lockOK
 		b.mu.Unlock()
 		if !ok {
-			return errors.New("Screen lock isn't watched, so no lock lease: ask for a duration")
+			return refusef(refLease, "Screen lock isn't watched, so no lock lease: ask for a duration")
 		}
 	default:
 		if _, err := duration.Parse(lease); err != nil {
-			return fmt.Errorf("Lease %q: lock, a duration such as PT1H, or once for a call", lease)
+			return refusef(refLease, "Lease %q: lock, a duration such as PT1H, or once for a call", lease)
 		}
 	}
 	return nil
@@ -39,7 +39,7 @@ func (b *broker) checkLease(lease string) error {
 func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string) (*grant, error) {
 	unlock, err := c.exclusiveLock(b.cfg.Launcher, params)
 	if err != nil {
-		return nil, err
+		return nil, refuse(refFailed, err)
 	}
 	g := &grant{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		Granted: b.now(), cap: c, ended: make(chan struct{}), unlock: unlock}
@@ -48,7 +48,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	}
 	if err := c.kind().live(b, g); err != nil {
 		unlock()
-		return nil, err
+		return nil, refuse(refFailed, err)
 	}
 	var once sync.Once
 	g.end = func(why string) {
@@ -71,7 +71,7 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	if lease == "lock" && !b.lockOK {
 		b.mu.Unlock()
 		g.end("the screen lock isn't watched")
-		return nil, errors.New("Screen lock isn't watched any more, so no lock lease: ask for a duration")
+		return nil, refusef(refLease, "Screen lock isn't watched any more, so no lock lease: ask for a duration")
 	}
 	b.grants[g.ID] = g
 	b.mu.Unlock()
@@ -112,7 +112,7 @@ func (b *broker) revoke(id string) ([]mounts.Holder, error) {
 	g, ok := b.grants[id]
 	b.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("No grant %q", id)
+		return nil, refusef(refNoGrant, "No grant %q", id)
 	}
 	b.endStanding(g)
 	g.end("revoked by the user")
@@ -126,7 +126,7 @@ func (b *broker) release(id, why string) error {
 	g, ok := b.grants[id]
 	b.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("No grant %q", id)
+		return refusef(refNoGrant, "No grant %q", id)
 	}
 	b.endStanding(g)
 	g.end(why)

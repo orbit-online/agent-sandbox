@@ -33,7 +33,9 @@ var readTimeout = 10 * time.Second
 
 type response struct {
 	Error string `json:"error,omitempty"`
-	Grant *grant `json:"grant,omitempty"`
+	// Why a request or call was refused, by category (refusal.go)
+	Refused refusal `json:"refused,omitempty"`
+	Grant   *grant  `json:"grant,omitempty"`
 	// What a host command printed: text, or Data of the image type Mime
 	Output       string           `json:"output,omitempty"`
 	Mime         string           `json:"mime,omitempty"`

@@ -47,19 +47,19 @@ type callRecord struct {
 func (b *broker) call(p peer, req wire.Request) (response, error) {
 	c, ok := b.caps[req.Capability]
 	if !ok || c.Type != "command" {
-		return response{}, fmt.Errorf("No host commands %q: see list", req.Capability)
+		return response{}, refusef(refUnknown, "No host commands %q: see list", req.Capability)
 	}
 	cmd, ok := c.Commands[req.Command]
 	if !ok {
-		return response{}, fmt.Errorf("%s has no command %q: see list", c.id(), req.Command)
+		return response{}, refusef(refUnknown, "%s has no command %q: see list", c.id(), req.Command)
 	}
 	params, err := c.validate(req.Params)
 	if err != nil {
-		return response{}, err
+		return response{}, refuse(refParams, err)
 	}
 	args, err := cmd.ValidateArgs(req.Arguments)
 	if err != nil {
-		return response{}, fmt.Errorf("%s_%s: %w", c.id(), req.Command, err)
+		return response{}, refusef(refArguments, "%s_%s: %w", c.id(), req.Command, err)
 	}
 	reason, err := foldReason(req.Reason)
 	if err != nil {
