@@ -573,7 +573,7 @@ permissions.dbus.timedate = {
 ```
 
 `see`, `talk` and `own` are lists of names, `call` and `broadcast` attribute sets of rule lists by name, as nixpak's
-`dbus.rules`; a name may end in `.*`. A grant adds its rule set under the grant's id; a revoke removes it. Either
+`dbus.rules`. Names are exact: the proxy takes no `.*` wildcards, in live sets or on its command line. A grant adds its rule set under the grant's id; a revoke removes it. Either
 applies from the next message the proxy reads: the client's reader first looks up who owns the names the set mentions
 (as after `Hello`) and holds that message until the bus answered, so a call by the owner's unique name passes too. A revoke also closes every client connection that sent or received a message under the rule set: that drops
 its names, match rules and exported objects on the bus, which a removed rule alone would leave. The client sees its
@@ -600,15 +600,12 @@ is not a guarantee: D-Bus capabilities are declared by the user in Nix and every
 name not listed gives is the config's responsibility, as for host sockets and host commands. It refuses:
 
 - on either bus, the bus driver (`org.freedesktop.DBus`), which the static guards rest on;
-- on the session bus, names that hand over more than their own service, each with the names below it and any wildcard
-  covering it: `org.freedesktop.Notifications` (the broker's consent), `org.freedesktop.systemd1` (transient units),
+- on the session bus, names that hand over more than their own service, each with the names below it: `org.freedesktop.Notifications` (the broker's consent), `org.freedesktop.systemd1` (transient units),
   `org.freedesktop.Flatpak` and `org.freedesktop.portal.Flatpak` (`HostCommand`, `Spawn`),
   `org.freedesktop.impl.portal.*` (the backends behind the portals' app ID checks), `org.freedesktop.secrets` and
   `org.gnome.keyring` (the user's secrets), `org.a11y.Bus`, `ca.desrt.dconf` (`Writer.Change` sets a keybinding's
   command), `org.gnome.Terminal`, `org.gnome.Shell` (`Eval`), `org.gnome.Mutter.RemoteDesktop` and `.ScreenCast`,
   `org.kde.KWin` (`loadScript`) and `org.kde.klauncher*`;
-- on the session bus, wildcards with fewer than three name elements before `.*` (`org.gnome.*`, `ca.desrt.*`) and any
-  over `org.freedesktop.portal`;
 - on `org.freedesktop.portal.Desktop`, talk and any call rule that doesn't name an interface, and the RemoteDesktop and
   ScreenCast interfaces: their sessions persist (below);
 - on the session bus, `own` of anything but the sandbox's app ID (`com.nixpak.ClaudeDesktop[.<name>]`), the names below
@@ -616,7 +613,7 @@ name not listed gives is the config's responsibility, as for host sockets and ho
   the default launcher can't take a named one's), and the tray's `org.freedesktop.StatusNotifierItem-<pid>-<n>`, as
   Flatpak limits apps to their app ID: owning a host program's name makes host programs send the sandbox what they
   mean for the real service (a notification watcher, a secret service);
-- on the system bus, wildcards, `own`, `org.freedesktop.PolicyKit1` (registering an authentication agent) and
+- on the system bus, `own`, `org.freedesktop.PolicyKit1` (registering an authentication agent) and
   `org.freedesktop.systemd1`; `org.freedesktop.login1` only by call rules naming an interface and a member.
 
 polkit and the proxy: services on the system bus check polkit with the caller's bus name as the subject, which polkit

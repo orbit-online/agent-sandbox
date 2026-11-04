@@ -11,12 +11,6 @@ import (
 // Scope says plainly what a grant covers, for the consent: "On the system bus: call org.freedesktop.timedate1's
 // methods and get its signals (talk). ..."
 func (d *Config) Scope() string {
-	named := func(arg string) string {
-		if name, ok := strings.CutSuffix(arg, ".*"); ok {
-			return name + " and the names below it"
-		}
-		return arg
-	}
 	// On the system bus polkit judges the proxy's calls as the user's graphical session (docs/permissions.md, D-Bus)
 	talk, calls := "call any method of %s and get its signals (talk); the service may be started on demand and may "+
 		"ask polkit", "call %s: %s"
@@ -34,7 +28,7 @@ func (d *Config) Scope() string {
 		{d.Own, "own %s, and anything talk gives (own): host programs will send it what they mean for that name"},
 	} {
 		for _, n := range p.names {
-			parts = append(parts, fmt.Sprintf(p.what, named(n)))
+			parts = append(parts, fmt.Sprintf(p.what, n))
 		}
 	}
 	for _, r := range []struct {
@@ -54,7 +48,7 @@ func (d *Config) Scope() string {
 			for i, rule := range r.rules[k] {
 				rules[i] = describeRule(rule)
 			}
-			parts = append(parts, fmt.Sprintf(r.what, named(k), strings.Join(rules, ", ")))
+			parts = append(parts, fmt.Sprintf(r.what, k, strings.Join(rules, ", ")))
 		}
 	}
 	return "On the " + d.Bus + " bus: " + strings.Join(parts, "; ") + "."

@@ -3,8 +3,8 @@
 // policy.json, which the Home Manager module reads too for its assertions.
 //
 // The lists guard the config's author against known footguns: names that hand the sandbox more than their own
-// service (code run on the host, the user's secrets, input and screen), names it could take over from host programs,
-// and wildcards over a vendor's whole namespace. They are not a guarantee: what any other name gives is the config's
+// service (code run on the host, the user's secrets, input and screen) and names it could take over from host programs.
+// Names are exact: the proxy takes no wildcards. They are not a guarantee: what any other name gives is the config's
 // responsibility, and every grant is the user's to consent to (docs/permissions.md, D-Bus)
 package dbuspolicy
 
@@ -18,19 +18,15 @@ import (
 
 // One bus's policy
 type Policy struct {
-	// Names refused with the names below them and any wildcard covering them. A trailing * matches any rest of the
-	// last element (org.kde.klauncher*)
+	// Names refused with the names below them. A trailing * matches any rest of the last element (org.kde.klauncher*)
 	Refused []string `json:"refused"`
-	// No wildcard at or below these, nor covering them
-	NoWildcard []string `json:"noWildcard"`
 	// By name, interfaces no call rule may reach. Neither talk nor own of the name, and every call rule names an
 	// interface, none of these
 	Methods map[string][]string `json:"methods"`
 	// Names only call rules with an interface and a member reach: no talk or own
 	ExplicitCalls []string `json:"explicitCalls"`
-	// Whether names may end in .*, and whether a set may own names (below the sandbox's app ID only)
-	Wildcards bool `json:"wildcards"`
-	Own       bool `json:"own"`
+	// Whether a set may own names (below the sandbox's app ID only)
+	Own bool `json:"own"`
 }
 
 //go:embed policy.json
@@ -113,10 +109,9 @@ func Check(bus, appID string, s Set) error {
 		}
 	}
 	for n, rs := range s.Call {
-		bare := strings.TrimSuffix(n, ".*")
 		for _, r := range rs {
 			iface, member := Method(r)
-			if denied, ok := p.Methods[bare]; ok {
+			if denied, ok := p.Methods[n]; ok {
 				if iface == "" {
 					return fmt.Errorf("rule %q for %s: name the interface, the name's %s are refused", r, n, strings.Join(denied, " and "))
 				}
@@ -126,7 +121,7 @@ func Check(bus, appID string, s Set) error {
 					}
 				}
 			}
-			if contains(p.ExplicitCalls, bare) && (iface == "" || member == "") {
+			if contains(p.ExplicitCalls, n) && (iface == "" || member == "") {
 				return fmt.Errorf("rule %q for %s: only calls naming an interface and a member", r, n)
 			}
 		}
@@ -134,38 +129,15 @@ func Check(bus, appID string, s Set) error {
 	return nil
 }
 
-// checkName refuses a name or wildcard the policy refuses; talk is for talk and own, which reach every method
-func (p Policy) checkName(arg string, talk bool) error {
-	bare, wildcard := strings.CutSuffix(arg, ".*")
-	if wildcard {
-		if !p.Wildcards {
-			return fmt.Errorf("%s: no wildcards on this bus", arg)
-		}
-		if strings.Count(bare, ".") < 2 {
-			return fmt.Errorf("%s: a wildcard needs three name elements before .*", arg)
-		}
-		for _, n := range p.NoWildcard {
-			if bare == n || strings.HasPrefix(bare, n+".") || strings.HasPrefix(n, bare+".") {
-				return fmt.Errorf("%s: no wildcard over %s", arg, n)
-			}
-		}
-	}
+// checkName refuses a name the policy refuses; talk is for talk and own, which reach every method
+func (p Policy) checkName(name string, talk bool) error {
 	for _, r := range p.Refused {
-		if covers(r, bare) || wildcard && strings.HasPrefix(strings.TrimSuffix(r, "*"), bare+".") {
-			return fmt.Errorf("%s is refused: it reaches %s", arg, r)
+		if covers(r, name) {
+			return fmt.Errorf("%s is refused: it reaches %s", name, r)
 		}
 	}
-	guarded := append([]string{}, p.ExplicitCalls...)
-	for n := range p.Methods {
-		guarded = append(guarded, n)
-	}
-	for _, n := range guarded {
-		if wildcard && (covers(bare, n) || strings.HasPrefix(n, bare+".")) {
-			return fmt.Errorf("%s: no wildcard over %s", arg, n)
-		}
-		if talk && bare == n {
-			return fmt.Errorf("%s: no talk or own, only call rules", arg)
-		}
+	if talk && (contains(p.ExplicitCalls, name) || p.Methods[name] != nil) {
+		return fmt.Errorf("%s: no talk or own, only call rules", name)
 	}
 	return nil
 }
@@ -182,24 +154,23 @@ func covers(r, n string) bool {
 // checkOwn: owning a name makes host programs send it what they mean for the service that would own it, so only the
 // sandbox's own names: its app ID and the names below it (but not the ones another launcher's app ID could start),
 // and the tray's
-func (p Policy) checkOwn(appID, arg string) error {
+func (p Policy) checkOwn(appID, name string) error {
 	if !p.Own {
-		return fmt.Errorf("own %s: no own on this bus", arg)
+		return fmt.Errorf("own %s: no own on this bus", name)
 	}
-	bare, wildcard := strings.CutSuffix(arg, ".*")
-	if !wildcard && trayName.MatchString(bare) {
+	if trayName.MatchString(name) {
 		return nil
 	}
 	if appID != "" {
-		if !wildcard && bare == appID {
+		if name == appID {
 			return nil
 		}
-		if rest, ok := strings.CutPrefix(bare, appID+"."); ok && !launcherElement.MatchString(rest) {
+		if rest, ok := strings.CutPrefix(name, appID+"."); ok && !launcherElement.MatchString(rest) {
 			return nil
 		}
 	}
 	return fmt.Errorf("own %s: only %s, names below it whose next element doesn't start with a lowercase letter, "+
-		"and org.freedesktop.StatusNotifierItem-<pid>-<n>", arg, appID)
+		"and org.freedesktop.StatusNotifierItem-<pid>-<n>", name, appID)
 }
 
 func contains(l []string, s string) bool {

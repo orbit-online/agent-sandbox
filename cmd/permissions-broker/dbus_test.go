@@ -94,8 +94,8 @@ func dbusCap(t *testing.T, name string, dc dbusgrant.Config) *capability {
 	return caps[name]
 }
 
-// What the broker refuses to declare: rules that would undo the proxies' static guards, wildcards and own on the
-// system bus, and what the proxy wouldn't take
+// What the broker refuses to declare: rules that would undo the proxies' static guards, wildcards, own on the system
+// bus, and what the proxy wouldn't take
 func TestDBusDeclarations(t *testing.T) {
 	for name, dc := range map[string]dbusgrant.Config{
 		"no bus":                    {Talk: []string{"org.test.A"}},
@@ -111,6 +111,7 @@ func TestDBusDeclarations(t *testing.T) {
 		"flatpak's HostCommand":     {Bus: "session", Talk: []string{"org.freedesktop.Flatpak"}},
 		"a portal backend":          {Bus: "session", Talk: []string{"org.freedesktop.impl.portal.desktop.kde"}},
 		"the accessibility bus":     {Bus: "session", Broadcast: map[string][]string{"org.a11y.Bus": {"*"}}},
+		"a wildcard":                {Bus: "session", Talk: []string{"org.example.App.*"}},
 		"a wildcard, system":        {Bus: "system", Talk: []string{"org.freedesktop.timedate1.*"}},
 		"own, system":               {Bus: "system", Own: []string{"org.test.A"}},
 		"not a name":                {Bus: "session", Talk: []string{"nodots"}},
@@ -145,7 +146,7 @@ func TestDBusDeclarations(t *testing.T) {
 		{Name: "timedate", Description: "d", Bus: "system", Talk: []string{"org.freedesktop.timedate1"}},
 		{Name: "hostname", Description: "d", Bus: "system",
 			Call: map[string][]string{"org.freedesktop.hostname1": {"org.freedesktop.DBus.Properties.Get@/org/freedesktop/hostname1"}}},
-		{Name: "portal", Description: "d", Bus: "session", See: []string{"org.example.App.*"},
+		{Name: "portal", Description: "d", Bus: "session", See: []string{"org.example.App"},
 			Call: map[string][]string{"org.freedesktop.portal.Desktop": {"org.freedesktop.portal.OpenURI.*@/org/freedesktop/portal/*",
 				"org.freedesktop.portal.Settings.Read@/"}},
 			Broadcast: map[string][]string{"org.freedesktop.portal.Desktop": {"org.freedesktop.portal.Settings.*"}}},
@@ -167,7 +168,7 @@ func TestDBusDeclarations(t *testing.T) {
 		t.Errorf("The scope: %q", got)
 	}
 	// The portal's call rules said as the proxy reads them, own and talk with what they bring
-	if got := caps["portal"].DBus.Scope(); got != "On the session bus: see org.example.App and the names below it (no calls); "+
+	if got := caps["portal"].DBus.Scope(); got != "On the session bus: see org.example.App (no calls); "+
 		"call org.freedesktop.portal.Desktop: any method of org.freedesktop.portal.OpenURI on /org/freedesktop/portal and the "+
 		"objects below it, org.freedesktop.portal.Settings.Read on /; "+
 		"get the signals of org.freedesktop.portal.Desktop: any method of org.freedesktop.portal.Settings." {

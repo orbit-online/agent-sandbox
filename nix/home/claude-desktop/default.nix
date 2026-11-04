@@ -608,8 +608,8 @@ let
         description = ''
           D-Bus capabilities (`docs/permissions.md`, D-Bus): rule sets granted whole, added to the session-bus proxy
           or the system-bus one while a grant lives. The system bus is at `/run/dbus/system_bus_socket` inside when
-          the launcher has one for it, and reaches nothing without a grant. A name may end in `.*` (not on the system
-          bus). Never the bus driver; on the session bus never the notification server, the systemd user manager,
+          the launcher has one for it, and reaches nothing without a grant. Names are exact well-known names, without
+          wildcards. Never the bus driver; on the session bus never the notification server, the systemd user manager,
           `org.freedesktop.Flatpak`, the portals' backends or `org.a11y.Bus`; on the system bus no `own`.
         '';
       };
@@ -1691,29 +1691,18 @@ in
                 ruled = d.see ++ d.talk ++ d.own ++ lib.attrNames d.call ++ lib.attrNames d.broadcast;
                 rules = lib.attrValues d.call ++ lib.attrValues d.broadcast;
                 count = lib.length (d.see ++ d.talk ++ d.own) + lib.foldl' (n: rs: n + lib.length rs) 0 rules;
-                wild = lib.hasSuffix ".*";
-                bare = lib.removeSuffix ".*";
-                valid = n: builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" (bare n) != null;
+                valid = n: builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" n != null;
                 ruleOk = r: builtins.match "(\\*|[A-Za-z0-9_.*-]*)(@(/\\*|(/[A-Za-z0-9_]+)+(/\\*)?|/))?" r != null;
                 # internal/dbuspolicy's policy, as dbuspolicy.Check applies it: a guard against known footguns, not
                 # a guarantee (docs/permissions.md, D-Bus)
                 p = dbusPolicy.${d.bus};
                 appId = l.sandboxed.config.flatpak.appId;
                 covers = r: n: if lib.hasSuffix "*" r then lib.hasPrefix (lib.removeSuffix "*" r) n else n == r || lib.hasPrefix "${r}." n;
-                below = a: b: lib.hasPrefix "${a}." b;
                 guarded = p.explicitCalls ++ lib.attrNames p.methods;
                 nameErrs =
                   talk: n:
-                  let
-                    b = bare n;
-                    w = wild n;
-                  in
-                  lib.optional (w && !p.wildcards) "${n}: no wildcards on this bus"
-                  ++ lib.optional (w && lib.length (lib.splitString "." b) < 3) "${n}: a wildcard needs three name elements before .*"
-                  ++ lib.optional (w && lib.any (x: b == x || below x b || below b x) p.noWildcard) "${n}: no wildcard there"
-                  ++ lib.optional (lib.any (r: covers r b || (w && below b (lib.removeSuffix "*" r))) p.refused) "${n} is refused"
-                  ++ lib.optional (w && lib.any (g: covers b g || below b g) guarded) "${n}: no wildcard over a name with call rules only"
-                  ++ lib.optional (talk && lib.elem b guarded) "${n}: no talk or own, only call rules";
+                  lib.optional (lib.any (r: covers r n) p.refused) "${n} is refused"
+                  ++ lib.optional (talk && lib.elem n guarded) "${n}: no talk or own, only call rules";
                 method =
                   r:
                   let
@@ -1739,24 +1728,21 @@ in
                   n: r:
                   let
                     m = method r;
-                    b = bare n;
                   in
-                  lib.optional (p.methods ? ${b} && (m.iface == "" || lib.elem m.iface p.methods.${b})) "${n}=${r}: refused on ${b}"
-                  ++ lib.optional (lib.elem b p.explicitCalls && (m.iface == "" || m.member == "")) "${n}=${r}: only calls naming an interface and a member";
+                  lib.optional (p.methods ? ${n} && (m.iface == "" || lib.elem m.iface p.methods.${n})) "${n}=${r}: refused on ${n}"
+                  ++ lib.optional (lib.elem n p.explicitCalls && (m.iface == "" || m.member == "")) "${n}=${r}: only calls naming an interface and a member";
                 ownErrs =
                   n:
                   let
-                    b = bare n;
-                    w = wild n;
-                    rest = lib.removePrefix "${appId}." b;
+                    rest = lib.removePrefix "${appId}." n;
                   in
                   lib.optional (
                     !(
                       p.own
                       && (
-                        (!w && builtins.match "org\\.freedesktop\\.StatusNotifierItem-[0-9]+-[0-9]+" b != null)
-                        || (!w && b == appId)
-                        || (below appId b && builtins.match "[a-z].*" rest == null)
+                        builtins.match "org\\.freedesktop\\.StatusNotifierItem-[0-9]+-[0-9]+" n != null
+                        || n == appId
+                        || (lib.hasPrefix "${appId}." n && builtins.match "[a-z].*" rest == null)
                       )
                     )
                   ) "own ${n}: only ${appId} and names below it not starting with a lowercase element, and the tray's";
@@ -1785,7 +1771,7 @@ in
                     && count <= 64
                     && lib.all valid ruled
                     && lib.all (rs: rs != [ ] && lib.all ruleOk rs) rules;
-                  message = "${dopt}: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]";
+                  message = "${dopt}: from 1 to 64 rules, each name a well-known bus name (no wildcards), each call or broadcast rule [METHOD][@PATH]";
                 }
                 {
                   assertion = policyErrs == [ ];

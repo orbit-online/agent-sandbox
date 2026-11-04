@@ -683,7 +683,7 @@ let
       ];
     };
     # D-Bus capabilities the broker would refuse, caught at eval: a bad name, no rules or ones the proxy doesn't take,
-    # names that undo the static guards, own and wildcards on the system bus
+    # names that undo the static guards, wildcards, own on the system bus
     testDBusAssertions = {
       expr = map (a: a.message) (
         failedAssertions (
@@ -720,7 +720,6 @@ let
                     bus = "session";
                     talk = [
                       "org.freedesktop.Notifications"
-                      "org.freedesktop.*"
                       "org.test.Fine"
                     ];
                   };
@@ -752,19 +751,22 @@ let
                     call."ca.desrt.dconf" = [ "ca.desrt.dconf.Writer.Change" ];
                   };
                   portal = {
-                    description = "the portal's screen cast and a vendor's namespace";
+                    description = "the portal's screen cast";
                     bus = "session";
-                    see = [ "org.example.*" ];
                     call."org.freedesktop.portal.Desktop" = [
                       "org.freedesktop.portal.ScreenCast.Start"
                       "*.Get"
                     ];
                   };
                   sys = {
-                    description = "wildcard and own";
+                    description = "own";
                     bus = "system";
-                    talk = [ "org.freedesktop.timedate1.*" ];
                     own = [ "org.test.A" ];
+                  };
+                  wild = {
+                    description = "a wildcard";
+                    bus = "session";
+                    talk = [ "org.example.App.*" ];
                   };
                   logind = {
                     description = "polkit and every login1 method";
@@ -786,15 +788,16 @@ let
         in
         [
           "${o}.a_b: a name of letters, digits and - that no host commands or host sockets have, and a description"
-          "${o}.bad: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]"
+          "${o}.bad: from 1 to 64 rules, each name a well-known bus name (no wildcards), each call or broadcast rule [METHOD][@PATH]"
           "${o}.dconf: ${policy}ca.desrt.dconf is refused"
-          "${o}.empty: from 1 to 64 rules, each name a well-known bus name (it may end in .*), each call or broadcast rule [METHOD][@PATH]"
+          "${o}.empty: from 1 to 64 rules, each name a well-known bus name (no wildcards), each call or broadcast rule [METHOD][@PATH]"
           "${o}.hijack: ${policy}own org.kde.StatusNotifierWatcher: ${own}; own com.nixpak.ClaudeDesktop.work.other: ${own}"
           "${o}.logind: ${policy}org.freedesktop.PolicyKit1 is refused; org.freedesktop.login1=org.freedesktop.login1.Manager.*: only calls naming an interface and a member"
-          "${o}.notify: ${policy}org.freedesktop.Notifications is refused; org.freedesktop.*: a wildcard needs three name elements before .*; org.freedesktop.*: no wildcard there; org.freedesktop.* is refused; org.freedesktop.*: no wildcard over a name with call rules only"
-          "${o}.portal: ${policy}org.example.*: a wildcard needs three name elements before .*; org.freedesktop.portal.Desktop=*.Get: a METHOD starting with * matches every method; org.freedesktop.portal.Desktop=org.freedesktop.portal.ScreenCast.Start: refused on org.freedesktop.portal.Desktop; org.freedesktop.portal.Desktop=*.Get: refused on org.freedesktop.portal.Desktop"
-          "${o}.sys: ${policy}own org.test.A: ${own}; org.freedesktop.timedate1.*: no wildcards on this bus"
+          "${o}.notify: ${policy}org.freedesktop.Notifications is refused"
+          "${o}.portal: ${policy}org.freedesktop.portal.Desktop=*.Get: a METHOD starting with * matches every method; org.freedesktop.portal.Desktop=org.freedesktop.portal.ScreenCast.Start: refused on org.freedesktop.portal.Desktop; org.freedesktop.portal.Desktop=*.Get: refused on org.freedesktop.portal.Desktop"
+          "${o}.sys: ${policy}own org.test.A: ${own}"
           "${o}.taken: a name of letters, digits and - that no host commands or host sockets have, and a description"
+          "${o}.wild: from 1 to 64 rules, each name a well-known bus name (no wildcards), each call or broadcast rule [METHOD][@PATH]"
         ];
     };
     testMcpServersHmTransform = {

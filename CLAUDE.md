@@ -183,9 +183,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
   broker, of a host command, host socket or D-Bus capability it has, none of folders), the assertions on D-Bus
-  capabilities (a name of their own, 1 to 64 rules the proxy takes, and the shared policy: a refused name, a wildcard
-  short of three elements, the portal's ScreenCast and a `*.Get` rule, own of a host program's name and of another
-  launcher's, polkit and login1's every method on the system bus, own and wildcards there; its names of its own and
+  capabilities (a name of their own, 1 to 64 rules the proxy takes, no wildcard, and the shared policy: a refused
+  name, the portal's ScreenCast and a `*.Get` rule, own of a host program's name and of another
+  launcher's, polkit and login1's every method on the system bus, own there; its names of its own and
   the tray's, and an explicit login1 call, accepted), the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
@@ -370,7 +370,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   for its length, one of 80 reachable through a long grant directory; a sync that looked before a grant's not
   closing its listener; a revoke during the connect closing the host's end whole; a grant without an address
   refused; no address made through a link; a stale address taken over; the addresses closed when the daemon
-  ends. `internal/dbuspolicy` (built with the broker for its tests): each name, wildcard, method, own and system-bus
+  ends. `internal/dbuspolicy` (built with the broker for its tests): each name, method, own and system-bus
   rule of the policy, and how a rule's METHOD reads. D-Bus capabilities against a fake proxy (`dbus_test.go`):
   declarations refused (as the module's assertions, plus a unique name), the consent's scope naming the bus and
   rules as the proxy reads them, own and talk with what they bring, a grant adding its set to its bus's proxy only and

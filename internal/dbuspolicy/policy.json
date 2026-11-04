@@ -18,9 +18,6 @@
       "org.kde.KWin",
       "org.kde.klauncher*"
     ],
-    "noWildcard": [
-      "org.freedesktop.portal"
-    ],
     "methods": {
       "org.freedesktop.portal.Desktop": [
         "org.freedesktop.portal.RemoteDesktop",
@@ -28,7 +25,6 @@
       ]
     },
     "explicitCalls": [],
-    "wildcards": true,
     "own": true
   },
   "system": {
@@ -37,12 +33,10 @@
       "org.freedesktop.PolicyKit1",
       "org.freedesktop.systemd1"
     ],
-    "noWildcard": [],
     "methods": {},
     "explicitCalls": [
       "org.freedesktop.login1"
     ],
-    "wildcards": false,
     "own": false
   }
 }

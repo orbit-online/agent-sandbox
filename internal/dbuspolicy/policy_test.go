@@ -15,7 +15,7 @@ func TestCheck(t *testing.T) {
 		set Set
 		ok  bool
 	}{
-		// The session bus's escapes, the names below them and wildcards covering them
+		// The session bus's escapes and the names below them
 		{"session", talk("org.freedesktop.DBus"), false},
 		{"session", talk("ca.desrt.dconf"), false},
 		{"session", Set{See: []string{"org.gnome.Terminal"}}, false},
@@ -30,19 +30,8 @@ func TestCheck(t *testing.T) {
 		{"session", talk("org.freedesktop.portal.Flatpak"), false},
 		{"session", talk("org.freedesktop.Flatpak"), false},
 		{"session", talk("org.freedesktop.systemd1"), false},
-		{"session", talk("org.gnome.Mutter.*"), false},
 		{"session", talk("org.gnome.Mutter.DisplayConfig"), true},
 		{"session", talk("org.kde.klipper"), true},
-		// Wildcards: three elements before .*, none over the portals
-		{"session", talk("org.gnome.*"), false},
-		{"session", talk("org.kde.*"), false},
-		{"session", talk("org.freedesktop.*"), false},
-		{"session", talk("ca.desrt.*"), false},
-		{"session", Set{See: []string{"org.freedesktop.portal.*"}}, false},
-		{"session", Set{See: []string{"org.freedesktop.portal.Desktop.*"}}, false},
-		{"session", Set{See: []string{"org.freedesktop.portal.Documents.*"}}, false},
-		{"session", talk("org.example.App.*"), true},
-		{"session", talk("org.example.*"), false},
 		// The portal: calls naming an interface, never RemoteDesktop or ScreenCast
 		{"session", talk("org.freedesktop.portal.Desktop"), false},
 		{"session", call("org.freedesktop.portal.Desktop", "*"), false},
@@ -58,7 +47,6 @@ func TestCheck(t *testing.T) {
 		{"system", talk("org.freedesktop.PolicyKit1"), false},
 		{"system", talk("org.freedesktop.systemd1"), false},
 		{"system", talk("org.freedesktop.DBus"), false},
-		{"system", talk("org.freedesktop.timedate1.*"), false},
 		{"system", Set{Own: []string{app}}, false},
 		{"system", talk("org.freedesktop.login1"), false},
 		{"system", call("org.freedesktop.login1", "*"), false},
@@ -68,9 +56,7 @@ func TestCheck(t *testing.T) {
 		// own: the app ID, names below it not another launcher's, the tray's
 		{"session", Set{Own: []string{app}}, true},
 		{"session", Set{Own: []string{app + ".Helper"}}, true},
-		{"session", Set{Own: []string{app + ".Helper.*"}}, true},
 		{"session", Set{Own: []string{app + ".work"}}, false},
-		{"session", Set{Own: []string{app + ".*"}}, false},
 		{"session", Set{Own: []string{"org.freedesktop.StatusNotifierItem-12-1"}}, true},
 		{"session", Set{Own: []string{"org.freedesktop.StatusNotifierWatcher"}}, false},
 		{"session", Set{Own: []string{"org.example.App"}}, false},

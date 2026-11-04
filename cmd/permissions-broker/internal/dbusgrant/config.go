@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strings"
 
 	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
 )
 
-// Config is a D-Bus capability as the config declares it, with the proxy's syntax: names that may end in ".*", call and
-// broadcast rules by name, each [METHOD][@PATH]
+// Config is a D-Bus capability as the config declares it, with the proxy's syntax: well-known names, call and broadcast
+// rules by name, each [METHOD][@PATH]
 type Config struct {
 	Name        string              `json:"name"`
 	Description string              `json:"description"`
@@ -69,10 +68,9 @@ func (d *Config) Check() error {
 	if n == 0 || n > MaxRules {
 		return fmt.Errorf("%d rules: from 1 to %d", n, MaxRules)
 	}
-	for _, arg := range names {
-		name, _ := strings.CutSuffix(arg, ".*")
+	for _, name := range names {
 		if !wellKnown.MatchString(name) || len(name) > 255 {
-			return fmt.Errorf("%q isn't a well-known bus name", arg)
+			return fmt.Errorf("%q isn't a well-known bus name", name)
 		}
 	}
 	return dbuspolicy.Check(d.Bus, d.appID, dbuspolicy.Set{See: d.See, Talk: d.Talk, Own: d.Own, Call: d.Call,
