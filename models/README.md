@@ -5,7 +5,7 @@ and its permissions broker. This file is the inventory they start from:
 who runs where, what crosses the sandbox's boundary and how each crossing
 checks its peer, what the attacker can do, and the properties the models
 check. Properties are numbered (S for structure, P for the broker's
-protocol, L for the launch path) so model files, Go tests and commit
+protocol, L for the launch path, D for the D-Bus proxy) so model files, Go tests and commit
 messages can cite them.
 
 Sources, as of main 491eb09 (the broker's protocol as of acbceda):
@@ -374,6 +374,32 @@ process whose principal is in the Sandbox domain, at any time.
   one, through a path the sandbox can write: its home, its store, the
   binds of `~/.claude` and `~/.config/Claude` (`launch-host.als`).
 
+### D-Bus proxy (`proxy.als`)
+
+The proxy (`cmd/dbus-proxy`) between the sandbox's clients and the bus,
+with the broker's live rule sets. Its state: each client's calls awaiting
+replies (`awaitBus`) and the calls to it awaiting its replies
+(`awaitPeer`), the names' owners and what the proxy saw each unique name
+own, the static rules and the live sets, the clients held while their
+proxy looks up a set's owners, the rules each client's last message was
+judged by, and the sets each client used. The attacker is every client
+(any destination, any serial, any reply, eavesdropping match rules);
+peers own names, call clients and reply, asked or forged.
+
+- D1. Nothing reaches a name or method outside the rules in force: a call
+  reaches its destination, and a NameOwnerChanged a client, only when
+  the static rules and the live sets in force when the proxy reads it
+  allow it. Owners looked up for a set that went meanwhile give nothing.
+- D2. A reply only answers a call let through: no two calls let through
+  await replies on one serial, a reply reaches a client only for a serial
+  awaiting one and, for a call to the bus, only from the bus, and a
+  client's reply reaches only a peer whose call to it awaits one.
+- D3. A removed set's clients are closed: every client a message it sent
+  or got was judged under the set (a rule for its destination, sender or
+  name, whatever the verdict) loses its connection with the set's removal,
+  alone or with the broker's connection.
+- D4. No eavesdropping: no client gets a call addressed to another.
+
 ## Not modelled
 
 To confirm with Anders (plan Open 2):
@@ -409,6 +435,7 @@ check: that's the user's own mount and ceiling configuration.
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
 | `protocol.als` | 3 | P1-P17 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
+| `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1-D4, each with a run for its premise and a revert check per guard enforcing it |
 
 The broker's Go tests run the protocol model's actions as `rapid` state
 machines against the broker (`cmd/permissions-broker/machine*_test.go`,
