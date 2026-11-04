@@ -29,7 +29,9 @@ func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderFi
 	fields := map[dbus.HeaderField]dbus.Variant{}
 	pos := 16
 	for pos < end {
-		pos = int(align8(uint64(pos)))
+		if pos = skipPadding(raw, pos, int(align8(uint64(pos))), end); pos < 0 {
+			return nil, errPadding
+		}
 		if pos+4 > end {
 			return nil, errors.New("Header field past the header's end")
 		}
@@ -52,7 +54,9 @@ func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderFi
 		var v dbus.Variant
 		switch want {
 		case 'u':
-			pos = int(align4(uint64(pos)))
+			if pos = skipPadding(raw, pos, int(align4(uint64(pos))), end); pos < 0 {
+				return nil, errPadding
+			}
 			if pos+4 > end {
 				return nil, errors.New("Header field past the header's end")
 			}
@@ -74,7 +78,9 @@ func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderFi
 			v = dbus.MakeVariant(sig)
 			pos += 1 + n + 1
 		default:
-			pos = int(align4(uint64(pos)))
+			if pos = skipPadding(raw, pos, int(align4(uint64(pos))), end); pos < 0 {
+				return nil, errPadding
+			}
 			if pos+4 > end {
 				return nil, errors.New("Header field past the header's end")
 			}
@@ -102,6 +108,21 @@ func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderFi
 }
 
 func align4(n uint64) uint64 { return (n + 3) &^ 3 }
+
+var errPadding = errors.New("Header padding not nul, or past the header's end")
+
+// Skips the padding from pos to next, nul bytes before end; -1 when they aren't
+func skipPadding(raw []byte, pos, next, end int) int {
+	if next > end {
+		return -1
+	}
+	for _, c := range raw[pos:next] {
+		if c != 0 {
+			return -1
+		}
+	}
+	return next
+}
 
 var errUnterminated = errors.New("Header string or signature not followed by a nul")
 

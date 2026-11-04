@@ -91,7 +91,8 @@ func (m *Message) ReplySerial() (uint32, bool) {
 }
 
 // DecodeBody decodes the body into Body, for a body no larger than limit, so a client can't make the proxy spend more
-// on decoding than what it looks for takes. Whether Body holds it
+// on decoding than what it looks for takes, and only one that holds valid values of its signature (canonical).
+// Whether Body holds it
 func (m *Message) DecodeBody(limit int) bool {
 	if m.decoded {
 		return m.Body != nil
@@ -102,6 +103,10 @@ func (m *Message) DecodeBody(limit int) bool {
 	}
 	msg, err := decode(m.raw)
 	if err != nil {
+		return false
+	}
+	sig, _ := m.Headers[dbus.FieldSignature].Value().(dbus.Signature)
+	if !canonical(m.order, sig, msg.Body, m.body) {
 		return false
 	}
 	m.Body = msg.Body

@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
@@ -16,12 +17,13 @@ func newSet() *Set {
 	return &Set{byName: map[string][]*Filter{}}
 }
 
-// The names the set mentions
+// The names the set mentions, sorted
 func (rs *Set) Names() []string {
 	out := make([]string, 0, len(rs.byName))
 	for name := range rs.byName {
 		out = append(out, name)
 	}
+	slices.Sort(out)
 	return out
 }
 

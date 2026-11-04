@@ -106,3 +106,20 @@ func TestDecodeLimit(t *testing.T) {
 		}
 	}
 }
+
+// Padding is nul: between header fields, and between the header and the body
+func TestPaddingNul(t *testing.T) {
+	// The path field ends at 16+4+4+3 = 27, padded to 32 before the member; the member's ends at 32+4+4+2 = 42,
+	// padded to 48 before the body
+	ok := rawMessage(dbus.TypeMethodCall, pathField, memberField)
+	if _, err := Parse(ok); err != nil {
+		t.Fatalf("Control: %v", err)
+	}
+	for _, at := range []int{29, 45} {
+		raw := append([]byte(nil), ok...)
+		raw[at] = 1
+		if _, err := Parse(raw); err == nil {
+			t.Errorf("Padding byte %d not nul, parsed", at)
+		}
+	}
+}

@@ -84,8 +84,11 @@ func TestReplyToCaller(t *testing.T) {
 	j := testJudge(t)
 	j.awaitPeer[peerCall{":1.7", 4}] = struct{}{}
 	for _, dest := range []string{":1.8", ""} {
-		r := fakeMessage(t, dbus.TypeMethodReply, 2, map[dbus.HeaderField]any{
-			dbus.FieldReplySerial: uint32(4), dbus.FieldDestination: dest})
+		h := map[dbus.HeaderField]any{dbus.FieldReplySerial: uint32(4), dbus.FieldDestination: dest}
+		if dest == "" {
+			delete(h, dbus.FieldDestination)
+		}
+		r := fakeMessage(t, dbus.TypeMethodReply, 2, h)
 		a, err := j.FromClient(r)
 		if err != nil {
 			t.Fatal(err)

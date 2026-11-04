@@ -230,11 +230,17 @@ func Parse(raw []byte) (*Message, error) {
 func parse(raw []byte, order binary.ByteOrder, bodyStart int, acct *Account) (*Message, error) {
 	m := &Message{Message: &dbus.Message{Type: dbus.Type(raw[1]), Flags: dbus.Flags(raw[2])}, order: order,
 		serial: order.Uint32(raw[8:12]), raw: raw, body: raw[bodyStart:], acct: acct}
-	headers, err := parseHeader(raw, order, 16+int(order.Uint32(raw[12:16])))
+	end := 16 + int(order.Uint32(raw[12:16]))
+	headers, err := parseHeader(raw, order, end)
+	if err == nil && skipPadding(raw, end, bodyStart, bodyStart) < 0 {
+		err = errPadding
+	}
 	if err == nil {
 		m.Headers = headers
 		// godbus checks the type, flags, required fields and names
 		if err = (&dbus.Message{Type: m.Type, Flags: m.Flags, Headers: headers}).IsValid(); err != nil {
+			err = fmt.Errorf("Invalid message: %w", err)
+		} else if err = checkNames(headers); err != nil {
 			err = fmt.Errorf("Invalid message: %w", err)
 		}
 	} else {

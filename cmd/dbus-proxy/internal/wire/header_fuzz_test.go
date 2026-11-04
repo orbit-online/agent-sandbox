@@ -14,8 +14,8 @@ import (
 // parseHeader against godbus's decoder, which reads the same fields as the body of a message of its own: a body of
 // signature (ua(yv)) puts the array at the offsets it has in a header, so alignment works out the same. Whatever
 // parseHeader takes, godbus reads alike; whatever godbus reads that has only known fields of their type, once each,
-// with strings of valid UTF-8 and no nul, parseHeader takes too, unless a string's terminator isn't a nul, which
-// godbus doesn't check. Run longer with go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s
+// with strings of valid UTF-8 and no nul, parseHeader takes too, unless a string's terminator or the padding isn't
+// nul, which godbus doesn't check. Run longer with go test -run '^$' -fuzz FuzzParseHeader -fuzztime 30s
 func FuzzParseHeader(f *testing.F) {
 	for _, m := range []*dbus.Message{
 		{Type: dbus.TypeMethodCall, Headers: map[dbus.HeaderField]dbus.Variant{
@@ -78,7 +78,7 @@ func FuzzParseHeader(f *testing.F) {
 			}
 			return
 		}
-		if gerr != nil || errors.Is(err, errUnterminated) {
+		if gerr != nil || errors.Is(err, errUnterminated) || errors.Is(err, errPadding) {
 			return
 		}
 		seen := map[dbus.HeaderField]bool{}
