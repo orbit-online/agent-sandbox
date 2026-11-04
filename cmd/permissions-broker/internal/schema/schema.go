@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -21,20 +22,22 @@ import (
 )
 
 type Schema struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description"`
-	Opaque      bool     `json:"opaque"`
-	Multiline   bool     `json:"multiline"`
-	MaxLength   *int     `json:"maxLength"`
-	Pattern     string   `json:"pattern"`
-	Enum        []any    `json:"enum"`
-	Minimum     *float64 `json:"minimum"`
-	Maximum     *float64 `json:"maximum"`
-	Items       *Schema  `json:"items"`
-	MaxItems    *int     `json:"maxItems"`
-	Instances   string   `json:"instances"`
+	Type        string      `json:"type"`
+	Description string      `json:"description"`
+	Opaque      bool        `json:"opaque"`
+	Multiline   bool        `json:"multiline"`
+	MaxLength   *int        `json:"maxLength"`
+	Pattern     string      `json:"pattern"`
+	Enum        []any       `json:"enum"`
+	Minimum     json.Number `json:"minimum"`
+	Maximum     json.Number `json:"maximum"`
+	Items       *Schema     `json:"items"`
+	MaxItems    *int        `json:"maxItems"`
+	Instances   string      `json:"instances"`
 
 	re *regexp.Regexp
+	// The bounds' exact values, nil for none
+	min, max *big.Rat
 }
 
 // An opaque string, data that the user has nothing to read in (a CSR), may be this long: it's shown as a digest
@@ -42,13 +45,20 @@ const MaxOpaque = 8192
 
 var argTypes = map[string]bool{"string": true, "boolean": true, "integer": true, "number": true, "array": true}
 
-// Parse reads and checks one argument's schema
+// Parse reads and checks one argument's schema. Numbers stay as written: bounds and enum values compare exactly
 func Parse(raw json.RawMessage) (*Schema, error) {
 	var s Schema
-	if err := json.Unmarshal(raw, &s); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&s); err != nil {
 		return nil, err
 	}
 	return &s, s.check(true)
+}
+
+// ratOf is a number's exact value
+func ratOf(n json.Number) (*big.Rat, bool) {
+	return new(big.Rat).SetString(string(n))
 }
 
 func (s *Schema) check(top bool) error {
@@ -58,8 +68,21 @@ func (s *Schema) check(top bool) error {
 	if (s.Opaque || s.Multiline || s.MaxLength != nil || s.Pattern != "") && s.Type != "string" {
 		return fmt.Errorf("opaque, multiline, maxLength and pattern are for strings only")
 	}
-	if (s.Minimum != nil || s.Maximum != nil) && s.Type != "integer" && s.Type != "number" {
+	if (s.Minimum != "" || s.Maximum != "") && s.Type != "integer" && s.Type != "number" {
 		return fmt.Errorf("minimum and maximum are for numbers only")
+	}
+	for _, b := range []struct {
+		n json.Number
+		r **big.Rat
+	}{{s.Minimum, &s.min}, {s.Maximum, &s.max}} {
+		if b.n == "" {
+			continue
+		}
+		r, ok := ratOf(b.n)
+		if !ok {
+			return fmt.Errorf("minimum and maximum must be numbers")
+		}
+		*b.r = r
 	}
 	if (s.Items != nil || s.MaxItems != nil) != (s.Type == "array") || s.Type == "array" && s.Items == nil {
 		return fmt.Errorf("an array needs items, and only an array takes items and maxItems")
@@ -141,22 +164,21 @@ func (s *Schema) checkScalar(v any, maxDefault int) error {
 			return s.inEnum(v)
 		}
 	case json.Number:
+		// A number a float64 holds, an integer as one of 64 bits
 		f, err := v.Float64()
 		if err != nil || math.IsInf(f, 0) {
 			break
 		}
-		n, intErr := v.Int64()
+		_, intErr := v.Int64()
 		if s.Type == "integer" && intErr != nil || s.Type != "integer" && s.Type != "number" {
 			break
 		}
-		// Integers exactly: past 2^53 a float64 can't tell neighbours apart
-		below := func(b float64) bool { return f < b }
-		above := func(b float64) bool { return f > b }
-		if s.Type == "integer" {
-			below = func(b float64) bool { return b > math.MinInt64 && n < int64(math.Ceil(b)) }
-			above = func(b float64) bool { return b < math.MaxInt64 && n > int64(math.Floor(b)) }
+		// Bounds exactly, not as float64s: 2.50000000000000001 is past 2.5, whatever a float64 rounds it to
+		r, ok := ratOf(v)
+		if !ok {
+			break
 		}
-		if s.Minimum != nil && below(*s.Minimum) || s.Maximum != nil && above(*s.Maximum) {
+		if s.min != nil && r.Cmp(s.min) < 0 || s.max != nil && r.Cmp(s.max) > 0 {
 			return fmt.Errorf("must lie within %s", s.bounds())
 		}
 		return s.inEnum(v)
@@ -170,8 +192,10 @@ func (s *Schema) inEnum(v any) error {
 	}
 	for _, e := range s.Enum {
 		if n, ok := v.(json.Number); ok {
-			if ef, ok := e.(float64); ok {
-				if f, _ := n.Float64(); f == ef {
+			// Exactly, as the bounds
+			en, isNumber := normalize(e).(json.Number)
+			if r, ok := ratOf(n); ok && isNumber {
+				if er, ok := ratOf(en); ok && r.Cmp(er) == 0 {
 					return nil
 				}
 			}
@@ -186,11 +210,11 @@ func (s *Schema) inEnum(v any) error {
 
 func (s *Schema) bounds() string {
 	lo, hi := "any", "any"
-	if s.Minimum != nil {
-		lo = fmt.Sprint(*s.Minimum)
+	if s.Minimum != "" {
+		lo = s.Minimum.String()
 	}
-	if s.Maximum != nil {
-		hi = fmt.Sprint(*s.Maximum)
+	if s.Maximum != "" {
+		hi = s.Maximum.String()
 	}
 	return lo + "–" + hi
 }
@@ -250,4 +274,37 @@ func DecodeObject(raw json.RawMessage) (map[string]any, error) {
 func OpaqueDigest(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return fmt.Sprintf("sha256:%s (%d characters)", hex.EncodeToString(sum[:])[:16], utf8.RuneCountInString(v))
+}
+
+// Canonical writes v's numbers one way, items of an array too: an integer without sign of zero, fraction or exponent,
+// any other number as its exact decimal. Equal values then encode equally: a grant of slot 0 covers slot -0
+func Canonical(v any) any {
+	switch v := v.(type) {
+	case json.Number:
+		r, ok := ratOf(v)
+		if !ok {
+			return v
+		}
+		if r.IsInt() {
+			return json.Number(r.Num().String())
+		}
+		// A decimal's denominator is 2^a 5^b: max(a, b) digits write it exactly
+		digits, d := 0, new(big.Int).Set(r.Denom())
+		for _, p := range []int64{2, 5} {
+			n, q, m := 0, new(big.Int), new(big.Int)
+			for q.DivMod(d, big.NewInt(p), m); m.Sign() == 0; q.DivMod(d, big.NewInt(p), m) {
+				d.Set(q)
+				n++
+			}
+			digits = max(digits, n)
+		}
+		return json.Number(strings.TrimRight(r.FloatString(digits), "0"))
+	case []any:
+		out := make([]any, len(v))
+		for i, x := range v {
+			out[i] = Canonical(x)
+		}
+		return out
+	}
+	return v
 }

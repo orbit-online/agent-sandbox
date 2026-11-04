@@ -300,3 +300,28 @@ func TestNotificationText(t *testing.T) {
 		t.Errorf("Reason shown as %q", f.asked[0].Reason)
 	}
 }
+
+// A grant covers a request with the same parameters by value, whatever their order or how a number is written: slot 0
+// is slot -0 (found by the state machine's generated parameters)
+func TestCoveredByValue(t *testing.T) {
+	b, f := testBroker(t, "allow")
+	c := &capability{Name: "token", Type: "command", Description: "a token",
+		Params: map[string]json.RawMessage{"scope": json.RawMessage(`{"type": "string", "description": "its scope"}`),
+			"slot": json.RawMessage(`{"type": "integer", "minimum": 0, "maximum": 9, "description": "a slot"}`)},
+		Commands: map[string]*hostcmd.Command{"issue": {Description: "issue one", Run: []string{"true"}}}}
+	if err := c.check(); err != nil {
+		t.Fatal(err)
+	}
+	b.caps[c.id()] = c
+	p := peerAt(t, os.Getpid())
+	g, err := b.request(p, req(c.id(), `{"scope":"x","slot":0}`, "PT1H"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, params := range []string{`{"slot":0,"scope":"x"}`, `{"scope":"x","slot":-0}`} {
+		got, err := b.request(p, req(c.id(), params, "PT1H"))
+		if err != nil || got != g || f.count() != 1 {
+			t.Errorf("%s: %v %v, asked %d times; want covered by %s", params, got, err, f.count(), g.Params)
+		}
+	}
+}

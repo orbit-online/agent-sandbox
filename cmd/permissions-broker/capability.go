@@ -81,7 +81,8 @@ func (c *capability) check() error {
 	return k.check(c)
 }
 
-// validate checks params against the capability's declared ones: no others, each of its schema. Returns them re-encoded with sorted keys, so equal requests compare equal
+// validate checks params against the capability's declared ones: no others, each of its schema. Returns them re-encoded
+// with sorted keys and numbers written one way, so equal requests compare equal
 func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 	params, err := schema.DecodeObject(raw)
 	if err != nil {
@@ -95,6 +96,7 @@ func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 		if err := s.CheckValue(v, maxParam); err != nil {
 			return nil, fmt.Errorf("Parameter %s of %s: %w", k, c.id(), err)
 		}
+		params[k] = schema.Canonical(v)
 	}
 	return json.Marshal(params) // maps marshal with sorted keys
 }

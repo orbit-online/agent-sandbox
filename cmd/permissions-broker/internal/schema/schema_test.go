@@ -28,6 +28,13 @@ func TestSchemaValues(t *testing.T) {
 		{`{"type": "integer", "enum": [1, 3]}`, []string{`3`}, []string{`2`}},
 		// Exactly, past what a float64 tells apart
 		{`{"type": "integer", "maximum": 9007199254740992}`, []string{`9007199254740992`}, []string{`9007199254740993`}},
+		// Numbers against their bounds and enum exactly too: a hair past either is no float64 apart from it (found by
+		// the state machine's generated arguments)
+		{`{"type": "number", "minimum": -1.5, "maximum": 2.5}`, []string{`2.5`, `25e-1`, `-1.50`, `1e-400`},
+			[]string{`2.50000000000000001`, `-1.50000000000000001`, `1e309`}},
+		{`{"type": "number", "enum": [1, 2.5, 1000]}`, []string{`2.50`, `1e3`, `1.0`},
+			[]string{`2.50000000000000001`, `1.00000000000000001`}},
+		{`{"type": "integer", "enum": [9007199254740992]}`, []string{`9007199254740992`}, []string{`9007199254740993`}},
 		{`{"type": "boolean"}`, []string{`true`, `false`}, []string{`"true"`, `1`}},
 		{`{"type": "array", "items": {"type": "string", "enum": ["x", "y"]}, "maxItems": 2}`,
 			[]string{`[]`, `["x", "y"]`}, []string{`["x", "y", "x"]`, `["z"]`, `"x"`}},
@@ -90,5 +97,18 @@ func TestSchemaLongEnum(t *testing.T) {
 		if got := s.Allows(); got != want {
 			t.Errorf("allows = %q, want %q", got, want)
 		}
+	}
+}
+
+// Canonical writes equal numbers equally, exactly
+func TestCanonical(t *testing.T) {
+	for in, want := range map[string]string{"-0": "0", "0": "0", "1e2": "100", "2.50": "2.5", "25E-1": "2.5", "-1.5": "-1.5",
+		"0.1": "0.1", "1e-3": "0.001", "2.50000000000000001": "2.50000000000000001", "123456789012345678901234567890": "123456789012345678901234567890"} {
+		if got := Canonical(json.Number(in)); got != json.Number(want) {
+			t.Errorf("Canonical(%s) = %v, want %s", in, got, want)
+		}
+	}
+	if got := fmt.Sprint(Canonical([]any{json.Number("-0"), "x"})); got != "[0 x]" {
+		t.Errorf("Canonical of an array: %s", got)
 	}
 }
