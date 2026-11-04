@@ -164,7 +164,7 @@ func TestLiveRemoveMatch(t *testing.T) {
 	if err := busCallOn(c, "GetId"); err != nil {
 		t.Fatal(err)
 	}
-	want := ownerMatch("org.test.Watched")
+	want := "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.test.Watched'"
 	for deadline := time.After(3 * time.Second); ; {
 		select {
 		case m := <-removed:

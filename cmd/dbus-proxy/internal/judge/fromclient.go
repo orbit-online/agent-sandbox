@@ -1,4 +1,4 @@
-package main
+package judge
 
 import (
 	"fmt"
@@ -55,9 +55,9 @@ func readsOthersTraffic(m *wire.Message) bool {
 }
 
 // The verdict for a call or signal from the client, by its destination's policy and the rules
-func (c *client) verdict(m *wire.Message) verdict {
+func (j *Judge) verdict(m *wire.Message) verdict {
 	dest := m.Header(dbus.FieldDestination)
-	p, fs := c.lookup(dest)
+	p, fs := j.lookup(dest)
 	if p < rules.See {
 		return hide
 	}
@@ -101,104 +101,87 @@ func (c *client) verdict(m *wire.Message) verdict {
 }
 
 // The policy of the name in a bus call's first argument; none when it has no string there
-func (c *client) arg0Policy(m *wire.Message) rules.Policy {
+func (j *Judge) arg0Policy(m *wire.Message) rules.Policy {
 	name, ok := arg0(m)
 	if !ok || name == "" {
 		return rules.None
 	}
-	p, _ := c.lookup(name)
+	p, _ := j.lookup(name)
 	return p
 }
 
-// Handles a message from the client: forwarded, refused through a Ping whose reply becomes the refusal, or dropped
-func (c *client) fromClient(m *wire.Message) error {
-	if m.Serial() > maxClientSerial {
-		return fmt.Errorf("Client serial %d is in the proxy's range", m.Serial())
+// FromClient judges a message from the client: forwarded, refused through a Ping whose reply becomes the refusal
+// (Replace), or dropped. An error ends the connection
+func (j *Judge) FromClient(m *wire.Message) (Action, error) {
+	if m.Serial() > MaxClientSerial {
+		return Action{}, fmt.Errorf("Client serial %d is in the proxy's range", m.Serial())
 	}
-	if len(m.FDs()) > 0 && !c.unixFDs {
-		return fmt.Errorf("File descriptors from a client that didn't negotiate them")
+	if len(m.FDs()) > 0 && !j.unixFDs {
+		return Action{}, fmt.Errorf("File descriptors from a client that didn't negotiate them")
 	}
-	var fakes [][]byte
-	c.mu.Lock()
-	c.cur = c.p.current()
-	out, err := c.judgeClient(m, &fakes)
-	c.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if out != nil {
-		m.CloseFDs()
-		if err := c.toBus.Send(out, nil); err != nil {
-			return err
-		}
-	} else if m.Message != nil {
-		if err := forward(c.toBus, m); err != nil {
-			return err
-		}
-	}
-	return sendAll(c.toBus, fakes)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.cur = j.current()
+	var calls [][]byte
+	a, err := j.judgeClient(m, &calls)
+	a.Calls = calls
+	return a, err
 }
 
-// Decides under mu. Returns the bytes to send instead of m, or nil with m left to forward, or nil with m.Message
-// cleared to drop it
-func (c *client) judgeClient(m *wire.Message, fakes *[][]byte) ([]byte, error) {
-	drop := func() ([]byte, error) {
-		m.CloseFDs()
-		m.Message = nil
-		return nil, nil
-	}
+// Decides under mu; the proxy's own calls go in fakes
+func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 	if isReply(m) {
 		// Only to a call the client got, and to its caller
 		rs, _ := m.ReplySerial()
 		call := peerCall{m.Header(dbus.FieldDestination), rs}
-		if _, ok := c.awaitPeer[call]; !ok {
-			return drop()
+		if _, ok := j.awaitPeer[call]; !ok {
+			return dropped, nil
 		}
-		delete(c.awaitPeer, call)
-		return nil, nil
+		delete(j.awaitPeer, call)
+		return forwarded, nil
 	}
-	refuse := func(name string) ([]byte, error) {
+	refuse := func(name string) (Action, error) {
 		if !generatesReply(m) {
-			return drop()
+			return dropped, nil
 		}
-		return c.rewrite(m, errorReply(m.Serial(), name))
+		return j.rewrite(m, errorReply(m.Serial(), name))
 	}
 	if _, ok := m.ReplySerial(); ok {
 		// xdg-dbus-proxy takes any message with a reply serial for a reply, so a call carrying the serial of a
 		// pending call to the client would pass unchecked
-		return refuse(errAccessDenied)
+		return refuse(ErrAccessDenied)
 	}
 	if m.Type == dbus.TypeMethodCall && m.Header(dbus.FieldDestination) == "" {
 		// The bus refuses them, or delivers them to monitors only; the proxy doesn't rely on that
-		return refuse(errAccessDenied)
+		return refuse(ErrAccessDenied)
 	}
 	if readsOthersTraffic(m) {
-		return refuse(errAccessDenied)
+		return refuse(ErrAccessDenied)
 	}
 	kind := expectNormal
 	hello := isBusCall(m) && m.Header(dbus.FieldMember) == "Hello"
 	if hello {
-		if c.helloSeen {
+		if j.helloSeen {
 			// The bus would end the connection; refusing it here keeps a second Hello's reply from being taken
 			// for the first's
-			return refuse(errAccessDenied)
+			return refuse(ErrAccessDenied)
 		}
 		kind = expectHello
 	}
-	v := c.verdict(m)
+	v := j.verdict(m)
 	switch v {
 	case filterHasOwner, filterGetOwner:
-		if c.arg0Policy(m) < rules.See {
+		if j.arg0Policy(m) < rules.See {
 			if v == filterGetOwner {
-				return c.rewrite(m, errorReply(m.Serial(), errNameHasNoOwner))
+				return j.rewrite(m, errorReply(m.Serial(), ErrNameHasNoOwner))
 			}
-			return c.rewrite(m, boolReply(m.Serial(), false))
+			return j.rewrite(m, boolReply(m.Serial(), false))
 		}
 	case validateMatch:
 		// readsOthersTraffic refused eavesdropping already
 	case validateOwn, validateSee, validateTalk:
 		need := map[verdict]rules.Policy{validateOwn: rules.Own, validateSee: rules.See, validateTalk: rules.Talk}[v]
-		if p := c.arg0Policy(m); p < need {
+		if p := j.arg0Policy(m); p < need {
 			if p < rules.See {
 				v = hide
 			} else {
@@ -212,47 +195,47 @@ func (c *client) judgeClient(m *wire.Message, fakes *[][]byte) ([]byte, error) {
 	case hide:
 		dest := m.Header(dbus.FieldDestination)
 		if (dest != "" && dest[0] == ':') || m.Flags&dbus.FlagNoAutoStart != 0 {
-			return refuse(errNameHasNoOwner)
+			return refuse(ErrNameHasNoOwner)
 		}
-		return refuse(errServiceUnknown)
+		return refuse(ErrServiceUnknown)
 	case deny:
-		return refuse(errAccessDenied)
+		return refuse(ErrAccessDenied)
 	}
 	if generatesReply(m) {
 		e := expect{kind: kind, fromBus: m.Header(dbus.FieldDestination) == busName}
-		if err := c.expectFromBus(m.Serial(), e); err != nil {
-			return nil, err
+		if err := j.expectFromBus(m.Serial(), e); err != nil {
+			return Action{}, err
 		}
 	}
-	if hello && !c.helloSeen {
-		c.helloSeen = true
-		return nil, c.initialNameOps(fakes)
+	if hello && !j.helloSeen {
+		j.helloSeen = true
+		return forwarded, j.initialNameOps(fakes)
 	}
-	return nil, nil
+	return forwarded, nil
 }
 
 // A refused call goes to the bus as a Ping with its serial; the reply to it becomes the refusal
-func (c *client) rewrite(m *wire.Message, reply *dbus.Message) ([]byte, error) {
+func (j *Judge) rewrite(m *wire.Message, reply *dbus.Message) (Action, error) {
 	data, err := wire.Encode(ping(m.Flags), m.Serial())
 	if err != nil {
-		return nil, err
+		return Action{}, err
 	}
-	if err := c.expectFromBus(m.Serial(), expect{kind: expectRewrite, rewrite: reply, fromBus: true}); err != nil {
-		return nil, err
+	if err := j.expectFromBus(m.Serial(), expect{kind: expectRewrite, rewrite: reply, fromBus: true}); err != nil {
+		return Action{}, err
 	}
-	return data, nil
+	return Action{Verdict: Replace, Message: data}, nil
 }
 
 // After Hello: watch every name the rules mention and ask who owns it now, so its owner's unique name gets its
 // policy, and hold the client until the answers came
-func (c *client) initialNameOps(fakes *[][]byte) error {
-	for _, rs := range c.cur.Live() {
-		if err := c.lookupSet(rs, fakes); err != nil {
+func (j *Judge) initialNameOps(fakes *[][]byte) error {
+	for _, rs := range j.cur.Live() {
+		if err := j.lookupSet(rs, fakes); err != nil {
 			return err
 		}
 	}
 	// Those added since the client's message were taken with the rules above, under the same mu
-	c.newSets = nil
-	_, err := c.lookupNames(c.cur.Names(), fakes)
+	j.newSets = nil
+	_, err := j.lookupNames(j.cur.Names(), fakes)
 	return err
 }

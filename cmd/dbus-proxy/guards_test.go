@@ -7,15 +7,16 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
-// Serials above maxClientSerial are the proxy's, and serial 0 is none: either ends the connection
+// Serials above judge.MaxClientSerial are the proxy's, and serial 0 is none: either ends the connection
 func TestClientSerials(t *testing.T) {
 	bus := startBus(t)
 	addr := startProxy(t, bus)
-	for _, serial := range []uint32{maxClientSerial + 1, 0} {
+	for _, serial := range []uint32{judge.MaxClientSerial + 1, 0} {
 		rc := rawConnect(t, addr)
 		rc.send(serial, busCall("GetId"))
 		if !rc.closed() {

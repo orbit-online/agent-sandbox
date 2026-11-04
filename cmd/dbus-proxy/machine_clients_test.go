@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"pgregory.net/rapid"
 )
@@ -127,7 +128,7 @@ func (mc *machine) drawSerial(t *rapid.T, c *refClient, p *party) uint32 {
 			return rapid.SampledFrom(c.sent).Draw(t, "reuse")
 		}
 	case "forged":
-		return maxClientSerial + 1
+		return judge.MaxClientSerial + 1
 	}
 	return mc.fresh(p)
 }
@@ -243,7 +244,7 @@ func (m *model) callTo(target, from string, serial uint32, member, tok, dest str
 // awaits a reply already (the refusal is a Ping on that serial)
 func (m *model) guard(c *refClient, serial uint32, tok string) (func(string), bool) {
 	c.sent = append(c.sent, serial)
-	if serial > maxClientSerial {
+	if serial > judge.MaxClientSerial {
 		m.leave(c.role)
 		return nil, false
 	}

@@ -8,49 +8,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/godbus/dbus/v5"
-	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/sasl"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"golang.org/x/sys/unix"
 )
 
-const (
-	// Calls waiting for a reply, in each direction
-	maxPendingReplies = 8192
-	// Time a client gets to authenticate
-	authTimeout = 30 * time.Second
-)
+// Time a client gets to authenticate
+const authTimeout = 30 * time.Second
 
-// What a reply from the bus to a serial the client (or the proxy) sent is for
-type expectKind int
-
-const (
-	expectNormal expectKind = iota
-	expectHello
-	expectListNames // ListNames or ListActivatableNames: the reply is filtered
-	expectRewrite   // A refused call sent as a Ping: the reply is swapped for the refusal
-	expectFakeMatch // The proxy's own AddMatch
-	expectFakeOwner // The proxy's own GetNameOwner of name
-)
-
-// A call awaiting its reply from the bus side. Calls to the bus driver, the proxy's own among them, take a reply
-// only from the bus; sync marks the proxy's own GetNameOwner of a name, which the client waits for
-type expect struct {
-	kind    expectKind
-	name    string
-	rewrite *dbus.Message
-	fromBus bool
-	sync    bool
-}
-
-// A call to the client awaiting its reply: the caller's unique name and serial
-type peerCall struct {
-	caller string
-	serial uint32
-}
-
-// One client's connection and its bus connection. The two readers share the state below under mu
+// One client's connection and its bus connection: a reader each way judging what it reads, and a sender each way
 type client struct {
 	p             *Proxy
 	conn, bus     *net.UnixConn
@@ -59,45 +26,15 @@ type client struct {
 	clientR, busR *wire.Reader
 	unixFDs       bool
 	log           *slog.Logger
-
-	mu         sync.Mutex
-	awaitBus   map[uint32]expect     // Calls to the bus side awaiting a reply, by the client's (or proxy's) serial
-	awaitPeer  map[peerCall]struct{} // Calls to the client awaiting its reply
-	names      *nameTable
-	fakeSerial uint32
-	helloSeen  bool
-	// Closed once the owners of the names looked up are known (after Hello, after a live set is added), or nil when
-	// there are none; syncing counts the GetNameOwner replies still out
-	synced  chan struct{}
-	syncing int
-	acct    *wire.Account
-	// The rules this message is judged by, taken under mu as it's judged: a live set added or removed applies from
-	// the next message (livesets.go)
-	cur *rules.Rules
-	// The live sets a message the client sent or got was judged under, which a set's removal closes the connection
-	// for; the live sets added or removed since the client's last message, whose names it hasn't looked up or
-	// stopped watching yet; and the match rules watching each set's names
-	used     map[*rules.Set]bool
-	newSets  []*rules.Set
-	goneSets []*rules.Set
-	matches  map[*rules.Set][]string
+	acct          *wire.Account
+	j             *judge.Judge
 	// Ends the connection, from outside its goroutines
 	kill func()
 }
 
 func (p *Proxy) handle(conn *net.UnixConn) {
 	defer conn.Close()
-	c := &client{
-		p: p, conn: conn,
-		awaitBus:   map[uint32]expect{},
-		awaitPeer:  map[peerCall]struct{}{},
-		names:      newNameTable(),
-		used:       map[*rules.Set]bool{},
-		matches:    map[*rules.Set][]string{},
-		fakeSerial: maxClientSerial,
-		log:        p.log,
-		acct:       p.budget.Account(),
-	}
+	c := &client{p: p, conn: conn, log: p.log, acct: p.budget.Account()}
 	if err := c.connect(); err != nil {
 		c.log.Warn("Client refused", "err", err)
 		if c.bus != nil {
@@ -170,6 +107,7 @@ func peerCred(conn *net.UnixConn) (*unix.Ucred, error) {
 
 // Forwards both ways until either side ends or breaks a rule, then closes both
 func (c *client) run() {
+	c.j = judge.New(c.p.current, c.unixFDs)
 	c.toClient = wire.NewSender(c.conn, c.acct)
 	c.toBus = wire.NewSender(c.bus, c.acct)
 	done := make(chan struct{})
@@ -184,7 +122,7 @@ func (c *client) run() {
 			c.toBus.Close()
 		})
 	}
-	c.kill = func() { stop("live rules", errRevoked) }
+	c.kill = func() { stop("live rules", judge.ErrRevoked) }
 	c.p.register(c)
 	defer c.p.unregister(c)
 	var wg sync.WaitGroup
@@ -207,33 +145,43 @@ func (c *client) run() {
 }
 
 func (c *client) readClient(done chan struct{}) error {
+	held := func() error {
+		if h := c.j.Held(); h != nil {
+			select {
+			case <-h:
+			case <-done:
+				return wire.ErrClosed
+			}
+		}
+		return nil
+	}
 	for {
 		m, err := c.clientR.ReadMessage()
 		if err != nil {
 			return err
 		}
 		// The names of live sets added since, before the message is judged by them
-		if err := c.syncSets(done); err != nil {
-			m.CloseFDs()
-			m.Release()
-			return err
+		calls, err := c.j.Sync()
+		if err == nil {
+			err = sendAll(c.toBus, calls)
 		}
-		err = c.fromClient(m)
+		if err == nil {
+			err = held()
+		}
+		if err == nil {
+			var a judge.Action
+			if a, err = c.j.FromClient(m); err == nil {
+				err = c.act(a, m, c.toBus, c.toBus)
+			}
+		}
 		m.CloseFDs()
 		m.Release()
+		if err == nil {
+			// Hold the client's next message until the proxy knows who owns the names it looked up
+			err = held()
+		}
 		if err != nil {
 			return err
-		}
-		// Hold the client's next message until the proxy knows who owns the names it looked up
-		c.mu.Lock()
-		synced := c.synced
-		c.mu.Unlock()
-		if synced != nil {
-			select {
-			case <-synced:
-			case <-done:
-				return wire.ErrClosed
-			}
 		}
 	}
 }
@@ -244,7 +192,10 @@ func (c *client) readBus() error {
 		if err != nil {
 			return err
 		}
-		err = c.fromBus(m)
+		var a judge.Action
+		if a, err = c.j.FromBus(m); err == nil {
+			err = c.act(a, m, c.toClient, c.toBus)
+		}
 		m.CloseFDs()
 		m.Release()
 		if err != nil {
@@ -253,45 +204,24 @@ func (c *client) readBus() error {
 	}
 }
 
-// Passes a message on as it came; the sender owns its file descriptors from here
-func forward(s *wire.Sender, m *wire.Message) error {
-	data, err := m.Encode()
-	if err != nil {
-		return fmt.Errorf("Encode message: %w", err)
+// Does what the judge said: m forwarded to to (the sender owns its file descriptors from there), replaced or dropped,
+// then the proxy's own calls to the bus
+func (c *client) act(a judge.Action, m *wire.Message, to, bus *wire.Sender) error {
+	switch a.Verdict {
+	case judge.Forward:
+		data, err := m.Encode()
+		if err != nil {
+			return fmt.Errorf("Encode message: %w", err)
+		}
+		if err := to.Send(data, m.TakeFDs()); err != nil {
+			return err
+		}
+	case judge.Replace:
+		if err := to.Send(a.Message, nil); err != nil {
+			return err
+		}
 	}
-	return s.Send(data, m.TakeFDs())
-}
-
-// Records a reply expected from the bus side; called with mu held. A serial already awaiting its reply ends the
-// connection: overwriting it would let the bus's reply to one call be judged as the reply to another
-func (c *client) expectFromBus(serial uint32, e expect) error {
-	if _, ok := c.awaitBus[serial]; ok {
-		return fmt.Errorf("Serial %d reused while its call awaits a reply", serial)
-	}
-	if len(c.awaitBus) >= maxPendingReplies {
-		return fmt.Errorf("Too many calls awaiting replies")
-	}
-	c.awaitBus[serial] = e
-	return nil
-}
-
-// Encodes a call of the proxy's own to the bus and records its reply's purpose; called with mu held. The caller
-// sends it once mu is released
-func (c *client) fakeCall(out *[][]byte, m *dbus.Message, e expect) error {
-	if c.fakeSerial == ^uint32(0) {
-		return fmt.Errorf("Out of serials for the proxy's own calls")
-	}
-	c.fakeSerial++
-	e.fromBus = true
-	data, err := wire.Encode(m, c.fakeSerial)
-	if err != nil {
-		return err
-	}
-	if err := c.expectFromBus(c.fakeSerial, e); err != nil {
-		return err
-	}
-	*out = append(*out, data)
-	return nil
+	return sendAll(bus, a.Calls)
 }
 
 func sendAll(s *wire.Sender, msgs [][]byte) error {

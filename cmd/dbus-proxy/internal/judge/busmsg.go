@@ -1,21 +1,22 @@
-package main
+package judge
 
 import (
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
 const (
-	busName  = "org.freedesktop.DBus"
+	busName  = rules.BusName
 	busPath  = dbus.ObjectPath("/org/freedesktop/DBus")
 	busIface = "org.freedesktop.DBus"
 
-	errAccessDenied   = "org.freedesktop.DBus.Error.AccessDenied"
-	errNameHasNoOwner = "org.freedesktop.DBus.Error.NameHasNoOwner"
-	errServiceUnknown = "org.freedesktop.DBus.Error.ServiceUnknown"
+	ErrAccessDenied   = "org.freedesktop.DBus.Error.AccessDenied"
+	ErrNameHasNoOwner = "org.freedesktop.DBus.Error.NameHasNoOwner"
+	ErrServiceUnknown = "org.freedesktop.DBus.Error.ServiceUnknown"
 
 	// Serials above it are the proxy's own messages to the bus, as in xdg-dbus-proxy
-	maxClientSerial = ^uint32(0) - 65536
+	MaxClientSerial = ^uint32(0) - 65536
 	// The largest body of a bus driver call the proxy looks into: names are at most 255 bytes, match rules 1024
 	maxInspectBody = 4 << 10
 )

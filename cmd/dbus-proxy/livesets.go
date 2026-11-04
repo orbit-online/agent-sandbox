@@ -1,107 +1,8 @@
 package main
 
-import (
-	"errors"
+import "github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 
-	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
-	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
-)
-
-// A client's side of the live rule sets (control.go): which sets it used, and their names looked up when one is added
-
-var errRevoked = errors.New("A live rule set the connection used was removed")
-
-// The policy and filters for a name by the rules the message is judged by; called with mu held. A live set with a
-// filter for the name counts as used, whatever the verdict: its removal ends the connection
-func (c *client) lookup(name string) (rules.Policy, []*rules.Filter) {
-	if c.cur == nil {
-		c.cur = c.p.current()
-	}
-	p, fs := c.names.lookup(c.cur, name)
-	for _, f := range fs {
-		if f.Set != nil && f.Set.Live() {
-			if c.used == nil {
-				c.used = map[*rules.Set]bool{}
-			}
-			c.used[f.Set] = true
-		}
-	}
-	return p, fs
-}
-
-// Holds the client's next message until n more of the proxy's own calls are answered; called with mu held
-func (c *client) holdFor(n int) {
-	c.syncing += n
-	if c.synced == nil {
-		c.synced = make(chan struct{})
-	}
-}
-
-// Watches names and asks who owns them, holding the client until the owners are known: a call by an owner's unique
-// name right after Hello or after a set is added passes too. Returns the match rules. Called with mu held
-func (c *client) lookupNames(names []string, fakes *[][]byte) ([]string, error) {
-	var matches []string
-	for _, name := range names {
-		match := ownerMatch(name)
-		if err := c.fakeCall(fakes, busCall("AddMatch", match), expect{kind: expectFakeMatch}); err != nil {
-			return nil, err
-		}
-		matches = append(matches, match)
-		if err := c.fakeCall(fakes, busCall("GetNameOwner", name), expect{kind: expectFakeOwner, name: name, sync: true}); err != nil {
-			return nil, err
-		}
-		c.holdFor(1)
-	}
-	return matches, nil
-}
-
-// lookupNames for a live set's names, whose match rules go when the set does
-func (c *client) lookupSet(rs *rules.Set, fakes *[][]byte) error {
-	matches, err := c.lookupNames(rs.Names(), fakes)
-	c.matches[rs] = append(c.matches[rs], matches...)
-	return err
-}
-
-// Before the client's next message is judged: looks up the names of the live sets added since and stops watching
-// those of the sets removed, then waits for the owners. Before Hello there's nothing to do: Hello's initialNameOps
-// takes the live sets there are then. On the client's reader, so the proxy's calls never overtake its Hello
-func (c *client) syncSets(done chan struct{}) error {
-	var fakes [][]byte
-	var err error
-	c.mu.Lock()
-	if c.helloSeen {
-		for _, rs := range c.goneSets {
-			for _, m := range c.matches[rs] {
-				if err == nil {
-					err = c.fakeCall(&fakes, busCall("RemoveMatch", m), expect{kind: expectFakeMatch})
-				}
-			}
-			delete(c.matches, rs)
-		}
-		for _, rs := range c.newSets {
-			if err == nil {
-				err = c.lookupSet(rs, &fakes)
-			}
-		}
-	}
-	c.goneSets, c.newSets = nil, nil
-	synced := c.synced
-	c.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if err := sendAll(c.toBus, fakes); err != nil {
-		return err
-	}
-	if synced != nil {
-		select {
-		case <-synced:
-		case <-done:
-			return wire.ErrClosed
-		}
-	}
-	return nil
-}
+// The live rule sets the control socket adds and removes (control.go), applied to the clients connected
 
 // The clients connected now
 func (p *Proxy) register(c *client) {
@@ -143,9 +44,7 @@ func (p *Proxy) addSet(rs *rules.Set) {
 	defer p.setsMu.Unlock()
 	p.cur.Store(p.current().With(rs))
 	for _, c := range p.connected() {
-		c.mu.Lock()
-		c.newSets = append(c.newSets, rs)
-		c.mu.Unlock()
+		c.j.AddSet(rs)
 	}
 }
 
@@ -158,22 +57,8 @@ func (p *Proxy) removeSet(rs *rules.Set) int {
 	p.cur.Store(p.current().Without(rs))
 	ended := 0
 	for _, c := range p.connected() {
-		c.mu.Lock()
-		used := c.used[rs]
-		delete(c.used, rs)
-		for i, s := range c.newSets {
-			if s == rs {
-				c.newSets = append(c.newSets[:i:i], c.newSets[i+1:]...)
-				break
-			}
-		}
-		if !used && c.matches[rs] != nil {
-			c.goneSets = append(c.goneSets, rs)
-		}
-		kill := c.kill
-		c.mu.Unlock()
-		if used {
-			kill()
+		if c.j.RemoveSet(rs) {
+			c.kill()
 			ended++
 		}
 	}

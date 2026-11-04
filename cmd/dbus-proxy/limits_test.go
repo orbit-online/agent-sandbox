@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
@@ -28,14 +29,14 @@ func silentService(t *testing.T, bus string) {
 	}()
 }
 
-// Calls awaiting replies stop at maxPendingReplies each way
+// Calls awaiting replies stop at judge.MaxPendingReplies each way
 func TestPendingReplyCaps(t *testing.T) {
 	bus := startBus(t)
 	silentService(t, bus)
 	addr := startProxy(t, bus, "--talk="+svcName)
 	rc := rawConnect(t, addr)
 	var buf []byte
-	for i := 0; i <= maxPendingReplies; i++ {
+	for i := 0; i <= judge.MaxPendingReplies; i++ {
 		d, _ := wire.Encode(echoTo(svcName), uint32(10+i))
 		buf = append(buf, d...)
 	}
@@ -46,7 +47,7 @@ func TestPendingReplyCaps(t *testing.T) {
 
 	rc = rawConnect(t, addr)
 	peer := connect(t, bus)
-	for i := 0; i <= maxPendingReplies; i++ {
+	for i := 0; i <= judge.MaxPendingReplies; i++ {
 		peer.Object(rc.name, "/").Go(svcIface+".Echo", 0, nil, "x")
 	}
 	if !rc.closed() {
