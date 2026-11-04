@@ -54,7 +54,7 @@ env=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/ni
 nsenter=("$SETPRIV" --no-new-privs nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
 # A re-entry joins the app's cgroup (sandbox/app/ in the app's unit, see bwrap-subid.sh) before it joins its
 # namespaces: it stays the caller's child, on its terminal, and it is in the sandbox's cgroup namespace's subtree, so
-# it can make cgroups of its own there
+# cgrun works there
 join_cgroup() {
   local cg
   cg=$(systemctl --user show -P ControlGroup "$APP_UNIT") || cg=
@@ -110,7 +110,7 @@ start() {
     *) setenv+=(--setenv="$kv") ;;
     esac
   done < <(env -0)
-  # Its cgroup delegated, so the sandbox can run jobs in cgroups of their own. The unit's processes start in
+  # Its cgroup delegated, so the sandbox can run jobs in cgroups of their own (cgrun). The unit's processes start in
   # supervisor/, the cgroup root holds none. With Delegate=, OOMPolicy= defaults to continue: an OOM kill below it
   # ends the process the kernel picked, not the unit
   systemd-run --user --quiet --collect --unit="$APP_UNIT" --slice="$SLICE" -p Delegate=yes \

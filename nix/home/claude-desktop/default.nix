@@ -189,6 +189,14 @@ let
       pkgs.findutils
     ];
   };
+  # On the sandbox's PATH: a command in a cgroup of its own with a memory limit, see environment.md
+  cgrun = script "cgrun.sh" {
+    name = "cgrun";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+  };
   # Written by the host's activation, bound from its /etc
   hostEtc = [
     "passwd"
@@ -851,6 +859,7 @@ let
           osConfig.i18n.glibcLocales
           storeGc
           scratchpadPrune
+          cgrun
         ];
       };
       # The entries claude-desktop's FHS env takes from /etc, minus shadow, sudoers, nix (NIX_CONF_DIR) and the

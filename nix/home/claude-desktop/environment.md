@@ -108,6 +108,14 @@ remove it.
 - A tool is missing: work around it for now (`nix run`, `nix shell`), and in
   the same go add it to the module's `path` in the user's config and tell the
   user to rebuild.
+- Run heavy jobs under `cgrun --memory=SIZE -- CMD...`: a cgroup of their
+  own with that limit, so past it the kernel kills the job, not the app or
+  the user's desktop. `nix flake check` and other big builds also with
+  `--max-jobs 4 --cores 4` (Nix's defaults start a builder per core, each
+  using every core), for example `cgrun --memory=24G -- nix flake check -L
+  --max-jobs 4 --cores 4`; long property or fuzz runs and Alloy too. Size the
+  limit a little above the job's measured peak; the repo's CLAUDE.md may
+  name it.
 
 ## Nix
 <!-- memo: topic={nix,sandbox} -->

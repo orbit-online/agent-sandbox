@@ -20,15 +20,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   the cgroups below it: nixpak's launcher and the host side in `supervisor/`,
   the sandbox in `sandbox/app/`, its cgroup namespace rooted at `sandbox/`
   (at most 64 cgroups, 4 deep), which it sees alone and writable at
-  `/sys/fs/cgroup`. The re-entries (`claude://`, `--shell`) join `sandbox/app/`.
-  The broker, its host command calls and the system-bus
+  `/sys/fs/cgroup`. The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
+  `cgrun.sh` (`cgrun` on the sandbox's PATH) runs a job in a `sandbox/cgrun-<pid>/`
+  with a memory limit. The broker, its host command calls and the system-bus
   proxy are units in the slice too. Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
   `<!-- memo: FILTER -->` marker, the marked ones going into the memo store `/etc/claude/environment.memo`
   (`<!-- memo-doc: ... -->` lines document its values). The store also injects `environment`, the frontmatter's name
   for the environment. Then the module's scripts (`*.sh`; `store-gc.sh` and
-  `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks). `default.nix` loads them with its `script` helper: Nix values
+  `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks, `cgrun.sh` for its jobs). `default.nix` loads them with its `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
   with `: "${VAR:?}"` at the top.
   What the host does in the sandbox's home and store, which the sandbox can
@@ -176,7 +177,15 @@ twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
 ## Testing
 
-`nix flake check` runs everything below; run it before every commit. The
+`nix flake check` runs everything below; run it before every commit. Inside
+the Claude Desktop sandbox, run heavy jobs under `cgrun`, so going past the
+limit kills the job, not the app or the desktop: `cgrun --memory=24G -- nix
+flake check -L --max-jobs 4 --cores 4` (at Nix's defaults, 32 jobs with every
+core each, it can take the whole machine beside other test workers; at 4 and 4
+it peaks at about 21 GiB), extended property runs under `cgrun --memory=4G` (the
+broker's at `RAPID_CHECKS=1000 RAPID_STEPS=100` peaks at about 1 GiB in one
+process) and `models/check` under `cgrun --memory=8G` (it peaks at about 1.1
+GiB). The
 checks are in `nix/checks/default.nix` and use a test NixOS system with both
 modules and a user alice (the `home-manager` input exists only for it).
 
@@ -222,7 +231,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `HOME_DIRS` and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
   set the pid, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
-  references in the closure). The launchers' slices: each wrapper's `SLICE`, work's
+  references in the closure), `cgrun` on the sandbox's PATH. The launchers' slices: each wrapper's `SLICE`, work's
   `APP_UNIT`, its app unit execing nixpak's launcher, its broker's and system-bus proxy's
   slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
@@ -507,7 +516,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
   launcher's in a unit and slice of its own, the broker, the system-bus proxy and a host command call units in the
   slice, both re-entries in `app/`; inside, `/sys/fs/cgroup` the sandbox's subtree alone, writable, without a unit's
-  name; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
+  name; `cgrun` giving a job a cgroup of its own with its `memory.max`, killing one past 64M with the app running
+  on, and removing the cgroup; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
   process in its root, unmounting the bind from a nested user namespace and a 64th cgroup, and a cgroup2 mount of its
   own in a nested cgroup namespace showing its own subtree), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,

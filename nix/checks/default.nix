@@ -1015,6 +1015,8 @@ in
           grep -qP '^readonly NIXPAK_LAUNCHER=/nix/store/\S+-nixpak-' "$appRun" &&
             grep -qF 'exec env -i "''${VARS[@]}" "$NIXPAK_LAUNCHER" --password-store=basic "$@"' "$appRun" ||
             { echo "work's app unit doesn't exec nixpak's launcher" >&2; exit 1; }
+          # cgrun on the sandbox's PATH
+          [[ -x $(grep -- '-claude-desktop-sw$' "$paths")/bin/cgrun ]] || { echo "the sandbox's PATH lacks cgrun" >&2; exit 1; }
           # What the launcher writes in its home, confined to the directories in HOME_DIRS
           workState=$(grep -- '-claude-desktop-work-state-inner$' "$workClosure/store-paths")/bin/claude-desktop-work-state-inner
           for line in \

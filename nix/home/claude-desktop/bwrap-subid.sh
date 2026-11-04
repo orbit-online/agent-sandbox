@@ -56,7 +56,7 @@ subid)
   # cgroup namespace, with its processes in sandbox/app/: bwrap's parent sits in sandbox/ while it clones the child,
   # whose new cgroup namespace is rooted where its parent is, then the info fd's reader below moves the parent back
   # here and the child, still blocked, into app/. sandbox/ holds no process, so controllers can be enabled for its
-  # children, and the kernel's nsdelegate keeps the sandbox from writing its root's files (memory.max,
+  # children (cgrun), and the kernel's nsdelegate keeps the sandbox from writing its root's files (memory.max,
   # cgroup.max.*) or moving a process out of it. It sees sandbox/ alone at /sys/fs/cgroup
   # cgroup v2 alone: one line, 0::PATH
   cg_self=$(</proc/self/cgroup)

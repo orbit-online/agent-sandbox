@@ -75,6 +75,19 @@
       top = [l.split() for l in in_work("cat /proc/self/mountinfo").splitlines() if l.split()[4] == "/sys/fs/cgroup"][-1]
       assert top[3] == "/" and "rw" in top[5].split(","), top
 
+  with subtest("cgrun runs a job in a cgroup of its own, killed past its memory limit while the app runs on"):
+      out = in_work("cgrun --memory=64M -- sh -c 'cat /proc/self/cgroup; cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'")
+      cg, limit = out.split()
+      assert re.fullmatch(r"0::/cgrun-\d+", cg) and limit == str(64 << 20), out
+      out = in_work("sh -c 'cgrun --memory=64M -- sh -c \"head -c 512M /dev/zero | tail\"; echo exit=$?'")
+      assert out.strip().splitlines()[-1] == "exit=137", out
+      # Its cgroup gone after it
+      assert not [n for n in in_work("ls /sys/fs/cgroup").split() if n.startswith("cgrun-")]
+      workstation.succeed("systemctl --user -M alice@ is-active claude-desktop-work-app")
+      workstation.succeed(f"test -e /proc/{app}")
+      events = dict(l.split() for l in workstation.succeed(f"cat '{unit_root}/sandbox/memory.events'").splitlines())
+      assert int(events["oom_kill"]) >= 1, events
+
   with subtest("The sandbox can't widen its cgroup or leave it"):
       def refused(cmd):
           status, out = workstation.execute(work_cmd(f"sh -c {shlex.quote(cmd)}") + " 2>&1")
