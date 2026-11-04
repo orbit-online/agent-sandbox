@@ -184,8 +184,8 @@ flake check -L --max-jobs 4 --cores 4` (at Nix's defaults, 32 jobs with every
 core each, it can take the whole machine beside other test workers; at 4 and 4
 it peaks at about 21 GiB), extended property runs under `cgrun --memory=4G` (the
 broker's at `RAPID_CHECKS=1000 RAPID_STEPS=100` peaks at about 1 GiB in one
-process) and `models/check` under `cgrun --memory=8G` (it peaks at about 1.1
-GiB). The
+process); `models/check` puts itself under `cgrun --memory=8G` when `cgrun` is on
+PATH (it peaks at about 1.1 GiB). The
 checks are in `nix/checks/default.nix` and use a test NixOS system with both
 modules and a user alice (the `home-manager` input exists only for it).
 
@@ -547,6 +547,19 @@ runs `models/check`. A change to docs alone runs none.
 
 Every new test gets the revert check: break the implementation, see the test
 fail, restore it.
+
+Heavy runs go one at a time, under a memory cap: on 2026-11-04 a `nix flake
+check` at this machine's defaults (`max-jobs = 32`, `cores = 0`) beside a
+mutation run of four parallel `go test` workers most likely took the 64 GiB
+machine down. Measured since: the flake check with `--max-jobs 4 --cores 4`
+peaks at about 21 GiB, a serial mutation run at 1.5 GiB, `models/check` at
+1.1 GiB. `models/check` caps itself (each model alone, a 4 GiB JVM heap with
+SAT4J inside it, an 8 GiB address space): a model that needs more has too big
+a scope, so shrink it and say what that costs; in the Claude Desktop sandbox
+it also runs under `cgrun --memory=8G`. There, the rest goes under `cgrun` as
+above; elsewhere, `nix flake check -L --max-jobs 4 --cores 4`, and extended
+rapid runs and mutation runs one at a time under `prlimit --as=12884901888`
+(not with `-race`, whose shadow memory needs a large address space).
 
 Beyond the checks:
 

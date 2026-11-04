@@ -16,10 +16,18 @@
 # else is FAIL: the comment above the command says which claim it
 # encodes (with its number from README.md), and the instance Alloy found
 # is printed under it. A known finding that stops failing is a FAIL too,
-# so its `expect 1` can't go stale. Works from any directory.
+# so its `expect 1` can't go stale. Works from any directory. Each model
+# runs alone, under a 4 GiB JVM heap and an 8 GiB address space
+# (ALLOY_HEAP, ALLOY_VMEM_KIB): one that needs more has too big a scope.
+# In the Claude Desktop sandbox, the whole run goes under
+# `cgrun --memory=8G` too.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# With cgrun on PATH (the Claude Desktop sandbox), in a cgroup of its own capped at 8 GiB, unless already in one
+if command -v cgrun >/dev/null && ! grep -q '/cgrun-[0-9]*$' /proc/self/cgroup; then
+  exec cgrun --memory=8G -- "$here/check" "$@"
+fi
 if ! command -v alloy6 >/dev/null || ! command -v jq >/dev/null; then
   exec nix shell nixpkgs#alloy6 nixpkgs#jq --command "$here/check" "$@"
 fi
@@ -29,7 +37,7 @@ for arg in "$@"; do
   case $arg in
     -v) verbose=true ;;
     --known) known=true ;;
-    -h|--help) sed -n '2,20p' "$here/check" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$here/check" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) models+=("$here/${arg%.als}.als") ;;
   esac
 done
@@ -39,6 +47,9 @@ if ! ((${#models[@]})); then
     grep -qE '^[[:space:]]*(run|check)[[:space:]]' "$model" && models+=("$model")
   done
 fi
+
+# One model at a time, each under a 4 GiB heap and an 8 GiB address space (ALLOY_HEAP, ALLOY_VMEM_KIB)
+heap=${ALLOY_HEAP:-4g} vmem_kib=${ALLOY_VMEM_KIB:-8388608}
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -75,7 +86,12 @@ for model in "${models[@]}"; do
   # alloy6 also fails when a command misses its `expect`; only a missing
   # receipt means the model didn't run. Models open each other by path
   # relative to this directory.
-  (cd "$here" && alloy6 exec -q -f -n -t text -o "$tmp/$stem" "$model") >"$tmp/$stem.log" 2>&1 || true
+  # Capped: the JVM's heap (SAT4J, the default solver, lives in it) and the address space, so a scope that grows
+  # past what a model should need fails here instead of taking the machine's memory. The serial GC and two malloc
+  # arenas keep the JVM's own threads from reserving the address space
+  (cd "$here" && ulimit -v "$vmem_kib" && MALLOC_ARENA_MAX=2 \
+    JAVA_TOOL_OPTIONS="-Xmx$heap -XX:+UseSerialGC ${JAVA_TOOL_OPTIONS:-}" \
+    alloy6 exec -q -f -n -t text -o "$tmp/$stem" "$model") >"$tmp/$stem.log" 2>&1 || true
   if [[ ! -f $tmp/$stem/receipt.json ]]; then
     printf '  %sERROR%s %s\n' "$red" "$off" "$stem"; sed 's/^/    /' "$tmp/$stem.log"; fails=$((fails + 1)); continue
   fi
