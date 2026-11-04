@@ -42,8 +42,11 @@ func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderFi
 			return nil, fmt.Errorf("Header field %d twice", code)
 		}
 		// The variant's signature: one type code
-		if raw[pos+1] != 1 || raw[pos+2] != want || raw[pos+3] != 0 {
+		if raw[pos+1] != 1 || raw[pos+2] != want {
 			return nil, fmt.Errorf("Header field %d has the wrong type", code)
+		}
+		if raw[pos+3] != 0 {
+			return nil, errUnterminated
 		}
 		pos += 4
 		var v dbus.Variant
@@ -100,10 +103,15 @@ func parseHeader(raw []byte, order binary.ByteOrder, end int) (map[dbus.HeaderFi
 
 func align4(n uint64) uint64 { return (n + 3) &^ 3 }
 
+var errUnterminated = errors.New("Header string or signature not followed by a nul")
+
 // n bytes at pos followed by a nul, before end, valid UTF-8 without nuls
 func cString(raw []byte, pos, n, end int) (string, error) {
-	if pos+n+1 > end || raw[pos+n] != 0 {
-		return "", errors.New("Header string past the header's end or unterminated")
+	if pos+n+1 > end {
+		return "", errors.New("Header string past the header's end")
+	}
+	if raw[pos+n] != 0 {
+		return "", errUnterminated
 	}
 	s := raw[pos : pos+n]
 	if bytes.IndexByte(s, 0) >= 0 || !utf8.Valid(s) {
