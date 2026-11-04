@@ -135,7 +135,6 @@ func (w *world) startProxy() {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	p.policyBus, p.appID = "session", testApp
 	p.log = slog.New(slog.DiscardHandler)
 	l, err := listen(sock)
 	if err != nil {
@@ -148,15 +147,13 @@ func (w *world) startProxy() {
 	}
 	done := make(chan struct{}, 2)
 	go func() { p.Serve(l); done <- struct{}{} }()
-	go func() { p.serveControl(cl); done <- struct{}{} }()
+	go func() { p.control("session", testApp).Serve(cl); done <- struct{}{} }()
 	w.t.Cleanup(func() {
 		l.Close()
 		cl.Close()
 		<-done
 		<-done
-		for _, c := range p.connected() {
-			c.kill()
-		}
+		p.reg.KillAll()
 	})
 	w.addr = sock
 }

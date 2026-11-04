@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/control"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 )
 
@@ -22,13 +23,13 @@ func startLive(t *testing.T, bus string, args ...string) (string, string) {
 	t.Helper()
 	ctlPath := filepath.Join(t.TempDir(), "control")
 	var p *Proxy
-	addr := startProxyWith(t, bus, func(pp *Proxy) { p = pp; pp.policyBus, pp.appID = "session", testApp }, args...)
+	addr := startProxyWith(t, bus, func(pp *Proxy) { p = pp }, args...)
 	l, err := listen(ctlPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	go func() { p.serveControl(l); close(done) }()
+	go func() { p.control("session", testApp).Serve(l); close(done) }()
 	t.Cleanup(func() { l.Close(); <-done })
 	return addr, ctlPath
 }
@@ -51,7 +52,7 @@ func dialControl(t *testing.T, path string) *ctlConn {
 }
 
 // Sends a request and returns the answer, or nil when the proxy closed the connection
-func (c *ctlConn) do(t *testing.T, req map[string]any) *controlResponse {
+func (c *ctlConn) do(t *testing.T, req map[string]any) *control.Response {
 	t.Helper()
 	data, _ := json.Marshal(req)
 	if _, err := c.conn.Write(append(data, '\n')); err != nil {
@@ -61,14 +62,14 @@ func (c *ctlConn) do(t *testing.T, req map[string]any) *controlResponse {
 	if err != nil {
 		return nil
 	}
-	var res controlResponse
+	var res control.Response
 	if err := json.Unmarshal(line, &res); err != nil {
 		t.Fatal(err)
 	}
 	return &res
 }
 
-func (c *ctlConn) must(t *testing.T, req map[string]any) *controlResponse {
+func (c *ctlConn) must(t *testing.T, req map[string]any) *control.Response {
 	t.Helper()
 	res := c.do(t, req)
 	if res == nil || !res.OK {
@@ -216,14 +217,14 @@ func TestLiveSetRefused(t *testing.T) {
 	if res := ctl.do(t, map[string]any{"op": "add", "id": "a", "talk": []string{svcName}}); res == nil || res.OK {
 		t.Errorf("The same id twice: %+v", res)
 	}
-	for i := 1; i < maxLiveSets; i++ {
+	for i := 1; i < control.MaxSets; i++ {
 		ctl.must(t, map[string]any{"op": "add", "id": "s" + string(rune('a'+i%26)) + strings.Repeat("x", i/26), "talk": []string{svcName}})
 	}
 	if res := ctl.do(t, map[string]any{"op": "add", "id": "over", "talk": []string{svcName}}); res == nil || res.OK {
-		t.Errorf("Past %d sets: %+v", maxLiveSets, res)
+		t.Errorf("Past %d sets: %+v", control.MaxSets, res)
 	}
 	// A line past the cap ends the connection
-	if _, err := ctl.conn.Write([]byte(strings.Repeat("x", maxControlLine+1) + "\n")); err == nil {
+	if _, err := ctl.conn.Write([]byte(strings.Repeat("x", control.MaxLine+1) + "\n")); err == nil {
 		if line, _ := ctl.r.ReadBytes('\n'); !strings.Contains(string(line), "too long") {
 			t.Errorf("An overlong line: %q", line)
 		}
@@ -242,7 +243,7 @@ func TestLiveControlPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	go func() { p.serveControl(l); close(done) }()
+	go func() { p.control("session", testApp).Serve(l); close(done) }()
 	t.Cleanup(func() { l.Close(); <-done })
 	if res := dialControl(t, other).do(t, map[string]any{"op": "add", "id": "a", "talk": []string{svcName}}); res != nil {
 		t.Errorf("A peer of another uid got %+v", res)

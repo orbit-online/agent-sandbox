@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/control"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 	"github.com/orbit-online/agent-sandbox/internal/dbuspolicy"
@@ -54,20 +54,13 @@ The client can't monitor the bus or eavesdrop, whatever the rules.
 // Listens for clients of one bus and applies one set of rules
 type Proxy struct {
 	bus    []*net.UnixAddr
-	rules  *rules.Rules
+	reg    *control.Registry // The rules in force and the clients past authentication
 	log    *slog.Logger
 	budget *wire.Budget
-	uid    int // The uid a client must have
+	uid    int // The uid a client and the broker must have
 
 	mu      sync.Mutex
 	clients int
-	conns   map[*client]bool // The clients past authentication, for live sets
-
-	// The rules with the live sets, once the control socket changed them (livesets.go); setsMu orders the changes
-	cur    atomic.Pointer[rules.Rules]
-	setsMu sync.Mutex
-	// The bus and the sandbox's app ID, which live sets are checked against
-	policyBus, appID string
 }
 
 // Clients connected at once; the app opens a handful
@@ -78,7 +71,13 @@ func NewProxy(address string, rules *rules.Rules) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{bus: addrs, rules: rules, log: slog.Default(), budget: wire.NewBudget(), uid: os.Getuid()}, nil
+	return &Proxy{bus: addrs, reg: control.NewRegistry(rules), log: slog.Default(), budget: wire.NewBudget(),
+		uid: os.Getuid()}, nil
+}
+
+// The control socket's server, for live sets checked against bus's policy and the sandbox's app ID
+func (p *Proxy) control(bus, appID string) *control.Server {
+	return &control.Server{Registry: p.reg, Bus: bus, AppID: appID, UID: p.uid, Log: p.log}
 }
 
 // Accepts clients until the listener closes. Out of file descriptors or memory, it waits and tries again, as
@@ -223,17 +222,17 @@ func run(opts docopt.Opts) error {
 		go func() { served <- waitPidfd(pidfd) }()
 	}
 	if rel, ok := opts["--control"].(string); ok {
-		p.policyBus, _ = opts.String("--bus")
-		p.appID, _ = opts.String("--app-id")
-		if _, ok := dbuspolicy.Buses[p.policyBus]; !ok {
-			return fmt.Errorf("Invalid --bus %q: session or system", p.policyBus)
+		bus, _ := opts.String("--bus")
+		appID, _ := opts.String("--app-id")
+		if _, ok := dbuspolicy.Buses[bus]; !ok {
+			return fmt.Errorf("Invalid --bus %q: session or system", bus)
 		}
 		cl, err := listenControl(rel)
 		if err != nil {
 			return err
 		}
 		defer cl.Close()
-		go func() { served <- p.serveControl(cl) }()
+		go func() { served <- p.control(bus, appID).Serve(cl) }()
 	}
 	l, err := listen(path)
 	if err != nil {

@@ -1,16 +1,20 @@
-package main
+// Package control is the control socket the permissions broker adds and removes live rule sets on (--control), and
+// the registry of the rules in force and the connections they apply to
+package control
 
 import (
 	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
+	"golang.org/x/sys/unix"
 )
 
 // The control socket (--control): the permissions broker adds and removes live rule sets, one per D-Bus grant, by the
@@ -24,13 +28,13 @@ import (
 // at a time: when its connection closes, every live set goes as by a removal
 
 const (
-	maxControlLine = 64 << 10
-	maxLiveSets    = 32
+	MaxLine = 64 << 10
+	MaxSets = 32
 )
 
 var setID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-type controlRequest struct {
+type request struct {
 	Op        string   `json:"op"`
 	ID        string   `json:"id"`
 	See       []string `json:"see"`
@@ -40,35 +44,45 @@ type controlRequest struct {
 	Broadcast []string `json:"broadcast"`
 }
 
-type controlResponse struct {
+type Response struct {
 	OK     bool   `json:"ok,omitempty"`
 	Closed int    `json:"closed,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
+// Server serves the control socket
+type Server struct {
+	Registry *Registry
+	// The bus and the sandbox's app ID, which live sets are checked against (rules.ParseLive)
+	Bus, AppID string
+	// The uid the broker must have
+	UID int
+	Log *slog.Logger
+}
+
 // The live sets by id, which only the connected broker changes
 type control struct {
-	p    *Proxy
+	*Server
 	mu   sync.Mutex
 	busy bool
 	sets map[string]*rules.Set
 }
 
-// Serves the control socket until it's closed
-func (p *Proxy) serveControl(l *net.UnixListener) error {
-	ctl := &control{p: p, sets: map[string]*rules.Set{}}
+// Serve serves the control socket until it's closed
+func (s *Server) Serve(l *net.UnixListener) error {
+	ctl := &control{Server: s, sets: map[string]*rules.Set{}}
 	for {
 		conn, err := l.AcceptUnix()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			p.log.Warn("Control accept failed", "err", err)
+			s.Log.Warn("Control accept failed", "err", err)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if err := p.controlPeer(conn); err != nil {
-			p.log.Warn("Control peer refused", "err", err)
+		if err := s.controlPeer(conn); err != nil {
+			s.Log.Warn("Control peer refused", "err", err)
 			conn.Close()
 			continue
 		}
@@ -77,7 +91,7 @@ func (p *Proxy) serveControl(l *net.UnixListener) error {
 		ctl.busy = true
 		ctl.mu.Unlock()
 		if busy {
-			p.log.Warn("Control peer refused: the broker is connected already")
+			s.Log.Warn("Control peer refused: the broker is connected already")
 			conn.Close()
 			continue
 		}
@@ -92,15 +106,34 @@ func (p *Proxy) serveControl(l *net.UnixListener) error {
 // namespace of its own (nixpak's wrapper and the system-bus bwrap make one) the peer's namespaces from its pidfd
 // (PIDFD_GET_*_NAMESPACE need ptrace access, which commoncap refuses across user namespaces), and it has no /proc.
 // One connection at a time on top: a second while the broker is connected is closed
-func (p *Proxy) controlPeer(conn *net.UnixConn) error {
-	cred, err := peerCred(conn)
+func (s *Server) controlPeer(conn *net.UnixConn) error {
+	uid, err := PeerUID(conn)
 	if err != nil {
 		return err
 	}
-	if int(cred.Uid) != p.uid {
-		return fmt.Errorf("Peer uid %d is not the proxy's %d", cred.Uid, p.uid)
+	if uid != s.UID {
+		return fmt.Errorf("Peer uid %d is not the proxy's %d", uid, s.UID)
 	}
 	return nil
+}
+
+// PeerUID is the uid of the process at the other end of conn, from SO_PEERCRED
+func PeerUID(conn *net.UnixConn) (int, error) {
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var cred *unix.Ucred
+	var cerr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, cerr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil {
+		return 0, err
+	}
+	if cerr != nil {
+		return 0, cerr
+	}
+	return int(cred.Uid), nil
 }
 
 // Answers the broker's requests until its connection ends, then drops every live set
@@ -110,24 +143,24 @@ func (ctl *control) serve(conn *net.UnixConn) {
 		ctl.mu.Lock()
 		defer ctl.mu.Unlock()
 		for id, rs := range ctl.sets {
-			n := ctl.p.removeSet(rs)
-			ctl.p.log.Info("Live rule set dropped with the broker's connection", "id", id, "closed", n)
+			n := ctl.Registry.Remove(rs)
+			ctl.Log.Info("Live rule set dropped with the broker's connection", "id", id, "closed", n)
 		}
 		clear(ctl.sets)
 		ctl.busy = false
 	}()
-	r := bufio.NewReaderSize(conn, maxControlLine)
+	r := bufio.NewReaderSize(conn, MaxLine)
 	enc := json.NewEncoder(conn)
 	for {
 		line, err := r.ReadSlice('\n')
 		if err != nil {
 			if errors.Is(err, bufio.ErrBufferFull) {
-				_ = enc.Encode(controlResponse{Error: "Request too long"})
+				_ = enc.Encode(Response{Error: "Request too long"})
 			}
 			return
 		}
-		var req controlRequest
-		var res controlResponse
+		var req request
+		var res Response
 		if err := json.Unmarshal(line, &req); err != nil {
 			res.Error = "Not a JSON request"
 		} else if res.Closed, err = ctl.do(req); err != nil {
@@ -141,7 +174,7 @@ func (ctl *control) serve(conn *net.UnixConn) {
 	}
 }
 
-func (ctl *control) do(req controlRequest) (int, error) {
+func (ctl *control) do(req request) (int, error) {
 	ctl.mu.Lock()
 	defer ctl.mu.Unlock()
 	if !setID.MatchString(req.ID) {
@@ -152,17 +185,17 @@ func (ctl *control) do(req controlRequest) (int, error) {
 		if ctl.sets[req.ID] != nil {
 			return 0, fmt.Errorf("Rule set %s is there already", req.ID)
 		}
-		if len(ctl.sets) >= maxLiveSets {
-			return 0, fmt.Errorf("%d live rule sets at most", maxLiveSets)
+		if len(ctl.sets) >= MaxSets {
+			return 0, fmt.Errorf("%d live rule sets at most", MaxSets)
 		}
 		rs, err := rules.ParseLive(req.ID, rules.Args{See: req.See, Talk: req.Talk, Own: req.Own, Call: req.Call,
-			Broadcast: req.Broadcast}, ctl.p.policyBus, ctl.p.appID)
+			Broadcast: req.Broadcast}, ctl.Bus, ctl.AppID)
 		if err != nil {
 			return 0, err
 		}
 		ctl.sets[req.ID] = rs
-		ctl.p.addSet(rs)
-		ctl.p.log.Info("Live rule set added", "id", req.ID)
+		ctl.Registry.Add(rs)
+		ctl.Log.Info("Live rule set added", "id", req.ID)
 		return 0, nil
 	case "remove":
 		rs := ctl.sets[req.ID]
@@ -170,8 +203,8 @@ func (ctl *control) do(req controlRequest) (int, error) {
 			return 0, fmt.Errorf("No rule set %s", req.ID)
 		}
 		delete(ctl.sets, req.ID)
-		n := ctl.p.removeSet(rs)
-		ctl.p.log.Info("Live rule set removed", "id", req.ID, "closed", n)
+		n := ctl.Registry.Remove(rs)
+		ctl.Log.Info("Live rule set removed", "id", req.ID, "closed", n)
 		return n, nil
 	}
 	return 0, fmt.Errorf("Unknown op %q", req.Op)

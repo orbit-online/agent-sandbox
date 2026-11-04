@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/control"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"pgregory.net/rapid"
 )
@@ -334,7 +335,7 @@ func (w *world) dialBroker() *broker {
 }
 
 // Sends a request and returns the answer, or nil when the proxy closed the connection
-func (b *broker) do(req map[string]any) *controlResponse {
+func (b *broker) do(req map[string]any) *control.Response {
 	data, _ := json.Marshal(req)
 	b.conn.SetDeadline(time.Now().Add(settle))
 	if _, err := b.conn.Write(append(data, '\n')); err != nil {
@@ -344,7 +345,7 @@ func (b *broker) do(req map[string]any) *controlResponse {
 	if err != nil {
 		return nil
 	}
-	var res controlResponse
+	var res control.Response
 	if json.Unmarshal(line, &res) != nil {
 		return nil
 	}

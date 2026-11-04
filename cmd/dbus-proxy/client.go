@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/control"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/sasl"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
-	"golang.org/x/sys/unix"
 )
 
 // Time a client gets to authenticate
@@ -28,8 +28,6 @@ type client struct {
 	log           *slog.Logger
 	acct          *wire.Account
 	j             *judge.Judge
-	// Ends the connection, from outside its goroutines
-	kill func()
 }
 
 func (p *Proxy) handle(conn *net.UnixConn) {
@@ -56,12 +54,12 @@ func (p *Proxy) handle(conn *net.UnixConn) {
 // Checks the peer, connects to the bus and authenticates both sides
 func (c *client) connect() error {
 	c.clientR = wire.NewReader(c.conn, c.acct)
-	cred, err := peerCred(c.conn)
+	peer, err := control.PeerUID(c.conn)
 	if err != nil {
 		return err
 	}
-	if int(cred.Uid) != c.p.uid {
-		return fmt.Errorf("Peer uid %d is not the proxy's %d", cred.Uid, c.p.uid)
+	if peer != c.p.uid {
+		return fmt.Errorf("Peer uid %d is not the proxy's %d", peer, c.p.uid)
 	}
 	uid := os.Getuid()
 	if c.bus, err = dialBus(c.p.bus); err != nil {
@@ -76,7 +74,7 @@ func (c *client) connect() error {
 		return fmt.Errorf("Authenticate to the bus: %w", err)
 	}
 	negotiate := func() (bool, error) { return sasl.NegotiateFDs(c.bus, c.busR) }
-	if c.unixFDs, err = sasl.Serve(c.conn, c.clientR, int(cred.Uid), guid, negotiate); err != nil {
+	if c.unixFDs, err = sasl.Serve(c.conn, c.clientR, peer, guid, negotiate); err != nil {
 		return fmt.Errorf("Authenticate the client: %w", err)
 	}
 	if _, err := c.bus.Write([]byte("BEGIN\r\n")); err != nil {
@@ -90,24 +88,9 @@ func (c *client) connect() error {
 	return nil
 }
 
-func peerCred(conn *net.UnixConn) (*unix.Ucred, error) {
-	raw, err := conn.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
-	var cred *unix.Ucred
-	var cerr error
-	if err := raw.Control(func(fd uintptr) {
-		cred, cerr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-	}); err != nil {
-		return nil, err
-	}
-	return cred, cerr
-}
-
 // Forwards both ways until either side ends or breaks a rule, then closes both
 func (c *client) run() {
-	c.j = judge.New(c.p.current, c.unixFDs)
+	c.j = judge.New(c.p.reg.Current, c.unixFDs)
 	c.toClient = wire.NewSender(c.conn, c.acct)
 	c.toBus = wire.NewSender(c.bus, c.acct)
 	done := make(chan struct{})
@@ -122,9 +105,7 @@ func (c *client) run() {
 			c.toBus.Close()
 		})
 	}
-	c.kill = func() { stop("live rules", judge.ErrRevoked) }
-	c.p.register(c)
-	defer c.p.unregister(c)
+	defer c.p.reg.Register(c.j, func() { stop("live rules", judge.ErrRevoked) })()
 	var wg sync.WaitGroup
 	for _, f := range []struct {
 		side string
