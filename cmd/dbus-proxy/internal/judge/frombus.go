@@ -45,7 +45,7 @@ func (j *Judge) judgeBus(m *wire.Message, fakes *[][]byte) (Action, error) {
 	sender := m.Header(dbus.FieldSender)
 	if m.Type == dbus.TypeSignal && m.Header(dbus.FieldDestination) == "" {
 		_, fs := j.lookup(sender)
-		if !rules.BroadcastPasses(fs, m.Header(dbus.FieldPath), m.Header(dbus.FieldInterface), m.Header(dbus.FieldMember)) {
+		if !rules.BroadcastPasses(fs) {
 			return dropped, nil
 		}
 	}

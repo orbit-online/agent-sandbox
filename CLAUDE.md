@@ -309,7 +309,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   on a socket pair: EXTERNAL accepted with and without an initial response, file descriptors as negotiated,
   refusals, the command and line caps; `TestSASLAgainstSpec`, generated input against `spec.SASLServer`), `rules` (rules parsed as xdg-dbus-proxy's, the lookup, configs refused by
   example, and `TestConfigAgainstSpec`: 3000 generated configs, valid and near misses, taken exactly when
-  `spec.ParseConfig` takes them, then each name's policy, calls and broadcasts the model's), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
+  `spec.ParseConfig` takes them, a field null beside one that gives the entry something among the misses, then each name's policy, calls and broadcasts the model's), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
   forgotten, a reply only to its caller; the eavesdrop match, the bounded name and owned-name tables; the bus
   driver's default refusal, the monitoring guard on its own, Introspectable passing, the 4 KiB inspection cap; and a
   stateful property test, `machine_test.go`, that drives one connection's judge with the bus as a queue answered in

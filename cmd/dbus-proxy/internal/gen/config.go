@@ -146,7 +146,7 @@ func cfgMiss(t *rapid.T, n ConfigNames, entries []cfgEntry) string {
 		}
 		e.fields = append(e.fields, [2]string{key, val})
 	}
-	switch rapid.IntRange(0, 13).Draw(t, "kind") {
+	switch rapid.IntRange(0, 14).Draw(t, "kind") {
 	case 0:
 		set(rapid.SampledFrom([]string{"polcy", "Policy", "CALL", "", "talk"}).Draw(t, "field"), quote("see"))
 	case 1:
@@ -197,6 +197,15 @@ func cfgMiss(t *rapid.T, n ConfigNames, entries []cfgEntry) string {
 	case 13:
 		s := render(t, entries)
 		return s[:rapid.IntRange(0, len(s)-1).Draw(t, "cut")]
+	case 14:
+		// A field null beside one that gives the entry something, so the null alone is what's wrong
+		e := some()
+		field := rapid.SampledFrom([]string{"policy", "call", "broadcast"}).Draw(t, "null field")
+		other := [2]string{"policy", quote("see")}
+		if field == "policy" {
+			other = [2]string{"call", quoteList([]string{cfgRule(t, n)})}
+		}
+		e.fields = rapid.Permutation([][2]string{other, {field, "null"}}).Draw(t, "null order")
 	}
 	return render(t, entries)
 }
