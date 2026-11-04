@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
@@ -28,8 +27,6 @@ type capability struct {
 	Sources []mounts.Source
 	// Host sockets: the host's socket, or none with an instances glob, whose matches are the sockets
 	Path string
-	// D-Bus: the bus and the rule set
-	DBus *dbusgrant.Config
 	// The bounding argument whose values the instances glob gives, and the glob
 	glob, globArg string
 
@@ -76,7 +73,7 @@ func (c *capability) check() error {
 	}
 	k := c.kind()
 	if k == nil {
-		return fmt.Errorf("%s has type %q, not command, socket, dbus or attach", c.Name, c.Type)
+		return fmt.Errorf("%s has type %q, not command, socket or attach", c.Name, c.Type)
 	}
 	return k.check(c)
 }

@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
@@ -32,7 +31,7 @@ import (
 const settle = 3 * time.Second
 
 // The capabilities: host commands on the instances, one launcher at a time; the instances' host sockets; host
-// commands whose call prints what it's given; folders beneath a ceiling; and a D-Bus rule set
+// commands whose call prints what it's given; and folders beneath a ceiling
 const (
 	capVM      = "vm"
 	capConsole = "console"
@@ -42,13 +41,11 @@ const (
 	maxValidity = 30 * time.Minute
 )
 
-// The standing grants: a host socket of an instance, a grant of the exclusive host commands, a host command, a D-Bus
-// rule set
+// The standing grants: a host socket of an instance, a grant of the exclusive host commands and a host command
 var standingGrants = []standingConfig{
 	{Capability: capConsole, Params: json.RawMessage(`{"name":"a"}`)},
 	{Capability: capVM, Params: json.RawMessage(`{"name":"b"}`)},
 	{Capability: capToken, Params: json.RawMessage(`{"scope":"read"}`)},
-	{Capability: capBus, Params: json.RawMessage(`{}`)},
 }
 
 // fixture is what a test's iterations share: a directory and the fake systemd's log
@@ -77,8 +74,6 @@ type world struct {
 	anon               *caller
 	// The instances' echo servers, by name
 	echoes map[string]*echoServer
-	// The D-Bus proxy's control socket (machine_dbus_test.go)
-	proxy *proxyStandIn
 }
 
 // A process in the sandbox that sends requests
@@ -104,9 +99,7 @@ func newWorld(t *rapid.T, f *fixture) *world {
 		t.Fatal(err)
 	}
 	w.cfg = config{Launcher: "test", GrantDir: dir + "/grants", ControlSocket: dir + "/control.sock",
-		SandboxGrantDir: dir + "/inside", Window: []string{"window"}, Grants: standingGrants, Denied: []string{w.root + "/d/secret"},
-		DBusControl: map[string]string{"session": dir + "/dbus.sock"}}
-	w.proxy = startProxyStandIn(t, dir+"/dbus.sock")
+		SandboxGrantDir: dir + "/inside", Window: []string{"window"}, Grants: standingGrants, Denied: []string{w.root + "/d/secret"}}
 	w.startStandIn()
 	fd, err := unix.PidfdOpen(os.Getpid(), 0)
 	if err != nil {
@@ -146,9 +139,6 @@ func (w *world) startStandIn() {
 }
 
 func (w *world) close() {
-	if w.proxy != nil {
-		w.proxy.ln.Close()
-	}
 	for _, e := range w.echoes {
 		e.stop()
 	}
@@ -244,10 +234,8 @@ func (w *world) capabilities() map[string]*capability {
 			"sign": {Description: "sign something", Run: w.script("sign", "cat"), MaxValidity: "PT30M",
 				Arguments: rawArgs(signArgs)},
 		}}
-	bus := &capability{Name: capBus, Type: "dbus", Description: "a portal",
-		DBus: &dbusgrant.Config{Name: capBus, Bus: "session", Talk: []string{"org.test.Portal"}}}
 	caps := map[string]*capability{}
-	for _, c := range []*capability{vm, console, token, bus} {
+	for _, c := range []*capability{vm, console, token} {
 		if err := c.check(); err != nil {
 			w.t.Fatal(err)
 		}

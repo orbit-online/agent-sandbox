@@ -34,8 +34,8 @@ func (b *broker) checkLease(lease string) error {
 	return nil
 }
 
-// grant makes a grant live, as its capability's kind does (mounts a folder, gives a host socket its address, adds a
-// D-Bus rule set to its proxy), and ties it to its lease
+// grant makes a grant live, as its capability's kind does (mounts a folder, gives a host socket its address), and ties
+// it to its lease
 func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, lease string) (*grant, error) {
 	unlock, err := c.exclusiveLock(b.cfg.Launcher, params)
 	if err != nil {

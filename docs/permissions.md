@@ -9,7 +9,7 @@ and session leases removed, folders built into the broker, and host sockets at s
 (`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Then the Go D-Bus proxy with
 static rules (step 5) and the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03). Live rules with the
 system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and removed 2026-11-04 until a capability needs
-them: nothing declared one, and the proxy and module are smaller without them (D-Bus keeps the design). Not built yet:
+them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). Not built yet:
 device grants. Steps lists the order.
 
 ## Why
@@ -528,7 +528,7 @@ Kept for compatibility: any rule gives its name TALK, and TALK passes all the na
 #### Live rules and the system bus (not built: removed 2026-11-04 until a capability needs it)
 
 Built 2026-11-03 and removed the next day: nothing declared a D-Bus capability, all of the sandbox's D-Bus use is
-nixpak's static config, and the proxy, module and models are smaller without the live layer. The design stays here for
+nixpak's static config, and the proxy, broker, module and models are smaller without the live layer. The design stays here for
 when one is needed. Live rule sets would differ from static ones in one more way: their call and broadcast rules pass
 only the broadcasts a broadcast rule matches, and their see, talk and own what those static policies pass.
 
@@ -604,8 +604,8 @@ call or broadcast rule reads "any method", "any method of org.foo.Iface" or "org
 xdg-dbus-proxy (`filter_new_from_rule`: "Both interface and method wildcarded"), so a rule set may hold `*` alone,
 never `*.Get`. An `own` line says that host programs will send the name what they mean for it.
 
-What a capability may hold is one policy per bus in `internal/dbuspolicy/policy.json`, which the module reads for its
-assertions and the broker (at start) and both proxies (on every `add`) embed: a confused broker or a peer that isn't
+What a capability may hold is one policy per bus in a JSON file (`internal/dbuspolicy/policy.json` while it was built),
+which the module reads for its assertions and the broker (at start) and both proxies (on every `add`) embed: a confused broker or a peer that isn't
 the broker can't add what the config can't declare. The policy guards the config's author against known footguns. It
 is not a guarantee: D-Bus capabilities are declared by the user in Nix and every grant is consented to, and what any
 name not listed gives is the config's responsibility, as for host sockets and host commands. It refuses:
@@ -664,7 +664,7 @@ description.
 | `watch`   |                                                     | a stream of grant events, one JSON per line    |
 | `share`   |                                                     | (from `bwrap-subid.sh` only, see above)        |
 
-`request` grants ahead of use: a folder, a host socket, a D-Bus rule set, or a host command capability before its first
+`request` grants ahead of use: a folder, a host socket, or a host command capability before its first
 call (`params` holds the bounding values). `call` asks only when no grant covers it.
 
 `reason` is required and goes into the notification as text: whitespace and control characters folded to single
@@ -762,7 +762,7 @@ tell whether a folder or a host socket is still in use. Claude Code's channels c
 ## Standing grants
 
 A launcher's `permissions.grants` lists grants the daemon makes whenever it starts, without asking: each a capability
-and the values of its bounding arguments, of host commands, host sockets and D-Bus. Folders get none: what should always
+and the values of its bounding arguments, of host commands and host sockets. Folders get none: what should always
 be there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
 config, and taken away by a rebuild. One click in a dialog the sandbox brought up never widens access for good.
 
@@ -803,7 +803,7 @@ windows-vm, as a Nix module in secoya/agent-sandbox-plugins: `screenshot`, `clic
 never reaches the sandbox.
 
 Designed for: SSH and Kubernetes certificates signed with fixed principals, certs from a host CA. Host sockets and D-Bus
-rule sets cover systemd, the journal and BlueZ; host commands or device grants cover TPM operations and UEFI variables.
+rule sets (not built, D-Bus) cover systemd, the journal and BlueZ; host commands or device grants cover TPM operations and UEFI variables.
 Host applications through AT-SPI need their own design: the accessibility bus is neither proxy's.
 
 ## Overview
@@ -819,7 +819,7 @@ settings and nixpak's, and the daemon passes it on unchanged as `overview` in co
 - `network`: its own network namespace with a macvlan on the LAN, which the module always sets up;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
-  `files`), `/tmp` with the scratchpad, `/run/permissions`, and `/run/dbus` with the system-bus proxy.
+  `files`), `/tmp` with the scratchpad, and `/run/permissions`.
 
 It carries no consent: nothing in it can be changed from the window. A config change and a rebuild change it.
 
@@ -835,8 +835,8 @@ a daemon started again starts them afresh.
 `models/` holds the Alloy model of the sandbox and the broker's protocol, and the stateful property tests run its
 actions against the broker. The property tests follow the rewrite since step 3's first half (no sessions, host socket
 requests, connections and revokes); the models still describe the first design (plugins, `service` units, session
-leases) until step 3's second half adjusts them: host command calls, bounding values and instances, host socket connections, and the
-D-Bus proxies' rule sets come in as those land.
+leases) until step 3's second half adjusts them: host command calls, bounding values and instances, and host socket
+connections come in as those land.
 
 ## Steps
 

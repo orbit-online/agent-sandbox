@@ -17,14 +17,10 @@ buildGoModule {
       ../../../go.sum
       ../../../cmd/permissions-broker
       ../../../internal/proc
-      ../../../internal/dbuspolicy
     ];
   };
-  # The binary and its own internal/ packages, and the policy package for its tests: it has no binary
-  subPackages = [
-    "cmd/permissions-broker/..."
-    "internal/dbuspolicy"
-  ];
+  # The binary and its own internal/ packages
+  subPackages = [ "cmd/permissions-broker/..." ];
   vendorHash = "sha256-4Of8zQcd0WJzGnwkK/GWhawzSDpKSHcjyx8mcLJaadE=";
   env.CGO_ENABLED = 0;
   nativeBuildInputs = [ makeBinaryWrapper ];

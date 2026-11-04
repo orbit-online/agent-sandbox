@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/dbusgrant"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
@@ -61,8 +60,6 @@ type capabilityInfo struct {
 	// Host commands: each command's description and free arguments, and what a grant covers, as the consent says it
 	Commands map[string]*hostcmd.Command `json:"commands,omitempty"`
 	Scope    []hostcmd.ScopeItem         `json:"scope,omitempty"`
-	// D-Bus: what a grant covers, as the consent says it
-	Covers string `json:"covers,omitempty"`
 }
 
 type grant struct {
@@ -157,8 +154,6 @@ type broker struct {
 	// Listening at the host sockets' addresses, by address relative to the grant directory
 	socketsMu sync.Mutex
 	listeners map[string]*hostListener
-	// The D-Bus proxies' control sockets, by bus, under mu
-	proxies map[string]*dbusgrant.Proxy
 }
 
 func randomID() string {

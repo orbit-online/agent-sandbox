@@ -36,7 +36,7 @@ const (
 	refBlocked refusal = "blocked"
 	// The user said no, or didn't answer in time
 	refDenied refusal = "denied"
-	// Making the grant live failed: a mount, an address, the D-Bus proxy
+	// Making the grant live failed: a mount, an address
 	refFailed refusal = "failed"
 	// release or revoke of a grant there isn't
 	refNoGrant refusal = "nogrant"

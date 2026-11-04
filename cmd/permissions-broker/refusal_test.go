@@ -16,7 +16,7 @@ import (
 // oracle (machine_oracle_test.go) says too. The machines draw theirs from the declarations
 
 // exampleBroker is a broker with the state machine's token capability (machine_decls_test.go), its calls printing
-// their input, and a D-Bus capability that takes no calls
+// their input
 func exampleBroker(t *testing.T, answers ...string) (*broker, *fakeAsker, map[string]*oracleCap) {
 	b, f := testBroker(t, answers...)
 	fakeSystemd(t)

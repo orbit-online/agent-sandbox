@@ -42,9 +42,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `users` and have a subuid and subgid range.
 - `go.mod`, `cmd/`, `internal/`: one Go module for the Go helpers below,
   each in `cmd/<binary>`, with `internal/` for what they share (`proc`: the
-  pid behind a pidfd and whether it still runs; `dbuspolicy`: what a D-Bus rule
-  set may not hold, per bus, from `policy.json`, which the broker embeds for
-  its `dbus` kind, until that goes too). Their packages in
+  pid behind a pidfd and whether it still runs). Their packages in
   `nix/packages/<binary>/` build it with `subPackages`, from a source
   filtered to `go.mod`, `go.sum`, the binary's directory (its own `internal/`
   packages included) and the `internal/` packages it uses, each with its own `vendorHash` (Go vendors only what the
@@ -92,8 +90,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   host command), `hostcmd` (a host command's declaration: its checks, its free
   arguments, the consent's scope, what it reads on stdin), `hostsock` (what a
   host socket may not be, reaching one without links, the addresses in the grant
-  directory), `dbusgrant` (a D-Bus capability's rule set, its checks and scope,
-  the connection to a proxy's control socket), `mountinfo` (mountinfo files) and
+  directory), `mountinfo` (mountinfo files) and
   `mounts` (attach grants in the sandbox's mount namespace: the folders ceiling
   by path and identity, the helpers run through `nsenter` that clone a host path
   and join the sandbox's mount namespace only after their exec on the host's
@@ -112,9 +109,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `commands.go` (host command capabilities: bounding arguments, instance globs),
   `call.go` (a call: covered or asked, run as a transient unit, its output),
   `hostsockets.go` (listening at the host sockets' addresses), `splice.go`
-  (connections to them, spliced under a grant), `dbus.go` (D-Bus capabilities, a
-  proxy per bus, a bus's grants ended when its proxy's connection breaks),
-  `sandbox.go` (finding and pinning the sandbox), `members.go` (its processes by
+  (connections to them, spliced under a grant), `sandbox.go` (finding and pinning the sandbox), `members.go` (its processes by
   user namespace), `folders.go` (the folders capability), `attach.go` (mounting,
   unmounting, cleanup) and `holders.go` (what still held ended grants). Each
   type's kind is in its type's file. Each `*_test.go` follows its file; tests
@@ -388,19 +383,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   for its length, one of 80 reachable through a long grant directory, one of 60 é (120 bytes) no instance; a sync that looked before a grant's not
   closing its listener; a revoke during the connect closing the host's end whole; a grant without an address
   refused; no address made through a link; a stale address taken over; the addresses closed when the daemon
-  ends. `internal/dbuspolicy` (built with the broker for its tests): each name, method, own and system-bus
-  rule of the policy, and how a rule's METHOD reads. D-Bus capabilities against a fake proxy (`dbus_test.go`):
-  declarations refused (as the module's assertions, plus a unique name), the consent's scope naming the bus and
-  rules as the proxy reads them, own and talk with what they bring, a grant adding its set to its bus's proxy only and
-  a revoke removing it, a set the proxy refuses no grant, a standing grant's set pushed at start, a broken connection
-  to the proxy ending the bus's grants (found by a removal or by an add) and the next grant dialling again. The MCP server: the nudge after 15
+  ends. The MCP server: the nudge after 15
   minutes, not again right after, and in tool results; and the cleanup a stopped daemon's `ExecStopPost`
   runs (call units stopped, locks removed, folder grants detached, mountpoints and host socket addresses
   removed, also without the sandbox). Stateful property tests
   (`machine*_test.go`, `pgregory.net/rapid`) run random sequences of the
   protocol model's actions against the broker on the stand-in sandbox, with
-  a fake clock, with standing grants of a host socket by instance, the exclusive host commands, another host
-  command and a D-Bus rule set in its config, the last pushed to a stand-in for the proxy's control socket: requests of each type and host command calls
+  a fake clock, with standing grants of a host socket by instance, the exclusive host commands and another host
+  command in its config: requests of each type and host command calls
   from an anonymous caller, and floods of them, with their inputs generated from the declarations' grammar
   (`machine_gen*_test.go`, `machine_decls_test.go`: capability and command names and near-misses of them,
   parameters and a command's arguments using every keyword of the schema subset, with values at and past each
@@ -416,7 +406,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   instances' consoles (echoed from the host under a live grant, closed at once otherwise, kept open and closed
   when their grant ends), another launcher's exclusive locks and control.sock from inside.
   After every step the broker's grants and gates, its
-  mounts, locks, host socket addresses and open connections, the proxy's live rule sets and the window's view (the standing grants, ended
+  mounts, locks, host socket addresses and open connections and the window's view (the standing grants, ended
   and live, included) match a reference model
   (P1-P4, P6, P7, P9-P14, P16, P17; `models/README.md` lists the model's actions they leave to other tests). `go test` runs 150
   sequences of about 30 steps (about 25 seconds); more with
