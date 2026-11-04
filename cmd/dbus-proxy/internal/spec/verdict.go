@@ -129,7 +129,8 @@ func ProxyVerdict(m *Message, r Rules) Verdict {
 		return refuse(ServiceUnknown)
 	}
 	forward := func(toBus bool) Verdict {
-		if reply && r.Awaiting(m.Serial) {
+		// Any call: the bus answers some that expect no reply too
+		if call && r.Awaiting(m.Serial) {
 			return Verdict{Kind: End}
 		}
 		return Verdict{Kind: Forward, ToBus: toBus}

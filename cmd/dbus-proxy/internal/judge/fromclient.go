@@ -209,6 +209,10 @@ func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 		if err := j.expectFromBus(m.Serial(), e); err != nil {
 			return Action{}, err
 		}
+	} else if _, ok := j.awaitBus[m.Serial()]; ok && m.Type == dbus.TypeMethodCall {
+		// The bus answers some calls that expect no reply (the bus driver's errors): one on a serial awaiting a reply
+		// would answer the other call
+		return Action{}, fmt.Errorf("Serial %d reused while its call awaits a reply", m.Serial())
 	}
 	if hello && !j.helloSeen {
 		j.helloSeen = true
