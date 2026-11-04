@@ -109,6 +109,27 @@ func TestInstanceNameLength(t *testing.T) {
 	}
 }
 
+// The limit is the address's bytes: 60 é are 60 characters the schema takes, but 120 bytes no address holds. No
+// instance, so a request is refused before the user is asked, not after the Allow (found by the state machine's
+// generated instance names)
+func TestInstanceNameBytes(t *testing.T) {
+	b, f := testBroker(t, "allow")
+	wide := strings.Repeat("é", 60)
+	c := testSocket(t, b)
+	// The name a directory's, as no socket's file name could be
+	dir := t.TempDir()
+	c.glob = filepath.Join(dir, "*", "agent.sock")
+	e := startEcho(t, dir, wide+"/agent.sock")
+	t.Cleanup(func() { e.ln.Close() })
+	if found, _ := c.globMatches(); found[wide] != "" {
+		t.Errorf("Instances %v", found)
+	}
+	_, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"vm": "`+wide+`"}`, "PT1H"))
+	if refusalOf(err) != refInstance || f.count() != 0 {
+		t.Errorf("A name of %d bytes: %v, asked %d times", len(wide), err, f.count())
+	}
+}
+
 // A sync that looked for instances before a grant's did can't close the listener the grant opened
 func TestSyncRacesGrant(t *testing.T) {
 	b, _ := testBroker(t, "allow")

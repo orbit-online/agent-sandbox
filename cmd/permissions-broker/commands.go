@@ -121,7 +121,9 @@ func (c *capability) globMatches() (map[string]string, error) {
 			continue
 		}
 		v := strings.TrimSuffix(strings.TrimPrefix(ms[i], prefix), suffix)
-		if c.Type == "socket" && !hostsock.IsSocket(m) {
+		// A host socket's instance names its address, bound as a file name of at most MaxAddrName bytes: a value
+		// of as many characters may be twice that and more
+		if c.Type == "socket" && (!hostsock.IsSocket(m) || len(v) > hostsock.MaxAddrName) {
 			continue
 		}
 		if s := c.schemas[c.globArg]; v != "" && found[v] == "" && s.CheckValue(v, maxParam) == nil {
