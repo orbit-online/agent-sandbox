@@ -437,6 +437,23 @@ check: that's the user's own mount and ceiling configuration.
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1-D4, each with a run for its premise and a revert check per guard enforcing it |
 
+The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine
+against the proxy between a real `dbus-daemon` and clients speaking the
+wire (`cmd/dbus-proxy/machine*_test.go`): clients connect, say Hello and
+hang up, call names allowed and hidden with fresh, reused and forged
+serials, call the bus (owners, names listed, owned, released and started,
+match rules eavesdropping or not, `BecomeMonitor`, a second Hello) and
+reply, asked or not; services take and release names, call clients,
+reply, forge replies (to a start the bus holds pending too) and
+broadcast; the broker adds and removes sets, alone or right before a
+client's message, and drops its connection. After every step what
+arrived at each end, the connections closed and every name's owner match
+a reference model. Not there: a set removed while a client's lookups for
+it are in flight (`D1inflight`): each step settles, so the lookups are
+answered within the step that adds the set or before the client's next
+message. The machine has calls and replies between clients, which
+`proxy.als` has between a client and a peer only.
+
 The broker's Go tests run the protocol model's actions as `rapid` state
 machines against the broker (`cmd/permissions-broker/machine*_test.go`,
 and live against the work launcher's daemon in the VM test,

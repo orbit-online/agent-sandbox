@@ -256,7 +256,22 @@ modules and a user alice (the `home-manager` input exists only for it).
   owned and dropped, a name's owner asked, names listed, a NameOwnerChanged received), each direction taking
   the rules there are as its message is judged, the match rules for a removed set's names removed, and
   `--control` and `--pid` as the module passes them (the socket 0600 in a 0700
-  directory, a path not clean or not relative or a bus not named refused, the exit with the pid).
+  directory, a path not clean or not relative or a bus not named refused, the exit with the pid). A stateful
+  property test (`machine*_test.go`, `pgregory.net/rapid`) runs random sequences of `models/proxy.als`'s actions
+  against the proxy with static rules and a control socket, between a `dbus-daemon` of its own (with an activatable
+  name whose start stays pending until someone takes the name: the test binary as `DBUS_PROXY_LAZY`), two services
+  straight on the bus and up to three clients speaking the wire: clients connecting, saying Hello (twice) and hanging
+  up, calls to names allowed and hidden and to unique names with fresh, reused and forged serials (and a call
+  carrying a reply serial), calls to the bus (owners, names listed, owned, released and started, match rules with and
+  without eavesdropping, `BecomeMonitor`), replies to calls asked and not; services taking and releasing names,
+  calling clients, replying, forging replies to clients' pending calls (a pending start included) and broadcasting;
+  the broker adding and removing live sets, alone or right before a client's next message, and its connection
+  dropping. Each step runs to quiescence (barriers through each connection, the bus dropping a connection that
+  closed), then what arrived at each end, the connections closed, the replies on the control socket and every name's
+  owner match a reference model (`machine_model_test.go`, `machine_bus_test.go`: the rules in force, each client's
+  name table, pending calls both ways, the sets each client used, the bus's owners, match rules and pending calls;
+  D1-D4). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
+  -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`), a failure again with the `-rapid.seed` it prints.
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):
   durations, parameter validation, consent (denied, allowed, a live grant
   covering the same request only), host commands (the schema subset's

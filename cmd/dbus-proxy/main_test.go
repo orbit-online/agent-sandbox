@@ -18,8 +18,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// With DBUS_PROXY_MAIN set the test binary is the proxy, for the tests of its command line
+// With DBUS_PROXY_MAIN set the test binary is the proxy, for the tests of its command line; with DBUS_PROXY_LAZY
+// the activatable service the state machine's bus starts (machine_world_test.go)
 func TestMain(m *testing.M) {
+	if os.Getenv("DBUS_PROXY_LAZY") != "" {
+		lazyHelper()
+	}
 	if os.Getenv("DBUS_PROXY_MAIN") != "" {
 		if n, err := strconv.ParseUint(os.Getenv("DBUS_PROXY_NOFILE"), 10, 64); err == nil {
 			rl := unix.Rlimit{Cur: n, Max: n}
