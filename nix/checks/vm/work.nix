@@ -9,14 +9,14 @@
   ...
 }:
 ''
-  import time
+  import re, time
 
   start_portal()
   workstation.succeed("mkdir /srv/project")
   app_pid, app_netns, app_mntns, _, _, _ = launch()
+  work_home = "${workStateDir}/home"
 
   with subtest("A named launcher runs a sandbox of its own next to the default one"):
-      work_home = "${workStateDir}/home"
       work_pid, work_netns, work_mntns, _, _, work_bus = launch("claude-desktop-work", work_home)
       assert work_netns != app_netns and work_mntns != app_mntns, "work runs in the default sandbox"
       # Its own tray item next to the default one's
@@ -34,6 +34,68 @@
       workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
       workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
 
+  with subtest("The sandbox runs in its unit's delegated cgroup, the app in sandbox/app"):
+      user = "/user.slice/user-1000.slice/user@1000.service"
+      work_slice = f"{user}/claude\\x2ddesktop\\x2dwork.slice"
+      unit_root = f"/sys/fs/cgroup{work_slice}/claude-desktop-work-app.service"
+      def procs(cg):
+          return workstation.succeed(f"cat '{unit_root}/{cg}cgroup.procs'").split()
+      def cgroup(pid):
+          return workstation.succeed(f"cat /proc/{pid}/cgroup").strip().removeprefix("0::")
+      def main_pid(unit):
+          return workstation.succeed(f"systemctl --user -M alice@ show -P MainPID {unit}").strip()
+      for prop, want in [("Delegate", "yes"), ("DelegateSubgroup", "supervisor")]:
+          got = workstation.succeed(f"systemctl --user -M alice@ show -P {prop} claude-desktop-work-app").strip()
+          assert got == want, f"{prop}={got}"
+      # Neither the delegation root nor the sandbox's root holds a process
+      inner = [procs(""), procs("sandbox/")]
+      assert inner == [[], []], f"processes in the root and sandbox/: {inner}"
+      # The unit's main process, nixpak's launcher, in supervisor/; bwrap's child and the app in sandbox/app/
+      assert main_pid("claude-desktop-work-app") in procs("supervisor/")
+      sandbox_procs = procs("sandbox/app/")
+      assert str(bwrap_info("com.nixpak.ClaudeDesktop.work")["child-pid"]) in sandbox_procs, sandbox_procs
+      app = next(p for p in sandbox_procs
+                 if workstation.execute(f"tr '\\0' ' ' </proc/{p}/cmdline")[1].endswith("/sleep infinity "))
+      # With the variable of the unit that ran the launcher
+      workstation.succeed(f"tr '\\0' '\\n' </proc/{app}/environ | grep -qx WAYLAND_DISPLAY=wayland-0")
+      # The default launcher's in a unit and slice of its own
+      assert cgroup(bwrap_info()["child-pid"]) == f"{user}/claude\\x2ddesktop.slice/claude-desktop-app.service/sandbox/app"
+      # The broker and the system-bus proxy, units of their own in the slice
+      workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=60)
+      for unit in ["claude-desktop-work-permissions", "claude-desktop-work-system-bus"]:
+          assert cgroup(main_pid(unit)) == f"{work_slice}/{unit}.service", f"{unit} in {cgroup(main_pid(unit))}"
+      # The re-entries join the app's cgroup: claude:// and --shell
+      assert in_work("cat /proc/self/cgroup").strip() == "0::/app"
+      assert sandbox_shell("cat /proc/self/cgroup").strip().splitlines()[-1] == "0::/app"
+      # Inside, /sys/fs/cgroup is the sandbox's subtree alone, writable: none of the session's units
+      listing = in_work("ls /sys/fs/cgroup").split()
+      assert "app" in listing and not [n for n in listing if n.endswith((".slice", ".service", ".scope"))], listing
+      dirs = in_work("find /sys/fs/cgroup -mindepth 1 -type d").split()
+      assert dirs == ["/sys/fs/cgroup/app"], dirs
+      top = [l.split() for l in in_work("cat /proc/self/mountinfo").splitlines() if l.split()[4] == "/sys/fs/cgroup"][-1]
+      assert top[3] == "/" and "rw" in top[5].split(","), top
+
+  with subtest("The sandbox can't widen its cgroup or leave it"):
+      def refused(cmd):
+          status, out = workstation.execute(work_cmd(f"sh -c {shlex.quote(cmd)}") + " 2>&1")
+          assert status != 0, f"{cmd}: {out}"
+      # Its root's limits are the host's (nsdelegate)
+      refused("echo 1G >/sys/fs/cgroup/memory.max")
+      refused("echo max >/sys/fs/cgroup/cgroup.max.descendants")
+      # No process in its root, which holds controllers for its children
+      refused("echo 0 >/sys/fs/cgroup/cgroup.procs")
+      # The host's hierarchy under the bind stays hidden, and a cgroup2 mount of its own, in a cgroup namespace of its
+      # own, shows its own cgroup's subtree
+      refused("unshare --user --map-current-user --mount umount /sys/fs/cgroup")
+      out = in_work("unshare --user --map-root-user --mount --cgroup sh -c"
+                    " 'd=$(mktemp -d) && mount -t cgroup2 none $d && ls $d'").split()
+      assert "cgroup.procs" in out and not [n for n in out if n.endswith((".slice", ".service", ".scope"))], out
+      # At most 64 cgroups below its root, app/ included
+      out = in_work("sh -c 'n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done;"
+                    " echo $n; rmdir /sys/fs/cgroup/d*'")
+      assert out.strip() == "63", f"made {out.strip()} cgroups"
+
+  with subtest("The work launcher's broker"):
       # The permissions broker: its daemon runs, its grant directory is read-only inside, shared in the sandbox's
       # outer mount namespace before the FHS env's bwrap copied it, so a slave where the app runs
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=60)
@@ -115,6 +177,9 @@
       assert sorted(standing) == ["echo", "test"], f"standing grants {standing}"
       mcp_until(mcp_script({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
           "name": "test_thing", "arguments": {"reason": "the VM test"}}}), "issued-PT28800S")
+      # The call ran as a unit in the launcher's slice
+      call = workstation.succeed("cat /run/user/1000/test-call.cgroup").strip()
+      assert re.fullmatch(rf"0::{re.escape(work_slice)}/perm-work_call-[0-9a-f]+\.service", call), f"the call in {call}"
       # The host socket at its stable address: the broker copies bytes to and from alice's echo server. The test
       # binary's live-connect is the client, as the sandbox has no nc
       workstation.succeed(f"install -D -m755 -o alice ${brokerLive}/bin/permissions-broker-live {work_home}/connect")
@@ -254,7 +319,8 @@
       as_alice("/run/current-system/sw/bin/sh -c 'QT_QPA_PLATFORM=offscreen timeout 5 /etc/profiles/per-user/alice/bin/claude-desktop-work"
                " --permissions; [ $? = 124 ]'")
 
-      workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-work")
+  with subtest("The work sandbox ends with its unit"):
+      workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-work-app")
       workstation.wait_until_fails(f"test -e /proc/{work_pid}", timeout=30)
       # The daemon ends with its sandbox
       workstation.wait_until_fails("systemctl --user -M alice@ is-active claude-desktop-work-permissions", timeout=30)

@@ -128,7 +128,13 @@ let
                 description = "a test command";
                 commands.thing = {
                   description = "print the validity";
-                  run = [ "${pkgs.writeShellScript "run" "echo issued-$(${lib.getExe pkgs.jq} -r .validity)"}" ];
+                  # And its cgroup, for the test to find it in the launcher's slice
+                  run = [
+                    "${pkgs.writeShellScript "run" ''
+                      cat /proc/self/cgroup >"$XDG_RUNTIME_DIR/test-call.cgroup"
+                      echo issued-$(${lib.getExe pkgs.jq} -r .validity)
+                    ''}"
+                  ];
                   maxValidity = "PT8H";
                 };
               };
@@ -260,12 +266,13 @@ let
             " org.freedesktop.appearance color-scheme"
         ))
 
-    # Starts a launcher as a unit of alice's, named after it, and returns what the stub app logged in `home`: its pid,
-    # net, mount and pid ns, capabilities and whether it got its tray item's name. KillMode=process: like a desktop's
-    # app scope, ending the app leaves the rest alone
+    # Starts a launcher from a unit of alice's outside its slice, as a desktop's app scope is, with a variable only
+    # that unit has, and returns what the stub app logged in `home`: its pid, net, mount and pid ns, capabilities and
+    # whether it got its tray item's name. The launcher returns once it started the app's unit,
+    # <launcher>-app.service
     def launch(launcher="claude-desktop", home="${sandboxHome}"):
         workstation.succeed(
-            f"systemd-run --user -M alice@ --unit {launcher} -p KillMode=process -E WAYLAND_DISPLAY=wayland-0"
+            "systemd-run --user -M alice@ --wait --pipe --quiet -E WAYLAND_DISPLAY=wayland-0"
             f" -- /etc/profiles/per-user/alice/bin/{launcher}"
         )
         workstation.wait_until_succeeds(f"test -s {home}/stub-app.log", timeout=300)

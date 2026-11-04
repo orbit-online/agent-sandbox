@@ -1,10 +1,13 @@
 # shellcheck shell=bash
 # The launcher on the host's PATH. $VARS: the sandbox's environment, filtered (see `vars` in default.nix).
 # $REQUIRED_BINDS: the sources of the binds that aren't optional. $HOME_DIRS: where the sandbox's home, ~/.claude and
-# ~/.config/Claude are on the host, the directories claude-desktop-state ($STATE) works in
-: "${SCRATCHPAD:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${STATE:?}"
+# ~/.config/Claude are on the host, the directories claude-desktop-state ($STATE) works in.
+# The sandbox runs as the unit $APP_UNIT ($APP_RUN, see app-unit.sh) in the launcher's slice ($SLICE), with its cgroup
+# delegated: see bwrap-subid.sh for the cgroups below it. The broker and its calls are units of their own in the slice,
+# the re-entries join the app's cgroup
+: "${SCRATCHPAD:?}" "${APP_ID:?}" "${APP_PID:?}" "${SETPRIV:?}" "${STATE:?}" "${SLICE:?}" "${APP_UNIT:?}" "${APP_RUN:?}"
 : "${PERMISSIONS_CONFIG?}" "${PERMISSIONS_DIR?}" "${PERMISSIONS_UNIT?}" "${PERMISSIONS_BROKER:?}" "${PERMISSIONS_WINDOW:?}" "${PERMISSIONS_TITLE:?}"
-: "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}" "${GTK_THEME_WATCH:?}" "${NIXPAK_LAUNCHER:?}"
+: "${STORE_SYNC:?}" "${STORE_ROOTS:?}" "${STORE_ROOTS_LINK:?}" "${GTK_THEME:?}"
 args=(--password-store=basic "$@")
 
 # The running sandbox's pid 1. The mount ns check stops a stale info file with a recycled pid from pointing at a
@@ -49,6 +52,70 @@ env=(env -i "${VARS[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/ni
 # first, on the host, as bwrap sets it for everything inside: nsenter holds every capability in U2 until it execs a
 # path the sandbox controls, whose file capabilities would otherwise count
 nsenter=("$SETPRIV" --no-new-privs nsenter -U -m -p -n -i -u -C -r -w --preserve-credentials)
+# A re-entry joins the app's cgroup (sandbox/app/ in the app's unit, see bwrap-subid.sh) before it joins its
+# namespaces: it stays the caller's child, on its terminal, and it is in the sandbox's cgroup namespace's subtree, so
+# it can make cgroups of its own there
+join_cgroup() {
+  local cg
+  cg=$(systemctl --user show -P ControlGroup "$APP_UNIT") || cg=
+  if [[ -z $cg ]] || ! echo $$ 2>/dev/null >"/sys/fs/cgroup$cg/sandbox/app/cgroup.procs"; then
+    echo "claude-desktop: The running sandbox isn't in $APP_UNIT's cgroups: quit the app and start it again" >&2
+    exit 1
+  fi
+}
+
+# Starts the sandbox: prepares its state here, where a refusal reaches the caller, then starts the app's unit, which
+# outlives the caller's terminal or the desktop's app scope. The unit gets the caller's environment, which VARS read,
+# not only the user manager's
+start() {
+  # The sandbox can write its home and plant links there, so the files it expects (resolv.conf, user-dirs.dirs, the
+  # app's config) are written confined, see confine.sh. The directories themselves are bind sources, on paths it can't
+  # write
+  mkdir -p "${HOME_DIRS[@]}"
+  # Bind source for Claude Code's temp dir, which it wants private. Its parent, the state dir, exists from the home's
+  # mkdir
+  [[ -d $SCRATCHPAD ]] || mkdir -m 700 "$SCRATCHPAD"
+  "$STATE" "${HOME_DIRS[@]}" -- home
+
+  "$STORE_SYNC"
+  # nixpak binds the closure from the host store, where a GC would empty it under the running sandbox once a rebuild
+  # dropped its generation. The runtime dir goes at logout, the next launch replaces the root
+  mkdir -p "$XDG_RUNTIME_DIR/claude-desktop"
+  nix-store --add-root "$XDG_RUNTIME_DIR/claude-desktop/$STORE_ROOTS_LINK" --realise "$STORE_ROOTS" >/dev/null
+  # nixpak only passes bwrap the --*-bind-try variants, which skip a missing source
+  for src in "${REQUIRED_BINDS[@]}"; do
+    [[ -e $src ]] || { echo "claude-desktop: Bind source $src is missing" >&2; exit 1; }
+  done
+
+  # The permissions broker, a unit of its own that finds the sandbox once it runs (docs/permissions.md)
+  if [[ -n $PERMISSIONS_CONFIG ]]; then
+    mkdir -p "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR"
+    systemctl --user -q is-active "$PERMISSIONS_UNIT" ||
+      # ExecStopPost ends its grants when it stops, a crash included: service units are bound to it, folder grants
+      # are detached. It fails when it finds no sandbox within a minute: the start limit ends the restarts then
+      systemd-run --user --quiet --collect --unit="$PERMISSIONS_UNIT" --slice="$SLICE" -p Restart=on-failure \
+        -p StartLimitIntervalSec=10min -p StartLimitBurst=3 \
+        -p ExecStopPost="$PERMISSIONS_BROKER cleanup $PERMISSIONS_CONFIG" -- \
+        "$PERMISSIONS_BROKER" serve "$PERMISSIONS_CONFIG"
+  fi
+
+  "$GTK_THEME" || true
+
+  # The caller's environment, minus what systemd sets per unit and the shell's own
+  local setenv=() kv
+  while IFS= read -r -d '' kv; do
+    case ${kv%%=*} in
+    INVOCATION_ID | JOURNAL_STREAM | SYSTEMD_EXEC_PID | MANAGERPID | MAINPID | NOTIFY_SOCKET | LISTEN_* | WATCHDOG_* | \
+      MEMORY_PRESSURE_* | TRIGGER_* | MONITOR_* | EXIT_* | SERVICE_RESULT | PIDFILE | SHLVL | PWD | OLDPWD | _) ;;
+    *) setenv+=(--setenv="$kv") ;;
+    esac
+  done < <(env -0)
+  # Its cgroup delegated, so the sandbox can run jobs in cgroups of their own. The unit's processes start in
+  # supervisor/, the cgroup root holds none. With Delegate=, OOMPolicy= defaults to continue: an OOM kill below it
+  # ends the process the kernel picked, not the unit
+  systemd-run --user --quiet --collect --unit="$APP_UNIT" --slice="$SLICE" -p Delegate=yes \
+    -p DelegateSubgroup=supervisor "${setenv[@]}" -- "$APP_RUN" "$@"
+}
 
 # --permissions (the .desktop file's action with the broker): the Permissions window, on the host. Ahead of the
 # running sandbox's lookup, which would hand the flag to the app
@@ -64,8 +131,7 @@ if [[ ${1:-} == --shell ]]; then
   fi
   if [[ -z ${app:-} ]]; then
     echo "Starting Claude"
-    # As a unit of its own: run from the terminal, the app would stop with the terminal's unit
-    systemd-run --user --collect --quiet -- "$(readlink -f "$0")"
+    start
     for ((i = 0; i < 300; i++)); do
       if pid=$(sandbox_pid); then
         app=$(app_pid "$pid") && break
@@ -78,6 +144,7 @@ if [[ ${1:-} == --shell ]]; then
   # The terminal's. Ghostty points TERMINFO at its own entry, which the sandbox's store lacks: xterm-256color then
   term=()
   for v in TERM TERMINFO COLORTERM; do [[ -z ${!v:-} ]] || term+=("$v=${!v}"); done
+  join_cgroup
   # shellcheck disable=SC2016
   exec "${env[@]}" "${term[@]}" "${nsenter[@]}" -t "$app" /bin/sh -c \
     '[ -z "${TERMINFO-}" ] || [ -d "$TERMINFO" ] || { TERM=xterm-256color; unset TERMINFO; }; exec "$SHELL" -l'
@@ -93,40 +160,8 @@ if pid=$(sandbox_pid); then
     sleep 1
   done
   [[ -n ${app:-} ]] || { echo "claude-desktop: The running sandbox has no app" >&2; exit 1; }
+  join_cgroup
   exec "${env[@]}" "${nsenter[@]}" -t "$app" /init "${args[@]}"
 fi
 
-# The sandbox can write its home and plant links there, so the files it expects (resolv.conf, user-dirs.dirs, the app's
-# config) are written confined, see confine.sh. The directories themselves are bind sources, on paths it can't write
-mkdir -p "${HOME_DIRS[@]}"
-# Bind source for Claude Code's temp dir, which it wants private. Its parent, the state dir, exists from the home's mkdir
-[[ -d $SCRATCHPAD ]] || mkdir -m 700 "$SCRATCHPAD"
-"$STATE" "${HOME_DIRS[@]}" -- home
-
-"$STORE_SYNC"
-# nixpak binds the closure from the host store, where a GC would empty it under the running sandbox once a rebuild
-# dropped its generation. The runtime dir goes at logout, the next launch replaces the root
-mkdir -p "$XDG_RUNTIME_DIR/claude-desktop"
-nix-store --add-root "$XDG_RUNTIME_DIR/claude-desktop/$STORE_ROOTS_LINK" --realise "$STORE_ROOTS" >/dev/null
-# nixpak only passes bwrap the --*-bind-try variants, which skip a missing source
-for src in "${REQUIRED_BINDS[@]}"; do
-  [[ -e $src ]] || { echo "claude-desktop: Bind source $src is missing" >&2; exit 1; }
-done
-
-# The permissions broker, a unit of its own that finds the sandbox once it runs (docs/permissions.md)
-if [[ -n $PERMISSIONS_CONFIG ]]; then
-  mkdir -p "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR"
-  systemctl --user -q is-active "$PERMISSIONS_UNIT" ||
-    # ExecStopPost ends its grants when it stops, a crash included: service units are bound to it, folder grants
-    # are detached. It fails when it finds no sandbox within a minute: the start limit ends the restarts then
-    systemd-run --user --quiet --collect --unit="$PERMISSIONS_UNIT" -p Restart=on-failure \
-      -p StartLimitIntervalSec=10min -p StartLimitBurst=3 \
-      -p ExecStopPost="$PERMISSIONS_BROKER cleanup $PERMISSIONS_CONFIG" -- \
-      "$PERMISSIONS_BROKER" serve "$PERMISSIONS_CONFIG"
-fi
-
-"$GTK_THEME" || true
-# Double fork: the launcher this script execs into must not wait for it. It stops once that pid ($$) exits
-("$GTK_THEME_WATCH" $$ </dev/null >/dev/null 2>&1 &)
-
-exec env -i "${VARS[@]}" "$NIXPAK_LAUNCHER" "${args[@]}"
+start "$@"

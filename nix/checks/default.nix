@@ -1002,6 +1002,19 @@ in
             "readonly STORE_ROOTS_LINK=store-roots-work"; do
             grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
           done
+          # The launchers' slices: the app as a unit of the wrapper's in its own, the broker and its calls as units of
+          # their own there, the system-bus proxy too
+          for line in \
+            "readonly SLICE='claude\\x2ddesktop\\x2dwork.slice'" \
+            "readonly APP_UNIT=claude-desktop-work-app.service"; do
+            grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
+          done
+          grep -qxF -- "readonly SLICE='claude\\x2ddesktop.slice'" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
+            { echo "the default launcher's wrapper lacks its slice" >&2; exit 1; }
+          appRun=$(grep -oP '^readonly APP_RUN=\K/nix/store/\S+' "$wrapper") || { echo "work's wrapper lacks APP_RUN" >&2; exit 1; }
+          grep -qP '^readonly NIXPAK_LAUNCHER=/nix/store/\S+-nixpak-' "$appRun" &&
+            grep -qF 'exec env -i "''${VARS[@]}" "$NIXPAK_LAUNCHER" --password-store=basic "$@"' "$appRun" ||
+            { echo "work's app unit doesn't exec nixpak's launcher" >&2; exit 1; }
           # What the launcher writes in its home, confined to the directories in HOME_DIRS
           workState=$(grep -- '-claude-desktop-work-state-inner$' "$workClosure/store-paths")/bin/claude-desktop-work-state-inner
           for line in \
@@ -1054,6 +1067,7 @@ in
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .unit == "claude-desktop-work-permissions.service"
+            and .slice == "claude\\x2ddesktop\\x2dwork.slice"
             and .sandboxGrantDir == "/run/permissions"
             and .window[1] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .window[2] == "Claude permissions (work)"
@@ -1094,7 +1108,8 @@ in
           workBwrap=$(hostBwrap "$workClosure/store-paths")
           grep -qxF 'readonly SYSTEM_BUS_UNIT=claude-desktop-work-system-bus' "$workBwrap" &&
             grep -qxF 'readonly SYSTEM_BUS_DIR=claude-desktop/system-bus-work' "$workBwrap" &&
-            grep -qxF 'readonly SYSTEM_BUS_CONTROL=claude-desktop/dbus-control-work/system/control.sock' "$workBwrap" ||
+            grep -qxF 'readonly SYSTEM_BUS_CONTROL=claude-desktop/dbus-control-work/system/control.sock' "$workBwrap" &&
+            grep -qxF "readonly SYSTEM_BUS_SLICE='claude\\x2ddesktop\\x2dwork.slice'" "$workBwrap" ||
             { echo "work's bwrap doesn't start the system-bus proxy" >&2; exit 1; }
           grep -qxF "readonly SYSTEM_BUS_UNIT='''" "$(hostBwrap "$paths")" ||
             { echo "the default launcher starts a system-bus proxy" >&2; exit 1; }

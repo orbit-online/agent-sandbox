@@ -60,8 +60,8 @@
 
   with subtest("launch"):
       start_portal()
-      # A bind that isn't optional, with its source missing. The launch syncs the store first. RuntimeMaxSec:
-      # without the check it starts the app, and --wait would wait on it
+      # A bind that isn't optional, with its source missing, refused before the app's unit starts, so the caller
+      # sees it. The launch syncs the store first. RuntimeMaxSec: a launcher hanging there
       status, out = workstation.execute(
           "systemd-run --user -M alice@ --wait --pipe --quiet -p RuntimeMaxSec=600"
           " -- /etc/profiles/per-user/alice/bin/claude-desktop 2>&1"
@@ -373,7 +373,7 @@
 
   with subtest("the theme watcher ends with the app"):
       workstation.succeed("pgrep -u alice -f claude-desktop-gtk-theme-watch")
-      workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop")
+      workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-app")
       workstation.wait_until_fails("pgrep -u alice -f 'claude-desktop-gtk-theme-watch|gdbus monitor'", timeout=30)
       workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
       workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")

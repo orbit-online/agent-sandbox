@@ -11,6 +11,7 @@
 uid=$(id -u) gid=$(id -g)
 args=()
 info_out=
+cg_root=
 case $SUBID_MAP in
 subid)
   : "${SUBID_BROKER:?}"
@@ -50,13 +51,36 @@ subid)
     echo "claude-desktop: subid-broker didn't start" >&2
     exit 1
   }
-  args+=(--bind "$sock" /run/subid-broker.sock "$@")
+  # The sandbox's cgroups, below the app's unit's (Delegate=yes), which systemd started in supervisor/
+  # (DelegateSubgroup=), where this shell and nixpak's launcher stay. The sandbox gets sandbox/, the root of its
+  # cgroup namespace, with its processes in sandbox/app/: bwrap's parent sits in sandbox/ while it clones the child,
+  # whose new cgroup namespace is rooted where its parent is, then the info fd's reader below moves the parent back
+  # here and the child, still blocked, into app/. sandbox/ holds no process, so controllers can be enabled for its
+  # children, and the kernel's nsdelegate keeps the sandbox from writing its root's files (memory.max,
+  # cgroup.max.*) or moving a process out of it. It sees sandbox/ alone at /sys/fs/cgroup
+  # cgroup v2 alone: one line, 0::PATH
+  cg_self=$(</proc/self/cgroup)
+  cg_self=${cg_self#0::}
+  [[ $cg_self == */supervisor ]] || {
+    echo "claude-desktop: Not in the app's unit's supervisor cgroup but in $cg_self" >&2
+    exit 1
+  }
+  cg_root=/sys/fs/cgroup${cg_self%/supervisor}
+  mkdir "$cg_root/sandbox" "$cg_root/sandbox/app"
+  # Without end, the sandbox's cgroups would cost the kernel memory without end
+  echo 64 >"$cg_root/sandbox/cgroup.max.descendants"
+  echo 4 >"$cg_root/sandbox/cgroup.max.depth"
+  # The controllers the unit got, for sandbox/ and below
+  ctl=()
+  for c in memory pids; do grep -qw "$c" "$cg_root/cgroup.controllers" && ctl+=("+$c"); done
+  ((${#ctl[@]} == 0)) || echo "${ctl[*]}" >"$cg_root/cgroup.subtree_control"
+  args+=(--bind "$sock" /run/subid-broker.sock --bind "$cg_root/sandbox" /sys/fs/cgroup "$@")
   # The system-bus proxy, with D-Bus capabilities on the system bus (docs/permissions.md, D-Bus): a unit of its own
   # in a bwrap holding its closure, the host's system bus socket and its directories. It listens in
   # $SYSTEM_BUS_DIR, which nixpak binds read-only at /run/dbus, takes the broker's rule sets on its control socket,
   # and exits with this shell's pid, which bwrap's becomes: it shares the host's pid namespace to watch the pid there.
   # Its bwrap holds the system control socket's directory only, not the session proxy's next to it
-  : "${SYSTEM_BUS_UNIT?}" "${SYSTEM_BUS_DIR?}" "${SYSTEM_BUS_CONTROL?}" "${SYSTEM_BUS_PROXY:?}" "${SYSTEM_BUS_CLOSURE:?}"
+  : "${SYSTEM_BUS_UNIT?}" "${SYSTEM_BUS_SLICE?}" "${SYSTEM_BUS_DIR?}" "${SYSTEM_BUS_CONTROL?}" "${SYSTEM_BUS_PROXY:?}" "${SYSTEM_BUS_CLOSURE:?}"
   : "${SYSTEMD_RUN:?}" "${SYSTEMCTL:?}"
   if [[ -n $SYSTEM_BUS_UNIT ]]; then
     bus_dir=$XDG_RUNTIME_DIR/$SYSTEM_BUS_DIR
@@ -68,7 +92,9 @@ subid)
     "$SYSTEMCTL" --user stop "$SYSTEM_BUS_UNIT" 2>/dev/null || true
     closure=()
     while read -r p; do closure+=(--ro-bind "$p" "$p"); done <"$SYSTEM_BUS_CLOSURE"
-    "$SYSTEMD_RUN" --user --quiet --collect --unit="$SYSTEM_BUS_UNIT" --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- \
+    # In the launcher's slice, with the app
+    "$SYSTEMD_RUN" --user --quiet --collect --unit="$SYSTEM_BUS_UNIT" --slice="$SYSTEM_BUS_SLICE" \
+      --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- \
       "$BWRAP" --unshare-user --unshare-ipc --unshare-net --unshare-uts --unshare-cgroup-try --die-with-parent \
       "${closure[@]}" --bind /run/dbus/system_bus_socket /run/dbus/system_bus_socket \
       --bind "$bus_dir" "$bus_dir" --bind "$ctl_dir" "$ctl_dir" -- \
@@ -131,6 +157,13 @@ mkfifo "$d/info" "$d/userns"
     exit 1
   }
   pid=${BASH_REMATCH[1]}
+  if [[ -n $cg_root ]]; then
+    if ! echo $$ >"$cg_root/supervisor/cgroup.procs" || ! echo "$pid" >"$cg_root/sandbox/app/cgroup.procs" ||
+      { ((${#ctl[@]})) && ! echo "${ctl[*]}" >"$cg_root/sandbox/cgroup.subtree_control"; }; then
+      kill -KILL "$pid" $$
+      exit 1
+    fi
+  fi
   # Unblocked without maps, the child would run as the overflow uid: take bwrap down instead
   if ! "$NEWUIDMAP" "$pid" "${umap[@]}" || ! "$NEWGIDMAP" "$pid" "${gmap[@]}"; then
     kill -KILL "$pid" $$
@@ -141,4 +174,6 @@ mkfifo "$d/info" "$d/userns"
 ) &
 # The caller reads its info fd to EOF, so bwrap mustn't hold it
 [[ -z $info_out ]] || exec {info_out}>&-
+# Where the child's cgroup namespace is rooted, see above
+[[ -z $cg_root ]] || echo $$ >"$cg_root/sandbox/cgroup.procs"
 exec "$BWRAP" --unshare-user --info-fd 20 --userns-block-fd 21 "${args[@]}" 20>"$d/info" 21<"$d/userns"

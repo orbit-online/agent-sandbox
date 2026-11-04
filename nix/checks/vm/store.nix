@@ -10,7 +10,7 @@
   workstation.succeed("mkdir /srv/project")
   launch()
   sandbox_pid = bwrap_info()["child-pid"]
-  workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop")
+  workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-app")
 
   with subtest("the launcher deletes a store dir the sandbox swapped for its own and syncs afresh"):
       workstation.wait_until_fails(f"test -e /proc/{sandbox_pid}", timeout=30)
@@ -53,4 +53,8 @@
       launches = workstation.succeed("cat ${sandboxHome}/stub-app.log").splitlines()
       assert len(launches) == 2, launches
       assert out.splitlines()[-1] == launches[1].split()[1], f"{out} {launches}"
+      # In the app's unit, its cgroup delegated, as from the desktop: the sandbox in sandbox/app/
+      cg = workstation.succeed("systemctl --user -M alice@ show -P ControlGroup claude-desktop-app").strip()
+      assert cg.endswith("/claude\\x2ddesktop.slice/claude-desktop-app.service"), cg
+      assert workstation.succeed(f"cat '/sys/fs/cgroup{cg}/sandbox/app/cgroup.procs'").split(), f"nothing in {cg}/sandbox/app"
 ''

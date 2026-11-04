@@ -11,7 +11,18 @@ single-user Nix store, and an environment doc for the Claude running inside.
   sandbox's namespaces at the top). Its options configure the default
   launcher; `launchers.<name>` adds sandboxes next to it with the same
   options, each built by `launcher` from the module's defaults alone, with its
-  own state dir, app ID, MAC and `claude-desktop-<name>`. Then
+  own state dir, app ID, MAC and `claude-desktop-<name>`. Each runs its
+  sandbox as a unit in a slice of its own, `claude\x2ddesktop[\x2d<name>].slice`
+  (escaped, as a `-` nests one slice in another): `claude-desktop.sh` prepares
+  the state where the caller sees a refusal, then starts `app-unit.sh` as
+  `claude-desktop[-<name>]-app.service` there with the caller's environment,
+  `Delegate=yes` and `DelegateSubgroup=supervisor`. `bwrap-subid.sh` lays out
+  the cgroups below it: nixpak's launcher and the host side in `supervisor/`,
+  the sandbox in `sandbox/app/`, its cgroup namespace rooted at `sandbox/`
+  (at most 64 cgroups, 4 deep), which it sees alone and writable at
+  `/sys/fs/cgroup`. The re-entries (`claude://`, `--shell`) join `sandbox/app/`.
+  The broker, its host command calls and the system-bus
+  proxy are units in the slice too. Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
   `<!-- memo: FILTER -->` marker, the marked ones going into the memo store `/etc/claude/environment.memo`
@@ -211,7 +222,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   `HOME_DIRS` and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
   set the pid, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
-  references in the closure). For `work`: its wrapper alone in `bin`, its app ID,
+  references in the closure). The launchers' slices: each wrapper's `SLICE`, work's
+  `APP_UNIT`, its app unit execing nixpak's launcher, its broker's and system-bus proxy's
+  slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, the store and memo's config in the FHS env,
@@ -490,7 +503,13 @@ modules and a user alice (the `home-manager` input exists only for it).
   of login1's `CanReboot`: `challenge` without a graphical session of alice's, `yes` with an active one, as for a
   process of hers in a user unit on the host; the VM has polkit for it), the Permissions window
   staying up against it, the state machine tests run live (below), the daemon and the system-bus proxy ending with the
-  sandbox), its own `/etc/hosts`, the closure's GC root on the
+  sandbox; its cgroups: the app's unit delegated, nothing in its root or in `sandbox/`, nixpak's launcher in
+  `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
+  launcher's in a unit and slice of its own, the broker, the system-bus proxy and a host command call units in the
+  slice, both re-entries in `app/`; inside, `/sys/fs/cgroup` the sandbox's subtree alone, writable, without a unit's
+  name; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
+  process in its root, unmounting the bind from a nested user namespace and a 64th cgroup, and a cgroup2 mount of its
+  own in a nested cgroup namespace showing its own subtree), its own `/etc/hosts`, the closure's GC root on the
   host and `/etc` bound from the store except passwd, group and machine-id,
   `nettest.sh` inside the sandbox against a host
   service on the LAN address, loopback and a dummy interface, a `files`
@@ -499,7 +518,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   past a process at the app's pid in a pid ns of the sandbox's own, `XDG_CURRENT_DESKTOP`
   with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces, with no_new_privs as `claude://` has it,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
-  starting the app when it isn't running), the wrapper refusing system
+  starting the app when it isn't running, in the app's unit), the wrapper refusing system
   users, and
   `netns-macvlan` refusing a second user, bob, alice's namespaces, each of
   its checks on its own, and alice a netns of hers below a user namespace

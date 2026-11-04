@@ -8,7 +8,8 @@
 # │
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
 #    │  owns: N (netns: lo + eth0 macvlan), M1 (sandbox mount tree), MU (udhcpc's mount tree, made from the
-#    │        host's: its closure, /proc and the sandbox's home), P (pid ns), ipc, uts, cgroup
+#    │        host's: its closure, /proc and the sandbox's home), P (pid ns), ipc, uts, cgroup (rooted at sandbox/ in
+#    │        the app's unit's delegated cgroup, see bwrap-subid.sh)
 #    │  runs (in N, M1, P): bwrap's init and the FHS env script as uid 1000 without capabilities
 #    │       (in N, MU, P): udhcpc + dhcpScript (net_admin and net_raw only)
 #    │       (in N and the host's mount ns): netSetup's ip calls; the permissions broker's helpers, which join M1
@@ -113,6 +114,7 @@ let
       NEWGIDMAP = "${osConfig.security.wrapperDir}/newgidmap";
       SUBID_BROKER = lib.getExe subidBroker;
       SYSTEM_BUS_UNIT = if systemBus == null then "" else systemBus.unit;
+      SYSTEM_BUS_SLICE = if systemBus == null then "" else systemBus.slice;
       SYSTEM_BUS_DIR = if systemBus == null then "" else systemBus.dir;
       SYSTEM_BUS_CONTROL = if systemBus == null then "" else systemBus.control;
       SYSTEM_BUS_PROXY = lib.getExe dbusProxy;
@@ -131,6 +133,10 @@ let
   suffixOf = name: lib.optionalString (name != null) "-${name}";
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
   stateDirOf = name: "${config.xdg.dataHome}/claude-desktop${suffixOf name}";
+  # The launcher's cgroup slice, holding the app's unit, the broker's and its calls' and the system-bus proxy's. A - in
+  # a slice's name nests it in the slice before it (claude-desktop-work.slice in claude-desktop.slice), so each is
+  # escaped: one slice per launcher, each a sibling of app.slice. systemd makes it when a unit names it
+  sliceOf = name: "${lib.replaceStrings [ "-" ] [ "\\x2d" ] "claude-desktop${suffixOf name}"}.slice";
   # The app's pid in the FHS env's pid ns (see app-pid.sh), one per launcher: their tray items share the session bus
   appPidOf = name: 100 + lib.lists.findFirstIndex (n: n == name) null ([ null ] ++ lib.attrNames cfg.launchers);
   # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
@@ -1175,6 +1181,7 @@ let
         if dbusOn "system" then
           {
             unit = "claude-desktop${suffix}-system-bus";
+            slice = sliceOf name;
             dir = "claude-desktop/system-bus${suffix}";
             control = "${dbusControlDir}/system/control.sock";
           }
@@ -1193,6 +1200,7 @@ let
           grantDir = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}";
           controlSocket = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock";
           unit = "${permissionsUnit}.service";
+          slice = sliceOf name;
           sandboxGrantDir = "/run/permissions";
           window = [
             (lib.getExe permissionsWindow)
@@ -1333,9 +1341,26 @@ let
         vars.GTK_THEME = lib.getExe gtkTheme;
       };
 
+      varsPrelude = ''
+        VARS=(
+          ${vars}
+        )
+        readonly VARS
+      '';
+      # The app's unit, which the wrapper starts in the slice
+      appUnit = script "app-unit.sh" {
+        name = "claude-desktop${suffix}-app";
+        runtimeInputs = [ pkgs.coreutils ];
+        vars = {
+          GTK_THEME_WATCH = lib.getExe gtkThemeWatch;
+          NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
+        };
+        prelude = varsPrelude;
+      };
       wrapper = script "claude-desktop.sh" {
         name = "claude-desktop${suffix}";
         runtimeInputs = [
+          pkgs.coreutils
           osConfig.nix.package
           osConfig.systemd.package
         ];
@@ -1355,20 +1380,18 @@ let
           STORE_ROOTS = "${storeRoots}";
           STORE_ROOTS_LINK = "store-roots${suffix}";
           GTK_THEME = lib.getExe gtkTheme;
-          GTK_THEME_WATCH = lib.getExe gtkThemeWatch;
-          NIXPAK_LAUNCHER = lib.getExe sandboxed.config.script;
+          SLICE = sliceOf name;
+          APP_UNIT = "claude-desktop${suffix}-app.service";
+          APP_RUN = lib.getExe appUnit;
         };
-        prelude = ''
-          VARS=(
-            ${vars}
-          )
+        prelude = varsPrelude + ''
           REQUIRED_BINDS=(
             ${lib.escapeShellArgs (
               lib.mapAttrsToList (_: b: b.src) (lib.filterAttrs (_: b: b.enable && !b.optional) lcfg.binds)
             )}
           )
           HOME_DIRS=(${lib.escapeShellArgs homeDirs})
-          readonly VARS REQUIRED_BINDS HOME_DIRS
+          readonly REQUIRED_BINDS HOME_DIRS
         '';
       };
       claude-desktop = pkgs.symlinkJoin {
