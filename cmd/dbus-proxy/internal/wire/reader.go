@@ -141,7 +141,9 @@ func (r *Reader) PendingFDs() int { return len(r.fds) }
 // ReadLine reads a SASL line without its CRLF, at most MaxAuthLine long
 func (r *Reader) ReadLine() (string, error) {
 	for {
-		if i := bytes.Index(r.data, []byte("\r\n")); i >= 0 {
+		if i := bytes.Index(r.data, []byte("\r\n")); i > MaxAuthLine {
+			return "", errors.New("SASL line too long")
+		} else if i >= 0 {
 			return string(r.consume(i + 2)[:i]), nil
 		}
 		if len(r.data) >= MaxAuthLine {
