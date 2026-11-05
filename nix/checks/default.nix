@@ -374,6 +374,21 @@ let
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
       expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
     };
+    # At the cap on a launcher name's length, and past it
+    testLauncherNameMax = {
+      expr = failedAssertions (nixos (enabled // { launchers.${lib.fixedWidthString 47 "a" "w"} = { }; }));
+      expected = [ ];
+    };
+    testLauncherNameTooLong =
+      let
+        name = lib.fixedWidthString 48 "a" "w";
+      in
+      {
+        expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.${name} = { }; })));
+        expected = [
+          "agent-sandbox.claude-desktop: launcher name ${name} must be at most 47 characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 108 bytes"
+        ];
+      };
     testLauncherNetnsAssertion = {
       expr = map (a: a.message) (
         failedAssertions (

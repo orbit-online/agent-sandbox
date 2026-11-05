@@ -212,7 +212,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
-  name and per-launcher netns assertions, a tray on two launchers at once,
+  name assertions (its characters, and its length at and past the cap of 47 its
+  broker's socket path sets), the per-launcher netns assertion, a tray on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the

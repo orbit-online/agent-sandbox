@@ -133,6 +133,8 @@ let
 
   # A named launcher's suffix to file names, empty for the default one
   suffixOf = name: lib.optionalString (name != null) "-${name}";
+  # The longest launcher name, see its assertion
+  launcherNameMax = 47;
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
   stateDirOf = name: "${config.xdg.dataHome}/claude-desktop${suffixOf name}";
   # The launcher's cgroup slice, holding the app's unit, the broker's and its calls'. A - in
@@ -1729,6 +1731,14 @@ in
           # File names, the app ID and the .desktop file's Name take it as is
           assertion = builtins.match "[a-z][a-z0-9-]*" name != null;
           message = "agent-sandbox.claude-desktop: launcher name ${name} must match [a-z][a-z0-9-]*";
+        }
+        ++ lib.optional (name != "") {
+          # The tightest of what the name goes into: the broker's control socket and request.sock, 61 bytes besides
+          # the name with a 10-digit uid, bound by path (at most 108 bytes). The app ID (D-Bus's 255 bytes, 21
+          # besides), the slice (systemd's 255 characters, 27 besides and 3 more for each - escaped) and the state
+          # dir's file name (255, 15 besides) allow more; the macvlan is eth0 whatever the name
+          assertion = lib.stringLength name <= launcherNameMax;
+          message = "agent-sandbox.claude-desktop: launcher name ${name} must be at most ${toString launcherNameMax} characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 108 bytes";
         }
       ) launchers
     );
