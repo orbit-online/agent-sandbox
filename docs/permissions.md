@@ -140,15 +140,18 @@ host (user, no capabilities)                       sandbox
   Its sections (waiting requests, what's still open in ended folder grants, the configuration, the grants, host
   command calls, recent decisions) each collapse to their header. A grant is one line: its summary (capability and
   bounding values), its badges and the time it has left, with Revoke; expanded, it shows its parameters by their
-  declarations' descriptions, who may use it (the sandbox as a whole), Claude's reason, and for a host command capability what it covers and the calls made under it. Badges: the
+  declarations' descriptions, who may use it (the sandbox as a whole), Claude's reason, and for a host command capability what it covers (a line per consent phrase, Details collapsed beneath; Consent) and the calls made under it. Badges: the
   lease (or "from config" for a standing grant) and a host command
   capability's free arguments, with a warning badge for each unrestricted one. A waiting request shows its summary,
-  the same badges for free arguments, for a host command its bounding values, what a grant covers and the call
+  the same badges for free arguments, for a host command what a grant covers on its bounding values (as a grant
+  does, its bounding values in Details) and the call
   asking (its command and free arguments, opaque ones by digest, the rest whole), and Claude's reason. Fields narrow a
   folder or service request; a host command request has none, only its lease, which offers `once` for a call and
   Claude's own proposal. Everything the broker or Claude wrote is in read-only text boxes the user can select and
-  copy from. The broker sends what this needs in `state`: each host command capability's `scope` (its commands and
-  free arguments, unrestricted ones first, each with its description and what its schema allows), a pending call's
+  copy from. The broker sends what this needs in `state`: each host command capability's `title`, `consent` (its
+  consent lines, unrestricted ones first, each with its phrase, the commands sharing it and whether one is
+  unrestricted) and `scope` (its commands and free arguments, unrestricted ones first, each with its description and
+  what its schema allows), a pending call's
   `command` and `arguments`, a grant's `reason`, and each call's `capability`.
 
 ### Handle on the sandbox, and restarts
@@ -781,8 +784,13 @@ phrase share it: it appears once, marked if any of them is unrestricted, so rela
 free string with no enum or pattern), never from the phrase. Leases read as "1 h 30 min". A declaration without a
 title or a command without its phrase is a config error, as is an undescribed argument.
 
-The window shows the same, with the call that asked. `state` carries, per host command capability, `title`,
-`consent` (each line's phrase, `commands` and `unrestricted`) and `scope` (the details, a free argument each). Summaries are one line and
+The window shows the same: "A grant covers, on "windows-vm", for 10 min:" (the lease the user picked), then a line per
+phrase with an "unrestricted" badge where it applies and the commands' names dim after it ("keys, type"). Below, a
+collapsed Details holds the bounding values by their descriptions and every free argument as its schema allows it,
+from the declaration's descriptions ("Run PowerShell in the guest (exec): script, any PowerShell, run as SYSTEM,
+unrestricted"), an enum listed whole. The badges above count the free arguments and name the unrestricted ones, and the
+call that asked and the reason follow. `state` carries, per host command capability, `title`, `consent` (each line's
+phrase, `commands` and `unrestricted`) and `scope` (the details, a free argument each). Summaries are one line and
 servers may cut them, so nothing the user must see goes only there.
 
 The sandbox can post notifications too, through the notification portal (`org.freedesktop.portal.Notification`; the

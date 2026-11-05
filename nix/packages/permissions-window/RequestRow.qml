@@ -2,7 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// A request waiting for the user's answer: what it asks for, what that covers, the call asking and Claude's reason,
+// A request waiting for the user's answer: what it asks for, what that covers (for a host command capability, a line
+// per consent phrase, then Details), the call asking and Claude's reason,
 // fields that narrow it, its lease, Allow and Deny. A host command grant has only its lease to change: its bounding
 // values are what the call needs, and the broker refuses others
 Frame {
@@ -21,24 +22,22 @@ Frame {
         ReadOnlyText {
             objectName: "summary-" + request.modelData.id
             Layout.fillWidth: true
-            text: request.modelData.summary
+            // A host command capability's summary completes the sentence, as in the notification
+            text: (request.isCommand ? "Claude wants to " : "") + request.modelData.summary
             font.bold: true
         }
         Badges {
             model: request.view.freeBadges(request.modelData.capability, request.modelData.id)
             visible: model.length > 0
         }
-        ReadOnlyText {
-            objectName: "bounds-" + request.modelData.id
-            Layout.fillWidth: true
-            visible: request.isCommand && text !== ""
-            text: request.view.paramLines(request.modelData.capability, request.modelData.params)
-        }
-        ReadOnlyText {
-            objectName: "scope-" + request.modelData.id
-            Layout.fillWidth: true
+        CommandScope {
             visible: request.isCommand
-            text: "A grant covers:\n" + request.view.scopeText(request.modelData.capability, false)
+            view: request.view
+            key: request.modelData.id
+            capability: request.modelData.capability
+            heading: request.view.coversHeading(request.modelData.capability, request.modelData.params,
+                                                lease.currentValue || request.modelData.lease)
+            boundsText: request.view.paramLines(request.modelData.capability, request.modelData.params)
         }
         ReadOnlyText {
             objectName: "call-" + request.modelData.id

@@ -24,7 +24,9 @@ ColumnLayout {
         ReadOnlyText {
             objectName: "grant-" + grant.gid
             Layout.fillWidth: true
-            text: grant.modelData.summary
+            // A host command capability's summary completes "Claude wants to": a sentence of its own here
+            text: grant.isCommand ? grant.modelData.summary.charAt(0).toUpperCase() + grant.modelData.summary.slice(1)
+                                  : grant.modelData.summary
         }
         Badges {
             model: grant.view.grantBadges(grant.modelData)
@@ -65,11 +67,11 @@ ColumnLayout {
                   : grant.modelData.reason ? "Claude's reason, in its own words: " + JSON.stringify(grant.modelData.reason)
                   : "No reason recorded"
         }
-        ReadOnlyText {
-            objectName: "scope-" + grant.gid
-            Layout.fillWidth: true
+        CommandScope {
             visible: grant.isCommand
-            text: "Covers:\n" + grant.view.scopeText(grant.modelData.capability, true)
+            view: grant.view
+            key: grant.gid
+            capability: grant.modelData.capability
         }
         ReadOnlyText {
             objectName: "calls-" + grant.gid

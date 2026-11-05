@@ -20,7 +20,7 @@ TestCase {
                      { id: "g2", capability: "echo", params: {}, summary: "the echo", lease: "standing",
                        socket: "/run/permissions/sockets/echo" },
                      { id: "g3", capability: "windows-vm", params: { vm: "win11" },
-                       summary: 'Control a Windows VM (vm="win11")', lease: "PT1H30M", reason: "check the VM",
+                       summary: 'control the Windows VM "win11"', lease: "PT1H30M", reason: "check the VM",
                        expires: new Date(Date.now() + 90 * 60000).toISOString() }],
             calls: [{ grant: "g3", capability: "windows-vm", time: "2026-11-03T10:00:00Z", command: "exec",
                       arguments: { script: "Get-Date" }, exit: 0 },
@@ -41,8 +41,14 @@ TestCase {
             },
             capabilities: [{ id: "folders/folder", type: "attach",
                              params: { path: { type: "string" }, ro: { type: "boolean" } } },
-                           { id: "windows-vm", type: "command",
+                           { id: "windows-vm", type: "command", title: "control the Windows VM",
                              params: { vm: { type: "string", description: "the VM" } },
+                             consent: [{ consent: "Run any PowerShell, up to system level",
+                                         commands: ["exec"], unrestricted: true },
+                                       { consent: "Use the keyboard and type any text", commands: ["keys", "type"],
+                                         unrestricted: true },
+                                       { consent: "Click on the screen", commands: ["click"] },
+                                       { consent: "Take screenshots", commands: ["screenshot"] }],
                              scope: [{ command: "exec", description: "Run PowerShell", argument: "script",
                                        about: "any PowerShell, as SYSTEM", allows: "any text", unrestricted: true },
                                      { command: "click", description: "Click", argument: "x", about: "column",
@@ -189,16 +195,39 @@ TestCase {
         verify(!findChild(view, "badge-free-g1"), "free arguments on a grant without")
     }
 
-    // An expanded host command grant: its bounding values by description, who holds it, Claude's reason, what it
-    // covers and the calls made under it; all calls, ended grants' too, in a section of their own
+    // A host command capability's consent: a line per phrase, the commands sharing one on it, a warning on an
+    // unrestricted one, the commands' names after it
+    function consentLines(key) {
+        const lines = []
+        for (let i = 0; findChild(view, "consent-" + key + "-" + i); i++) {
+            const open = findChild(view, "consent-unrestricted-" + key + "-" + i)
+            lines.push((open.visible ? "[" + open.text + "] " : "") + findChild(view, "consent-" + key + "-" + i).text
+                       + " (" + findChild(view, "consent-commands-" + key + "-" + i).text + ")")
+        }
+        return lines
+    }
+
+    // An expanded host command grant: its summary a sentence, its bounding values by description, who holds it,
+    // Claude's reason, what it covers as the consent says it, the details collapsed until asked for, and the calls
+    // made under it; all calls, ended grants' too, in a section of their own
     function test_command_grant() {
         click("toggle-g3")
+        compare(findChild(view, "grant-g3").text, 'Control the Windows VM "win11"')
         compare(findChild(view, "params-g3").text, "the VM (vm): win11")
         compare(findChild(view, "holders-g3").text, "Given to the sandbox: anything in it may use it")
         compare(findChild(view, "reason-g3").text, 'Claude\'s reason, in its own words: "check the VM"')
-        compare(findChild(view, "scope-g3").text, "Covers:\nRun PowerShell (exec): script, any PowerShell, as SYSTEM, "
+        compare(findChild(view, "covers-g3").text, "Covers:")
+        compare(consentLines("g3"), ["[unrestricted] Run any PowerShell, up to system level (exec)",
+                                     "[unrestricted] Use the keyboard and type any text (keys, type)",
+                                     "Click on the screen (click)", "Take screenshots (screenshot)"])
+        verify(findChild(view, "consent-unrestricted-g3-0").warning)
+        verify(!findChild(view, "scope-g3").visible, "the details shown before they were asked for")
+        click("details-toggle-g3")
+        verify(findChild(view, "scope-g3").visible)
+        compare(findChild(view, "scope-g3").text, "Run PowerShell (exec): script, any PowerShell, as SYSTEM, "
                 + "unrestricted\nClick (click): x, column, a number within 0–99\nPress keys (keys): key, a key, one of 9 "
                 + "values: a, b, c, d, e, f, g, h, i\nTake a screenshot (screenshot)")
+        click("details-toggle-g3")
         const calls = findChild(view, "calls-g3").text
         verify(calls.endsWith(" windows-vm exec: exit 0\nscript: Get-Date"), calls)
         verify(calls.indexOf("click") < 0, calls)
@@ -208,23 +237,31 @@ TestCase {
         click("toggle-g3")
     }
 
-    // A host command request: its bounding values shown, never editable, what a grant covers and the call asking;
+    // A host command request: what Claude wants to do, what a grant covers on which values and for how long, the
+    // bounding values in the details, never editable, and the call asking;
     // the lease is still the user's, once and Claude's own proposal among them, and Allow sends no parameters
     function test_command_request() {
         const before = mock.state
         const st = JSON.parse(before)
         st.pending = [{ id: "p4", capability: "windows-vm", params: { vm: "win11" },
-                        summary: 'Control a Windows VM (vm="win11")', reason: "look", lease: "PT2H",
+                        summary: 'control the Windows VM "win11"', reason: "look", lease: "PT2H",
                         command: "exec", arguments: { script: "Get-Date\nGet-Item" } }]
         mock.state = JSON.stringify(st)
         tryVerify(() => !view.settling, 3000)
         const field = findChild(view, "field-vm")
         verify(!field || !field.visible, "an editable bounding value")
+        compare(findChild(view, "summary-p4").text, 'Claude wants to control the Windows VM "win11"')
+        compare(findChild(view, "covers-p4").text, 'A grant covers, on "win11", for 2 h:')
+        compare(consentLines("p4"), ["[unrestricted] Run any PowerShell, up to system level (exec)",
+                                     "[unrestricted] Use the keyboard and type any text (keys, type)",
+                                     "Click on the screen (click)", "Take screenshots (screenshot)"])
+        verify(!findChild(view, "bounds-p4").visible && !findChild(view, "scope-p4").visible, "details shown")
+        click("details-toggle-p4")
         compare(findChild(view, "bounds-p4").text, "the VM (vm): win11")
         const scope = findChild(view, "scope-p4").text
-        verify(scope.indexOf("script, any PowerShell, as SYSTEM, unrestricted") > 0, scope)
-        // The consent counts a long enum; the grant's details list it
-        verify(scope.indexOf("key, a key, one of 9 values\n") > 0, scope)
+        verify(scope.startsWith("Run PowerShell (exec): script, any PowerShell, as SYSTEM, unrestricted\n"), scope)
+        verify(scope.indexOf("key, a key, one of 9 values: a, b") > 0, scope)
+        click("details-toggle-p4")
         compare(findChild(view, "badge-unrestricted-p4-exec-script").text, "unrestricted: exec script")
         const call = findChild(view, "call-p4")
         compare(call.text, "The call asking: exec\nscript: Get-Date\nGet-Item")
@@ -237,6 +274,7 @@ TestCase {
         lease.currentIndex = lease.indexOfValue("once")
         verify(lease.currentIndex >= 0, "no once")
         lease.activated(lease.currentIndex)
+        compare(findChild(view, "covers-p4").text, 'A grant covers, on "win11", for this call only:')
         mouseClick(findChild(view, "allow"))
         const c = sent()
         compare(c.pending, "p4")

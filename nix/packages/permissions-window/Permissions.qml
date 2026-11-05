@@ -189,9 +189,34 @@ Item {
                                                    + (typeof args[k] === "string" ? args[k] : JSON.stringify(args[k])))
                                           .join("")
     }
-    // What a grant of a host command capability covers, one command or free argument a line, unrestricted ones first.
-    // full adds the values of an enum the broker counts rather than lists (more than its maxListedEnum, 8)
-    function scopeText(capId, full) {
+    // A host command capability's bounding values as the consent's summary has them: a value alone, quoted, or with
+    // several, each after its name
+    function boundValues(capId, params) {
+        const decl = (caps[capId] || {}).params || {}
+        const keys = Object.keys(params || {}).sort()
+        return keys.map(k => {
+            const v = params[k]
+            const shown = (decl[k] || {}).opaque && typeof v === "string" ? "opaque, " + v.length + " characters"
+                                                                          : JSON.stringify(v)
+            return keys.length > 1 ? k + " " + shown : shown
+        }).join(", ")
+    }
+    // How long a lease lasts, after "for" or as "until": the notification's words
+    function leasePhrase(lease) {
+        switch (lease) {
+        case "lock": return "until the screen locks"
+        case "once": return "for this call only"
+        }
+        return "for " + (spoken(lease) || lease)
+    }
+    // The heading of what a host command request's grant covers: on its bounding values, for the lease picked
+    function coversHeading(capId, params, lease) {
+        const on = boundValues(capId, params)
+        return "A grant covers" + (on ? ", on " + on : "") + ", " + leasePhrase(lease) + ":"
+    }
+    // What a grant of a host command capability covers in detail, one command or free argument a line, unrestricted
+    // ones first, with the values of an enum the broker counts rather than lists (more than its maxListedEnum, 8)
+    function scopeText(capId) {
         const cap = caps[capId] || {}
         return (cap.scope || []).map(s => {
             if (!s.argument)
@@ -201,7 +226,7 @@ Item {
             const decl = ((cap.commands || {})[s.command] || {}).arguments || {}
             const arg = decl[s.argument] || {}
             const values = arg.enum || (arg.items || {}).enum || []
-            return full && values.length > 8 ? line + ": " + values.join(", ") : line
+            return values.length > 8 ? line + ": " + values.join(", ") : line
         }).join("\n")
     }
     function callsText(list, none) {
