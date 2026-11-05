@@ -650,7 +650,7 @@ name not listed gives is the config's responsibility, as for host sockets and ho
   `org.kde.KWin` (`loadScript`) and `org.kde.klauncher*`;
 - on `org.freedesktop.portal.Desktop`, talk and any call rule that doesn't name an interface, and the RemoteDesktop and
   ScreenCast interfaces: their sessions persist (below);
-- on the session bus, `own` of anything but the sandbox's app ID (`com.nixpak.ClaudeDesktop[.<name>]`), the names below
+- on the session bus, `own` of anything but the sandbox's app ID (`com.anthropic.Claude[.<name>]`), the names below
   it whose next element doesn't start with a lowercase letter (lowercase ones are how launchers' app IDs are made, so
   the default launcher can't take a named one's), and the tray's `org.freedesktop.StatusNotifierItem-<pid>-<n>`, as
   Flatpak limits apps to their app ID: owning a host program's name makes host programs send the sandbox what they

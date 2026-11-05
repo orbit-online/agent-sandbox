@@ -224,7 +224,7 @@ let
         return workstation.succeed(f"echo {pid}").strip()
 
     # The info of a running sandbox's bwrap, found by its app ID: the work launcher's lies next to the default one's
-    def bwrap_info(app_id="com.nixpak.ClaudeDesktop"):
+    def bwrap_info(app_id="com.anthropic.Claude"):
         d = workstation.succeed(f"grep -lx name={app_id} /run/user/1000/.flatpak/nixpak-app-*/info").split()[-1]
         return json.loads(workstation.succeed(f"cat {d.removesuffix('/info')}/bwrapinfo.json"))
 

@@ -121,7 +121,7 @@ start() {
 # running sandbox's lookup, which would hand the flag to the app
 if [[ ${1:-} == --permissions ]]; then
   [[ -n $PERMISSIONS_CONFIG ]] || { echo "claude-desktop: This launcher has no permissions broker" >&2; exit 1; }
-  exec "$PERMISSIONS_WINDOW" "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR-control.sock" "$PERMISSIONS_TITLE"
+  exec "$PERMISSIONS_WINDOW" --app-id="$APP_ID" "$XDG_RUNTIME_DIR/claude-desktop/$PERMISSIONS_DIR-control.sock" "$PERMISSIONS_TITLE"
 fi
 
 # --shell (the .desktop file's terminal action): a login shell where the app runs, so it gets the Code tab's environment

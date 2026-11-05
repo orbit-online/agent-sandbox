@@ -14,12 +14,16 @@ import (
 const usage = `permissions-window - The Permissions window of a sandbox's permissions broker
 
 Usage:
-  permissions-window <control-socket> [<title>]
+  permissions-window --app-id=<id> <control-socket> [<title>]
 
 A client of the broker's control.sock (docs/permissions.md): shows pending
 requests to answer, what the configuration gives the sandbox (read-only), live
 grants to revoke and the recent decisions, and refreshes on the broker's watch
 events. Without a running broker it says so.
+
+Options:
+  --app-id=<id>  The window's Wayland app ID and X11 WM_CLASS: the sandbox's
+                 app ID, so the window shows under its launcher's .desktop file
 `
 
 func main() {
@@ -41,7 +45,8 @@ func main() {
 	}
 	qmlPath := filepath.Join(filepath.Dir(exe), "../share/permissions-window/Main.qml")
 	qt.NewQGuiApplication(os.Args)
-	qt.QGuiApplication_SetDesktopFileName("claude-permissions")
+	appID, _ := opts.String("--app-id")
+	qt.QGuiApplication_SetDesktopFileName(appID)
 	engine, _ := load(&window{socket: socket}, title, qmlPath, func(w string) { slog.Warn("QML", "warning", w) })
 	if len(engine.RootObjects()) == 0 {
 		slog.Error("The window didn't load")

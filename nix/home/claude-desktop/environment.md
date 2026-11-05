@@ -68,8 +68,8 @@ whole sandbox's and lasts its lease (an hour unless you ask otherwise);
 release it when you're done.
 
 - Own PID, user, UTS and IPC namespaces (pid 1 is `bwrap`), new session.
-  Portals see the app as Flatpak `com.nixpak.ClaudeDesktop`, or
-  `com.nixpak.ClaudeDesktop.<name>` for a named launcher (nixpak's
+  Portals see the app as Flatpak `com.anthropic.Claude`, or
+  `com.anthropic.Claude.<name>` for a named launcher (nixpak's
   `/.flatpak-info`, which the FHS env's inner bwrap doesn't bind).
 - Session D-Bus goes through a filtering proxy on the host (the module's
   `dbus-proxy`, started by nixpak in place of xdg-dbus-proxy), which lets through

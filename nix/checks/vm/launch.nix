@@ -120,7 +120,7 @@
       in_sandbox("xdg-open https://example.test/from-the-sandbox")
       workstation.wait_until_succeeds("grep -q from-the-sandbox /run/user/1000/fake-portal-uris", timeout=30)
       opened = json.loads(workstation.succeed("grep from-the-sandbox /run/user/1000/fake-portal-uris"))
-      assert opened["app"] == "com.nixpak.ClaudeDesktop", f"the portal saw the caller as {opened}"
+      assert opened["app"] == "com.anthropic.Claude", f"the portal saw the caller as {opened}"
       # A method of an allowed name that no rule lists
       status, out = bus_call("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
                              "org.freedesktop.portal.OpenURI.SchemeSupported", "https", "@a{sv} {}")

@@ -1007,7 +1007,7 @@ in
           [[ $(ls $work/bin) == claude-desktop-work ]] || { echo "work has more than its wrapper: $(ls $work/bin)" >&2; exit 1; }
           wrapper=$(readlink -f $work/bin/claude-desktop-work)
           for line in \
-            "readonly APP_ID=com.nixpak.ClaudeDesktop.work" \
+            "readonly APP_ID=com.anthropic.Claude.work" \
             "HOME_DIRS=(/home/alice/.local/share/claude-desktop-work/home)" \
             "readonly STORE_ROOTS_LINK=store-roots-work"; do
             grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
@@ -1075,14 +1075,15 @@ in
           ! jq -e 'any(.[]; . == "/run/permissions")' "$args" >/dev/null || { echo "the default launcher binds /run/permissions" >&2; exit 1; }
           grep -qxF "readonly PERMISSIONS_DIR=permissions-work" "$wrapper" || { echo "work's wrapper lacks PERMISSIONS_DIR" >&2; exit 1; }
           pcfg=$(grep -oP '^readonly PERMISSIONS_CONFIG=\K/nix/store/\S+' "$wrapper") || { echo "work's wrapper lacks the broker's config" >&2; exit 1; }
-          jq -e '.appId == "com.nixpak.ClaudeDesktop.work" and .launcher == "work"
+          jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work"
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .unit == "claude-desktop-work-permissions.service"
             and .slice == "claude\\x2ddesktop\\x2dwork.slice"
             and .sandboxGrantDir == "/run/permissions"
-            and .window[1] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
-            and .window[2] == "Claude permissions (work)"
+            and .window[1] == "--app-id=com.anthropic.Claude.work"
+            and .window[2] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
+            and .window[3] == "Claude permissions (work)"
             and .denied == ["/home/alice/.local/share/claude-desktop", "/home/alice/.local/share/claude-desktop-work",
               "${"$"}{XDG_RUNTIME_DIR}"]
             and .folders == [{path: "/srv/notes", rw: false}] and (has("plugins") | not)
@@ -1132,16 +1133,16 @@ in
             grep -qaF "\"desktopName\": \"$id.desktop\"" "$(grep -- '-claude-desktop-app\.asar$' "$c")" ||
               { echo "$bin's asar lacks the desktopName $id.desktop" >&2; exit 1; }
           }
-          same_id ${sandboxed} claude-desktop "$paths" com.nixpak.ClaudeDesktop
-          same_id $work claude-desktop-work "$workClosure/store-paths" com.nixpak.ClaudeDesktop.work
+          same_id ${sandboxed} claude-desktop "$paths" com.anthropic.Claude
+          same_id $work claude-desktop-work "$workClosure/store-paths" com.anthropic.Claude.work
           # The default launcher keeps the claude:// handler and upstream's actions, and lacks the Permissions action
-          d=${sandboxed}/share/applications/com.nixpak.ClaudeDesktop.desktop
+          d=${sandboxed}/share/applications/com.anthropic.Claude.desktop
           for line in 'Name=Claude' 'Exec=claude-desktop %U' 'Name=New chat' 'Name=New shell'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
           done
           grep -q '^MimeType=x-scheme-handler/claude' "$d" || { echo "$d lacks the claude:// handler" >&2; exit 1; }
           ! grep -q '^Name=Permissions$' "$d" || { echo "the default launcher has the Permissions action" >&2; exit 1; }
-          d=$work/share/applications/com.nixpak.ClaudeDesktop.work.desktop
+          d=$work/share/applications/com.anthropic.Claude.work.desktop
           for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Exec=claude-desktop-work claude://claude.ai/new' 'Name=New shell' 'Name=Permissions'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
           done

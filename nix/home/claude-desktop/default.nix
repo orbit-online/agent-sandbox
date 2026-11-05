@@ -811,9 +811,10 @@ let
     let
       suffix = suffixOf name;
       # The sandbox's app ID: the proxy's /.flatpak-info names the app by it to the portals, and the wrapper finds its
-      # running sandbox by it. It names the launcher's .desktop file and its windows' app ID too: gnome-shell drops a
-      # portal notification unless <app ID>.desktop exists
-      appId = "com.nixpak.ClaudeDesktop${lib.optionalString (name != null) ".${name}"}";
+      # running sandbox by it. It names the launcher's .desktop file and its windows' app ID too, the Permissions
+      # window's included: gnome-shell drops a portal notification unless <app ID>.desktop exists. The default
+      # launcher's is upstream's, so its .desktop file keeps upstream's name; a launcher's name is a valid last element
+      appId = "com.anthropic.Claude${lib.optionalString (name != null) ".${name}"}";
       desktopFile = "${appId}.desktop";
       stateDir = stateDirOf name;
       appPid = appPidOf name;
@@ -1173,6 +1174,7 @@ let
           sandboxGrantDir = "/run/permissions";
           window = [
             (lib.getExe permissionsWindow)
+            "--app-id=${appId}"
             "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock"
             permissionsTitle
           ];

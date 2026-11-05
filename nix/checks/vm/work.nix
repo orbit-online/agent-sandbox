@@ -38,8 +38,8 @@
       # The portal names a notification's app by the caller's /.flatpak-info, and gnome-shell drops it unless
       # <app>.desktop exists; that file's StartupWMClass puts the app's windows under it
       apps = "/etc/profiles/per-user/alice/share/applications"
-      for run, launcher, app_id in [(in_sandbox, "default", "com.nixpak.ClaudeDesktop"),
-                                    (in_work, "work", "com.nixpak.ClaudeDesktop.work")]:
+      for run, launcher, app_id in [(in_sandbox, "default", "com.anthropic.Claude"),
+                                    (in_work, "work", "com.anthropic.Claude.work")]:
           run(f"notify-send hello-from-{launcher}")
           workstation.wait_until_succeeds(f"grep -q hello-from-{launcher} /run/user/1000/fake-portal-notifications", timeout=30)
           sent = json.loads(workstation.succeed(f"grep hello-from-{launcher} /run/user/1000/fake-portal-notifications"))
@@ -65,7 +65,7 @@
       # The unit's main process, nixpak's launcher, in supervisor/; bwrap's child and the app in sandbox/app/
       assert main_pid("claude-desktop-work-app") in procs("supervisor/")
       sandbox_procs = procs("sandbox/app/")
-      assert str(bwrap_info("com.nixpak.ClaudeDesktop.work")["child-pid"]) in sandbox_procs, sandbox_procs
+      assert str(bwrap_info("com.anthropic.Claude.work")["child-pid"]) in sandbox_procs, sandbox_procs
       app = next(p for p in sandbox_procs
                  if workstation.execute(f"tr '\\0' ' ' </proc/{p}/cmdline")[1].endswith("/sleep infinity "))
       # With the variable of the unit that ran the launcher
@@ -147,7 +147,7 @@
           "systemctl --user -M alice@ show -p StartLimitBurst -p StartLimitIntervalUSec claude-desktop-work-permissions"
       ).split()
       assert sorted(limit) == ["StartLimitBurst=3", "StartLimitIntervalUSec=10min"], f"start limit {limit}"
-      work_pid = bwrap_info("com.nixpak.ClaudeDesktop.work")["child-pid"]
+      work_pid = bwrap_info("com.anthropic.Claude.work")["child-pid"]
       m1 = [l for l in workstation.succeed(f"cat /proc/{work_pid}/mountinfo").splitlines() if " /run/permissions " in l]
       assert len(m1) == 1 and " shared:" in m1[0], f"/run/permissions in M1: {m1}"
       m2 = [l for l in in_work("cat /proc/self/mountinfo").splitlines() if " /run/permissions " in l]
@@ -284,9 +284,17 @@
       assert status != 0, "the work sandbox has a system bus socket"
 
       # The Permissions window starts on the host against the running daemon, its Qt kept from the host's plugins.
-      # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds
-      as_alice("/run/current-system/sw/bin/sh -c 'QT_QPA_PLATFORM=offscreen timeout 5 /etc/profiles/per-user/alice/bin/claude-desktop-work"
-               " --permissions; [ $? = 124 ]'")
+      # Offscreen, as the VM has no compositor alice could show it on: still up after five seconds. Its app ID, the
+      # Wayland app_id and WM_CLASS it takes, is the launcher's, so it shows under the launcher's .desktop file
+      workstation.succeed("systemd-run --user -M alice@ --unit permissions-window -E QT_QPA_PLATFORM=offscreen --"
+                          " /run/current-system/sw/bin/timeout 5 /etc/profiles/per-user/alice/bin/claude-desktop-work --permissions")
+      window_args = workstation.wait_until_succeeds(
+          "for p in /proc/[0-9]*; do case $(readlink $p/exe) in */bin/.permissions-window-wrapped)"
+          " tr '\\0' '\\n' <$p/cmdline; exit 0;; esac; done; exit 1", timeout=30).splitlines()
+      assert "--app-id=com.anthropic.Claude.work" in window_args, window_args
+      workstation.wait_until_fails("systemctl --user -M alice@ is-active permissions-window", timeout=30)
+      status = workstation.succeed("systemctl --user -M alice@ show -P ExecMainStatus permissions-window").strip()
+      assert status == "124", f"the Permissions window ended before its timeout: {status}"
 
   with subtest("The work sandbox ends with its unit"):
       workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-work-app")

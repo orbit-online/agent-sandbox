@@ -12,10 +12,12 @@ single-user Nix store, and an environment doc for the Claude running inside.
   launcher; `launchers.<name>` adds sandboxes next to it with the same
   options, each built by `launcher` from the module's defaults alone, with its
   own state dir, app ID, MAC and `claude-desktop-<name>`. The app ID,
-  `com.nixpak.ClaudeDesktop[.<name>]`, also names the launcher's `.desktop`
-  file, its `StartupWMClass` and the asar's `desktopName` (its windows' app
-  ID): the portal names the app's notifications by the app ID, and gnome-shell
-  drops them unless a `.desktop` file of that name exists. Each runs its
+  `com.anthropic.Claude[.<name>]`, also names the launcher's `.desktop`
+  file, its `StartupWMClass`, the asar's `desktopName` (its windows' app
+  ID) and the Permissions window's `--app-id`: the portal names the app's
+  notifications by the app ID, and gnome-shell drops them unless a `.desktop`
+  file of that name exists. The default launcher's is upstream's, so its
+  `.desktop` file keeps upstream's name and stands in for upstream's. Each runs its
   sandbox as a unit in a slice of its own, `claude\x2ddesktop[\x2d<name>].slice`
   (escaped, as a `-` nests one slice in another): `claude-desktop.sh` prepares
   the state where the caller sees a refusal, then starts `app-unit.sh` as
@@ -256,7 +258,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   ID in the wrapper and `/.flatpak-info`, which names their only `.desktop`
   file, its `StartupWMClass` and the `desktopName` their asar gets; the
   default launcher's `.desktop` file keeps the `claude://` handler and
-  upstream's actions, and lacks the Permissions action.
+  upstream's actions, and lacks the Permissions action. For `work`, the
+  Permissions window's `--app-id` in its broker's config.
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace, and the user namespace chain: a netns two user namespaces down
@@ -517,7 +520,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   beneath it refused; a SIGKILL of the daemon closing its connections and ending its
   folder grant, the standing grants alone back under new ids after its restart, the overview in its state, no
   system bus socket inside, the Permissions window
-  staying up against it, the state machine tests run live (below), the daemon ending with the
+  staying up against it with the launcher's app ID as its `--app-id`, the state machine tests run live (below), the daemon ending with the
   sandbox; its cgroups: the app's unit delegated, nothing in its root or in `sandbox/`, nixpak's launcher in
   `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
   launcher's in a unit and slice of its own, the broker and a host command call units in the
