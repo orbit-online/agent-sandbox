@@ -67,6 +67,13 @@ let
     launchers.work.binds."/srv/work".rw = true;
   };
   system = nixos enabled;
+  launcherNameMax = lib.toInt (
+    builtins.head (
+      builtins.match ".*\nconst launcherNameMax = ([0-9]+)\n.*" (
+        builtins.readFile ../../cmd/permissions-broker/socketpath_test.go
+      )
+    )
+  );
   alice = system.config.home-manager.users.alice;
   failedAssertions = sys: lib.filter (a: !a.assertion) sys.config.home-manager.users.alice.assertions;
   # alice's programs.mcp set to `mcp`
@@ -374,19 +381,20 @@ let
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
       expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
     };
-    # At the cap on a launcher name's length, and past it
+    # At the cap on a launcher name's length, and past it. The cap is the Go test's, which binds the broker's sockets
+    # at it, so the module's has to agree
     testLauncherNameMax = {
-      expr = failedAssertions (nixos (enabled // { launchers.${lib.fixedWidthString 47 "a" "w"} = { }; }));
+      expr = failedAssertions (nixos (enabled // { launchers.${lib.fixedWidthString launcherNameMax "a" "w"} = { }; }));
       expected = [ ];
     };
     testLauncherNameTooLong =
       let
-        name = lib.fixedWidthString 48 "a" "w";
+        name = lib.fixedWidthString (launcherNameMax + 1) "a" "w";
       in
       {
         expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.${name} = { }; })));
         expected = [
-          "agent-sandbox.claude-desktop: launcher name ${name} must be at most 47 characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 108 bytes"
+          "agent-sandbox.claude-desktop: launcher name ${name} must be at most ${toString launcherNameMax} characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 107 bytes and its NUL"
         ];
       };
     testLauncherNetnsAssertion = {
