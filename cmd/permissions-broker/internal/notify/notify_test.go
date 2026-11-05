@@ -22,6 +22,7 @@ type fakeNotifications struct {
 	last   uint32
 	shown  map[uint32][]string // id: the actions, key then label
 	bodies map[uint32]string
+	sums   map[uint32]string
 	posted chan uint32
 }
 
@@ -42,6 +43,7 @@ func (f *fakeNotifications) Notify(app string, replaces uint32, icon, summary, b
 	}
 	f.shown[id] = actions
 	f.bodies[id] = body
+	f.sums[id] = summary
 	select {
 	case f.posted <- id:
 	default:
@@ -125,7 +127,7 @@ func testBus(t *testing.T) (string, *fakeNotifications) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	f := &fakeNotifications{conn: busConn(t, addr), name: "fake", shown: map[uint32][]string{},
-		bodies: map[uint32]string{}, posted: make(chan uint32, 8)}
+		bodies: map[uint32]string{}, sums: map[uint32]string{}, posted: make(chan uint32, 8)}
 	if err := f.conn.Export(f, notifyPath, notifyIface); err != nil {
 		t.Fatal(err)
 	}
@@ -284,18 +286,22 @@ func TestNotificationDefaultGuards(t *testing.T) {
 	}
 }
 
-// A host command's notification says, ahead of the reason, what the grant covers, for how long and where: the scope,
-// the lease and the bounding values by their descriptions. The lease is said in hours and minutes
+// A host command's notification says what Claude wants to do and for how long in its summary, and what the grant
+// covers ahead of the reason. The lease is said in hours and minutes
 func TestNotificationCovers(t *testing.T) {
 	addr, f := testBus(t)
-	id, _ := askWith(t, addr, f, Prompt{Summary: "the VM", Reason: "testing", Lease: "PT1H30M",
-		Scope: "Run PowerShell: any PowerShell, unrestricted (exec).", Bounds: `the VM is "win11"`})
+	id, _ := askWith(t, addr, f, Prompt{Summary: `control the VM "win<11>"`, Reason: "testing", Lease: "PT1H30M",
+		Scope: "⚠ Run any PowerShell; Take screenshots"})
 	f.mu.Lock()
-	body := f.bodies[id]
+	summary, body := f.sums[id], f.bodies[id]
 	f.mu.Unlock()
-	want := `Covers, for 1 h 30 min, where the VM is "win11": Run PowerShell: any PowerShell, unrestricted (exec).` +
-		"\nClaude's reason"
-	if !strings.HasPrefix(body, want) {
+	if want := `Claude wants to control the VM "win&lt;11&gt;" for 1 h 30 min`; summary != want {
+		t.Errorf("Summary %q", summary)
+	}
+	if want := "For 1 h 30 min: ⚠ Run any PowerShell; Take screenshots\nClaude's reason"; !strings.HasPrefix(body, want) {
+		t.Errorf("Body %q", body)
+	}
+	if _, body := Text(Prompt{Summary: "x", Lease: "lock", Scope: "Take screenshots", Bounds: `vm "a", n 1`}, ""); !strings.HasPrefix(body, `On vm "a", n 1 until the screen locks: Take screenshots`+"\n") {
 		t.Errorf("Body %q", body)
 	}
 	if f.key(id, "Allow for 1 h 30 min") == "" {

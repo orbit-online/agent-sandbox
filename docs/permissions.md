@@ -219,11 +219,13 @@ is granted and declared in the launcher's `permissions` options:
 ### Declared host commands
 
 A capability groups commands that one grant covers. It declares its bounding arguments; each command declares its free
-arguments, its result type and what it runs:
+arguments, its result type and what it runs. Descriptions are for Claude (the MCP tools'); the consent texts are for
+the user:
 
 ```nix
 permissions.commands.windows-vm = {
   description = "Control a running Windows VM";
+  consent.title = "control the Windows VM";
   bounding.vm = {
     description = "the VM";
     instances = "$XDG_RUNTIME_DIR/windows-vm/*/qmp-agent.sock";
@@ -232,11 +234,13 @@ permissions.commands.windows-vm = {
   commands = {
     screenshot = {
       description = "Take a screenshot of the VM's screen";
+      consent = "Take screenshots";
       result = "image/png";
       run = [ "${windows-vm}/bin/windows-vm" "screenshot" ];
     };
     click = {
       description = "Click at a position on the screen";
+      consent = "Click on the screen";
       arguments = {
         x = { type = "integer"; minimum = 0; maximum = 7679; description = "column, in pixels"; };
         y = { type = "integer"; minimum = 0; maximum = 4319; description = "row, in pixels"; };
@@ -245,6 +249,7 @@ permissions.commands.windows-vm = {
     };
     exec = {
       description = "Run PowerShell in the guest";
+      consent = "Run any PowerShell, up to system level";
       arguments.script = {
         type = "string"; multiline = true; maxLength = 65536;
         description = "any PowerShell, run as SYSTEM";
@@ -271,6 +276,10 @@ permissions.commands.windows-vm = {
   (at most 767 significant digits, from about 4.9e-324 to 1.8e308), and bounds the exact arithmetic the broker does
   on it (`1e-9999999` would cost hours). Bounding arguments are scalars on one line: no arrays, no `multiline`,
   as the summary quotes them.
+- `consent.title` completes "Claude wants to …" in the notification ("control the Windows VM"), and each command's
+  `consent` says what it lets Claude do (Consent, below). Both are plain words for someone who isn't technical, without
+  ranges or limits ("Take screenshots", not "Take screenshots of screens 0–15"): those are in the window's Details,
+  from the schemas. Each is required, one line of at most 80 characters.
 - `result` is `text` (the default) or an image MIME type.
 - `maxValidity` (optional) caps the validity the command is told (below), for commands that issue credentials.
 - `exclusive` (optional): an instance may be granted to one launcher at a time. The daemons share lock files in
@@ -281,7 +290,8 @@ permissions.commands.windows-vm = {
   for an instance another launcher holds is refused, naming it.
 
 The module checks at eval time what it can: names fit MCP's tool names (`<capability>_<command>`, at most 64 characters
-of `[A-Za-z0-9_-]`), every argument is described, no argument is named `reason` or `lease` (the broker adds those),
+of `[A-Za-z0-9_-]`), every argument is described, the capability has `consent.title` and every command `consent`, each
+one line of at most 80 characters, no argument is named `reason` or `lease` (the broker adds those),
 `run` is a list. The daemon checks the rest at start and doesn't start on a config error.
 
 A plugin is now a Nix module that sets such a declaration with its package's scripts in `run`. Nothing of it runs on
@@ -325,7 +335,7 @@ The broker stops at the grant and the schema. The rest is the script's, and it r
 keeps one safe:
 
 - Fix in the script, or in a bounding argument, everything that bounds access. Leave free only what the consent can
-  say plainly: "any text typed", "any PowerShell as SYSTEM".
+  say plainly: "Type any text", "Run any PowerShell".
 - Read arguments from stdin with a JSON parser and pass each as one argv element of what it runs. Never `eval`,
   `sh -c` or string interpolation into a command line; put `--` before arguments that could start with `-`.
 - Prefer enums and bounded integers to strings, and a fixed set of operations to a general one. Raw protocol access
@@ -756,15 +766,24 @@ grant has only its lease to change: its bounding values are what the call needs.
 no buttons and otherwise answers a body click with the first action; when `GetServerInformation` names that server and
 a window is configured, `default` opens the window on the request instead, and the body says so.
 
-A grant of a host command capability covers all its commands. The summary names the capability, its bounding values and
-the lease ("Claude wants to control the Windows VM win11 for 1 hour"). The body starts with what that covers, for how
-long and on which bounding values, before the reason: unrestricted free arguments first, each said to be
-unrestricted, then the others with what their declaration allows, from the declaration's descriptions ("Covers, for
-1 h, where the VM is "win11": Run PowerShell in the guest: any PowerShell, run as SYSTEM, unrestricted (exec). Click
-at a position on the screen: column, in pixels, a number within 0–7679 (click). ..."). An enum of more than 8 values
-reads as a count ("one of 161 values"); the window lists them in a grant's details. Leases read as "1 h 30 min". Summaries are one line and servers may cut them, so nothing the user
-must see goes only there. A declaration with an undescribed free argument is a config error. The window shows the
-same, with the call that asked.
+A grant of a host command capability covers all its commands. The consent says so in the declaration's words for the
+user, not the descriptions written for Claude. The summary is the capability's `consent.title`, its bounding values
+and the lease: `Claude wants to control the Windows VM "windows-vm" for 10 min`. The values are quoted, alone, or
+with several bounding arguments each after its name (`vm "win11", screen 0`); opaque ones by digest. The body starts
+with what a grant covers, before the reason: the bounding values and the lease again, then the commands' `consent`
+phrases joined by `; `, those of commands with an unrestricted free argument first, each marked ⚠ (`On "windows-vm"
+for 10 min: ⚠ Run any PowerShell, up to system level; ⚠ Use the keyboard and type any text; Click on the screen;
+Take screenshots`; without bounding arguments, `For 10 min: ...`). The values come from the sandbox's request, and a
+long one pushes the lease and the rest of the value out of a summary a server cuts, so the body repeats them whole.
+Commands with the same
+phrase share it: it appears once, marked if any of them is unrestricted, so related commands (windows-vm's `keys` and
+`type`) can read as one thing the user allows. Whether a command is unrestricted the broker derives from its schemas (a
+free string with no enum or pattern), never from the phrase. Leases read as "1 h 30 min". A declaration without a
+title or a command without its phrase is a config error, as is an undescribed argument.
+
+The window shows the same, with the call that asked. `state` carries, per host command capability, `title`,
+`consent` (each line's phrase, `commands` and `unrestricted`) and `scope` (the details, a free argument each). Summaries are one line and
+servers may cut them, so nothing the user must see goes only there.
 
 The sandbox can post notifications too, through the notification portal (`org.freedesktop.portal.Notification`; the
 proxy doesn't let it reach `org.freedesktop.Notifications`), with any title, body and buttons. A look-alike's

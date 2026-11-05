@@ -221,17 +221,17 @@ func (w *world) script(name, body string) []string {
 func (w *world) capabilities() map[string]*capability {
 	glob := filepath.Join(w.dir, "instances", "*", "console.sock")
 	name := json.RawMessage(fmt.Sprintf(declVMName, glob))
-	vm := &capability{Name: capVM, Type: "command", Description: "a VM", Exclusive: true,
+	vm := &capability{Name: capVM, Type: "command", Description: "a VM", Title: "use a VM", Exclusive: true,
 		Params:   map[string]json.RawMessage{"name": name, "ro": json.RawMessage(declRO)},
-		Commands: map[string]*hostcmd.Command{"start": {Description: "start it", Run: w.script("start", "cat")}}}
+		Commands: map[string]*hostcmd.Command{"start": {Description: "start it", Consent: "Start it", Run: w.script("start", "cat")}}}
 	console := &capability{Name: capConsole, Type: "socket", Description: "a VM's console",
 		Params: map[string]json.RawMessage{"name": name}}
-	token := &capability{Name: capToken, Type: "command", Description: "a token",
+	token := &capability{Name: capToken, Type: "command", Description: "a token", Title: "get a token",
 		Params: map[string]json.RawMessage{"scope": json.RawMessage(declScope), "csr": json.RawMessage(declCSR),
 			"slot": json.RawMessage(declSlot)},
 		Commands: map[string]*hostcmd.Command{
-			"issue": {Description: "issue one", Run: w.script("run", "cat"), MaxValidity: "PT30M"},
-			"sign": {Description: "sign something", Run: w.script("sign", "cat"), MaxValidity: "PT30M",
+			"issue": {Description: "issue one", Consent: "Issue one", Run: w.script("run", "cat"), MaxValidity: "PT30M"},
+			"sign": {Description: "sign something", Consent: "Sign anything", Run: w.script("sign", "cat"), MaxValidity: "PT30M",
 				Arguments: rawArgs(signArgs)},
 		}}
 	caps := map[string]*capability{}

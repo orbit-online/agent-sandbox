@@ -121,8 +121,9 @@ func testCap(t *testing.T, typ string) *capability {
 	if typ == "command" {
 		// A host command printing its input, so tests see the validity it was given
 		fakeSystemd(t)
-		c.Commands = map[string]*hostcmd.Command{"run": {Description: "print the input", Run: script("run", "cat"),
-			MaxValidity: "PT8H"}}
+		c.Title = "use the test thing"
+		c.Commands = map[string]*hostcmd.Command{"run": {Description: "print the input", Consent: "Print what it gets",
+			Run: script("run", "cat"), MaxValidity: "PT8H"}}
 	}
 	if err := c.check(); err != nil {
 		t.Fatal(err)

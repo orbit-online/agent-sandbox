@@ -163,9 +163,14 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool, a
 // asked checks the question the user was asked (P7: the daemon's summary, the reason folded) and notes it pending
 func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, v verdict, done chan response) {
 	tag, _, _ := strings.Cut(req.Reason, ":")
-	desc := mc.caps[req.Capability].Description
+	c := mc.caps[req.Capability]
+	// A host command capability's summary is its consent title and the bounding values, without parentheses
+	desc, open := c.Description, " ("
+	if c.Type == "command" {
+		desc, open = c.Title, " "
+	}
 	// A capability without parameters is its description alone
-	named := strings.HasPrefix(call.p.Summary, desc+" (") || len(v.vals) == 0 && call.p.Summary == desc ||
+	named := strings.HasPrefix(call.p.Summary, desc+open) || len(v.vals) == 0 && call.p.Summary == desc ||
 		req.Capability == capFolder && strings.HasPrefix(call.p.Summary, desc)
 	leaked := strings.HasPrefix(tag, "why") && strings.Contains(call.p.Summary, tag)
 	if call.p.Reason != oracleReason(req.Reason) || !named || leaked || call.p.Lease != v.lease || !call.p.Options {

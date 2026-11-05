@@ -19,8 +19,10 @@ type capability struct {
 	Name        string
 	Type        string
 	Description string
-	Params      map[string]json.RawMessage
-	Exclusive   bool
+	// Host commands: the consent's title, for the user
+	Title     string
+	Params    map[string]json.RawMessage
+	Exclusive bool
 	// Host commands: by name
 	Commands map[string]*hostcmd.Command
 	// Folders: the ceiling, what may be granted at all
@@ -98,8 +100,15 @@ func (c *capability) validate(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(params) // maps marshal with sorted keys
 }
 
-// describe is the notification's summary of a validated request, built from its parameters, not from the reason
+// describe is the notification's summary of a validated request, built from its parameters, not from the reason. A
+// host command capability's is its title and the bounding values, which the notification puts after "Claude wants to"
 func (c *capability) describe(params json.RawMessage) string {
+	if c.Type == "command" {
+		if v := c.boundValues(params); v != "" {
+			return c.Title + " " + v
+		}
+		return c.Title
+	}
 	var m map[string]any
 	_ = json.Unmarshal(params, &m)
 	keys := make([]string, 0, len(m))

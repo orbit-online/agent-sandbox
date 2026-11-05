@@ -32,7 +32,7 @@ func TestConsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Not granted when the user allowed: %v", err)
 	}
-	if f.asked[1].Summary != `the test thing (path="/a")` || f.asked[1].Reason != "testing" {
+	if f.asked[1].Summary != `use the test thing "/a"` || f.asked[1].Reason != "testing" {
 		t.Errorf("Asked %+v", f.asked[1])
 	}
 	// The window shows the grant with the reason it was allowed for
@@ -272,8 +272,8 @@ func TestPendingCall(t *testing.T) {
 	p := <-seen
 	var got map[string]string
 	_ = json.Unmarshal(p.Arguments, &got)
-	if p.Command != "run" || got["script"] != script || got["csr"] != schema.OpaqueDigest(csr) || p.Scope != hostcmd.Scope(c.Commands) {
-		t.Errorf("Pending %s %v, scope %q", p.Command, got, p.Scope)
+	if p.Command != "run" || got["script"] != script || got["csr"] != schema.OpaqueDigest(csr) {
+		t.Errorf("Pending %s %v", p.Command, got)
 	}
 }
 
@@ -283,7 +283,7 @@ func TestNotificationText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := c.describe(params); d != `the test thing (path="/a, ro=true")` {
+	if d := c.describe(params); d != `use the test thing "/a, ro=true"` {
 		t.Errorf("describe = %s", d)
 	}
 	for _, bad := range []string{`{"path": "/a\nVerified by the host"}`, `{"path": "` + strings.Repeat("x", maxParam+1) + `"}`} {
@@ -305,10 +305,10 @@ func TestNotificationText(t *testing.T) {
 // is slot -0 (found by the state machine's generated parameters)
 func TestCoveredByValue(t *testing.T) {
 	b, f := testBroker(t, "allow")
-	c := &capability{Name: "token", Type: "command", Description: "a token",
+	c := &capability{Name: "token", Type: "command", Description: "a token", Title: "get a token",
 		Params: map[string]json.RawMessage{"scope": json.RawMessage(`{"type": "string", "description": "its scope"}`),
 			"slot": json.RawMessage(`{"type": "integer", "minimum": 0, "maximum": 9, "description": "a slot"}`)},
-		Commands: map[string]*hostcmd.Command{"issue": {Description: "issue one", Run: []string{"true"}}}}
+		Commands: map[string]*hostcmd.Command{"issue": {Description: "issue one", Consent: "Issue one", Run: []string{"true"}}}}
 	if err := c.check(); err != nil {
 		t.Fatal(err)
 	}

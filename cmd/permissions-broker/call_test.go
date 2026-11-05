@@ -58,7 +58,7 @@ func TestCallChecksFirst(t *testing.T) {
 		t.Errorf("A valid call: %v, asked %d times", err, f.count())
 	}
 	// The user was told what the grant covers
-	if f.asked[0].Scope != hostcmd.Scope(c.Commands) || f.asked[0].Lease != defaultLease {
+	if f.asked[0].Scope != hostcmd.Covers(c.Commands) || f.asked[0].Lease != defaultLease {
 		t.Errorf("Asked %+v", f.asked[0])
 	}
 }

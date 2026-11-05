@@ -85,23 +85,28 @@ let
   # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
   commandsOf =
     withRun: lcfg:
-    lib.mapAttrsToList (name: c: {
-      inherit name;
-      inherit (c) description bounding exclusive;
-      commands = lib.mapAttrs (
-        _: cmd:
-        {
-          inherit (cmd)
-            description
-            arguments
-            result
-            timeout
-            ;
-        }
-        // lib.optionalAttrs (cmd.maxValidity != null) { inherit (cmd) maxValidity; }
-        // lib.optionalAttrs withRun { inherit (cmd) run; }
-      ) c.commands;
-    }) lcfg.permissions.commands;
+    lib.mapAttrsToList (
+      name: c:
+      {
+        inherit name;
+        inherit (c) description bounding exclusive;
+        commands = lib.mapAttrs (
+          _: cmd:
+          {
+            inherit (cmd)
+              description
+              arguments
+              result
+              timeout
+              ;
+          }
+          // lib.optionalAttrs (cmd.maxValidity != null) { inherit (cmd) maxValidity; }
+          // lib.optionalAttrs withRun { inherit (cmd) run consent; }
+        ) c.commands;
+      }
+      # The consent, in the user's words, is the broker's alone
+      // lib.optionalAttrs withRun { inherit (c) consent; }
+    ) lcfg.permissions.commands;
   # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
   bwrapSubid =
     vars:
@@ -520,7 +525,16 @@ let
             options = {
               description = mkOption {
                 type = types.str;
-                description = "What a grant of the capability lets Claude do, for the consent.";
+                description = "What a grant of the capability lets Claude do, for Claude: the MCP tools' descriptions name it.";
+              };
+              consent.title = mkOption {
+                type = types.str;
+                default = "";
+                example = "control the Windows VM";
+                description = ''
+                  For the user: a short phrase completing "Claude wants to …", which the notification follows with the
+                  bounding values and the lease. Required, one line of at most 80 characters.
+                '';
               };
               bounding = mkOption {
                 type = types.attrsOf (pkgs.formats.json { }).type;
@@ -541,7 +555,18 @@ let
                     options = {
                       description = mkOption {
                         type = types.str;
-                        description = "What the command does.";
+                        description = "What the command does, for Claude: its MCP tool's description.";
+                      };
+                      consent = mkOption {
+                        type = types.str;
+                        default = "";
+                        example = "Take screenshots";
+                        description = ''
+                          For the user: what the command lets Claude do, in plain words for someone non-technical,
+                          without ranges ("Take screenshots"). The consent shows it a line, commands with the same
+                          phrase on one line, marked unrestricted when a free argument takes any text. Required, one
+                          line of at most 80 characters.
+                        '';
                       };
                       arguments = mkOption {
                         type = types.attrsOf (pkgs.formats.json { }).type;
@@ -1701,11 +1726,21 @@ in
                 named = n: builtins.match "[A-Za-z0-9-]+" n != null;
                 described = args: lib.all (a: a.description or "" != "") (lib.attrValues args);
                 reserved = args: lib.any (n: args ? ${n}) [ "reason" "lease" ];
+                # A phrase the consent shows: one line of at most 80 characters, not blank
+                phrase =
+                  p:
+                  builtins.match "[[:space:]]*" p == null
+                  && builtins.match ".*[[:cntrl:]].*" p == null
+                  && lib.stringLength p <= 80;
               in
               [
                 {
                   assertion = named cname && c.commands != { };
                   message = "${copt}: a name of letters, digits and -, and at least one command";
+                }
+                {
+                  assertion = phrase c.consent.title;
+                  message = "${copt}: consent.title, for the user, one line of at most 80 characters";
                 }
                 {
                   assertion =
@@ -1715,6 +1750,10 @@ in
                   message = "${copt}: every bounding argument needs a description, none may be named reason or lease, and none may be an array or multiline";
                 }
               ]
+              ++ lib.mapAttrsToList (n: cmd: {
+                assertion = phrase cmd.consent;
+                message = "${copt}.commands.${n}: consent, for the user, one line of at most 80 characters";
+              }) c.commands
               ++ lib.mapAttrsToList (n: cmd: {
                 assertion =
                   named n

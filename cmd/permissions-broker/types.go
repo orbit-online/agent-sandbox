@@ -57,8 +57,11 @@ type capabilityInfo struct {
 	Params      map[string]json.RawMessage `json:"params,omitempty"`
 	Instances   json.RawMessage            `json:"instances,omitempty"`
 	Error       string                     `json:"error,omitempty"`
-	// Host commands: each command's description and free arguments, and what a grant covers, as the consent says it
+	// Host commands: each command's description and free arguments; the consent's title and what a grant covers, a
+	// command a line as the consent says it, and in detail
 	Commands map[string]*hostcmd.Command `json:"commands,omitempty"`
+	Title    string                      `json:"title,omitempty"`
+	Consent  []hostcmd.ConsentItem       `json:"consent,omitempty"`
 	Scope    []hostcmd.ScopeItem         `json:"scope,omitempty"`
 }
 
@@ -98,8 +101,6 @@ type pending struct {
 	Summary    string          `json:"summary"`
 	Reason     string          `json:"reason"`
 	Lease      string          `json:"lease"`
-	// Host commands: what a grant covers, every command and its free arguments
-	Scope string `json:"scope,omitempty"`
 	// A call's: its command and free arguments, opaque ones by digest
 	Command   string          `json:"command,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`

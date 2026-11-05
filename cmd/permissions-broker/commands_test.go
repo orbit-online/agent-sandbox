@@ -12,8 +12,9 @@ import (
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/schema"
 )
 
-// A declaration the broker can't stand behind stops it: every argument described, no names it uses, names that make
-// MCP tools, a result it can wrap, one instances glob on a string with one *
+// A declaration the broker can't stand behind stops it: every argument described, a title and every command's phrase
+// for the consent, each on one line and short, no names it uses, names that make MCP tools, a result it can wrap, one
+// instances glob on a string with one *
 func TestCommandsRefused(t *testing.T) {
 	desc := `"description": "d"`
 	for name, change := range map[string]func(c *capability){
@@ -32,10 +33,17 @@ func TestCommandsRefused(t *testing.T) {
 			c.Commands["run"].Arguments = map[string]json.RawMessage{"x": json.RawMessage(`{"type": "string", ` + desc +
 				`, "instances": "/run/*"}`)}
 		},
-		"no commands":  func(c *capability) { c.Commands = nil },
-		"no run":       func(c *capability) { c.Commands["run"].Run = nil },
-		"name":         func(c *capability) { c.Name = "a_b" },
-		"command name": func(c *capability) { c.Commands["a b"] = c.Commands["run"] },
+		"no title":           func(c *capability) { c.Title = "" },
+		"blank title":        func(c *capability) { c.Title = "  " },
+		"title on two lines": func(c *capability) { c.Title = "use it\nAllowed by the host" },
+		"long title":         func(c *capability) { c.Title = strings.Repeat("x", hostcmd.MaxPhrase+1) },
+		"no consent":         func(c *capability) { c.Commands["run"].Consent = "" },
+		"consent with a tab": func(c *capability) { c.Commands["run"].Consent = "Run\tit" },
+		"long consent":       func(c *capability) { c.Commands["run"].Consent = strings.Repeat("é", hostcmd.MaxPhrase+1) },
+		"no commands":        func(c *capability) { c.Commands = nil },
+		"no run":             func(c *capability) { c.Commands["run"].Run = nil },
+		"name":               func(c *capability) { c.Name = "a_b" },
+		"command name":       func(c *capability) { c.Commands["a b"] = c.Commands["run"] },
 		"tool name": func(c *capability) {
 			c.Commands[strings.Repeat("x", hostcmd.MaxToolName-len(c.Name))] = c.Commands["run"]
 		},
@@ -64,20 +72,27 @@ func TestCommandsRefused(t *testing.T) {
 	}
 }
 
-// The config's host commands load under their names; a name taken twice stops the daemon
+// The config's host commands load under their names, with their consent as the module writes it; a name taken twice
+// stops the daemon
 func TestLoadCommands(t *testing.T) {
-	cfg := commandConfig{Name: "vm", Description: "a VM", Commands: map[string]*hostcmd.Command{
-		"shot": {Description: "a screenshot", Run: []string{"/bin/true"}, Result: "image/png"}}}
+	var cfg commandConfig
+	if err := json.Unmarshal([]byte(`{"name": "vm", "description": "a VM", "consent": {"title": "use the VM"},
+		"commands": {"shot": {"description": "a screenshot", "consent": "Take screenshots", "run": ["/bin/true"],
+		"result": "image/png"}}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
 	caps := map[string]*capability{}
 	if err := loadCommands([]commandConfig{cfg}, caps); err != nil {
 		t.Fatal(err)
 	}
 	c := caps["vm"]
-	if c == nil || c.Type != "command" || c.Commands["shot"].Timeout != hostcmd.DefaultTimeout {
+	if c == nil || c.Type != "command" || c.Commands["shot"].Timeout != hostcmd.DefaultTimeout ||
+		c.Title != "use the VM" || c.Commands["shot"].Consent != "Take screenshots" {
 		t.Errorf("Loaded %+v", c)
 	}
 	again := cfg
-	again.Commands = map[string]*hostcmd.Command{"shot": {Description: "again", Run: []string{"/bin/true"}}}
+	again.Commands = map[string]*hostcmd.Command{"shot": {Description: "again", Consent: "Again",
+		Run: []string{"/bin/true"}}}
 	if err := loadCommands([]commandConfig{again}, caps); err == nil {
 		t.Error("A second vm loaded")
 	}
@@ -118,15 +133,16 @@ func TestGlobInstances(t *testing.T) {
 	}
 }
 
-// The scope's parts, as the window gets them with the capability: unrestricted free arguments first, each with what its
-// schema allows, and the bounding values by their descriptions for the notification's body
+// The scope's parts in detail, as the window gets them with the capability: unrestricted free arguments first, each
+// with what its schema allows. The summary has the title and the bounding values, each after its name when there are
+// several, opaque ones by digest
 func TestScopeItems(t *testing.T) {
 	c := testCap(t, "command")
 	c.Params["cert"] = json.RawMessage(`{"type": "string", "opaque": true, "description": "the key"}`)
-	c.Commands["exec"] = &hostcmd.Command{Description: "Run PowerShell", Run: []string{"/bin/true"},
-		Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string", "multiline": true,
-			"description": "any PowerShell, as SYSTEM"}`)}}
-	c.Commands["keys"] = &hostcmd.Command{Description: "Press keys", Run: []string{"/bin/true"},
+	c.Commands["exec"] = &hostcmd.Command{Description: "Run PowerShell", Consent: "Run any PowerShell",
+		Run: []string{"/bin/true"}, Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string",
+			"multiline": true, "description": "any PowerShell, as SYSTEM"}`)}}
+	c.Commands["keys"] = &hostcmd.Command{Description: "Press keys", Consent: "Press keys", Run: []string{"/bin/true"},
 		Arguments: map[string]json.RawMessage{"key": json.RawMessage(`{"type": "string", "enum": ["a", "b"],
 			"description": "a key"}`)}}
 	if err := c.check(); err != nil {
@@ -148,27 +164,50 @@ func TestScopeItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bounds := c.bounds(params); bounds != `the key is `+schema.OpaqueDigest(strings.Repeat("k", 40))+
-		` and a path is "/a" and read-only is true` {
-		t.Errorf("bounds = %s", bounds)
+	if d := c.describe(params); d != `use the test thing cert `+schema.OpaqueDigest(strings.Repeat("k", 40))+
+		`, path "/a", ro true` {
+		t.Errorf("describe = %s", d)
+	}
+	if d := c.describe(json.RawMessage(`{"path": "/a\"b"}`)); d != `use the test thing "/a\"b"` {
+		t.Errorf("describe = %s", d)
+	}
+	if d := c.describe(json.RawMessage(`{}`)); d != "use the test thing" {
+		t.Errorf("describe = %s", d)
 	}
 }
 
-// What the consent says a schema allows, and which free arguments it calls unrestricted
-func TestSchemaScope(t *testing.T) {
+// The consent's lines: a phrase each, the commands sharing one on one line, marked unrestricted when a free argument
+// of any of them takes any text whatever the phrase says, those first
+func TestConsentItems(t *testing.T) {
 	c := testCap(t, "command")
-	c.Commands["exec"] = &hostcmd.Command{Description: "Run PowerShell", Run: []string{"/bin/true"},
-		Arguments: map[string]json.RawMessage{"script": json.RawMessage(`{"type": "string", "multiline": true,
-			"description": "any PowerShell, as SYSTEM"}`)}}
-	c.Commands["click"] = &hostcmd.Command{Description: "Click", Run: []string{"/bin/true"},
-		Arguments: map[string]json.RawMessage{"x": json.RawMessage(`{"type": "integer", "minimum": 0,
-			"maximum": 99, "description": "column"}`)}}
+	free := func(desc string) map[string]json.RawMessage {
+		return map[string]json.RawMessage{"text": json.RawMessage(`{"type": "string", "description": "` + desc + `"}`)}
+	}
+	c.Commands["type"] = &hostcmd.Command{Description: "Type", Consent: "Use the keyboard", Run: []string{"/bin/true"},
+		Arguments: free("any text")}
+	c.Commands["keys"] = &hostcmd.Command{Description: "Press keys", Consent: "Use the keyboard",
+		Run: []string{"/bin/true"}, Arguments: map[string]json.RawMessage{"key": json.RawMessage(`{"type": "string",
+			"enum": ["a", "b"], "description": "a key"}`)}}
+	// After type, so that its free argument decides nothing
+	c.Commands["zoom"] = &hostcmd.Command{Description: "Zoom", Consent: "Use the keyboard", Run: []string{"/bin/true"},
+		Arguments: map[string]json.RawMessage{"in": json.RawMessage(`{"type": "boolean", "description": "in"}`)}}
+	c.Commands["exec"] = &hostcmd.Command{Description: "Run PowerShell", Consent: "Run a harmless script",
+		Run: []string{"/bin/true"}, Arguments: free("any PowerShell")}
 	if err := c.check(); err != nil {
 		t.Fatal(err)
 	}
-	want := "Run PowerShell: any PowerShell, as SYSTEM, unrestricted (exec). Click: column, a number within 0–99 " +
-		"(click). print the input (run)."
-	if got := hostcmd.Scope(c.Commands); got != want {
-		t.Errorf("scope = %q\nwant    %q", got, want)
+	b, _ := testBroker(t)
+	b.caps = map[string]*capability{c.id(): c}
+	got := b.listCapabilities()[0].Consent
+	want := []hostcmd.ConsentItem{
+		{Consent: "Run a harmless script", Commands: []string{"exec"}, Unrestricted: true},
+		{Consent: "Use the keyboard", Commands: []string{"keys", "type", "zoom"}, Unrestricted: true},
+		{Consent: "Print what it gets", Commands: []string{"run"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("consent = %+v\nwant      %+v", got, want)
+	}
+	if got, want := hostcmd.Covers(c.Commands), "⚠ Run a harmless script; ⚠ Use the keyboard; Print what it gets"; got != want {
+		t.Errorf("covers = %q\nwant     %q", got, want)
 	}
 }

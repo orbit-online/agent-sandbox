@@ -87,8 +87,12 @@ func newLiveEnv(t *testing.T) *liveEnv {
 	if res.Error != "" {
 		t.Fatal(res.Error)
 	}
+	// The summary starts with this: a host command capability's consent title, another's description
 	for _, c := range res.Capabilities {
 		lv.desc[c.ID] = c.Description
+		if c.Type == "command" {
+			lv.desc[c.ID] = c.Title
+		}
 	}
 	lv.caps = oracleCaps(res.Capabilities)
 	// The folders there are beneath the ceiling: the test script's /srv/notes and its sub. /srv/mounted has a mount

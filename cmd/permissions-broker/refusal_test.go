@@ -24,12 +24,13 @@ func exampleBroker(t *testing.T, answers ...string) (*broker, *fakeAsker, map[st
 	if err := os.WriteFile(run, []byte("#!/bin/sh\ncat\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	token := &capability{Name: capToken, Type: "command", Description: "a token",
+	token := &capability{Name: capToken, Type: "command", Description: "a token", Title: "get a token",
 		Params: map[string]json.RawMessage{"scope": json.RawMessage(declScope), "csr": json.RawMessage(declCSR),
 			"slot": json.RawMessage(declSlot)},
 		Commands: map[string]*hostcmd.Command{
-			"issue": {Description: "issue one", Run: []string{run}},
-			"sign":  {Description: "sign something", Run: []string{run}, Arguments: rawArgs(signArgs)},
+			"issue": {Description: "issue one", Consent: "Issue one", Run: []string{run}},
+			"sign": {Description: "sign something", Consent: "Sign anything", Run: []string{run},
+				Arguments: rawArgs(signArgs)},
 		}}
 	if err := token.check(); err != nil {
 		t.Fatal(err)

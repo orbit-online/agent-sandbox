@@ -1,5 +1,5 @@
 // Package hostcmd is the host commands' declarations (docs/permissions.md): a command's checks, its free arguments
-// validated, what a grant covers as the consent says it, and what the command reads on stdin. Running one under a
+// validated, what a grant covers as the consent says it (each command's phrase, and in detail), and what the command reads on stdin. Running one under a
 // grant is the broker's
 package hostcmd
 
@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
@@ -18,7 +19,10 @@ import (
 
 // Command is a host command as the config declares it
 type Command struct {
-	Description string                     `json:"description"`
+	// For Claude: what the command does, its MCP tool's description
+	Description string `json:"description"`
+	// For the user: what the command lets Claude do, in a short phrase the consent shows
+	Consent     string                     `json:"consent"`
 	Arguments   map[string]json.RawMessage `json:"arguments"`
 	Result      string                     `json:"result"`
 	Run         []string                   `json:"run,omitempty"`
@@ -35,6 +39,9 @@ const (
 	MaxToolName = 64
 	// A call's timeout unless its command declares one
 	DefaultTimeout = "PT1M"
+	// A consent phrase, a command's or a capability's title, is at most this long: the notification shows them
+	// together on a line or two
+	MaxPhrase = 80
 )
 
 // A command's name: it makes an MCP tool name with its capability's
@@ -54,6 +61,9 @@ func (cmd *Command) Check(capName, name string, bounding map[string]*schema.Sche
 	}
 	if cmd.Description == "" || len(cmd.Run) == 0 {
 		return fmt.Errorf("command %s needs a description and run", name)
+	}
+	if err := CheckPhrase(cmd.Consent); err != nil {
+		return fmt.Errorf("command %s: consent: %w", name, err)
 	}
 	switch {
 	case cmd.Result == "":
@@ -87,6 +97,19 @@ func (cmd *Command) Check(capName, name string, bounding map[string]*schema.Sche
 			return fmt.Errorf("command %s: argument %s: instances are for bounding arguments", name, arg)
 		}
 		cmd.args[arg] = s
+	}
+	return nil
+}
+
+// CheckPhrase checks a phrase the consent shows the user: there, one line of at most MaxPhrase characters
+func CheckPhrase(p string) error {
+	switch {
+	case strings.TrimSpace(p) == "":
+		return fmt.Errorf("none: the consent shows it")
+	case utf8.RuneCountInString(p) > MaxPhrase:
+		return fmt.Errorf("longer than %d characters", MaxPhrase)
+	case strings.ContainsFunc(p, unicode.IsControl):
+		return fmt.Errorf("one line, without control characters")
 	}
 	return nil
 }
@@ -142,9 +165,9 @@ type Input struct {
 	Validity   string          `json:"validity,omitempty"`
 }
 
-// ScopeItem is one part of what a grant of a host command capability covers: a command without free arguments, or one free
-// argument of a command with its declaration's description and what its schema lets through. The window shows them
-// as the notification's scope line says them
+// ScopeItem is one part of what a grant of a host command capability covers in detail: a command without free
+// arguments, or one free argument of a command with its declaration's description and what its schema lets through.
+// The window shows them under Details, and counts the free arguments in its badges
 type ScopeItem struct {
 	Command     string `json:"command"`
 	Description string `json:"description"`
@@ -178,18 +201,58 @@ func ScopeItems(cmds map[string]*Command) []ScopeItem {
 	return append(open, bounded...)
 }
 
-// Scope says what a grant of a capability with cmds covers, for the consent, in ScopeItems' order
-func Scope(cmds map[string]*Command) string {
-	var parts []string
-	for _, s := range ScopeItems(cmds) {
-		switch {
-		case s.Argument == "":
-			parts = append(parts, s.Description+" ("+s.Command+")")
-		case s.Unrestricted:
-			parts = append(parts, fmt.Sprintf("%s: %s, unrestricted (%s)", s.Description, s.About, s.Command))
-		default:
-			parts = append(parts, fmt.Sprintf("%s: %s, %s (%s)", s.Description, s.About, s.Allows, s.Command))
+// ConsentItem is a line of the consent: a phrase, the commands that have it (commands sharing a phrase share the
+// line), and whether a free argument of one of them takes any text, which the broker derives from the schema rather
+// than trusting the phrase
+type ConsentItem struct {
+	Consent      string   `json:"consent"`
+	Commands     []string `json:"commands"`
+	Unrestricted bool     `json:"unrestricted,omitempty"`
+}
+
+// ConsentItems is what a grant of a capability with cmds covers, a line per phrase: unrestricted ones first, then the
+// rest, each in the order of its first command's name
+func ConsentItems(cmds map[string]*Command) []ConsentItem {
+	var items []ConsentItem
+	at := map[string]int{}
+	for _, name := range slices.Sorted(maps.Keys(cmds)) {
+		cmd := cmds[name]
+		i, ok := at[cmd.Consent]
+		if !ok {
+			i = len(items)
+			at[cmd.Consent] = i
+			items = append(items, ConsentItem{Consent: cmd.Consent})
+		}
+		items[i].Commands = append(items[i].Commands, name)
+		for _, s := range cmd.args {
+			items[i].Unrestricted = items[i].Unrestricted || s.Unrestricted()
 		}
 	}
-	return strings.Join(parts, ". ") + "."
+	slices.SortStableFunc(items, func(a, b ConsentItem) int {
+		switch {
+		case a.Unrestricted == b.Unrestricted:
+			return 0
+		case a.Unrestricted:
+			return -1
+		}
+		return 1
+	})
+	return items
+}
+
+// Warning marks an unrestricted command's phrase in the notification
+const Warning = "⚠ "
+
+// Covers says what a grant of a capability with cmds covers, for the notification: the commands' phrases in
+// ConsentItems' order, an unrestricted one marked
+func Covers(cmds map[string]*Command) string {
+	var parts []string
+	for _, item := range ConsentItems(cmds) {
+		if item.Unrestricted {
+			parts = append(parts, Warning+item.Consent)
+		} else {
+			parts = append(parts, item.Consent)
+		}
+	}
+	return strings.Join(parts, "; ")
 }

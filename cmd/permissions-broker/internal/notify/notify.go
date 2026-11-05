@@ -18,7 +18,8 @@ import (
 // The notification's question and the user's answer: allow, deny or options
 type Prompt struct {
 	Summary, Reason, Lease string
-	// Host commands: what the grant covers, shown before the reason, and the bounding values it's for
+	// Host commands: what the grant covers, shown before the reason, and the bounding values it's on. With them, the
+	// summary says what Claude wants to do, and for how long
 	Scope, Bounds string
 	// Whether to offer Options, which needs the window
 	Options bool
@@ -55,8 +56,6 @@ func Ask(ctx context.Context, p Prompt) (string, error) {
 // the notification appearing is ignored and the question asked again, against look-alikes timed to sit where the user
 // is about to click. Not answering in time denies, and the notification is replaced by one without buttons
 func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
-	summary := "Claude asks for " + escapeMarkup(p.Summary)
-	reason := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
 	match := []dbus.MatchOption{dbus.WithMatchObjectPath(notifyPath), dbus.WithMatchInterface(notifyIface)}
 	if err := conn.AddMatchSignal(match...); err != nil {
 		return "", fmt.Errorf("Watch the notifications: %w", err)
@@ -72,15 +71,7 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 			return "", fmt.Errorf("Find the notification server: %w", err)
 		}
 		click, label, hint := bodyClick(ctx, server, p)
-		// Ahead of the reason: a server may cut what's long, and the scope is what's granted
-		var lines []string
-		if p.Scope != "" {
-			lines = append(lines, escapeMarkup(coversLine(p)))
-		}
-		if hint != "" {
-			lines = append(lines, hint)
-		}
-		body := strings.Join(append(lines, reason), "\n")
+		summary, body := Text(p, hint)
 		allow, deny, options := randomKey(), randomKey(), randomKey()
 		keys := map[string]string{"default": click, allow: "allow", deny: "deny"}
 		// The default action goes first: a server that draws no buttons and finds none named default may take the first
@@ -117,6 +108,32 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 		}
 		return action, nil
 	}
+}
+
+// Text is the notification's summary and body, markup escaped, with hint, a line saying what a click on the body does,
+// before the reason
+func Text(p Prompt, hint string) (string, string) {
+	summary := "Claude asks for " + escapeMarkup(p.Summary)
+	if p.Scope != "" {
+		summary = "Claude wants to " + escapeMarkup(p.Summary) + " " + leaseLabel(p.Lease)
+	}
+	// Ahead of the reason: a server may cut what's long, and the scope is what's granted. The bounding values and the
+	// lease again, since the sandbox chose the values and a long one pushes the rest of a summary out where it's cut
+	var lines []string
+	if p.Scope != "" {
+		head := leaseLabel(p.Lease)
+		if p.Bounds != "" {
+			head = "On " + p.Bounds + " " + head
+		} else {
+			head = strings.ToUpper(head[:1]) + head[1:]
+		}
+		lines = append(lines, escapeMarkup(head+": "+p.Scope))
+	}
+	if hint != "" {
+		lines = append(lines, hint)
+	}
+	reason := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
+	return summary, strings.Join(append(lines, reason), "\n")
 }
 
 // The name cosmic-notifications gives in GetServerInformation
@@ -169,16 +186,6 @@ func awaitAction(ctx context.Context, signals <-chan *dbus.Signal, owner string,
 
 func escapeMarkup(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
-}
-
-// coversLine says what a host command grant covers, for how long and on which bounding values: "Covers, for 1 h,
-// where the VM is "win11": Run PowerShell in the guest: any PowerShell, run as SYSTEM, unrestricted (exec). ..."
-func coversLine(p Prompt) string {
-	head := "Covers, " + leaseLabel(p.Lease)
-	if p.Bounds != "" {
-		head += ", where " + p.Bounds
-	}
-	return head + ": " + p.Scope
 }
 
 func leaseLabel(lease string) string {

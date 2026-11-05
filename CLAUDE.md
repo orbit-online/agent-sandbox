@@ -98,7 +98,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `Call`, its client side), `notify` (asking with a notification), `mcpserver`
   (the MCP server inside the sandbox, a client of request.sock, with a tool per
   host command), `hostcmd` (a host command's declaration: its checks, its free
-  arguments, the consent's scope, what it reads on stdin), `hostsock` (what a
+  arguments, the consent's lines (a phrase each, shared by the commands that have
+  it) and scope, what it reads on stdin), `hostsock` (what a
   host socket may not be, reaching one without links, the addresses in the grant
   directory), `mountinfo` (mountinfo files) and
   `mounts` (attach grants in the sandbox's mount namespace: the folders ceiling
@@ -220,7 +221,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
-  broker, of a host command or host socket it has, none of folders), the assertions on host sockets (a
+  broker, of a host command or host socket it has, none of folders), the assertions on host commands (names, described
+  arguments, results, and the consent's title and each command's phrase: present, one line, at most 80 characters),
+  the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
   glob that could match one), the `dbus` defaults (the portal's, with `tray` the tray item's name at the
@@ -338,11 +341,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   sampled as examples, each refused with its category or served (`refusal_test.go`), host commands (the schema subset's
   keywords, numbers against bounds and enums exactly, numbers past what a float64 holds (rounding to 0 too) or written
   in more than 800 digits or an exponent past ±400 refused, numbers written one way in parameters, a long enum said as a count, declarations refused for an undescribed or reserved argument, a
-  bad name, result, timeout or glob; instances from a glob; the scope's parts
-  in `state`, unrestricted first, and the bounding values by description; a call checked
+  bad name, result, timeout or glob, no consent title or a command without its phrase, or one blank, past 80
+  characters or with a control character; the config's `consent` loaded; instances from a glob; the scope's parts
+  in `state`, unrestricted first; the consent's lines in `state`, a phrase each with the commands sharing it, unrestricted
+  first, marked by the schemas whatever the phrase says, and the summary's bounding values (alone, by name when
+  several, opaque by digest); a call checked
   before the user is asked and told the scope, the window getting the call asking with its arguments whole
-  (opaque ones by digest); the notification's "Covers" line with the lease and bounding values,
-  leases in hours and minutes; a granted request's reason on the grant; a once grant covering only
+  (opaque ones by digest); the notification's summary ("Claude wants to" the title, the values and the lease) and its
+  body's first line (the bounding values and the lease again, then the phrases), markup escaped, leases in hours and
+  minutes, word for word for a declaration shaped like agent-sandbox-plugins' windows-vm, and a bounding value as long
+  as a parameter may be whole in the body with the lease (`consent_text_test.go`); a granted request's reason on the grant; a once grant covering only
   its call and refused to a request; a failing call's exit and stderr,
   recorded with opaque arguments by digest and its capability; image and text results, too much
   output stopping the unit; the unit's properties (the launcher's slice too) and a revoke stopping it;

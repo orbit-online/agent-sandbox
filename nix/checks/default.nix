@@ -193,12 +193,14 @@ let
                 };
                 commands.vm = {
                   description = "a VM";
+                  consent.title = "use the VM";
                   bounding.vm = {
                     type = "string";
                     description = "the VM";
                   };
                   commands.shot = {
                     description = "a screenshot";
+                    consent = "Take screenshots";
                     result = "image/png";
                     run = [ "/srv/shot" ];
                   };
@@ -646,8 +648,10 @@ let
                 enable = true;
                 commands.vm = {
                   description = "a VM";
+                  consent.title = "use the VM";
                   commands.shot = {
                     description = "a screenshot";
+                    consent = "Take screenshots";
                     run = [ "/srv/shot" ];
                   };
                 };
@@ -792,25 +796,53 @@ let
                 enable = true;
                 commands.a_b = {
                   description = "bad name";
+                  consent.title = "use it";
                   commands.c = {
                     description = "fine";
+                    consent = "Do it";
                     run = [ "/bin/true" ];
                   };
                 };
                 commands.vm = {
                   description = "a VM";
+                  consent.title = "use the VM";
                   bounding.vm.type = "string";
                   commands.ok = {
                     description = "a JSON result";
+                    consent = "Read it";
                     result = "application/json";
                     run = [ "/bin/true" ];
                   };
                   commands.shot = {
                     description = "an argument named reason";
+                    consent = "Take screenshots";
                     arguments.reason = {
                       type = "string";
                       description = "r";
                     };
+                    run = [ "/bin/true" ];
+                  };
+                };
+                # Without the user's words: no title, a command without its phrase, one on two lines, one too long
+                commands.mute = {
+                  description = "for Claude only";
+                  commands.a = {
+                    description = "no phrase";
+                    run = [ "/bin/true" ];
+                  };
+                  commands.b = {
+                    description = "two lines";
+                    consent = "Look\nAllowed by the host";
+                    run = [ "/bin/true" ];
+                  };
+                  commands.c = {
+                    description = "too long";
+                    consent = lib.concatStrings (lib.replicate 81 "x");
+                    run = [ "/bin/true" ];
+                  };
+                  commands.d = {
+                    description = "80 characters, fine";
+                    consent = lib.concatStrings (lib.replicate 80 "x");
                     run = [ "/bin/true" ];
                   };
                 };
@@ -821,6 +853,10 @@ let
       );
       expected = [
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.a_b: a name of letters, digits and -, and at least one command"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute: consent.title, for the user, one line of at most 80 characters"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.a: consent, for the user, one line of at most 80 characters"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.b: consent, for the user, one line of at most 80 characters"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.c: consent, for the user, one line of at most 80 characters"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm: every bounding argument needs a description, none may be named reason or lease, and none may be an array or multiline"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.ok: a name of letters, digits and - (vm_ok at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.shot: a name of letters, digits and - (vm_shot at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
@@ -1059,7 +1095,7 @@ in
           done
           # The permissions MCP server's host commands: what the sandbox may call, not what runs on the host
           workMcp=$(grep -oP '^readonly MCP_SERVERS=\K\S+' "$workState")
-          jq -e '.[0].name == "vm" and .[0].commands.shot.result == "image/png" and (.[0].commands.shot | has("run") | not)' \
+          jq -e '.[0].name == "vm" and .[0].commands.shot.result == "image/png" and (.[0].commands.shot | has("run") or has("consent") | not) and (.[0] | has("consent") | not)' \
             "$(jq -r '.permissions.args[2]' "$workMcp")" >/dev/null || { echo "work's MCP host commands are off" >&2; exit 1; }
           # The default launcher's ~/.claude is bound from /srv/claude, its ~/.config/Claude from the host's
           grep -qxF -- "HOME_DIRS=(/home/alice/.local/share/claude-desktop/home /srv/claude /home/alice/.config/Claude)" \
@@ -1112,9 +1148,9 @@ in
             and .folders == [{path: "/srv/notes", rw: false}] and (has("plugins") | not)
             and .sockets == [{name: "agent", description: "an agent", path: "$XDG_RUNTIME_DIR/agent.sock", bounding: {}}]
             and .grants == [{capability: "agent", params: {}}, {capability: "vm", params: {vm: "win11"}}]
-            and .commands == [{name: "vm", description: "a VM", exclusive: false,
+            and .commands == [{name: "vm", description: "a VM", consent: {title: "use the VM"}, exclusive: false,
               bounding: {vm: {type: "string", description: "the VM"}}, commands: {shot: {description: "a screenshot",
-              arguments: {}, result: "image/png", timeout: "PT1M", run: ["/srv/shot"]}}}]
+              consent: "Take screenshots", arguments: {}, result: "image/png", timeout: "PT1M", run: ["/srv/shot"]}}}]
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []

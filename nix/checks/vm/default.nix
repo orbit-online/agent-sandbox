@@ -126,8 +126,10 @@ let
               # A host command printing the validity it was given
               commands.test = {
                 description = "a test command";
+                consent.title = "run the test command";
                 commands.thing = {
                   description = "print the validity";
+                  consent = "Print how long its grant lasts";
                   # And its cgroup, for the test to find it in the launcher's slice
                   run = [
                     "${pkgs.writeShellScript "run" ''

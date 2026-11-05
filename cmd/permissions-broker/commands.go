@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,11 @@ type commandConfig struct {
 	Bounding    map[string]json.RawMessage  `json:"bounding"`
 	Exclusive   bool                        `json:"exclusive"`
 	Commands    map[string]*hostcmd.Command `json:"commands"`
+	// For the user, where Description is for Claude
+	Consent struct {
+		// Completes "Claude wants to …": "control the Windows VM"
+		Title string `json:"title"`
+	} `json:"consent"`
 }
 
 var commandName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
@@ -34,8 +40,8 @@ var commandName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 // loadCommands makes the config's host command capabilities, each under its own name
 func loadCommands(cfgs []commandConfig, caps map[string]*capability) error {
 	for _, cc := range cfgs {
-		c := &capability{Name: cc.Name, Type: "command", Description: cc.Description, Params: cc.Bounding,
-			Exclusive: cc.Exclusive, Commands: cc.Commands}
+		c := &capability{Name: cc.Name, Type: "command", Description: cc.Description, Title: cc.Consent.Title,
+			Params: cc.Bounding, Exclusive: cc.Exclusive, Commands: cc.Commands}
 		if err := c.check(); err != nil {
 			return fmt.Errorf("Host commands %s: %w", cc.Name, err)
 		}
@@ -47,11 +53,14 @@ func loadCommands(cfgs []commandConfig, caps map[string]*capability) error {
 	return nil
 }
 
-// checkCommands checks a host command capability: names that make MCP tool names, every argument described, bounding
-// and free arguments apart, at most one instances glob
+// checkCommands checks a host command capability: names that make MCP tool names, a title and every command's
+// phrase for the consent, every argument described, bounding and free arguments apart, at most one instances glob
 func (c *capability) checkCommands() error {
 	if !commandName.MatchString(c.Name) {
 		return fmt.Errorf("name %q: letters, digits and -", c.Name)
+	}
+	if err := hostcmd.CheckPhrase(c.Title); err != nil {
+		return fmt.Errorf("consent.title: %w", err)
 	}
 	if len(c.Commands) == 0 {
 		return fmt.Errorf("no commands")
@@ -148,27 +157,29 @@ func (c *capability) globInstances() (json.RawMessage, error) {
 	return json.Marshal(inst)
 }
 
-// bounds names the bounding values of params by their declarations' descriptions, for the consent's body: the summary
-// names them too, but a server may cut a summary. Opaque values by digest, as the summary has them
-func (c *capability) bounds(params json.RawMessage) string {
+// boundValues says the bounding values of params for the consent's summary, after the title: a value alone, quoted, or
+// with several, each after its name. Opaque values by digest
+func (c *capability) boundValues(params json.RawMessage) string {
 	m, _ := schema.DecodeObject(params)
 	var parts []string
 	for _, k := range slices.Sorted(maps.Keys(m)) {
-		about := k
-		if s := c.schemas[k]; s != nil && s.Description != "" {
-			about = s.Description
-		}
 		v, isString := m[k].(string)
+		var shown string
 		switch {
 		case isString && c.schemas[k] != nil && c.schemas[k].Opaque:
-			parts = append(parts, about+" is "+schema.OpaqueDigest(v))
+			shown = schema.OpaqueDigest(v)
 		case isString:
-			parts = append(parts, fmt.Sprintf("%s is %q", about, v))
+			// Quoted, so a value can't pass itself off as more values or text of the notification's own
+			shown = strconv.Quote(v)
 		default:
-			parts = append(parts, fmt.Sprintf("%s is %v", about, m[k]))
+			shown = fmt.Sprint(m[k])
 		}
+		if len(m) > 1 {
+			shown = k + " " + shown
+		}
+		parts = append(parts, shown)
 	}
-	return strings.Join(parts, " and ")
+	return strings.Join(parts, ", ")
 }
 
 // How often the broker looks again for the instances grants are of
@@ -195,7 +206,7 @@ type commandKind struct{ baseKind }
 func (commandKind) check(c *capability) error { return c.checkCommands() }
 
 func (commandKind) scope(c *capability, params json.RawMessage) (string, string) {
-	return hostcmd.Scope(c.Commands), c.bounds(params)
+	return hostcmd.Covers(c.Commands), c.boundValues(params)
 }
 
 func (commandKind) info(c *capability, i *capabilityInfo) {
@@ -206,5 +217,7 @@ func (commandKind) info(c *capability, i *capabilityInfo) {
 		v.Run = nil
 		i.Commands[name] = &v
 	}
+	i.Title = c.Title
+	i.Consent = hostcmd.ConsentItems(c.Commands)
 	i.Scope = hostcmd.ScopeItems(c.Commands)
 }

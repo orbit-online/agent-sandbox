@@ -21,7 +21,7 @@ func TestValidate(t *testing.T) {
 			t.Errorf("validate(%s) accepted", bad)
 		}
 	}
-	if d := c.describe(got); d != `the test thing (path="/a", ro=true)` {
+	if d := c.describe(got); d != `use the test thing path "/a", ro true` {
 		t.Errorf("describe = %q", d)
 	}
 }
@@ -40,7 +40,7 @@ func TestOpaqueParam(t *testing.T) {
 		t.Fatalf("validate refused %d characters: %v", len(csr), err)
 	}
 	d := c.describe(got)
-	if strings.Contains(d, "MIIB") || !strings.Contains(d, "csr=sha256:") || !strings.Contains(d, "(8192 characters)") {
+	if strings.Contains(d, "MIIB") || !strings.HasPrefix(d, "use the test thing sha256:") || !strings.Contains(d, "(8192 characters)") {
 		t.Errorf("describe = %.120q", d)
 	}
 	other, _ := c.validate(json.RawMessage(`{"csr": "` + csr[1:] + `"}`))

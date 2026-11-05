@@ -20,7 +20,7 @@ type kind interface {
 	live(b *broker, g *grant) error
 	// end takes away what live gave, once the grant ended and its connections closed
 	end(b *broker, g *grant, why string)
-	// scope says what a grant of c with params covers, and the bounding values it's for, for the consent
+	// scope says what a grant of c covers, and the bounding values of params, for the notification's body
 	scope(c *capability, params json.RawMessage) (scope, bounds string)
 	// info adds what the type shows of c to the list
 	info(c *capability, i *capabilityInfo)
