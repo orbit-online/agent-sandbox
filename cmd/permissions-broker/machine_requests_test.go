@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/duration"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
@@ -160,6 +161,10 @@ func (mc *machine) delivered(t *rapid.T, g *refGrant, res response, call bool, a
 	}
 }
 
+// invisible is a rune the consent never shows raw, since it breaks a line, turns text around or hides: a line or
+// paragraph separator or a format character
+func invisible(r rune) bool { return unicode.In(r, unicode.Zl, unicode.Zp, unicode.Cf) }
+
 // asked checks the question the user was asked (P7: the daemon's summary, the reason folded) and notes it pending
 func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, v verdict, done chan response) {
 	tag, _, _ := strings.Cut(req.Reason, ":")
@@ -172,7 +177,8 @@ func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, v verdict,
 	// A capability without parameters is its description alone
 	named := strings.HasPrefix(call.p.Summary, desc+open) || len(v.vals) == 0 && call.p.Summary == desc ||
 		req.Capability == capFolder && strings.HasPrefix(call.p.Summary, desc)
-	leaked := strings.HasPrefix(tag, "why") && strings.Contains(call.p.Summary, tag)
+	leaked := strings.HasPrefix(tag, "why") && strings.Contains(call.p.Summary, tag) ||
+		strings.ContainsFunc(call.p.Summary+call.p.Bounds, invisible)
 	if call.p.Reason != oracleReason(req.Reason) || !named || leaked || call.p.Lease != v.lease || !call.p.Options {
 		mc.fatalf(t, "Asked %+v for %+v", call.p, req)
 	}

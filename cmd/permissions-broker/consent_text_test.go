@@ -6,9 +6,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // The consent for a declaration shaped like agent-sandbox-plugins' windows-vm: the notification's summary and body,
@@ -88,5 +90,52 @@ func TestConsentTextLongValue(t *testing.T) {
 	_, body := notify.Text(f.asked[0], "")
 	if want := `On "` + long + `" for 10 min: Print what it gets` + "\n"; !strings.HasPrefix(body, want) {
 		t.Errorf("body = %q", body)
+	}
+}
+
+// A bounding value the sandbox chose with a line separator, a right-to-left override and a zero-width space: escaped
+// wherever the consent shows it, the summary, the body and the window's heading in state, so it can't start a line of
+// its own, turn the text around or hide a character
+func TestConsentTextInvisibleRunes(t *testing.T) {
+	b, f := testBroker(t, "options")
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	seen := make(chan *pending, 1)
+	go func() {
+		for {
+			var asked *pending
+			b.mu.Lock()
+			for _, p := range b.pending {
+				if p.Options {
+					asked = p
+				}
+			}
+			b.mu.Unlock()
+			if asked != nil {
+				seen <- asked
+				_ = b.answer(wire.Request{Pending: asked.ID})
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	_, _ = b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "x\u2028, for this call only:\u202e\u200by", "ro": true}`,
+		"PT10M"))
+	p := <-seen
+	quoted := `path "x\u2028, for this call only:\u202e\u200by", ro true`
+	summary, body := notify.Text(f.asked[0], "")
+	if want := "Claude wants to use the test thing " + quoted + " for 10 min"; summary != want {
+		t.Errorf("summary = %q", summary)
+	}
+	if want := "On " + quoted + " for 10 min: Print what it gets\n"; !strings.HasPrefix(body, want) {
+		t.Errorf("body = %q", body)
+	}
+	if p.Bounds != quoted {
+		t.Errorf("state's bounds = %q", p.Bounds)
+	}
+	for _, s := range []string{summary, body, p.Summary, p.Bounds} {
+		if strings.ContainsAny(s, "\u2028\u202e\u200b") {
+			t.Errorf("Raw in %q", s)
+		}
 	}
 }

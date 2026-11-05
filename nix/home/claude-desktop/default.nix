@@ -82,6 +82,16 @@ let
       else
         drv;
   };
+  # How many characters a UTF-8 string holds, as the broker counts runes: its bytes but the continuation bytes
+  # (0x80-0xBF), each the second byte of U+0080-U+00BF's encoding, since a Nix string can't spell a lone byte.
+  # lib.stringLength counts bytes
+  utf8Length =
+    let
+      continuation = map (
+        i: builtins.substring 1 1 (builtins.fromJSON ''"\u00${lib.toHexString i}"'')
+      ) (lib.range 128 191);
+    in
+    s: lib.length (lib.filter (b: !(lib.elem b continuation)) (lib.stringToCharacters s));
   # A launcher's host commands as the broker's config has them; the MCP server's copy, in the sandbox, without run
   commandsOf =
     withRun: lcfg:
@@ -1731,7 +1741,7 @@ in
                   p:
                   builtins.match "[[:space:]]*" p == null
                   && builtins.match ".*[[:cntrl:]].*" p == null
-                  && lib.stringLength p <= 80;
+                  && utf8Length p <= 80;
               in
               [
                 {

@@ -25,10 +25,11 @@ func often(t *rapid.T, share int, label string) bool {
 	return rapid.IntRange(0, 9).Draw(t, label) < share
 }
 
-// Runes a string may hold: letters, marks, digits, punctuation, symbols, spaces, and format characters such as
-// U+200B and U+202E, which aren't control characters (Cc)
-var textRune = rapid.RuneFrom([]rune("aé中😀 -_./<>&\"\\"), unicode.L, unicode.M, unicode.N, unicode.P, unicode.S,
-	unicode.Zs, unicode.Cf)
+// Runes a string may hold: letters, marks, digits, punctuation, symbols, spaces, line and paragraph separators
+// (U+2028, U+2029) and format characters such as U+200B and U+202E, which aren't control characters (Cc) but mustn't
+// reach the consent raw
+var textRune = rapid.RuneFrom([]rune("aé中😀 -_./<>&\"\\\u2028\u2029\u202e\u2066\u200b"), unicode.L, unicode.M,
+	unicode.N, unicode.P, unicode.S, unicode.Zs, unicode.Zl, unicode.Zp, unicode.Cf)
 
 // Control characters (Cc): C0, DEL and C1, newline and tab among them
 var controlRune = rapid.SampledFrom([]rune{0, '\a', '\b', '\n', '\t', '\r', 0x1b, 0x7f, 0x85, 0x9b})

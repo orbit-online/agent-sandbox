@@ -282,7 +282,8 @@ permissions.commands.windows-vm = {
 - `consent.title` completes "Claude wants to …" in the notification ("control the Windows VM"), and each command's
   `consent` says what it lets Claude do (Consent, below). Both are plain words for someone who isn't technical, without
   ranges or limits ("Take screenshots", not "Take screenshots of screens 0–15"): those are in the window's Details,
-  from the schemas. Each is required, one line of at most 80 characters.
+  from the schemas. Each is required, one line of at most 80 characters (characters, not bytes: the module counts
+  UTF-8 characters as the daemon counts runes).
 - `result` is `text` (the default) or an image MIME type.
 - `maxValidity` (optional) caps the validity the command is told (below), for commands that issue credentials.
 - `exclusive` (optional): an instance may be granted to one launcher at a time. The daemons share lock files in
@@ -778,15 +779,19 @@ phrases joined by `; `, those of commands with an unrestricted free argument fir
 for 10 min: ⚠ Run any PowerShell, up to system level; ⚠ Use the keyboard and type any text; Click on the screen;
 Take screenshots`; without bounding arguments, `For 10 min: ...`). The values come from the sandbox's request, and a
 long one pushes the lease and the rest of the value out of a summary a server cuts, so the body repeats them whole.
-Commands with the same
+Quoted with Go's `strconv.Quote`, they show what doesn't print escaped: a line or paragraph separator (U+2028, U+2029),
+a bidi control (U+202E, U+2066-2069) or a zero-width space can't start a line of its own (a fake "for this call
+only"), turn the text around or hide a character. Commands with the same
 phrase share it: it appears once, marked if any of them is unrestricted, so related commands (windows-vm's `keys` and
 `type`) can read as one thing the user allows. Whether a command is unrestricted the broker derives from its schemas (a
 free string with no enum or pattern), never from the phrase. Leases read as "1 h 30 min". A declaration without a
 title or a command without its phrase is a config error, as is an undescribed argument.
 
-The window shows the same: "A grant covers, on "windows-vm", for 10 min:" (the lease the user picked), then a line per
+The window shows the same: "A grant covers, on "windows-vm", for 10 min:" (the lease the user picked), its values the
+broker's text for the notification, which a pending request carries as `bounds`, shown as they are. Then a line per
 phrase with an "unrestricted" badge where it applies and the commands' names dim after it ("keys, type"). Below, a
-collapsed Details holds the bounding values by their descriptions and every free argument as its schema allows it,
+collapsed Details holds the bounding values by their descriptions, quoted as JSON with C1 controls, separators and
+format characters escaped too (opaque ones by length), and every free argument as its schema allows it,
 from the declaration's descriptions ("Run PowerShell in the guest (exec): script, any PowerShell, run as SYSTEM,
 unrestricted"), an enum listed whole. The badges above count the free arguments and name the unrestricted ones, and the
 call that asked and the reason follow. `state` carries, per host command capability, `title`, `consent` (each line's

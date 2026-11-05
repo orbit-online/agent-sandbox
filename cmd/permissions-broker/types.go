@@ -101,6 +101,9 @@ type pending struct {
 	Summary    string          `json:"summary"`
 	Reason     string          `json:"reason"`
 	Lease      string          `json:"lease"`
+	// Host commands: the bounding values as the notification says them, quoted (non-printing runes escaped) and opaque
+	// ones by digest, for the window's heading, which shows them as they are
+	Bounds string `json:"bounds,omitempty"`
 	// A call's: its command and free arguments, opaque ones by digest
 	Command   string          `json:"command,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`

@@ -845,6 +845,33 @@ let
                     consent = lib.concatStrings (lib.replicate 80 "x");
                     run = [ "/bin/true" ];
                   };
+                  # Characters, not bytes, as the broker counts: Danish of 46 (49 bytes) and 80 (87 bytes), CJK of 80
+                  # (240 bytes), all fine; CJK of 81 and Danish of 81 too long
+                  commands.e = {
+                    description = "Danish";
+                    consent = "Læs og ret filer på din virtuelle maskine, Åse";
+                    run = [ "/bin/true" ];
+                  };
+                  commands.f = {
+                    description = "Danish at the cap";
+                    consent = "Ændr, flyt og slet filer på den virtuelle maskine også når den kører, på én gang";
+                    run = [ "/bin/true" ];
+                  };
+                  commands.g = {
+                    description = "CJK at the cap";
+                    consent = lib.concatStrings (lib.replicate 80 "画");
+                    run = [ "/bin/true" ];
+                  };
+                  commands.h = {
+                    description = "CJK past the cap";
+                    consent = lib.concatStrings (lib.replicate 81 "画");
+                    run = [ "/bin/true" ];
+                  };
+                  commands.i = {
+                    description = "Danish past the cap";
+                    consent = "Ændr, flyt og slet filer på den virtuelle maskine, også når den kører, på én gang";
+                    run = [ "/bin/true" ];
+                  };
                 };
               };
             }
@@ -857,6 +884,8 @@ let
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.a: consent, for the user, one line of at most 80 characters"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.b: consent, for the user, one line of at most 80 characters"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.c: consent, for the user, one line of at most 80 characters"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.h: consent, for the user, one line of at most 80 characters"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.commands.mute.commands.i: consent, for the user, one line of at most 80 characters"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm: every bounding argument needs a description, none may be named reason or lease, and none may be an array or multiline"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.ok: a name of letters, digits and - (vm_ok at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.shot: a name of letters, digits and - (vm_shot at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"

@@ -223,7 +223,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
   broker, of a host command or host socket it has, none of folders), the assertions on host commands (names, described
-  arguments, results, and the consent's title and each command's phrase: present, one line, at most 80 characters),
+  arguments, results, and the consent's title and each command's phrase: present, one line, at most 80 characters,
+  counted in UTF-8 characters: Danish of 46 and 80, CJK of 80 taken, of 81 refused),
   the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
@@ -350,8 +351,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   before the user is asked and told the scope, the window getting the call asking with its arguments whole
   (opaque ones by digest); the notification's summary ("Claude wants to" the title, the values and the lease) and its
   body's first line (the bounding values and the lease again, then the phrases), markup escaped, leases in hours and
-  minutes, word for word for a declaration shaped like agent-sandbox-plugins' windows-vm, and a bounding value as long
-  as a parameter may be whole in the body with the lease (`consent_text_test.go`); a granted request's reason on the grant; a once grant covering only
+  minutes, word for word for a declaration shaped like agent-sandbox-plugins' windows-vm, a bounding value as long
+  as a parameter may be whole in the body with the lease, and one with U+2028, U+202E and U+200B escaped in the
+  summary, the body and the pending request's `bounds` (`consent_text_test.go`); phrases counted in characters (Danish
+  and CJK at the cap); a granted request's reason on the grant; a once grant covering only
   its call and refused to a request; a failing call's exit and stderr,
   recorded with opaque arguments by digest and its capability; image and text results, too much
   output stopping the unit; the unit's properties (the launcher's slice too) and a revoke stopping it;
@@ -436,7 +439,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   from an anonymous caller, and floods of them, with their inputs generated from the declarations' grammar
   (`machine_gen*_test.go`, `machine_decls_test.go`: capability and command names and near-misses of them,
   parameters and a command's arguments using every keyword of the schema subset, with values at and past each
-  limit, of other types, keys missing or extra, unicode, control characters, odd number and string encodings (numbers
+  limit, of other types, keys missing or extra, unicode (line and paragraph separators, bidi and other format
+  characters too, which the question asked must show escaped), control characters, odd number and string encodings (numbers
   at and past the edges of a float64 and of their digits and exponent) and
   objects that aren't, leases, reasons, instance names and folder paths; `TestGeneratorShares` keeps each kind's
   valid share between a fifth and nine tenths), each judged by an oracle written from `docs/permissions.md`
@@ -471,7 +475,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   grant's summary as a sentence, parameters, holders, reason, consent lines (the phrase, an unrestricted badge, the
   commands sharing it), Details collapsed until opened (a long enum listed) and calls, the calls of ended grants, a host
   command request with its summary after "Claude wants to", no editable bounding value, its heading on the bounding
-  values and the lease picked, its consent lines, Details (the bounding values, the scope) and the call asking, its lease still editable (once
+  values (the broker's `bounds`, escaped runes kept escaped) and the lease picked, its consent lines, Details (the bounding values, the scope) and the call asking, its lease still editable (once
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.

@@ -183,7 +183,8 @@ func (mc *liveMachine) delivered(t *rapid.T, g *refGrant, res response, call boo
 // asked checks the question as the window shows it (P7: the daemon's summary, the reason folded) and notes it pending
 func (mc *liveMachine) asked(t *rapid.T, q *pending, req wire.Request, v verdict, done chan response) {
 	tag, _, _ := strings.Cut(req.Reason, ":")
-	leaked := strings.HasPrefix(tag, "why") && strings.Contains(q.Summary, tag)
+	leaked := strings.HasPrefix(tag, "why") && strings.Contains(q.Summary, tag) ||
+		strings.ContainsFunc(q.Summary+q.Bounds, invisible)
 	if !strings.HasPrefix(q.Summary, mc.lv.desc[req.Capability]) || leaked || q.Lease != v.lease ||
 		q.Capability != req.Capability || canonical(objectOf(q.Params)) != v.params || q.Reason != oracleReason(req.Reason) {
 		mc.fatalf(t, "Asked %+v for %+v", q, req)

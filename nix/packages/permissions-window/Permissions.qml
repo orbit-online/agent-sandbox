@@ -164,14 +164,20 @@ Item {
         return ms <= 0 ? "ending" : minutes(Math.ceil(ms / 60000)) + " left"
     }
 
-    // A capability's parameter values, one a line, each by its declaration's description
+    // A value the sandbox chose, quoted as JSON, with what JSON leaves raw and would break a line, turn the text around
+    // or hide escaped too: C1 controls, line and paragraph separators, bidi and other format characters
+    function quoted(v) {
+        return JSON.stringify(v).replace(/[\u0080-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g,
+                                          c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"))
+    }
+    // A capability's parameter values, one a line, each by its declaration's description, quoted
     function paramLines(capId, params) {
         const decl = (caps[capId] || {}).params || {}
         return Object.keys(params || {}).sort().map(k => {
             const d = decl[k] || {}
             const v = params[k]
             const shown = d.opaque && typeof v === "string" ? "opaque, " + v.length + " characters"
-                                                            : typeof v === "string" ? v : JSON.stringify(v)
+                                                            : quoted(v)
             return (d.description ? d.description + " (" + k + ")" : k) + ": " + shown
         }).join("\n")
     }
@@ -189,18 +195,6 @@ Item {
                                                    + (typeof args[k] === "string" ? args[k] : JSON.stringify(args[k])))
                                           .join("")
     }
-    // A host command capability's bounding values as the consent's summary has them: a value alone, quoted, or with
-    // several, each after its name
-    function boundValues(capId, params) {
-        const decl = (caps[capId] || {}).params || {}
-        const keys = Object.keys(params || {}).sort()
-        return keys.map(k => {
-            const v = params[k]
-            const shown = (decl[k] || {}).opaque && typeof v === "string" ? "opaque, " + v.length + " characters"
-                                                                          : JSON.stringify(v)
-            return keys.length > 1 ? k + " " + shown : shown
-        }).join(", ")
-    }
     // How long a lease lasts, after "for" or as "until": the notification's words
     function leasePhrase(lease) {
         switch (lease) {
@@ -209,10 +203,10 @@ Item {
         }
         return "for " + (spoken(lease) || lease)
     }
-    // The heading of what a host command request's grant covers: on its bounding values, for the lease picked
-    function coversHeading(capId, params, lease) {
-        const on = boundValues(capId, params)
-        return "A grant covers" + (on ? ", on " + on : "") + ", " + leasePhrase(lease) + ":"
+    // The heading of what a host command request's grant covers: on its bounding values, as the broker quotes them for
+    // the notification (non-printing runes escaped, opaque ones by digest), for the lease picked
+    function coversHeading(bounds, lease) {
+        return "A grant covers" + (bounds ? ", on " + bounds : "") + ", " + leasePhrase(lease) + ":"
     }
     // What a grant of a host command capability covers in detail, one command or free argument a line, unrestricted
     // ones first, with the values of an enum the broker counts rather than lists (more than its maxListedEnum, 8)

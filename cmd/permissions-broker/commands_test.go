@@ -40,10 +40,14 @@ func TestCommandsRefused(t *testing.T) {
 		"no consent":         func(c *capability) { c.Commands["run"].Consent = "" },
 		"consent with a tab": func(c *capability) { c.Commands["run"].Consent = "Run\tit" },
 		"long consent":       func(c *capability) { c.Commands["run"].Consent = strings.Repeat("é", hostcmd.MaxPhrase+1) },
-		"no commands":        func(c *capability) { c.Commands = nil },
-		"no run":             func(c *capability) { c.Commands["run"].Run = nil },
-		"name":               func(c *capability) { c.Name = "a_b" },
-		"command name":       func(c *capability) { c.Commands["a b"] = c.Commands["run"] },
+		"long Danish": func(c *capability) {
+			c.Commands["run"].Consent = "Ændr, flyt og slet filer på den virtuelle maskine, også når den kører, på én gang"
+		},
+		"long CJK":     func(c *capability) { c.Commands["run"].Consent = strings.Repeat("画", hostcmd.MaxPhrase+1) },
+		"no commands":  func(c *capability) { c.Commands = nil },
+		"no run":       func(c *capability) { c.Commands["run"].Run = nil },
+		"name":         func(c *capability) { c.Name = "a_b" },
+		"command name": func(c *capability) { c.Commands["a b"] = c.Commands["run"] },
 		"tool name": func(c *capability) {
 			c.Commands[strings.Repeat("x", hostcmd.MaxToolName-len(c.Name))] = c.Commands["run"]
 		},
@@ -68,6 +72,18 @@ func TestCommandsRefused(t *testing.T) {
 		change(c)
 		if err := c.check(); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Phrases are counted in characters, as the module counts them: Danish of 46 and of 80 (87 bytes), CJK of 80
+func TestPhraseCharacters(t *testing.T) {
+	for _, p := range []string{"Læs og ret filer på din virtuelle maskine, Åse",
+		"Ændr, flyt og slet filer på den virtuelle maskine også når den kører, på én gang", strings.Repeat("画", 80)} {
+		c := testCap(t, "command")
+		c.Commands["run"].Consent = p
+		if err := c.check(); err != nil {
+			t.Errorf("%q: %v", p, err)
 		}
 	}
 }

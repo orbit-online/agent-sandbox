@@ -222,6 +222,8 @@ type decision struct {
 func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string, call *askingCall) (decision, error) {
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan wire.Request, 1)}
+	scope, bounds := c.kind().scope(c, params)
+	p.Bounds = bounds
 	if call != nil {
 		p.Command, p.Arguments = call.Command, call.Arguments
 	}
@@ -253,7 +255,6 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 		err    error
 	}
 	asked := make(chan result, 1)
-	scope, bounds := c.kind().scope(c, params)
 	go func() {
 		action, err := b.ask(ctx, notify.Prompt{Summary: summary, Reason: reason, Lease: lease, Scope: scope, Bounds: bounds,
 			Options: len(b.cfg.Window) > 0})

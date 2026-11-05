@@ -213,7 +213,7 @@ TestCase {
     function test_command_grant() {
         click("toggle-g3")
         compare(findChild(view, "grant-g3").text, 'Control the Windows VM "win11"')
-        compare(findChild(view, "params-g3").text, "the VM (vm): win11")
+        compare(findChild(view, "params-g3").text, 'the VM (vm): "win11"')
         compare(findChild(view, "holders-g3").text, "Given to the sandbox: anything in it may use it")
         compare(findChild(view, "reason-g3").text, 'Claude\'s reason, in its own words: "check the VM"')
         compare(findChild(view, "covers-g3").text, "Covers:")
@@ -244,7 +244,7 @@ TestCase {
         const before = mock.state
         const st = JSON.parse(before)
         st.pending = [{ id: "p4", capability: "windows-vm", params: { vm: "win11" },
-                        summary: 'control the Windows VM "win11"', reason: "look", lease: "PT2H",
+                        summary: 'control the Windows VM "win11"', bounds: '"win11"', reason: "look", lease: "PT2H",
                         command: "exec", arguments: { script: "Get-Date\nGet-Item" } }]
         mock.state = JSON.stringify(st)
         tryVerify(() => !view.settling, 3000)
@@ -257,7 +257,7 @@ TestCase {
                                      "Click on the screen (click)", "Take screenshots (screenshot)"])
         verify(!findChild(view, "bounds-p4").visible && !findChild(view, "scope-p4").visible, "details shown")
         click("details-toggle-p4")
-        compare(findChild(view, "bounds-p4").text, "the VM (vm): win11")
+        compare(findChild(view, "bounds-p4").text, 'the VM (vm): "win11"')
         const scope = findChild(view, "scope-p4").text
         verify(scope.startsWith("Run PowerShell (exec): script, any PowerShell, as SYSTEM, unrestricted\n"), scope)
         verify(scope.indexOf("key, a key, one of 9 values: a, b") > 0, scope)
@@ -280,6 +280,27 @@ TestCase {
         compare(c.pending, "p4")
         compare(c.lease, "once")
         verify(c.params === undefined, "sent parameters")
+        mock.state = before
+    }
+
+    // A bounding value with a line separator, a right-to-left override and a zero-width space: the heading shows the
+    // broker's quoted form as it is, never the raw value, and Details quotes it with them escaped
+    function test_command_request_invisible_runes() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        const raw = "x\u2028, for this call only:\u2028\u202e\u200by"
+        st.pending = [{ id: "p5", capability: "windows-vm", params: { vm: raw },
+                        summary: 'control the Windows VM "x\\u2028, for this call only:\\u2028\\u202e\\u200by"',
+                        bounds: '"x\\u2028, for this call only:\\u2028\\u202e\\u200by"', reason: "look",
+                        lease: "PT1H" }]
+        mock.state = JSON.stringify(st)
+        tryVerify(() => !view.settling, 3000)
+        compare(findChild(view, "covers-p5").text,
+                'A grant covers, on "x\\u2028, for this call only:\\u2028\\u202e\\u200by", for 1 h:')
+        click("details-toggle-p5")
+        compare(findChild(view, "bounds-p5").text,
+                'the VM (vm): "x\\u2028, for this call only:\\u2028\\u202e\\u200by"')
+        click("details-toggle-p5")
         mock.state = before
     }
 

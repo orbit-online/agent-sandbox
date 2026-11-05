@@ -35,8 +35,7 @@ Frame {
             view: request.view
             key: request.modelData.id
             capability: request.modelData.capability
-            heading: request.view.coversHeading(request.modelData.capability, request.modelData.params,
-                                                lease.currentValue || request.modelData.lease)
+            heading: request.view.coversHeading(request.modelData.bounds, lease.currentValue || request.modelData.lease)
             boundsText: request.view.paramLines(request.modelData.capability, request.modelData.params)
         }
         ReadOnlyText {
