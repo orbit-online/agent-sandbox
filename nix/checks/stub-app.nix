@@ -45,7 +45,8 @@ let
       echo '"use strict";' >app/main.js
       # The real app's tray icon choice, minified, for the module's patch
       echo 'function c(e){return e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"}' >>app/main.js
-      # The .desktop file the module adds its shell action to, and rewrites for a named launcher
+      # The .desktop file the module installs under each launcher's app ID, with its shell action, and rewrites for a named
+      # launcher
       printf '%s\n' '[Desktop Entry]' Name=Claude Actions=NewChat 'Exec=claude-desktop %U' 'MimeType=x-scheme-handler/claude;' StartupWMClass=com.anthropic.Claude \
         "" '[Desktop Action NewChat]' 'Name=New chat' 'Exec=claude-desktop claude://claude.ai/new' \
         >$out/share/applications/com.anthropic.Claude.desktop

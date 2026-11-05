@@ -11,7 +11,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   sandbox's namespaces at the top). Its options configure the default
   launcher; `launchers.<name>` adds sandboxes next to it with the same
   options, each built by `launcher` from the module's defaults alone, with its
-  own state dir, app ID, MAC and `claude-desktop-<name>`. Each runs its
+  own state dir, app ID, MAC and `claude-desktop-<name>`. The app ID,
+  `com.nixpak.ClaudeDesktop[.<name>]`, also names the launcher's `.desktop`
+  file, its `StartupWMClass` and the asar's `desktopName` (its windows' app
+  ID): the portal names the app's notifications by the app ID, and gnome-shell
+  drops them unless a `.desktop` file of that name exists. Each runs its
   sandbox as a unit in a slice of its own, `claude\x2ddesktop[\x2d<name>].slice`
   (escaped, as a `-` nests one slice in another): `claude-desktop.sh` prepares
   the state where the caller sees a refusal, then starts `app-unit.sh` as
@@ -248,9 +252,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   the store right after the embedded ones), its permissions broker (the
   read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
-  Permissions action, which the default launcher lacks, no `claude://`
-  handler, `StartupWMClass` matching the `desktopName` its asar gets, which
-  the default launcher's keeps from upstream).
+  Permissions action, no `claude://` handler). For both launchers, their app
+  ID in the wrapper and `/.flatpak-info`, which names their only `.desktop`
+  file, its `StartupWMClass` and the `desktopName` their asar gets; the
+  default launcher's `.desktop` file keeps the `claude://` handler and
+  upstream's actions, and lacks the Permissions action.
 - `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
   including `openNetns` against a child in its own user and network
   namespace, and the user namespace chain: a netns two user namespaces down
@@ -497,7 +503,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   lease, route and DNS (udhcpc in a mount namespace of its own with its
   closure and the sandbox's home, none of alice's files), the launcher `work` running next to the default
   sandbox (its own namespaces, MAC and lease, its own tray item at another
-  pid, its re-entry found by app ID, its state dir and GC root, and its
+  pid, its re-entry found by app ID, its state dir and GC root, a
+  `notify-send` from each launcher reaching the fake portal from its app ID,
+  which names a `.desktop` file in alice's profile with that `StartupWMClass`, and its
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, the standing grants from the config: the host command, a tool of

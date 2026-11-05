@@ -810,8 +810,11 @@ let
     name: lcfg:
     let
       suffix = suffixOf name;
-      # A named launcher's .desktop file, whose name its windows' app ID matches. The default launcher keeps upstream's
-      desktopFile = "claude-desktop${suffix}.desktop";
+      # The sandbox's app ID: the proxy's /.flatpak-info names the app by it to the portals, and the wrapper finds its
+      # running sandbox by it. It names the launcher's .desktop file and its windows' app ID too: gnome-shell drops a
+      # portal notification unless <app ID>.desktop exists
+      appId = "com.nixpak.ClaudeDesktop${lib.optionalString (name != null) ".${name}"}";
+      desktopFile = "${appId}.desktop";
       stateDir = stateDirOf name;
       appPid = appPidOf name;
       # The D-Bus proxy's config (dbus-proxy --help): dbus without what's unset
@@ -992,7 +995,7 @@ let
           pkgs.jq
         ];
         ASAR = asar;
-        DESKTOP_NAME = lib.optionalString (name != null) desktopFile;
+        DESKTOP_NAME = desktopFile;
       } "source ${./patch-asar.sh}";
       # The sandbox gets its own netns with a macvlan on the LAN (netns-macvlan --help), so host
       # services, routes and abstract sockets stay out of reach. Its DHCP lease brings the DNS servers
@@ -1093,8 +1096,7 @@ let
           nixpakArgs@{ sloth, ... }:
           {
             imports = [ lcfg.sandbox ];
-            # The wrapper finds its running sandbox by it
-            flatpak.appId = lib.mkIf (name != null) "com.nixpak.ClaudeDesktop.${name}";
+            flatpak.appId = appId;
             app.package = package;
             # The proxy's rules, from dbus; nixpak's dbus.policies and dbus.rules would be its argv rules, which it
             # doesn't take
@@ -1161,7 +1163,7 @@ let
       permissionsTitle = "Claude permissions${lib.optionalString (name != null) " (${name})"}";
       permissionsConfig = pkgs.writeText "permissions${suffix}.json" (
         builtins.toJSON {
-          appId = sandboxed.config.flatpak.appId;
+          inherit appId;
           # Empty for the default launcher: no named one can take that name
           launcher = if name == null then "" else name;
           grantDir = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}";
@@ -1319,7 +1321,7 @@ let
           PERMISSIONS_WINDOW = lib.getExe permissionsWindow;
           PERMISSIONS_TITLE = permissionsTitle;
           SCRATCHPAD = scratchpad;
-          APP_ID = sandboxed.config.flatpak.appId;
+          APP_ID = appId;
           APP_PID = toString appPid;
           SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
           STATE = lib.getExe state;
@@ -1343,35 +1345,42 @@ let
       };
       claude-desktop = pkgs.symlinkJoin {
         name = "claude-desktop${suffix}-sandboxed";
-        # First path wins on collisions: the wrapper shadows nixpak's bin/claude-desktop, while the icons and the
-        # .desktop file (Exec=claude-desktop, claude:// handler) carry over. A named launcher takes only a .desktop file of
-        # its own: the default launcher installs the icons and keeps the claude:// handler
+        # First path wins on collisions: the wrapper shadows nixpak's bin/claude-desktop, while the icons carry over. Each
+        # launcher installs upstream's .desktop file under its app ID, its windows' StartupWMClass. A named launcher
+        # takes only that file: the default launcher installs the icons and keeps the claude:// handler
         paths = [ wrapper ] ++ lib.optional (name == null) sandboxed.config.env;
         postBuild = ''
           # The package's only .desktop file, whose name changed upstream
           set -- ${sandboxed.config.env}/share/applications/*.desktop
           [[ $# == 1 ]]
-          d=$out/share/applications/${if name == null then "\${1##*/}" else desktopFile}
+          d=$out/share/applications/${desktopFile}
           mkdir -p "$out/share/applications"
-          rm -f "$d"
-          sed -e 's/^Actions=.*/&;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}/' ${
-            lib.optionalString (name != null) (
-              lib.escapeShellArgs [
+          rm -f "$out/share/applications/''${1##*/}" "$d"
+          sed ${
+            lib.escapeShellArgs (
+              [
+                "-e"
+                "s/^Actions=.*/&;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}/"
+                "-e"
+                "/^StartupWMClass=/d"
+                "-e"
+                "s/^\\[Desktop Entry\\]$/&\\nStartupWMClass=${appId}/"
+              ]
+              ++ lib.optionals (name != null) [
                 "-e"
                 "0,/^Name=/s/^Name=.*/Name=Claude (${name})/"
                 "-e"
                 "s/^Exec=claude-desktop /Exec=claude-desktop-${name} /"
                 "-e"
                 "/^MimeType=/d"
-                "-e"
-                "s/^StartupWMClass=.*/StartupWMClass=${lib.removeSuffix ".desktop" desktopFile}/"
               ]
             )
           } "$(readlink -f "$1")" >"$d"
           grep -q '^Actions=.*;Shell${lib.optionalString lcfg.permissions.enable ";Permissions"}$' "$d"
+          [[ $(grep -c '^StartupWMClass=' "$d") == 1 ]]
+          grep -qxF 'StartupWMClass=${appId}' "$d"
           ${lib.optionalString (name != null) ''
             grep -qxF 'Name=Claude (${name})' "$d"
-            grep -qxF 'StartupWMClass=${lib.removeSuffix ".desktop" desktopFile}' "$d"
             ! grep -q '^Exec=claude-desktop ' "$d" || exit 1
             ! grep -q '^MimeType=' "$d" || exit 1
           ''}

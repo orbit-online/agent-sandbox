@@ -1,7 +1,8 @@
 # The settings part of xdg-desktop-portal, for the VM test: the color scheme starts dark, and SetColorScheme
-# (a test hook) changes it and emits SettingChanged as the portal would; its notifications and OpenURI. And the parts of Plasma
-# next to objects the sandbox mustn't reach: plasmashell's notification server, which the sandbox mustn't reach either,
-# with its clipboard (klipper) on one connection, kded's StatusNotifierWatcher with another module's object on a second
+# (a test hook) changes it and emits SettingChanged as the portal would; its notifications and OpenURI, which name the
+# calling app. And the parts of Plasma next to objects the sandbox mustn't reach: plasmashell's notification server,
+# which the sandbox mustn't reach either, with its clipboard (klipper) on one connection, kded's StatusNotifierWatcher
+# with another module's object on a second
 import asyncio
 import json
 import os
@@ -32,18 +33,11 @@ class Settings(ServiceInterface):
 
 
 class PortalNotification(ServiceInterface):
-    """The portal's notifications, which the app's libnotify uses (NOTIFY_FORCE_PORTAL): each one is appended to
-    $XDG_RUNTIME_DIR/fake-portal-notifications as JSON"""
+    """The portal's notifications, which the app's libnotify uses (NOTIFY_FORCE_PORTAL). AddNotification is
+    Caller's"""
 
     def __init__(self):
         super().__init__("org.freedesktop.portal.Notification")
-
-    @method()
-    def AddNotification(self, id: "s", notification: "a{sv}"):
-        fields = {k: v.value for k, v in notification.items() if isinstance(v.value, (str, int, bool))}
-        path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "fake-portal-notifications")
-        with open(path, "a") as f:
-            f.write(json.dumps({"id": id, **fields}) + "\n")
 
     @method()
     def RemoveNotification(self, id: "s"):
@@ -64,20 +58,27 @@ def record(name, entry):
         f.write(json.dumps(entry) + "\n")
 
 
-class OpenURI:
-    """The portal's OpenURI, which the sandbox's xdg-open calls. Like xdg-desktop-portal, it names the app by the
-    caller's process while the call is on: the pid behind the sender's connection, its /.flatpak-info. Each URI and
-    that app go to $XDG_RUNTIME_DIR/fake-portal-uris; so would SchemeSupported, which no rule of the sandbox's lets
-    through. A message handler, since dbus-next's service methods can't wait on a call of their own"""
+class Caller:
+    """The portal's calls that name the app, as xdg-desktop-portal does, by the caller's process while the call is
+    on: the pid behind the sender's connection, its /.flatpak-info. OpenURI, which the sandbox's xdg-open calls: each
+    URI and that app go to $XDG_RUNTIME_DIR/fake-portal-uris; so would SchemeSupported, which no rule of the
+    sandbox's lets through. AddNotification: each notification's id, its string, number and boolean fields, and that
+    app go to $XDG_RUNTIME_DIR/fake-portal-notifications, the app as gnome-shell gets it, which looks it up as
+    <app>.desktop. A message handler, since dbus-next's service methods can't wait on a call of their own"""
+
+    calls = {
+        ("org.freedesktop.portal.OpenURI", "OpenURI"),
+        ("org.freedesktop.portal.OpenURI", "SchemeSupported"),
+        ("org.freedesktop.portal.Notification", "AddNotification"),
+    }
 
     def __init__(self, bus):
         self.bus = bus
 
     def handle(self, msg):
-        call = (msg.message_type, msg.interface, msg.path)
-        if call != (MessageType.METHOD_CALL, "org.freedesktop.portal.OpenURI", "/org/freedesktop/portal/desktop"):
+        if msg.message_type != MessageType.METHOD_CALL or msg.path != "/org/freedesktop/portal/desktop":
             return None
-        if msg.member not in ("OpenURI", "SchemeSupported"):
+        if (msg.interface, msg.member) not in self.calls:
             return None
         asyncio.ensure_future(self.answer(msg))
         return True
@@ -96,9 +97,14 @@ class OpenURI:
         if msg.member == "OpenURI":
             record("fake-portal-uris", {"uri": msg.body[1], "app": app})
             self.bus.send(Message.new_method_return(msg, "o", ["/org/freedesktop/portal/desktop/request/1_1/t"]))
-        else:
+        elif msg.member == "SchemeSupported":
             record("fake-portal-uris", {"scheme": msg.body[0], "app": app})
             self.bus.send(Message.new_method_return(msg, "b", [True]))
+        else:
+            id, notification = msg.body
+            fields = {k: v.value for k, v in notification.items() if isinstance(v.value, (str, int, bool))}
+            record("fake-portal-notifications", {"id": id, **fields, "app": app})
+            self.bus.send(Message.new_method_return(msg))
 
 
 class Notifications(ServiceInterface):
@@ -155,7 +161,7 @@ async def main():
     bus = await MessageBus().connect()
     bus.export("/org/freedesktop/portal/desktop", Settings())
     bus.export("/org/freedesktop/portal/desktop", PortalNotification())
-    bus.add_message_handler(OpenURI(bus).handle)
+    bus.add_message_handler(Caller(bus).handle)
     await bus.request_name("org.freedesktop.portal.Desktop")
     shell = await MessageBus().connect()
     shell.export("/org/freedesktop/Notifications", Notifications())

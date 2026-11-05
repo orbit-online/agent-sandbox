@@ -34,6 +34,18 @@
       workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
       workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
 
+  with subtest("Each launcher's notifications name an app with a .desktop file of that name"):
+      # The portal names a notification's app by the caller's /.flatpak-info, and gnome-shell drops it unless
+      # <app>.desktop exists; that file's StartupWMClass puts the app's windows under it
+      apps = "/etc/profiles/per-user/alice/share/applications"
+      for run, launcher, app_id in [(in_sandbox, "default", "com.nixpak.ClaudeDesktop"),
+                                    (in_work, "work", "com.nixpak.ClaudeDesktop.work")]:
+          run(f"notify-send hello-from-{launcher}")
+          workstation.wait_until_succeeds(f"grep -q hello-from-{launcher} /run/user/1000/fake-portal-notifications", timeout=30)
+          sent = json.loads(workstation.succeed(f"grep hello-from-{launcher} /run/user/1000/fake-portal-notifications"))
+          assert sent["app"] == app_id, f"the portal saw {launcher}'s notification come from {sent}"
+          workstation.succeed(f"grep -qx StartupWMClass={app_id} {apps}/{app_id}.desktop")
+
   with subtest("The sandbox runs in its unit's delegated cgroup, the app in sandbox/app"):
       user = "/user.slice/user-1000.slice/user@1000.service"
       work_slice = f"{user}/claude\\x2ddesktop\\x2dwork.slice"
