@@ -22,9 +22,10 @@ import (
 // scripted services straight on the bus, clients speaking the wire through the proxy, an observer asking the bus who
 // owns what
 
-// How long a step may take to settle, and a connection to close
+// How long a step may take to settle, and a connection to close. Every wait on settle ends as soon as what it waits
+// for happens, so it bounds a failure only: the race detector on a loaded machine can take seconds per step
 const (
-	settle    = 5 * time.Second
+	settle    = 30 * time.Second
 	closeWait = time.Second
 )
 
