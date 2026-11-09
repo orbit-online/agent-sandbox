@@ -39,6 +39,10 @@ jobs:
             /usr/local/lib/android \
             /opt/ghc \
             /opt/hostedtoolcache/CodeQL
+      # The sandboxed app's closure builds the Go helpers, and subid-broker's and the permissions broker's tests nest
+      # user namespaces inside the build. Ubuntu's AppArmor gives a process in an unprivileged userns no
+      # capabilities, so the inner maps can't be written
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: cachix/install-nix-action@v31
       # What earlier runs built themselves, cache.nixos.org has the rest
       - uses: ./.github/actions/nix-cache-restore
