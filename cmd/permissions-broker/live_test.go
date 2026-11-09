@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,9 +182,6 @@ func (mc *liveMachine) pendingNow() []*refPending {
 
 // restartDaemon restarts the daemon's unit and waits until it answers and its events are followed again
 func (mc *liveMachine) restartDaemon(t *rapid.T) {
-	mc.ev.mu.Lock()
-	conns := mc.ev.conns
-	mc.ev.mu.Unlock()
 	// The unit's start limit counts restarts too: reset, or the fourth within ten minutes would end it
 	if out, err := mc.lv.systemctl("reset-failed", mc.lv.cfg.Unit); err != nil {
 		t.Fatalf("Reset the start limit: %v: %s", err, out)
@@ -191,10 +189,17 @@ func (mc *liveMachine) restartDaemon(t *rapid.T) {
 	if out, err := mc.lv.systemctl("restart", mc.lv.cfg.Unit); err != nil {
 		t.Fatalf("Restart: %v: %s", err, out)
 	}
+	// systemctl restart returns once the new daemon was started, not once it serves: wait until its events are
+	// followed, which it sends once it serves, its standing grants made
+	out, err := mc.lv.systemctl("show", "--property=MainPID", "--value", mc.lv.cfg.Unit)
+	pid, _ := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || pid == 0 {
+		t.Fatalf("The daemon's pid: %v: %s", err, out)
+	}
 	mc.waitFor(t, "the daemon's events", func() bool {
 		mc.ev.mu.Lock()
 		defer mc.ev.mu.Unlock()
-		return mc.ev.conns > conns
+		return mc.ev.pid == pid
 	})
 }
 

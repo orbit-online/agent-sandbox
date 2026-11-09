@@ -16,6 +16,7 @@ import (
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
+	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
 
@@ -272,9 +273,10 @@ type liveEvents struct {
 	mu      sync.Mutex
 	granted []string
 	ended   map[string]bool
-	// Connections the daemon follows so far, by their watching event: a restart's new daemon is followed once it grows
-	conns int
-	stop  chan struct{}
+	// The pid of the daemon whose events are followed, from its watching event: a restart's new daemon once it's the
+	// unit's main pid
+	pid  int
+	stop chan struct{}
 }
 
 func (lv *liveEnv) watch() *liveEvents {
@@ -295,6 +297,15 @@ func (lv *liveEnv) watch() *liveEvents {
 				conn.Close()
 				continue
 			}
+			// The daemon's pid, as it listened
+			var pid int
+			if raw, err := conn.(*net.UnixConn).SyscallConn(); err == nil {
+				_ = raw.Control(func(fd uintptr) {
+					if cred, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED); err == nil {
+						pid = int(cred.Pid)
+					}
+				})
+			}
 			go func() {
 				<-ev.stop
 				conn.Close()
@@ -306,7 +317,7 @@ func (lv *liveEnv) watch() *liveEvents {
 				ev.mu.Lock()
 				switch e.Event {
 				case "watching":
-					ev.conns++
+					ev.pid = pid
 				case "granted":
 					ev.granted = append(ev.granted, e.ID)
 				case "ended":
