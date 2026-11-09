@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -71,13 +72,40 @@ func startBus(t *testing.T) string {
 	}
 	cmd := exec.Command("dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile")
 	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	runBus(t, cmd)
+	return "unix:path=" + sock
+}
+
+// What runBus needs of a *testing.T or a *rapid.T
+type fatalCleaner interface {
+	Fatalf(format string, args ...any)
+	Cleanup(func())
+}
+
+// Starts cmd, a dbus-daemon, and returns once it listens. Its socket file appears at bind(), before listen(), when a
+// connect is refused; --print-address writes the address only once the bus listens
+func runBus(t fatalCleaner, cmd *exec.Cmd) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe: %v", err)
+	}
+	defer r.Close()
+	cmd.Args = append(cmd.Args, "--print-address=3")
+	cmd.ExtraFiles = []*os.File{w}
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
 		t.Fatalf("Start dbus-daemon: %v", err)
 	}
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	waitFor(t, func() bool { _, err := os.Stat(sock); return err == nil })
-	return "unix:path=" + sock
+	r.SetReadDeadline(time.Now().Add(busStartTimeout))
+	if _, err := bufio.NewReader(r).ReadString('\n'); err != nil {
+		t.Fatalf("dbus-daemon's address: %v", err)
+	}
 }
+
+// How long runBus waits for a bus to listen. It bounds a failure only
+const busStartTimeout = 60 * time.Second
 
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()

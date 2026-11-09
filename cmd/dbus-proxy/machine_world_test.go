@@ -111,11 +111,7 @@ func (w *world) startBus() {
 	}
 	cmd := exec.Command("dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile")
 	cmd.Env = append(os.Environ(), "DBUS_PROXY_LAZY=1")
-	if err := cmd.Start(); err != nil {
-		w.t.Fatalf("Start dbus-daemon: %v", err)
-	}
-	w.t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	w.waitFor("the bus's socket", func() bool { _, err := os.Stat(sock); return err == nil })
+	runBus(w.t, cmd)
 	w.bus = "unix:path=" + sock
 }
 
