@@ -129,25 +129,26 @@ func echoTo(dest string) *dbus.Message {
 	}, Body: []any{"x"}}
 }
 
-// A serial reused while its call awaits a reply ends the connection: otherwise the bus's reply to GetNameOwner,
-// read as the reply to a second Hello, would give the name's owner TALK
+// A serial reused while its call awaits a reply ends the connection: otherwise the reply to the first call would be
+// judged as the reply to the second, which for a second Hello could give a name's owner TALK. The first call goes to
+// a service that never answers, so it still awaits its reply when the proxy judges the second however slow the
+// proxy is; a call to the bus could have its reply back by then, and the second be no reuse at all
 func TestSerialReuse(t *testing.T) {
 	bus := startBus(t)
-	svc := startService(t, bus)
-	got := eavesdrop(svc)
-	rc := rawConnect(t, startProxy(t, bus, policy(svcName, "see")))
-	rc.send(3, busCall("GetNameOwner", svcName), busCall("Hello"))
-	if !rc.closed() {
-		t.Error("Serial reuse didn't end the connection")
-	}
-	if n := countType(got(300*time.Millisecond), dbus.TypeMethodCall, "Echo"); n != 0 {
-		t.Errorf("The service got %d calls", n)
-	}
-	// ListNames, then GetId on its serial: the ListNames reply mustn't pass unfiltered
-	rc = rawConnect(t, startProxy(t, bus))
-	rc.send(5, busCall("ListNames"), busCall("GetId"))
-	if !rc.closed() {
-		t.Error("Serial reuse didn't end the connection")
+	silentService(t, bus)
+	addr := startProxy(t, bus, policy(svcName, "talk"))
+	for _, second := range []string{"Hello", "GetNameOwner", "ListNames"} {
+		var m *dbus.Message
+		if second == "GetNameOwner" {
+			m = busCall(second, svcName)
+		} else {
+			m = busCall(second)
+		}
+		rc := rawConnect(t, addr)
+		rc.send(3, echoTo(svcName), m)
+		if !rc.closed() {
+			t.Errorf("Serial reuse by %s didn't end the connection", second)
+		}
 	}
 }
 
