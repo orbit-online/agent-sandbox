@@ -22,12 +22,9 @@ import (
 // scripted services straight on the bus, clients speaking the wire through the proxy, an observer asking the bus who
 // owns what
 
-// How long a step may take to settle, and a connection to close. Every wait on settle ends as soon as what it waits
-// for happens, so it bounds a failure only: the race detector on a loaded machine can take seconds per step
-const (
-	settle    = 30 * time.Second
-	closeWait = time.Second
-)
+// How long a step may take to settle, a connection to close included. Every wait on settle ends as soon as what it
+// waits for happens, so it bounds a failure only: the race detector on a loaded machine can take seconds per step
+const settle = 30 * time.Second
 
 // The bus as startBus's, with an activatable name whose start stays pending until someone takes the name: its Exec is
 // the test binary as lazyHelper, which never connects
@@ -341,9 +338,9 @@ func (p *party) isClosed(want bool) bool {
 		defer p.mu.Unlock()
 		return p.closed
 	}
-	// The proxy ends a connection as it reads the message or the removal that ends it; shorter than settle, as a
-	// connection kept open waits this long on each of rapid's attempts to shrink a failure
-	p.waitFor(closeWait, func() bool { return false })
+	// The proxy ends a connection as it reads the message or the removal that ends it, which under load can take
+	// seconds. A connection wrongly kept open waits all of settle, on each of rapid's attempts to shrink the failure
+	p.waitFor(settle, func() bool { return false })
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.closed
