@@ -103,9 +103,13 @@ func (rc *rawClient) waitReply(serial uint32) *wire.Message {
 	}
 }
 
+// How long closed waits for the proxy to end a connection. It bounds a failure only: a loaded machine (the race
+// detector, a CI runner) can take seconds to judge what a test sent first
+const closeTimeout = 60 * time.Second
+
 // Whether the proxy ends the connection (rather than the read timing out), reading what comes before
 func (rc *rawClient) closed() bool {
-	rc.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	rc.conn.SetReadDeadline(time.Now().Add(closeTimeout))
 	for {
 		m, err := rc.r.ReadMessage()
 		if err != nil {

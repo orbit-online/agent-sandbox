@@ -113,7 +113,7 @@ func TestQueuedFDs(t *testing.T) {
 	// The client reads nothing: the proxy holds what's queued for it until it ends the client, which the bus sees
 	// as the client's name gone
 	watcher := connect(t, bus)
-	for i := 0; i < 100 && hasOwner(t, watcher, rc.name); i++ {
+	for deadline := time.Now().Add(closeTimeout); time.Now().Before(deadline) && hasOwner(t, watcher, rc.name); {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if hasOwner(t, watcher, rc.name) {
