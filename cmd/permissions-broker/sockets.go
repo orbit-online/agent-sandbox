@@ -139,7 +139,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req wire.Request) respon
 		res.Calls = slices.Clone(b.calls)
 		b.mu.Unlock()
 		res.Standing = b.standingViews()
-		res.Overview = b.cfg.Overview
+		res.Overview = b.overviewState()
 	case "options":
 		err = b.markOptions(req.Pending)
 	case "answer":

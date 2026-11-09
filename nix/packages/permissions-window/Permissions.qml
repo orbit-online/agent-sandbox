@@ -15,30 +15,55 @@ Item {
     readonly property var log: (st.log || []).slice().reverse().slice(0, 30)
     // Host command calls, newest first, also those of grants that ended
     readonly property var calls: (st.calls || []).slice().reverse()
-    // What the sandbox reaches from its start, from the launcher's config, read-only: each section a title and its lines
+    // What the sandbox reaches from its start, from the launcher's config, read-only: each section a title, its items
+    // (a value, monospace when it's a path or a name, its badges, and rows for what goes with it) and its text, a line an item, for copying and the tests
     readonly property var standing: st.standing || []
     readonly property var overview: {
         const o = st.overview || {}
         const d = o.dbus || {}
         const sections = []
-        const add = (key, title, lines) => {
-            if (lines.length > 0)
-                sections.push({ key: key, title: title, text: lines.join("\n") })
+        const add = (key, title, items, lines) => {
+            if (items.length > 0)
+                sections.push({ key: key, title: title, items: items, text: lines.join("\n") })
         }
-        add("binds", "Binds", (o.binds || []).map(b => b.path + " (" + (b.rw ? "read-write" : "read-only")
-                                                   + (b.src && b.src !== b.path ? ", from " + b.src : "")
-                                                   + (b.optional ? ", if there" : "") + ")"))
-        add("devices", "Devices, if there", o.devices || [])
+        // Whether an optional bind or a device is there: the broker lists what the sandbox's mount table lacks, when it
+        // could read it
+        const known = Array.isArray(o.absent)
+        const optional = path => !known ? "optional" : o.absent.indexOf(path) >= 0 ? "optional, missing"
+                                                                                  : "optional, present"
+        const plain = (list, mono) => list.map(v => ({ value: v, mono: mono, badges: [], rows: [] }))
+        const binds = o.binds || []
+        add("binds", "Binds", binds.map(b => ({
+                value: b.path,
+                mono: true,
+                badges: [{ text: b.rw ? "read-write" : "read-only", warning: false }]
+                        .concat(b.optional ? [{ text: optional(b.path) }] : []),
+                rows: b.src && b.src !== b.path ? [{ name: "from", value: b.src }] : []
+            })), binds.map(b => b.path + " (" + (b.rw ? "read-write" : "read-only")
+                           + (b.src && b.src !== b.path ? ", from " + b.src : "")
+                           + (b.optional ? ", " + optional(b.path) : "") + ")"))
+        // Bound only where they exist, as an optional bind
+        add("devices", "Devices", (o.devices || []).map(v => ({ value: v, mono: true, badges: [{ text: optional(v) }],
+                                                                rows: [] })),
+            (o.devices || []).map(v => known ? v + " (" + optional(v) + ")" : v))
         // The proxy's config: by name, its policy, calls and broadcasts
-        add("dbus", "D-Bus, through the proxy", Object.keys(d).reduce((lines, n) => lines.concat(
-            d[n].policy ? [n + ": " + d[n].policy] : [],
-            (d[n].call || []).length > 0 ? [n + ": calls " + d[n].call.join(", ")] : [],
-            (d[n].broadcast || []).length > 0 ? [n + ": broadcasts " + d[n].broadcast.join(", ")] : []), []))
-        add("network", "Network", o.network ? [o.network] : [])
-        add("standing", "Standing grants", root.standing.map(g => g.summary + ": "
-                                                             + (g.ended ? "ended until the broker starts again"
-                                                                        : g.grant ? "granted" : "not granted now")))
-        add("implicit", "Also", o.implicit || [])
+        const names = Object.keys(d)
+        add("dbus", "D-Bus, through the proxy", names.map(n => ({
+                value: n,
+                mono: true,
+                badges: d[n].policy ? [{ text: d[n].policy }] : [],
+                rows: (d[n].call || []).map(c => ({ name: "calls", value: c }))
+                      .concat((d[n].broadcast || []).map(c => ({ name: "broadcasts", value: c })))
+            })), names.reduce((lines, n) => lines.concat(
+                d[n].policy ? [n + ": " + d[n].policy] : [],
+                (d[n].call || []).length > 0 ? [n + ": calls " + d[n].call.join(", ")] : [],
+                (d[n].broadcast || []).length > 0 ? [n + ": broadcasts " + d[n].broadcast.join(", ")] : []), []))
+        add("network", "Network", plain(o.network ? [o.network] : [], false), o.network ? [o.network] : [])
+        const state = g => g.ended ? "ended until the broker starts again" : g.grant ? "granted" : "not granted now"
+        add("standing", "Standing grants", root.standing.map(g => ({
+                value: g.summary, mono: false, badges: [{ text: state(g), warning: !!g.ended }], rows: [] })),
+            root.standing.map(g => g.summary + ": " + state(g)))
+        add("implicit", "Also", plain(o.implicit || [], false), o.implicit || [])
         return sections
     }
     // What still holds folder grants that ended, however they ended
@@ -471,16 +496,55 @@ Item {
                 Repeater {
                     model: root.overview
                     delegate: Section {
+                        id: part
                         required property var modelData
                         key: "overview-" + modelData.key
                         title: modelData.title
+                        info: modelData.items.length > 1 ? String(modelData.items.length) : ""
                         Card {
-                            padding: 8
-                            ReadOnlyText {
-                                objectName: "overview-" + modelData.key
-                                Layout.fillWidth: true
-                                text: modelData.text
-                                font.family: "monospace"
+                            objectName: "overview-" + part.modelData.key
+                            readonly property string text: part.modelData.text
+                            padding: 10
+                            Repeater {
+                                model: part.modelData.items
+                                delegate: ColumnLayout {
+                                    id: item
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.bottomMargin: 4
+                                        visible: item.index > 0
+                                        implicitHeight: 1
+                                        color: palette.midlight
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        ReadOnlyText {
+                                            objectName: "overview-" + part.modelData.key + "-" + item.index
+                                            Layout.fillWidth: true
+                                            text: item.modelData.value
+                                            font.family: item.modelData.mono ? "monospace" : Qt.application.font.family
+                                        }
+                                        Badges {
+                                            Layout.alignment: Qt.AlignTop
+                                            model: item.modelData.badges.map(b => ({ name: "", text: b.text,
+                                                                                     warning: b.warning === true }))
+                                        }
+                                    }
+                                    Repeater {
+                                        model: item.modelData.rows
+                                        delegate: FieldRow {
+                                            required property var modelData
+                                            Layout.leftMargin: -40
+                                            name: modelData.name
+                                            value: modelData.value
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

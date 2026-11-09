@@ -197,6 +197,9 @@
     "network": "its own namespace, a macvlan on the LAN",
     "implicit": [
       "Sockets: Wayland, PipeWire"
+    ],
+    "absent": [
+      "/etc/machine-id"
     ]
   },
   "held": [],

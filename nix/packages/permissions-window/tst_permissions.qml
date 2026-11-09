@@ -321,7 +321,7 @@ TestCase {
     // What the configuration gives, read-only, above the grants
     function test_overview() {
         compare(findChild(view, "overview-binds").text,
-                "/home/alice (read-write, from /srv/home)\n/srv/notes (read-only, if there)")
+                "/home/alice (read-write, from /srv/home)\n/srv/notes (read-only, optional)")
         compare(findChild(view, "overview-devices").text, "/dev/kvm")
         compare(findChild(view, "overview-dbus").text,
                 "org.kde.StatusNotifierItem-100-1: own\norg.freedesktop.portal.Desktop: calls a@/x, b@/x\n"
@@ -330,10 +330,27 @@ TestCase {
         compare(findChild(view, "overview-standing").text,
                 "the echo: granted\nthe test thing: ended until the broker starts again")
         compare(findChild(view, "overview-implicit").text, "Sockets: Wayland")
-        const devices = findChild(view, "overview-devices")
+        // An item a row each: its value selectable, its badges, what goes with it in rows
+        const devices = findChild(view, "overview-devices-0")
         verify(devices.readOnly && devices.selectByMouse)
         devices.selectAll()
         compare(devices.selectedText, "/dev/kvm")
+        compare(findChild(view, "overview-binds-0").text, "/home/alice")
+        compare(findChild(view, "overview-binds-1").text, "/srv/notes")
+        compare(findChild(view, "overview-dbus-0").text, "org.kde.StatusNotifierItem-100-1")
+        compare(findChild(view, "overview-standing-1").text, "the test thing")
+    }
+
+    // With the broker's list of what the sandbox lacks, an optional bind or a device says whether it's there
+    function test_overview_absent() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        st.overview.absent = ["/srv/notes"]
+        mock.state = JSON.stringify(st)
+        compare(findChild(view, "overview-binds").text,
+                "/home/alice (read-write, from /srv/home)\n/srv/notes (read-only, optional, missing)")
+        compare(findChild(view, "overview-devices").text, "/dev/kvm (optional, present)")
+        mock.state = before
     }
 
     // The same action twice is still a change: each command carries its own number

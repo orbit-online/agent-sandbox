@@ -203,7 +203,7 @@ func TestPeerGoneAfterRead(t *testing.T) {
 	}
 }
 
-// control.sock's state passes the config's overview on to the window as it is
+// control.sock's state passes the config's overview on to the window as it is, without the sandbox's mount table to add to it
 func TestStateOverview(t *testing.T) {
 	b, _ := testBroker(t)
 	b.cfg.Overview = json.RawMessage(`{"network":"its own","binds":[{"path":"/srv","rw":true}]}`)

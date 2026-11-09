@@ -46,7 +46,7 @@ RowLayout {
             anchors.margins: 3
             anchors.leftMargin: 6
             text: row.value
-            font.family: row.mono ? "monospace" : undefined
+            font.family: row.mono ? "monospace" : Qt.application.font.family
         }
     }
     RowLayout {

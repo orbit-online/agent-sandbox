@@ -139,7 +139,8 @@ host (user, no capabilities)                       sandbox
 
   Its tabs, each scrolling on its own: Requests (in front while there are some, and again when one arrives; Allow and
   Deny stay off for a second then, as for a row that moved), Granted (with what's still open in ended folder grants),
-  Activity (host command calls, recent decisions) and Configuration. Requests and grants are cards. Every value is
+  Activity (host command calls, recent decisions) and Configuration (a card per part, an item a row each with
+  its badges, such as read-only or a D-Bus policy, and what goes with it beneath, such as a bind's source). Requests and grants are cards. Every value is
   on a row of its own, its name on the left and the value in a box of its own, so a value the sandbox chose needs no
   quotes to show where it ends; what would break a line, turn the text around or hide is escaped there, and in
   Claude's reason, which stands apart beside a bar. A grant is one line: what's granted (a host command capability's
@@ -899,10 +900,13 @@ Host applications through AT-SPI need their own design: the accessibility bus is
 
 ## Overview
 
-The window shows what the sandbox reaches without asking, under "From the configuration", so the user sees the
+The window shows what the sandbox reaches without asking, on its Configuration tab, so the user sees the
 whole of its access in one place. The module writes it into the daemon's config, derived from the launcher's
-settings and nixpak's, and the daemon passes it on unchanged as `overview` in control.sock's `state`, next to
-`standing` (the standing grants, each with its live grant or ended):
+settings and nixpak's, and the daemon passes it on as `overview` in control.sock's `state`, next to
+`standing` (the standing grants, each with its live grant or ended), with one key added: `absent`, the optional binds
+and the devices with no mount at their path in the sandbox's pinned mount namespace (nixpak binds them only where
+they exist at launch), left out when the daemon can't read that mount table. The window then says of each whether
+it's present or missing:
 
 - `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
 - `devices`: from `devices` and `kvm`, each bound if present;

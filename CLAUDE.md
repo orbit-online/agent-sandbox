@@ -112,7 +112,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   until the sandbox ends), `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
   logind), `standing.go` (the standing grants from the config), `views.go` (and
-  opening the window), `types.go`, `clock.go` (the time and timers of leases and
+  opening the window), `overview.go` (the config's overview, with what the sandbox's mount table lacks), `types.go`, `clock.go` (the time and timers of leases and
   answers, which tests fake), `capability.go` (a capability, its parameters and
   summary), `kind.go` (what a capability's type adds, which the core calls into:
   its checks, a grant made live and ended, the consent's summary and scope, the
@@ -383,7 +383,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   refused by `control.sock`, `share` and `request` (S13), the sandbox's
   namespaces pinned (helpers refused once its pid moves to namespaces of its
   own) and not found from a stale instance directory or in a user namespace
-  that isn't a child of ours, the sockets end to end with `watch` events, the config's overview passed on in `state`, and what
+  that isn't a child of ours, the sockets end to end with `watch` events, the config's overview passed on in `state` (with the optional binds and devices a stand-in sandbox's mount
+  table lacks as `absent`, binds that aren't optional never), and what
   the sandbox can't do to it: hold every connection (control.sock still
   answers, idle clients time out), send an oversized request, dress up a
   parameter or reason in the notification, make a click on its replacement of
@@ -475,7 +476,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
   a standing grant shown as from the config, the tabs (the requests in front while there are some and when one
   arrives, the user's pick otherwise), a folder request's resolved folder from the summary, the overview of the configuration (binds, devices, D-Bus, the
-  network, the standing grants live and ended, the implicit lines), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
+  network, the standing grants live and ended, the implicit lines; an item a row each, its value selectable; an optional bind or a device present or missing by
+  the broker's `absent`), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
   replaced in place, a grant expanded and collapsed (kept through a refresh), the
   badges (lease, from config, free arguments with a warning for an unrestricted one), a host command
   grant's summary as a sentence, parameters, holders, reason, consent lines (the phrase, an unrestricted badge, the
