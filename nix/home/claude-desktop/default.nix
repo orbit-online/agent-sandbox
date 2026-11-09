@@ -1424,11 +1424,14 @@ let
             ! grep -q '^Exec=claude-desktop ' "$d" || exit 1
             ! grep -q '^MimeType=' "$d" || exit 1
           ''}
+          # The launcher by name, found on PATH as upstream's Exec finds it: gnome-shell keeps a .desktop file it read
+          # until it notices a change, which a profile switch doesn't make, and a store path there would run the
+          # launcher of the generation it read
           printf '\n[Desktop Action Shell]\nExec=%s %s --shell\nName=New shell\n' \
-            ${lib.getExe pkgs.xdg-terminal-exec} "$out/bin/claude-desktop${suffix}" >>"$d"
+            ${lib.getExe pkgs.xdg-terminal-exec} "claude-desktop${suffix}" >>"$d"
           ${lib.optionalString lcfg.permissions.enable ''
             printf '\n[Desktop Action Permissions]\nExec=%s --permissions\nName=Permissions\n' \
-              "$out/bin/claude-desktop${suffix}" >>"$d"
+              "claude-desktop${suffix}" >>"$d"
           ''}
         '';
       };

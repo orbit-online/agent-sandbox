@@ -1230,11 +1230,18 @@ in
           done
           grep -q '^MimeType=x-scheme-handler/claude' "$d" || { echo "$d lacks the claude:// handler" >&2; exit 1; }
           ! grep -q '^Name=Permissions$' "$d" || { echo "the default launcher has the Permissions action" >&2; exit 1; }
+          # Its actions run the launcher by name, as its Exec does: a cached .desktop file keeps running the current one
+          grep -qx 'Exec=/nix/store/[^ ]*/bin/xdg-terminal-exec claude-desktop --shell' "$d" ||
+            { echo "$d's shell action doesn't run claude-desktop by name" >&2; exit 1; }
+          ! grep -q '^Exec=/nix/store/[^ ]*/bin/claude-desktop' "$d" || { echo "$d runs a store path" >&2; exit 1; }
           d=$work/share/applications/com.anthropic.Claude.work.desktop
-          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Exec=claude-desktop-work claude://claude.ai/new' 'Name=New shell' 'Name=Permissions'; do
+          for line in 'Name=Claude (work)' 'Exec=claude-desktop-work %U' 'Exec=claude-desktop-work claude://claude.ai/new' 'Name=New shell' 'Name=Permissions' 'Exec=claude-desktop-work --permissions'; do
             grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
           done
           ! grep -q -e '^MimeType=' -e '^Exec=claude-desktop ' "$d" || { echo "$d keeps the claude:// handler or the default Exec" >&2; exit 1; }
+          grep -qx 'Exec=/nix/store/[^ ]*/bin/xdg-terminal-exec claude-desktop-work --shell' "$d" ||
+            { echo "$d's shell action doesn't run claude-desktop-work by name" >&2; exit 1; }
+          ! grep -q '^Exec=/nix/store/[^ ]*/bin/claude-desktop' "$d" || { echo "$d runs a store path" >&2; exit 1; }
           touch $out
         '';
 

@@ -266,7 +266,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   the store right after the embedded ones), its permissions broker (the
   read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
-  Permissions action, no `claude://` handler). For both launchers, their app
+  Permissions action, no `claude://` handler; both launchers' actions running the launcher by name, no store path). For both launchers, their app
   ID in the wrapper and `/.flatpak-info`, which names their only `.desktop`
   file, its `StartupWMClass` and the `desktopName` their asar gets; the
   default launcher's `.desktop` file keeps the `claude://` handler and
