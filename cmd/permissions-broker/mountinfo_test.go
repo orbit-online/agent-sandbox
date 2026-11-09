@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 )
@@ -30,7 +30,10 @@ func TestAttackKeepBind(t *testing.T) {
 	if _, err := fmt.Fscan(out, &pid); err != nil || pid <= 0 {
 		t.Fatal(pid, err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	waitUntil(t, "the re-bind", func() bool {
+		data, _ := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
+		return strings.Contains(string(data), " "+keep+" ")
+	})
 	holders, err := b.revoke(g.ID)
 	if err != nil {
 		t.Fatal(err)

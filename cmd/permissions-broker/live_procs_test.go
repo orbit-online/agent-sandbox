@@ -272,7 +272,7 @@ type liveEvents struct {
 	mu      sync.Mutex
 	granted []string
 	ended   map[string]bool
-	// Connections made so far: a restart's new daemon is followed once it grows
+	// Connections the daemon follows so far, by their watching event: a restart's new daemon is followed once it grows
 	conns int
 	stop  chan struct{}
 }
@@ -295,9 +295,6 @@ func (lv *liveEnv) watch() *liveEvents {
 				conn.Close()
 				continue
 			}
-			ev.mu.Lock()
-			ev.conns++
-			ev.mu.Unlock()
 			go func() {
 				<-ev.stop
 				conn.Close()
@@ -308,6 +305,8 @@ func (lv *liveEnv) watch() *liveEvents {
 				_ = json.Unmarshal(sc.Bytes(), &e)
 				ev.mu.Lock()
 				switch e.Event {
+				case "watching":
+					ev.conns++
 				case "granted":
 					ev.granted = append(ev.granted, e.ID)
 				case "ended":

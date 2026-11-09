@@ -83,7 +83,7 @@ func TestNoOutputAfterEnd(t *testing.T) {
 		res, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "PT1H")
 		done <- result{res.Output, err}
 	}()
-	time.Sleep(200 * time.Millisecond)
+	waitSlotTaken(t, c)
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}

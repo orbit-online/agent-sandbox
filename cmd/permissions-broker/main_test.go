@@ -290,3 +290,13 @@ func ownSandbox(t *testing.T, pid int) *sandbox {
 	t.Cleanup(func() { userns.Close() })
 	return &sandbox{pid: pid, pidfd: -1, userns: userns}
 }
+
+// waitUntil polls until ok holds. The bound is for a failure only: a loaded machine can take seconds
+func waitUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); !ok(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("Waited for %s", what)
+		}
+	}
+}

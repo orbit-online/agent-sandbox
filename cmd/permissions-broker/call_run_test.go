@@ -64,7 +64,8 @@ func TestCallResults(t *testing.T) {
 // The unit: the user's, collected, bounded by the timeout, bound to the daemon's, in the launcher's slice. A revoke stops a running call's
 // unit, and its output isn't handed out
 func TestCallUnit(t *testing.T) {
-	b, c, _ := commandBroker(t, "sleep 1; cat", "allow")
+	g := newGate(t)
+	b, c, _ := commandBroker(t, g.script("cat"), "allow")
 	b.cfg.Unit = "permissions.service"
 	b.cfg.Slice = `claude\x2ddesktop.slice`
 	c.Commands["run"].Timeout = "PT90S"
@@ -74,7 +75,7 @@ func TestCallUnit(t *testing.T) {
 		_, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "")
 		done <- err
 	}()
-	time.Sleep(300 * time.Millisecond)
+	g.waitStarted(t, 1)
 	gs := b.liveGrants()
 	if len(gs) != 1 {
 		t.Fatalf("Grants %v", gs)
@@ -82,6 +83,12 @@ func TestCallUnit(t *testing.T) {
 	if _, err := b.revoke(gs[0].ID); err != nil {
 		t.Fatal(err)
 	}
+	// The fake systemctl stops nothing: the command ends once the revoke stopped its unit
+	waitUntil(t, "the unit to be stopped", func() bool {
+		data, _ := os.ReadFile(log)
+		return strings.Contains(string(data), "systemctl --user stop perm-test_call-")
+	})
+	g.open(t)
 	if err := <-done; err == nil {
 		t.Error("Output handed out after a revoke")
 	}
@@ -134,7 +141,7 @@ func TestCallEndedBeforeStart(t *testing.T) {
 		_, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "")
 		done <- err
 	}()
-	time.Sleep(200 * time.Millisecond)
+	waitSlotTaken(t, b.caps["thing"])
 	if _, err := b.revoke(g.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +158,8 @@ func TestCallEndedBeforeStart(t *testing.T) {
 
 // Calls with the same bounding values run one at a time, and one waits callWait at most
 func TestCallSlot(t *testing.T) {
-	b, _, _ := commandBroker(t, "sleep 1; cat", "allow")
+	g := newGate(t)
+	b, _, _ := commandBroker(t, g.script("cat"), "allow")
 	old := callWait
 	callWait = 300 * time.Millisecond
 	t.Cleanup(func() { callWait = old })
@@ -163,10 +171,11 @@ func TestCallSlot(t *testing.T) {
 		_, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "")
 		first <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	g.waitStarted(t, 1)
 	if _, err := callRun(b, peerAt(t, os.Getpid()), `{}`, ""); err == nil || !strings.Contains(err.Error(), "still running") {
 		t.Errorf("A second call beside the first: %v", err)
 	}
+	g.open(t)
 	if err := <-first; err != nil {
 		t.Error(err)
 	}

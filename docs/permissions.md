@@ -706,7 +706,7 @@ description.
 | `call`    | `capability`, `command`, `params`, `arguments`, `reason`, `lease` | the command's output              |
 | `release` | `grant`                                             | ends the grant                                 |
 | `status`  |                                                     | the live grants                                |
-| `watch`   |                                                     | a stream of grant events, one JSON per line    |
+| `watch`   |                                                     | a stream of grant events, one JSON per line, the first `watching` once it follows them |
 | `share`   |                                                     | (from `bwrap-subid.sh` only, see above)        |
 
 `request` grants ahead of use: a folder, a host socket, or a host command capability before its first

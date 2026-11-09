@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -73,7 +73,12 @@ func TestSockets(t *testing.T) {
 	}
 	defer watch.Close()
 	_ = json.NewEncoder(watch).Encode(wire.Request{Op: "watch"})
-	time.Sleep(50 * time.Millisecond)
+	events := bufio.NewReader(watch)
+	// The deadlines bound a failure only
+	_ = watch.SetReadDeadline(time.Now().Add(30 * time.Second))
+	if line, err := events.ReadString('\n'); err != nil || !strings.Contains(line, `"watching"`) {
+		t.Fatalf("The watch's first event: %q, %v", line, err)
+	}
 
 	res, err := callBroker(sock, req(c.id(), `{"path": "/a"}`, "PT1H"))
 	if err != nil || res.Grant == nil {
@@ -91,11 +96,15 @@ func TestSockets(t *testing.T) {
 	if _, err := callBroker(sock, wire.Request{Op: "release", Grant: res.Grant.ID}); err != nil {
 		t.Error(err)
 	}
-	_ = watch.SetReadDeadline(time.Now().Add(time.Second))
-	events, _ := io.ReadAll(watch)
+	_ = watch.SetReadDeadline(time.Now().Add(30 * time.Second))
+	var got string
 	for _, want := range []string{`"pending"`, `"granted"`, `"ended"`} {
-		if !strings.Contains(string(events), want) {
-			t.Errorf("No %s event in:\n%s", want, events)
+		for !strings.Contains(got, want) {
+			line, err := events.ReadString('\n')
+			if err != nil {
+				t.Fatalf("No %s event in:\n%s", want, got)
+			}
+			got += line
 		}
 	}
 }

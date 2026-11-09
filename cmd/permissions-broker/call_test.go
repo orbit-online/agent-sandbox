@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,6 +24,49 @@ func commandBroker(t *testing.T, script string, answers ...string) (*broker, *ca
 	c.Commands["run"].Run = []string{path}
 	b.caps[c.id()] = c
 	return b, c, f
+}
+
+// A gate the test command waits at, so a call runs until the test lets it end: each run says it started, then waits
+// until the gate is open
+type cmdGate struct{ dir string }
+
+func newGate(t *testing.T) *cmdGate { return &cmdGate{dir: t.TempDir()} }
+
+// script is a test command that waits at the gate, then runs rest
+func (g *cmdGate) script(rest string) string {
+	return fmt.Sprintf("mktemp -p %[1]s started.XXXXXX >/dev/null; while [ ! -e %[1]s/open ]; do sleep 0.01; done; %[2]s",
+		g.dir, rest)
+}
+
+// waitStarted waits until n runs reached the gate
+func (g *cmdGate) waitStarted(t *testing.T, n int) {
+	t.Helper()
+	waitUntil(t, fmt.Sprintf("%d calls to start", n), func() bool {
+		m, _ := filepath.Glob(filepath.Join(g.dir, "started.*"))
+		return len(m) >= n
+	})
+}
+
+func (g *cmdGate) open(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(g.dir, "open"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitSlotTaken waits until a call holds one of c's instance slots, so it's past the grant's lookup
+func waitSlotTaken(t *testing.T, c *capability) {
+	t.Helper()
+	waitUntil(t, "a call to take its instance's slot", func() bool {
+		c.slotsMu.Lock()
+		defer c.slotsMu.Unlock()
+		for _, s := range c.slots {
+			if len(s) > 0 {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // Everything a call carries is checked before the user is asked
@@ -66,21 +110,28 @@ func TestCallChecksFirst(t *testing.T) {
 // A once grant covers the call it was made for, not one running beside it, and ends with it
 func TestCallOnce(t *testing.T) {
 	// A third allow, for the request that mustn't get a once grant
-	b, c, f := commandBroker(t, "sleep 0.5; cat", "allow", "allow", "allow")
-	first := make(chan error, 1)
+	g := newGate(t)
+	b, c, f := commandBroker(t, g.script("cat"), "allow", "allow", "allow")
+	first, second := make(chan error, 1), make(chan error, 1)
 	go func() {
 		_, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "once")
 		first <- err
 	}()
-	time.Sleep(200 * time.Millisecond)
+	g.waitStarted(t, 1)
 	if gs := b.liveGrants(); len(gs) != 1 || gs[0].Lease != "once" {
 		t.Fatalf("Grants while the first call runs: %v", gs)
 	}
-	if _, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "once"); err != nil || f.count() != 2 {
-		t.Errorf("A second call beside it: %v, asked %d times", err, f.count())
-	}
-	if err := <-first; err != nil {
-		t.Error(err)
+	// It waits for the first's slot once the user was asked
+	go func() {
+		_, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "once")
+		second <- err
+	}()
+	waitUntil(t, "the user to be asked for a second call beside it", func() bool { return f.count() == 2 })
+	g.open(t)
+	for _, ch := range []chan error{first, second} {
+		if err := <-ch; err != nil {
+			t.Error(err)
+		}
 	}
 	if gs := b.liveGrants(); len(gs) != 0 {
 		t.Errorf("Once grants left: %v", gs)
@@ -138,19 +189,23 @@ func TestCallParamsRefused(t *testing.T) {
 
 // Once grants of an exclusive capability beside each other: the lock is the launcher's, held by both
 func TestCallOnceExclusive(t *testing.T) {
-	b, c, f := commandBroker(t, "sleep 0.5; cat", "allow", "allow")
+	g := newGate(t)
+	b, c, f := commandBroker(t, g.script("cat"), "allow", "allow")
 	c.Exclusive = true
-	first := make(chan error, 1)
-	go func() {
+	calls := make(chan error, 2)
+	run := func() {
 		_, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "once")
-		first <- err
-	}()
-	time.Sleep(200 * time.Millisecond)
-	if _, err := callRun(b, peerAt(t, os.Getpid()), `{}`, "once"); err != nil || f.count() != 2 {
-		t.Errorf("A second once call: %v, asked %d times", err, f.count())
+		calls <- err
 	}
-	if err := <-first; err != nil {
-		t.Error(err)
+	go run()
+	g.waitStarted(t, 1)
+	go run()
+	waitUntil(t, "the user to be asked for a second once call", func() bool { return f.count() == 2 })
+	g.open(t)
+	for range 2 {
+		if err := <-calls; err != nil {
+			t.Error(err)
+		}
 	}
 	if locks := lockHolders([]string{"a", "b", "c"}); len(locks) != 0 {
 		t.Errorf("Locks left: %v", locks)

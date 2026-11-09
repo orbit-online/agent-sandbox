@@ -215,6 +215,8 @@ func (b *broker) event(kind, id string) {
 	}
 }
 
+// streamEvents sends the events from now on, after a first one, watching, once it follows them: a client that reads
+// the state after that misses no change
 func (b *broker) streamEvents(conn *net.UnixConn) {
 	ch := make(chan []byte, 16)
 	b.mu.Lock()
@@ -225,6 +227,9 @@ func (b *broker) streamEvents(conn *net.UnixConn) {
 		delete(b.watches, ch)
 		b.mu.Unlock()
 	}()
+	if _, err := conn.Write([]byte(`{"event":"watching","id":""}` + "\n")); err != nil {
+		return
+	}
 	closed := make(chan struct{})
 	go func() {
 		_, _ = bufio.NewReader(conn).ReadByte()

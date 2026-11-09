@@ -196,8 +196,6 @@ func (mc *liveMachine) restartDaemon(t *rapid.T) {
 		defer mc.ev.mu.Unlock()
 		return mc.ev.conns > conns
 	})
-	// The daemon reads the watch request in a goroutine of its own: a moment for it to subscribe
-	time.Sleep(200 * time.Millisecond)
 }
 
 func (mc *liveMachine) anonymous(t *rapid.T) *liveProc {

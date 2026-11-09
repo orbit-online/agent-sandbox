@@ -92,8 +92,12 @@ func TestShareHostHelpers(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		// nsenter and sh exec in place: sleep runs once the namespaces are joined (and the mount one made)
+		waitUntil(t, "the helper to run", func() bool {
+			comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", cmd.Process.Pid))
+			return string(comm) == "sleep\n"
+		})
 	}
-	time.Sleep(200 * time.Millisecond)
 	if err := b.shareFrom(peerAt(t, b.sb.pid)); err != nil {
 		t.Fatal(err)
 	}
