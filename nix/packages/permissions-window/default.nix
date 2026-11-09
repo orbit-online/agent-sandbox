@@ -4,6 +4,7 @@
   lib,
   makeWrapper,
   pkg-config,
+  writeShellApplication,
   ...
 }:
 let
@@ -23,7 +24,7 @@ let
     kdePackages.qqc2-desktop-style
   ];
 in
-buildGoModule {
+buildGoModule (finalAttrs: {
   pname = "permissions-window";
   version = "0.1.0";
   src = lib.fileset.toSource {
@@ -37,6 +38,11 @@ buildGoModule {
       ./Main.qml
       ./Permissions.qml
       ./Section.qml
+      ./TabPage.qml
+      ./Card.qml
+      ./FieldRow.qml
+      ./Quote.qml
+      ./CallList.qml
       ./RequestRow.qml
       ./GrantRow.qml
       ./Badges.qml
@@ -44,6 +50,8 @@ buildGoModule {
       ./ReadOnlyText.qml
       ./CommandScope.qml
       ./tst_permissions.qml
+      ./Preview.qml
+      ./preview-state.json
     ];
   };
   vendorHash = "sha256-ZkZIt1u0K249lyb24g9vuPaVwz2q/NDBVzHbQaeScwU=";
@@ -70,15 +78,31 @@ buildGoModule {
   postCheck = ''
     ${lib.getExe' qtdeclarative "qmltestrunner"} -input tst_permissions.qml
   '';
+  # Qt Quick draws text from distance fields by default, which smears small text, bold most, at fractional scales:
+  # QML_DISABLE_DISTANCEFIELD draws the controls' text with the font's own glyphs too, as the window's own text asks
+  # with renderType
   postInstall = ''
-    install -Dm644 -t $out/share/permissions-window Main.qml Permissions.qml Section.qml RequestRow.qml GrantRow.qml \
-      Badges.qml Badge.qml ReadOnlyText.qml CommandScope.qml
+    install -Dm644 -t $out/share/permissions-window Main.qml Permissions.qml Section.qml TabPage.qml Card.qml \
+      FieldRow.qml Quote.qml CallList.qml RequestRow.qml GrantRow.qml \
+      Badges.qml Badge.qml ReadOnlyText.qml CommandScope.qml Preview.qml preview-state.json
     wrapProgram $out/bin/permissions-window --set QML_IMPORT_PATH ${qmlPath} --set QT_PLUGIN_PATH ${pluginPath} \
-      --unset QML2_IMPORT_PATH
+      --unset QML2_IMPORT_PATH --set QML_DISABLE_DISTANCEFIELD 1
   '';
+  # The window against a mock broker, for working on its looks (preview.sh)
+  passthru.preview = writeShellApplication {
+    name = "permissions-window-preview";
+    runtimeEnv = {
+      QML_BIN = lib.getExe' qtdeclarative "qml";
+      QML_DIR = "${finalAttrs.finalPackage}/share/permissions-window";
+      QML_IMPORT_PATH = qmlPath;
+      QT_PLUGIN_PATH = pluginPath;
+      QML_DISABLE_DISTANCEFIELD = "1";
+    };
+    text = builtins.readFile ./preview.sh;
+  };
   meta = {
     description = "The Permissions window of agent-sandbox's permissions broker";
     mainProgram = "permissions-window";
     platforms = lib.platforms.linux;
   };
-}
+})

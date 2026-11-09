@@ -1,0 +1,356 @@
+{
+  "pending": [
+    {
+      "id": "p1",
+      "capability": "folders/folder",
+      "params": {
+        "path": "/home/alice/Workspace/ops/containers/database-jump-host",
+        "ro": false
+      },
+      "summary": "a folder from the host (path=\"/home/alice/Workspace/ops/containers/database-jump-host\", ro=false): \"/home/alice/Workspace/ops/containers/database-jump-host\", read-write",
+      "reason": "Bump the Alpine base image in the database-jump-host Dockerfile and commit it, as you asked.",
+      "lease": "PT1H",
+      "options": true
+    },
+    {
+      "id": "p2",
+      "capability": "request-send",
+      "params": {
+        "origin": "https://support.example.com"
+      },
+      "summary": "read from a service as you \"https://support.example.com\"",
+      "bounds": "\"https://support.example.com\"",
+      "reason": "Find the staging test ticket you just opened (internal id 19530) to get its number.",
+      "lease": "PT1H",
+      "command": "send",
+      "arguments": {
+        "method": "GET",
+        "path": "/api/v1/tickets?limit=5&user_email=alice%40example.com"
+      },
+      "options": true
+    }
+  ],
+  "grants": [
+    {
+      "id": "g1",
+      "capability": "windows-vm",
+      "params": {
+        "vm": "win11"
+      },
+      "summary": "control the Windows VM \"win11\"",
+      "reason": "Check the installer's log on the VM after the reboot.",
+      "lease": "PT1H",
+      "expires": "2026-11-09T15:10:00Z",
+      "granted": "2026-11-09T14:10:00Z"
+    },
+    {
+      "id": "g2",
+      "capability": "folders/folder",
+      "params": {
+        "path": "/home/alice/Workspace/ops/clusters/talos-office",
+        "ro": true
+      },
+      "summary": "a folder from the host (path=\"/home/alice/Workspace/ops/clusters/talos-office\", ro=true): \"/home/alice/Workspace/ops/clusters/talos-office\", read-only",
+      "reason": "Read the Talos machine config to compare the kubelet flags.",
+      "lease": "lock",
+      "path": "/run/permissions/folders/g2",
+      "source": "/home/alice/Workspace/ops/clusters/talos-office",
+      "granted": "2026-11-09T13:02:00Z",
+      "holders": [
+        {
+          "comm": "rg",
+          "pid": 48211
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "capability": "ssh-agent",
+      "params": {},
+      "summary": "the host's SSH agent",
+      "lease": "standing",
+      "socket": "/run/permissions/sockets/ssh-agent",
+      "granted": "2026-11-09T08:00:00Z"
+    }
+  ],
+  "calls": [
+    {
+      "grant": "g1",
+      "capability": "windows-vm",
+      "time": "2026-11-09T14:12:41Z",
+      "command": "screenshot",
+      "arguments": {},
+      "exit": 0
+    },
+    {
+      "grant": "g1",
+      "capability": "windows-vm",
+      "time": "2026-11-09T14:13:05Z",
+      "command": "exec",
+      "arguments": {
+        "script": "Get-Content C:\\Windows\\Temp\\setup.log -Tail 40"
+      },
+      "exit": 0
+    },
+    {
+      "grant": "g1",
+      "capability": "windows-vm",
+      "time": "2026-11-09T14:14:30Z",
+      "command": "click",
+      "arguments": {
+        "x": 812,
+        "y": 604
+      },
+      "exit": 1,
+      "error": "the VM isn't running"
+    }
+  ],
+  "log": [
+    {
+      "time": "2026-11-09T13:02:00Z",
+      "summary": "a folder from the host (path=\"/home/alice/Workspace/ops/clusters/talos-office\", ro=true)",
+      "reason": "Read the Talos machine config to compare the kubelet flags.",
+      "decision": "allowed until the screen locks"
+    },
+    {
+      "time": "2026-11-09T13:40:00Z",
+      "summary": "read and write at a service as you \"https://support.example.com\"",
+      "reason": "Close the test ticket.",
+      "decision": "denied"
+    },
+    {
+      "time": "2026-11-09T14:10:00Z",
+      "summary": "control the Windows VM \"win11\"",
+      "reason": "Check the installer's log on the VM after the reboot.",
+      "decision": "allowed for 1 h"
+    }
+  ],
+  "standing": [
+    {
+      "capability": "ssh-agent",
+      "params": {},
+      "summary": "the host's SSH agent",
+      "grant": "g3"
+    }
+  ],
+  "overview": {
+    "binds": [
+      {
+        "path": "/etc/group",
+        "src": "/etc/group",
+        "rw": false,
+        "optional": true
+      },
+      {
+        "path": "/etc/machine-id",
+        "src": "/etc/machine-id",
+        "rw": false,
+        "optional": true
+      },
+      {
+        "path": "/etc/passwd",
+        "src": "/etc/passwd",
+        "rw": false,
+        "optional": true
+      },
+      {
+        "path": "/home/alice",
+        "src": "/home/alice/.local/share/claude-desktop/home",
+        "rw": true,
+        "optional": false
+      },
+      {
+        "path": "/home/alice/.claude",
+        "src": "/home/alice/.claude",
+        "rw": true,
+        "optional": false
+      },
+      {
+        "path": "/home/alice/Workspace/agent",
+        "src": "/home/alice/Workspace/agent",
+        "rw": true,
+        "optional": false
+      },
+      {
+        "path": "/nix",
+        "src": "/home/alice/.local/share/claude-desktop/nix",
+        "rw": true,
+        "optional": false
+      }
+    ],
+    "devices": [
+      "/dev/kvm"
+    ],
+    "dbus": {
+      "org.freedesktop.portal.Desktop": {
+        "call": [
+          "org.freedesktop.portal.OpenURI.*@/org/freedesktop/portal/desktop",
+          "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
+        ]
+      },
+      "org.kde.StatusNotifierWatcher": {
+        "call": [
+          "org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem"
+        ]
+      }
+    },
+    "network": "its own namespace, a macvlan on the LAN",
+    "implicit": [
+      "Sockets: Wayland, PipeWire"
+    ]
+  },
+  "held": [],
+  "capabilities": [
+    {
+      "id": "folders/folder",
+      "type": "attach",
+      "description": "a folder from the host",
+      "params": {
+        "path": {
+          "type": "string",
+          "description": "the folder on the host: one list shows, or a folder beneath it"
+        },
+        "ro": {
+          "type": "boolean",
+          "description": "read-only, unless false; only what list marks rw may be read-write"
+        }
+      }
+    },
+    {
+      "id": "ssh-agent",
+      "type": "service",
+      "description": "the host's SSH agent",
+      "params": {}
+    },
+    {
+      "id": "request-send",
+      "type": "command",
+      "description": "Send GET requests to https://support.example.com as you, with your users CA certificate, for reading",
+      "title": "read from a service as you",
+      "params": {
+        "origin": {
+          "type": "string",
+          "description": "the service's origin"
+        }
+      },
+      "consent": [
+        {
+          "consent": "Read what you can see there",
+          "commands": [
+            "send"
+          ]
+        }
+      ],
+      "scope": [
+        {
+          "command": "send",
+          "description": "Send one GET request, for reading",
+          "argument": "method",
+          "about": "the request's method",
+          "allows": "GET"
+        },
+        {
+          "command": "send",
+          "description": "Send one GET request, for reading",
+          "argument": "path",
+          "about": "the request's path and query",
+          "allows": "any text starting with /"
+        }
+      ],
+      "commands": {
+        "send": {
+          "arguments": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET"
+              ],
+              "description": "the request's method"
+            },
+            "path": {
+              "type": "string",
+              "description": "the request's path and query"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "windows-vm",
+      "type": "command",
+      "description": "Control a Windows VM",
+      "title": "control the Windows VM",
+      "params": {
+        "vm": {
+          "type": "string",
+          "description": "the VM"
+        }
+      },
+      "consent": [
+        {
+          "consent": "Run any PowerShell, up to system level",
+          "commands": [
+            "exec"
+          ],
+          "unrestricted": true
+        },
+        {
+          "consent": "Use the keyboard and type any text",
+          "commands": [
+            "keys",
+            "type"
+          ],
+          "unrestricted": true
+        },
+        {
+          "consent": "Click on the screen",
+          "commands": [
+            "click"
+          ]
+        },
+        {
+          "consent": "Take screenshots",
+          "commands": [
+            "screenshot"
+          ]
+        }
+      ],
+      "scope": [
+        {
+          "command": "exec",
+          "description": "Run PowerShell",
+          "argument": "script",
+          "about": "any PowerShell, as SYSTEM",
+          "allows": "any text",
+          "unrestricted": true
+        },
+        {
+          "command": "type",
+          "description": "Type text",
+          "argument": "text",
+          "about": "the text",
+          "allows": "any text",
+          "unrestricted": true
+        },
+        {
+          "command": "click",
+          "description": "Click",
+          "argument": "x",
+          "about": "column",
+          "allows": "a number within 0–1919"
+        },
+        {
+          "command": "click",
+          "description": "Click",
+          "argument": "y",
+          "about": "row",
+          "allows": "a number within 0–1079"
+        },
+        {
+          "command": "screenshot",
+          "description": "Take a screenshot"
+        }
+      ]
+    }
+  ]
+}

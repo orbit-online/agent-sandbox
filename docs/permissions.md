@@ -131,21 +131,26 @@ host (user, no capabilities)                       sandbox
   instance for the system bus and the broker's live rules over a control socket aren't built (D-Bus).
 - The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
   action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
-  rest. It is a client only: all state lives in the daemon. Above the grants it shows, read-only, what the
+  rest. It is a client only: all state lives in the daemon. A tab of its own shows, read-only, what the
   configuration gives the sandbox from its start (Overview, below). It refreshes on every watch event, which the
   sandbox can cause at will. So pending requests come in the order they arrived, and a row doesn't move under the
-  pointer. What the user set on a row (narrowed parameters, a lease, a grant expanded, a section collapsed) is kept
+  pointer. What the user set on a row (narrowed parameters, a lease, a grant expanded) is kept
   by id through the refresh.
 
-  Its sections (waiting requests, what's still open in ended folder grants, the configuration, the grants, host
-  command calls, recent decisions) each collapse to their header. A grant is one line: its summary (capability and
-  bounding values), its badges and the time it has left, with Revoke; expanded, it shows its parameters by their
-  declarations' descriptions, who may use it (the sandbox as a whole), Claude's reason, and for a host command capability what it covers (a line per consent phrase, Details collapsed beneath; Consent) and the calls made under it. Badges: the
+  Its tabs, each scrolling on its own: Requests (in front while there are some, and again when one arrives; Allow and
+  Deny stay off for a second then, as for a row that moved), Granted (with what's still open in ended folder grants),
+  Activity (host command calls, recent decisions) and Configuration. Requests and grants are cards. Every value is
+  on a row of its own, its name on the left and the value in a box of its own, so a value the sandbox chose needs no
+  quotes to show where it ends; what would break a line, turn the text around or hide is escaped there, and in
+  Claude's reason, which stands apart beside a bar. A grant is one line: what's granted (a host command capability's
+  consent title, another's description), its badges and the time it has left, with Revoke; expanded, it shows its
+  parameters a row each, who may use it (the sandbox as a whole), Claude's reason, and for a host command capability what it covers (a line per consent phrase, Details collapsed beneath; Consent) and the calls made under it. Badges: the
   lease (or "from config" for a standing grant) and a host command
-  capability's free arguments, with a warning badge for each unrestricted one. A waiting request shows its summary,
-  the same badges for free arguments, for a host command what a grant covers on its bounding values (as a grant
-  does, its bounding values in Details) and the call
-  asking (its command and free arguments, opaque ones by digest, the rest whole), and Claude's reason. Fields narrow a
+  capability's free arguments, with a warning badge for each unrestricted one. A waiting request is headed by what
+  Claude asks for (as a grant's line), with the same badges for free arguments; then its values (a host command's
+  bounding values, never editable; a folder's fields and the folder the broker resolved, from its summary), for a
+  host command what a grant on them covers and the call
+  asking (its command and free arguments a row each, opaque ones by digest, the rest whole), and Claude's reason. Fields narrow a
   folder or service request; a host command request has none, only its lease, which offers `once` for a call and
   Claude's own proposal. Everything the broker or Claude wrote is in read-only text boxes the user can select and
   copy from. The broker sends what this needs in `state`: each host command capability's `title`, `consent` (its

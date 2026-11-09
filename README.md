@@ -81,6 +81,23 @@ The app's launcher entry gets a "New shell" action, which runs
 runs, with the environment its Code tab gets. If the app isn't running, it
 starts it first.
 
+## Permissions
+
+With `permissions.enable`, a launcher runs a broker on the host that grants
+the sandbox more while it runs: a folder (`permissions.folders`), a host
+socket at a stable address (`permissions.sockets`) or declared commands run on
+the host (`permissions.commands`). Claude asks through the sandbox's
+`permissions` MCP server, you answer in a notification and pick how long the
+grant lasts, and the Permissions window (the launcher's "Permissions" action,
+or Options on the notification) shows what's waiting, what's granted and what
+Claude did with it:
+
+![Two requests waiting: a folder, and GET requests to a service with the call asking](docs/images/permissions-requests.png)
+
+![Live grants: a Windows VM expanded with what it covers and its calls, a folder and a standing grant](docs/images/permissions-granted.png)
+
+The design: [`docs/permissions.md`](docs/permissions.md).
+
 ## State and maintenance
 
 Everything the sandbox keeps lives in `~/.local/share/claude-desktop` on the

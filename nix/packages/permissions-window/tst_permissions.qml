@@ -73,6 +73,12 @@ TestCase {
         return JSON.parse(mock.command)
     }
 
+    // A tab brought to the front, laid out before a mouse click lands on it
+    function show(page) {
+        view.page = page
+        waitForRendering(view)
+    }
+
     // A toggle may sit below the visible part of the window, where a mouse click doesn't reach
     function click(name) {
         const button = findChild(view, name)
@@ -85,6 +91,7 @@ TestCase {
     Component.onCompleted: initial = mock.state
     function cleanup() {
         mock.state = initial
+        view.page = ""
     }
 
     // The rows arriving at the start, or a test before that changed them, leave Allow and Deny off for a second
@@ -136,6 +143,7 @@ TestCase {
     }
 
     function test_revoke_then_end() {
+        show("granted")
         mouseClick(findChild(view, "revoke"))
         compare(sent().op, "revoke")
         compare(sent().grant, "g1")
@@ -147,6 +155,7 @@ TestCase {
         tryVerify(() => end.visible)
         compare(findChild(view, "held").text,
                 "Still open in folders no longer granted: the test thing (revoked by the user): cat (42), less (43, possibly)")
+        waitForRendering(view)
         mouseClick(end)
         compare(sent().op, "end")
         compare(sent().grants, ["g1"])
@@ -154,13 +163,14 @@ TestCase {
 
     // A standing grant shows as from the config, with no lease of its own
     function test_standing_grant() {
-        compare(findChild(view, "grant-g2").text, "the echo")
+        compare(findChild(view, "grant-g2").text, "The echo")
         compare(findChild(view, "badge-config-g2").text, "from config")
         verify(!findChild(view, "badge-lease-g2"), "a lease badge on a standing grant")
     }
 
-    // A grant is one line until the user expands it, which a refresh keeps; a section collapses to its header
+    // A grant is one line until the user expands it, which a refresh keeps
     function test_collapse_expand() {
+        show("granted")
         const details = findChild(view, "details-g3")
         verify(!details.visible, "expanded at the start")
         click("toggle-g3")
@@ -173,12 +183,6 @@ TestCase {
         verify(findChild(view, "details-g3").visible, "a refresh collapsed it")
         click("toggle-g3")
         verify(!findChild(view, "details-g3").visible, "not collapsed by a click")
-        verify(findChild(view, "grant-g1").visible)
-        click("section-granted")
-        verify(!findChild(view, "grant-g1").visible, "the section didn't collapse")
-        verify(findChild(view, "section-granted").visible, "the header went with it")
-        click("section-granted")
-        verify(findChild(view, "grant-g1").visible)
         mock.state = before
     }
 
@@ -211,12 +215,13 @@ TestCase {
     // Claude's reason, what it covers as the consent says it, the details collapsed until asked for, and the calls
     // made under it; all calls, ended grants' too, in a section of their own
     function test_command_grant() {
+        show("granted")
         click("toggle-g3")
-        compare(findChild(view, "grant-g3").text, 'Control the Windows VM "win11"')
-        compare(findChild(view, "params-g3").text, 'the VM (vm): "win11"')
+        compare(findChild(view, "grant-g3").text, "Control the Windows VM")
+        compare(findChild(view, "param-g3-vm").text, "win11")
         compare(findChild(view, "holders-g3").text, "Given to the sandbox: anything in it may use it")
-        compare(findChild(view, "reason-g3").text, 'Claude\'s reason, in its own words: "check the VM"')
-        compare(findChild(view, "covers-g3").text, "Covers:")
+        compare(findChild(view, "reason-g3").text, "check the VM")
+        compare(findChild(view, "covers-g3").text, "Covers")
         compare(consentLines("g3"), ["[unrestricted] Run any PowerShell, up to system level (exec)",
                                      "[unrestricted] Use the keyboard and type any text (keys, type)",
                                      "Click on the screen (click)", "Take screenshots (screenshot)"])
@@ -250,22 +255,24 @@ TestCase {
         tryVerify(() => !view.settling, 3000)
         const field = findChild(view, "field-vm")
         verify(!field || !field.visible, "an editable bounding value")
-        compare(findChild(view, "summary-p4").text, 'Claude wants to control the Windows VM "win11"')
-        compare(findChild(view, "covers-p4").text, 'A grant covers, on "win11", for 2 h:')
+        compare(findChild(view, "summary-p4").text, "Claude wants to control the Windows VM")
+        compare(findChild(view, "bound-p4-vm").text, "win11")
+        verify(findChild(view, "bound-p4-vm").readOnly)
+        compare(findChild(view, "covers-p4").text, "A grant on these values, for 2 h, lets Claude")
         compare(consentLines("p4"), ["[unrestricted] Run any PowerShell, up to system level (exec)",
                                      "[unrestricted] Use the keyboard and type any text (keys, type)",
                                      "Click on the screen (click)", "Take screenshots (screenshot)"])
-        verify(!findChild(view, "bounds-p4").visible && !findChild(view, "scope-p4").visible, "details shown")
+        verify(!findChild(view, "scope-p4").visible, "details shown")
         click("details-toggle-p4")
-        compare(findChild(view, "bounds-p4").text, 'the VM (vm): "win11"')
         const scope = findChild(view, "scope-p4").text
         verify(scope.startsWith("Run PowerShell (exec): script, any PowerShell, as SYSTEM, unrestricted\n"), scope)
         verify(scope.indexOf("key, a key, one of 9 values: a, b") > 0, scope)
         click("details-toggle-p4")
         compare(findChild(view, "badge-unrestricted-p4-exec-script").text, "unrestricted: exec script")
         const call = findChild(view, "call-p4")
-        compare(call.text, "The call asking: exec\nscript: Get-Date\nGet-Item")
+        compare(call.text, "exec")
         verify(call.readOnly && call.selectByMouse)
+        compare(findChild(view, "argument-p4-script").text, "Get-Date\nGet-Item")
         const lease = findChild(view, "lease")
         // Session leases are gone: no session holds a grant
         compare(lease.indexOfValue("session"), -1)
@@ -274,7 +281,7 @@ TestCase {
         lease.currentIndex = lease.indexOfValue("once")
         verify(lease.currentIndex >= 0, "no once")
         lease.activated(lease.currentIndex)
-        compare(findChild(view, "covers-p4").text, 'A grant covers, on "win11", for this call only:')
+        compare(findChild(view, "covers-p4").text, "A grant on these values, for this call only, lets Claude")
         mouseClick(findChild(view, "allow"))
         const c = sent()
         compare(c.pending, "p4")
@@ -283,36 +290,32 @@ TestCase {
         mock.state = before
     }
 
-    // A bounding value with a line separator, a right-to-left override and a zero-width space: the heading shows the
-    // broker's quoted form as it is, never the raw value, and Details quotes it with them escaped
+    // A bounding value with a line separator, a right-to-left override and a zero-width space: its row shows them
+    // escaped, never raw, and so does Claude's reason
     function test_command_request_invisible_runes() {
         const before = mock.state
         const st = JSON.parse(before)
         const raw = "x\u2028, for this call only:\u2028\u202e\u200by"
         st.pending = [{ id: "p5", capability: "windows-vm", params: { vm: raw },
                         summary: 'control the Windows VM "x\\u2028, for this call only:\\u2028\\u202e\\u200by"',
-                        bounds: '"x\\u2028, for this call only:\\u2028\\u202e\\u200by"', reason: "look",
+                        bounds: '"x\\u2028, for this call only:\\u2028\\u202e\\u200by"', reason: "lo\u202eok\nnext",
                         lease: "PT1H" }]
         mock.state = JSON.stringify(st)
         tryVerify(() => !view.settling, 3000)
-        compare(findChild(view, "covers-p5").text,
-                'A grant covers, on "x\\u2028, for this call only:\\u2028\\u202e\\u200by", for 1 h:')
-        click("details-toggle-p5")
-        compare(findChild(view, "bounds-p5").text,
-                'the VM (vm): "x\\u2028, for this call only:\\u2028\\u202e\\u200by"')
-        click("details-toggle-p5")
+        compare(findChild(view, "bound-p5-vm").text, "x\\u2028, for this call only:\\u2028\\u202e\\u200by")
+        compare(findChild(view, "reason-p5").text, "lo\\u202eok\nnext")
         mock.state = before
     }
 
     // What the user reads can be selected and copied, never edited: Claude's reason, a grant's values, the log
     function test_selectable() {
-        for (const name of ["reason-p1", "summary-p1", "grant-g1", "calls"]) {
+        for (const name of ["reason-p1", "summary-p1", "grant-g1", "call-head-0"]) {
             const t = findChild(view, name)
             verify(t && t.readOnly && t.selectByMouse, name)
             t.selectAll()
             compare(t.selectedText, t.text, name)
         }
-        compare(findChild(view, "reason-p1").text, 'Claude\'s reason, in its own words: "read the notes"')
+        compare(findChild(view, "reason-p1").text, "read the notes")
     }
 
     // What the configuration gives, read-only, above the grants
@@ -401,6 +404,44 @@ TestCase {
             mouseClick(findChild(view, "allow"))
             compare(mock.command, command, "a click right after a row was replaced answered")
         }
+        mock.state = before
+    }
+
+    // A tab each: the requests in front while there are some, the user's pick otherwise, and a new request bringing
+    // its tab to the front again
+    function test_tabs() {
+        compare(view.currentPage, "requests")
+        verify(findChild(view, "allow").visible)
+        click("tab-granted")
+        compare(view.currentPage, "granted")
+        verify(!findChild(view, "allow").visible, "the requests still shown")
+        verify(findChild(view, "revoke").visible)
+        compare(findChild(view, "tab-requests").text, "Requests  1")
+        const st = JSON.parse(mock.state)
+        st.pending.push({ id: "p9", capability: "test-thing", params: {}, summary: "the test thing", reason: "more",
+                          lease: "PT1H" })
+        mock.state = JSON.stringify(st)
+        compare(view.currentPage, "requests")
+        compare(findChild(view, "tab-requests").text, "Requests  2")
+        click("tab-activity")
+        st.pending = st.pending.slice(1)
+        mock.state = JSON.stringify(st)
+        compare(view.currentPage, "activity", "a request going away moved the user")
+    }
+
+    // A folder request shows the folder the broker found, links followed, apart from the fields that narrow it; a
+    // summary not shaped like that shows none
+    function test_resolved_folder() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        st.pending[0].summary = 'a folder (path="/srv/notes", ro=true): "/srv/real \\"notes\\"", read-only'
+        mock.state = JSON.stringify(st)
+        tryVerify(() => findChild(view, "resolved-p1").text === '/srv/real "notes"\nread-only', 1000,
+                  findChild(view, "resolved-p1").text)
+        verify(findChild(view, "resolved-p1").visible)
+        st.pending[0].summary = 'a folder (path="/srv/notes", ro=true)'
+        mock.state = JSON.stringify(st)
+        tryVerify(() => !findChild(view, "resolved-p1").parent.parent.visible, 1000)
         mock.state = before
     }
 }

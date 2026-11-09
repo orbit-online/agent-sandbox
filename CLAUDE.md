@@ -134,10 +134,15 @@ single-user Nix store, and an environment doc for the Claude running inside.
   Qt 6 bindings, and QML), a client of the broker's `control.sock`. miqt has
   no moc, so the QML talks to Go through a `QQmlPropertyMap`: state as JSON
   in, actions as JSON out (`window.go` holds the logic, `main.go` the Qt
-  glue). `Permissions.qml` is the content, with its parts in files of their
-  own: `Section.qml` (a collapsible section), `RequestRow.qml`, `GrantRow.qml`,
+  glue). `Permissions.qml` is the content, a tab each for the requests, the grants,
+  the activity (calls and decisions) and the configuration, with its parts in files of their
+  own: `TabPage.qml` (a tab's scrolling page), `Section.qml` (a heading and its part), `Card.qml` (a request's or a
+  grant's box), `RequestRow.qml`, `GrantRow.qml`, `FieldRow.qml` (a name and its value in a box of its own, or a field
+  to edit), `Quote.qml` (Claude's words beside a bar), `CallList.qml` (host command calls),
   `Badges.qml` and `Badge.qml`, `ReadOnlyText.qml` (selectable text), `CommandScope.qml` (what a host
-  command grant covers: a line per consent phrase, Details collapsed beneath). The launcher opens it with
+  command grant covers: a line per consent phrase, Details collapsed beneath). `Preview.qml`, `preview.sh` and
+  `preview-state.json` are the package's `preview` (`nix run .#permissions-window.preview -- --help`): the window
+  against a mock broker with a sample state, live or as a screenshot, from a checkout's QML with `--qml`. The launcher opens it with
   `--permissions` and the `.desktop` file's "Permissions" action; the broker
   opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
   paths to its own Qt's, Plasma's style and platform theme included: the
@@ -349,7 +354,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   first, marked by the schemas whatever the phrase says, and the summary's bounding values (alone, by name when
   several, opaque by digest); a call checked
   before the user is asked and told the scope, the window getting the call asking with its arguments whole
-  (opaque ones by digest); the notification's summary ("Claude wants to" the title, the values and the lease) and its
+  (opaque ones by digest); the notification's summary ("Claude wants to" the title and the lease, the values left to the body) and its
   body's first line (the bounding values and the lease again, then the phrases), markup escaped, leases in hours and
   minutes, word for word for a declaration shaped like agent-sandbox-plugins' windows-vm, a bounding value as long
   as a parameter may be whole in the body with the lease, and one with U+2028, U+202E and U+200B escaped in the
@@ -468,14 +473,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   reaching the broker through the property map) and `tst_permissions.qml`
   through `qmltestrunner` against a mock broker: an answer narrowed in its
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
-  a standing grant shown as from the config, the overview of the configuration (binds, devices, D-Bus, the
+  a standing grant shown as from the config, the tabs (the requests in front while there are some and when one
+  arrives, the user's pick otherwise), a folder request's resolved folder from the summary, the overview of the configuration (binds, devices, D-Bus, the
   network, the standing grants live and ended, the implicit lines), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
-  replaced in place, a grant expanded and collapsed (kept through a refresh) and a section collapsed, the
+  replaced in place, a grant expanded and collapsed (kept through a refresh), the
   badges (lease, from config, free arguments with a warning for an unrestricted one), a host command
   grant's summary as a sentence, parameters, holders, reason, consent lines (the phrase, an unrestricted badge, the
   commands sharing it), Details collapsed until opened (a long enum listed) and calls, the calls of ended grants, a host
-  command request with its summary after "Claude wants to", no editable bounding value, its heading on the bounding
-  values (the broker's `bounds`, escaped runes kept escaped) and the lease picked, its consent lines, Details (the bounding values, the scope) and the call asking, its lease still editable (once
+  command request headed "Claude wants to" and the consent's title, its bounding values a row each and never
+  editable (escaped runes escaped, in Claude's reason too), its heading on the lease picked, its consent lines,
+  Details (the scope) and the call asking, its arguments a row each, its lease still editable (once
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.

@@ -56,7 +56,7 @@ func TestConsentText(t *testing.T) {
 		t.Fatalf("Asked %d times", f.count())
 	}
 	summary, body := notify.Text(f.asked[0], "")
-	if want := `Claude wants to control the Windows VM "windows-vm" for 10 min`; summary != want {
+	if want := `Claude wants to control the Windows VM for 10 min`; summary != want {
 		t.Errorf("summary = %q\nwant      %q", summary, want)
 	}
 	if want := "On \"windows-vm\" for 10 min: ⚠ Run any PowerShell, up to system level; ⚠ Use the keyboard and type any text; " +
@@ -124,7 +124,7 @@ func TestConsentTextInvisibleRunes(t *testing.T) {
 	p := <-seen
 	quoted := `path "x\u2028, for this call only:\u202e\u200by", ro true`
 	summary, body := notify.Text(f.asked[0], "")
-	if want := "Claude wants to use the test thing " + quoted + " for 10 min"; summary != want {
+	if want := "Claude wants to use the test thing for 10 min"; summary != want {
 		t.Errorf("summary = %q", summary)
 	}
 	if want := "On " + quoted + " for 10 min: Print what it gets\n"; !strings.HasPrefix(body, want) {

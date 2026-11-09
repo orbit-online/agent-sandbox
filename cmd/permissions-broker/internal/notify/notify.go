@@ -21,6 +21,9 @@ type Prompt struct {
 	// Host commands: what the grant covers, shown before the reason, and the bounding values it's on. With them, the
 	// summary says what Claude wants to do, and for how long
 	Scope, Bounds string
+	// Host commands: the consent's title, which the summary uses without the bounding values: a server cuts the
+	// summary to a line, and the body has them
+	Title string
 	// Whether to offer Options, which needs the window
 	Options bool
 }
@@ -115,7 +118,11 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 func Text(p Prompt, hint string) (string, string) {
 	summary := "Claude asks for " + escapeMarkup(p.Summary)
 	if p.Scope != "" {
-		summary = "Claude wants to " + escapeMarkup(p.Summary) + " " + leaseLabel(p.Lease)
+		what := p.Summary
+		if p.Title != "" {
+			what = p.Title
+		}
+		summary = "Claude wants to " + escapeMarkup(what) + " " + leaseLabel(p.Lease)
 	}
 	// Ahead of the reason: a server may cut what's long, and the scope is what's granted. The bounding values and the
 	// lease again, since the sandbox chose the values and a long one pushes the rest of a summary out where it's cut

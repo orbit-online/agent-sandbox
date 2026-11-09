@@ -257,7 +257,7 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 	asked := make(chan result, 1)
 	go func() {
 		action, err := b.ask(ctx, notify.Prompt{Summary: summary, Reason: reason, Lease: lease, Scope: scope, Bounds: bounds,
-			Options: len(b.cfg.Window) > 0})
+			Title: c.Title, Options: len(b.cfg.Window) > 0})
 		asked <- result{action, err}
 	}()
 	select {

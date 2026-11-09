@@ -309,8 +309,8 @@ func TestNotificationDefaultGuards(t *testing.T) {
 	t.Fatal("Clicks on the body later were all asked again")
 }
 
-// A host command's notification says what Claude wants to do and for how long in its summary, and what the grant
-// covers ahead of the reason. The lease is said in hours and minutes
+// A host command's notification says what Claude wants to do and for how long in its summary, by the consent's title
+// when there is one, and what the grant covers ahead of the reason. The lease is said in hours and minutes
 func TestNotificationCovers(t *testing.T) {
 	addr, f := testBus(t)
 	id, _ := askWith(t, addr, f, Prompt{Summary: `control the VM "win<11>"`, Reason: "testing", Lease: "PT1H30M",
@@ -326,6 +326,11 @@ func TestNotificationCovers(t *testing.T) {
 	}
 	if _, body := Text(Prompt{Summary: "x", Lease: "lock", Scope: "Take screenshots", Bounds: `vm "a", n 1`}, ""); !strings.HasPrefix(body, `On vm "a", n 1 until the screen locks: Take screenshots`+"\n") {
 		t.Errorf("Body %q", body)
+	}
+	// With the consent's title, the summary leaves the bounding values to the body: a server cuts it to a line
+	if summary, _ := Text(Prompt{Summary: `control the VM "a-very-long-name"`, Title: "control the VM", Lease: "PT1H",
+		Scope: "Take screenshots", Bounds: `"a-very-long-name"`}, ""); summary != "Claude wants to control the VM for 1 h" {
+		t.Errorf("Summary with a title %q", summary)
 	}
 	if f.key(id, "Allow for 1 h 30 min") == "" {
 		t.Errorf("Actions %q", f.shown[id])

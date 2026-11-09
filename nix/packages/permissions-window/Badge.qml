@@ -11,6 +11,7 @@ Label {
     bottomPadding: 1
     color: warning ? "white" : palette.windowText
     font.bold: warning
+    renderType: Text.NativeRendering
     background: Rectangle {
         radius: 3
         color: badge.warning ? "firebrick" : "transparent"

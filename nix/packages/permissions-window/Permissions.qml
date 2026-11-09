@@ -107,6 +107,9 @@ Item {
     property int settleMs: 1000
     onPendingChanged: {
         const ids = pending.map(p => p.id)
+        // A new request brings its tab to the front; Allow and Deny are off for a second then anyway
+        if (ids.some(id => pendingIds.indexOf(id) < 0))
+            page = "requests"
         if (ids.some((id, i) => id !== pendingIds[i])) {
             settling = true
             settle.restart()
@@ -164,30 +167,59 @@ Item {
         return ms <= 0 ? "ending" : minutes(Math.ceil(ms / 60000)) + " left"
     }
 
-    // A value the sandbox chose, quoted as JSON, with what JSON leaves raw and would break a line, turn the text around
-    // or hide escaped too: C1 controls, line and paragraph separators, bidi and other format characters
-    function quoted(v) {
-        return JSON.stringify(v).replace(/[\u0080-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g,
-                                          c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"))
+    // A value the sandbox chose, as it is, in a box of its own: no quotes needed to see where it ends, but what would
+    // break a line where it shouldn't, turn the text around or hide is escaped, and C1 controls, line and paragraph separators, bidi and other format characters. A string with line
+    // breaks keeps them; another value is shown as JSON
+    function shown(v) {
+        const s = typeof v === "string" ? v : JSON.stringify(v)
+        return String(s).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g,
+                                 c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"))
     }
-    // A capability's parameter values, one a line, each by its declaration's description, quoted
-    function paramLines(capId, params) {
-        const decl = (caps[capId] || {}).params || {}
-        return Object.keys(params || {}).sort().map(k => {
-            const d = decl[k] || {}
-            const v = params[k]
-            const shown = d.opaque && typeof v === "string" ? "opaque, " + v.length + " characters"
-                                                            : quoted(v)
-            return (d.description ? d.description + " (" + k + ")" : k) + ": " + shown
-        }).join("\n")
+    // What a parameter is, from its capability's declaration
+    function paramDescription(capId, key) {
+        return ((((caps[capId] || {}).params || {})[key]) || {}).description || ""
     }
-    function grantParams(g) {
-        const lines = [paramLines(g.capability, g.params)]
+    // A request's heading: a host command capability's title completes "Claude wants to", the values below it; another
+    // capability by its description, or the broker's summary when it has none
+    function headline(req) {
+        const cap = caps[req.capability] || {}
+        if (cap.type === "command")
+            return "Claude wants to " + (cap.title || req.summary)
+        return "Claude asks for " + (cap.description || req.summary)
+    }
+    // A grant's line: the same words, as a sentence of its own
+    function grantTitle(g) {
+        const cap = caps[g.capability] || {}
+        const t = cap.type === "command" ? cap.title || g.summary : cap.description || g.summary
+        return t.charAt(0).toUpperCase() + t.slice(1)
+    }
+    // What the broker found an attach request's target to be, from the end of its summary (describeAttach: the
+    // path quoted, then read-only or read-write), or null
+    function resolvedTarget(summary) {
+        const m = /: ("(?:[^"\\]|\\.)*"), (read-only|read-write)$/.exec(summary || "")
+        if (!m)
+            return null
+        try {
+            return { path: shown(JSON.parse(m[1])), access: m[2] }
+        } catch (e) {
+            return null
+        }
+    }
+    // A grant's values a row each: its parameters by name, where it's mounted, its socket
+    function grantFields(g) {
+        const rows = Object.keys(g.params || {}).sort().map(k => {
+            const d = ((caps[g.capability] || {}).params || {})[k] || {}
+            const v = g.params[k]
+            return { key: k, name: k, description: d.description || "",
+                     value: d.opaque && typeof v === "string" ? "opaque, " + v.length + " characters" : shown(v) }
+        })
+        if (g.source)
+            rows.push({ key: "source", name: "on the host", value: g.source })
         if (g.path)
-            lines.push("Mounted at " + g.path + (g.source ? ", from " + g.source : ""))
+            rows.push({ key: "path", name: "mounted at", value: g.path })
         if (g.socket)
-            lines.push("Socket at " + g.socket)
-        return lines.filter(l => l).join("\n")
+            rows.push({ key: "socket", name: "socket", value: g.socket })
+        return rows
     }
     // A call's free arguments, one a line after the call's own: the broker has opaque ones by digest
     function argumentLines(args) {
@@ -203,10 +235,11 @@ Item {
         }
         return "for " + (spoken(lease) || lease)
     }
-    // The heading of what a host command request's grant covers: on its bounding values, as the broker quotes them for
-    // the notification (non-printing runes escaped, opaque ones by digest), for the lease picked
-    function coversHeading(bounds, lease) {
-        return "A grant covers" + (bounds ? ", on " + bounds : "") + ", " + leasePhrase(lease) + ":"
+    // The heading of what a host command request's grant covers, for the lease picked: its bounding values are the
+    // rows above it
+    function coversHeading(lease) {
+        const p = leasePhrase(lease)
+        return "A grant on these values, " + p + ", lets Claude"
     }
     // What a grant of a host command capability covers in detail, one command or free argument a line, unrestricted
     // ones first, with the values of an enum the broker counts rather than lists (more than its maxListedEnum, 8)
@@ -260,34 +293,67 @@ Item {
         return out.concat(freeBadges(g.capability, g.id))
     }
 
-    ScrollView {
+    // The tab shown: the user's pick, or the requests when there are some
+    property string page: ""
+    readonly property string currentPage: page !== "" ? page : pending.length > 0 ? "requests" : "granted"
+    readonly property var pages: ["requests", "granted", "activity", "config"]
+
+    ColumnLayout {
         anchors.fill: parent
-        contentWidth: availableWidth
+        spacing: 0
 
-        ColumnLayout {
-            width: parent.width
-            spacing: 12
+        Label {
+            Layout.fillWidth: true
+            Layout.margins: 12
+            visible: (root.broker.error || "") !== ""
+            text: root.broker.error || ""
+            color: "firebrick"
+            wrapMode: Text.Wrap
+            renderType: Text.NativeRendering
+        }
 
-            Item {
-                Layout.preferredHeight: 0
+        TabBar {
+            id: tabs
+            Layout.fillWidth: true
+            currentIndex: root.pages.indexOf(root.currentPage)
+            // Declared, not repeated: the Plasma style's TabBar reads its first tab's height before a Repeater adds it
+            TabButton {
+                objectName: "tab-requests"
+                text: "Requests" + (root.pending.length > 0 ? "  " + root.pending.length : "")
+                font.bold: root.pending.length > 0
+                onClicked: root.page = "requests"
             }
-
-            Label {
-                Layout.fillWidth: true
-                Layout.margins: 12
-                visible: (root.broker.error || "") !== ""
-                text: root.broker.error || ""
-                color: "firebrick"
-                wrapMode: Text.Wrap
+            TabButton {
+                objectName: "tab-granted"
+                text: "Granted" + (root.grants.length > 0 ? "  " + root.grants.length : "")
+                onClicked: root.page = "granted"
             }
+            TabButton {
+                objectName: "tab-activity"
+                text: "Activity"
+                onClicked: root.page = "activity"
+            }
+            TabButton {
+                objectName: "tab-config"
+                text: "Configuration"
+                onClicked: root.page = "config"
+            }
+        }
 
-            Section {
-                key: "pending"
-                title: "Waiting for your answer"
-                info: String(root.pending.length)
-                visible: root.pending.length > 0
-                expanded: root.isOpen("section:" + key, true)
-                onToggled: root.toggle("section:" + key, true)
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: tabs.currentIndex
+
+            TabPage {
+                objectName: "page-requests"
+                Label {
+                    objectName: "no-requests"
+                    visible: root.pending.length === 0
+                    text: "Nothing waiting for your answer"
+                    opacity: 0.7
+                    renderType: Text.NativeRendering
+                }
                 Repeater {
                     model: root.pending
                     delegate: RequestRow {
@@ -296,64 +362,37 @@ Item {
                 }
             }
 
-            Section {
-                key: "held"
-                title: "Still open"
-                visible: root.held.length > 0
-                expanded: root.isOpen("section:" + key, true)
-                onToggled: root.toggle("section:" + key, true)
-                RowLayout {
-                    Layout.fillWidth: true
-                    ReadOnlyText {
-                        objectName: "held"
+            TabPage {
+                objectName: "page-granted"
+                Card {
+                    visible: root.held.length > 0
+                    RowLayout {
                         Layout.fillWidth: true
-                        // A folder grant that ended is unmounted, but what's open in it stays readable to whoever holds it
-                        text: "Still open in folders no longer granted: "
-                              + root.held.map(g => g.summary + " (" + g.why + "): "
-                                              + g.holders.map(h => h.comm + " (" + h.pid + (h.possible ? ", possibly" : "")
-                                                              + ")").join(", ")).join("; ")
-                    }
-                    Button {
-                        objectName: "end"
-                        text: "End them"
-                        onClicked: root.send({ op: "end", grants: root.held.map(g => g.grant) })
-                    }
-                }
-            }
-
-            Section {
-                key: "config"
-                title: "From the configuration"
-                info: "read-only"
-                visible: root.overview.length > 0
-                expanded: root.isOpen("section:" + key, true)
-                onToggled: root.toggle("section:" + key, true)
-                Repeater {
-                    model: root.overview
-                    delegate: ColumnLayout {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        spacing: 2
-                        Label {
-                            text: modelData.title
-                            font.italic: true
-                        }
                         ReadOnlyText {
-                            objectName: "overview-" + modelData.key
+                            objectName: "held"
                             Layout.fillWidth: true
-                            Layout.leftMargin: 12
-                            text: modelData.text
+                            // A folder grant that ended is unmounted, but what's open in it stays readable to whoever
+                            // holds it
+                            text: "Still open in folders no longer granted: "
+                                  + root.held.map(g => g.summary + " (" + g.why + "): "
+                                                  + g.holders.map(h => h.comm + " (" + h.pid
+                                                                  + (h.possible ? ", possibly" : "") + ")").join(", "))
+                                            .join("; ")
+                        }
+                        Button {
+                            objectName: "end"
+                            text: "End them"
+                            onClicked: root.send({ op: "end", grants: root.held.map(g => g.grant) })
                         }
                     }
                 }
-            }
-
-            Section {
-                key: "granted"
-                title: "Granted"
-                info: root.grants.length > 0 ? String(root.grants.length) : "nothing right now"
-                expanded: root.isOpen("section:" + key, true)
-                onToggled: root.toggle("section:" + key, true)
+                Label {
+                    objectName: "no-grants"
+                    visible: root.grants.length === 0
+                    text: "Nothing granted right now"
+                    opacity: 0.7
+                    renderType: Text.NativeRendering
+                }
                 Repeater {
                     model: root.grants
                     delegate: GrantRow {
@@ -362,32 +401,89 @@ Item {
                 }
             }
 
-            Section {
-                key: "calls"
-                title: "Host command calls"
-                info: String(root.calls.length)
-                visible: root.calls.length > 0
-                expanded: root.isOpen("section:" + key, true)
-                onToggled: root.toggle("section:" + key, true)
-                ReadOnlyText {
-                    objectName: "calls"
-                    Layout.fillWidth: true
-                    text: root.callsText(root.calls, "")
+            TabPage {
+                objectName: "page-activity"
+                Section {
+                    key: "calls"
+                    title: "Host command calls"
+                    info: root.calls.length > 0 ? String(root.calls.length) : "none yet"
+                    CallList {
+                        objectName: "calls"
+                        view: root
+                        calls: root.calls
+                    }
+                }
+                Section {
+                    key: "log"
+                    title: "Recent decisions"
+                    info: root.log.length > 0 ? "" : "none yet"
+                    Repeater {
+                        model: root.log
+                        delegate: ColumnLayout {
+                            id: entry
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: 4
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label {
+                                    text: Qt.formatDateTime(new Date(entry.modelData.time), "yyyy-MM-dd HH:mm")
+                                    font.family: "monospace"
+                                    opacity: 0.7
+                                    renderType: Text.NativeRendering
+                                }
+                                Badge {
+                                    text: entry.modelData.decision
+                                    warning: entry.modelData.decision.startsWith("denied")
+                                }
+                            }
+                            ReadOnlyText {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 12
+                                text: root.shown(entry.modelData.summary)
+                            }
+                            Quote {
+                                Layout.leftMargin: 12
+                                visible: !!entry.modelData.reason
+                                text: root.shown(entry.modelData.reason || "")
+                            }
+                        }
+                    }
+                    // The log as plain text, for the tests
+                    property string text: root.log.map(e => Qt.formatDateTime(new Date(e.time), "yyyy-MM-dd HH:mm")
+                                                       + ": " + e.decision + ", " + e.summary
+                                                       + (e.reason ? ". Claude's reason: " + JSON.stringify(e.reason)
+                                                                   : "")).join("\n")
+                    objectName: "log"
                 }
             }
 
-            Section {
-                key: "log"
-                title: "Recent decisions"
-                visible: root.log.length > 0
-                expanded: root.isOpen("section:" + key, true)
-                onToggled: root.toggle("section:" + key, true)
-                ReadOnlyText {
-                    objectName: "log"
+            TabPage {
+                objectName: "page-config"
+                Label {
                     Layout.fillWidth: true
-                    text: root.log.map(e => Qt.formatDateTime(new Date(e.time), "yyyy-MM-dd HH:mm") + ": " + e.decision
-                                       + ", " + e.summary
-                                       + (e.reason ? ". Claude's reason: " + JSON.stringify(e.reason) : "")).join("\n")
+                    text: "What the sandbox gets from its start, from the launcher's configuration. Read-only here."
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    renderType: Text.NativeRendering
+                }
+                Repeater {
+                    model: root.overview
+                    delegate: Section {
+                        required property var modelData
+                        key: "overview-" + modelData.key
+                        title: modelData.title
+                        Card {
+                            padding: 8
+                            ReadOnlyText {
+                                objectName: "overview-" + modelData.key
+                                Layout.fillWidth: true
+                                text: modelData.text
+                                font.family: "monospace"
+                            }
+                        }
+                    }
                 }
             }
         }
