@@ -937,6 +937,11 @@ let
           ];
     };
   };
+  requestSend = import ./request-send.nix {
+    inherit pkgs nixos;
+    broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
+    requestSend = self.packages.${pkgs.stdenv.hostPlatform.system}.request-send;
+  };
   # The VM test's parts as vm-<part>, and vm, which builds them all
   vmParts = import ./vm {
     inherit pkgs aliceModule dbusProxy;
@@ -947,7 +952,7 @@ let
   };
 in
 {
-  tests = evalTests;
+  tests = evalTests // requestSend.tests;
 
   checks = vmChecks // {
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
@@ -956,6 +961,7 @@ in
       dbus-proxy
       permissions-broker
       permissions-window
+      request-send
       ;
 
     # nix-unit evaluates this flake again inside the build, which can't fetch, so every input (theirs too) comes from
@@ -1244,6 +1250,8 @@ in
           ! grep -q '^Exec=/nix/store/[^ ]*/bin/claude-desktop' "$d" || { echo "$d runs a store path" >&2; exit 1; }
           touch $out
         '';
+
+    request-send-module = requestSend.check;
 
     scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
       shellcheck ${../../scripts}/*.sh ${../home/claude-desktop}/*.sh

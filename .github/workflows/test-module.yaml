@@ -46,6 +46,6 @@ jobs:
       - uses: cachix/install-nix-action@v31
       # What earlier runs built themselves, cache.nixos.org has the rest
       - uses: ./.github/actions/nix-cache-restore
-      - run: nix build -L .#checks.x86_64-linux.{claude-desktop-eval,claude-desktop,scripts}
+      - run: nix build -L .#checks.x86_64-linux.{claude-desktop-eval,claude-desktop,request-send-module,scripts}
       - uses: ./.github/actions/nix-cache-save
         if: ${{ !cancelled() }}

@@ -1509,6 +1509,8 @@ let
 
 in
 {
+  imports = [ (import ./request-send.nix { inherit inputs; }) ];
+
   options.agent-sandbox.claude-desktop = launcherOptions cfg // {
     enable = lib.mkEnableOption "Claude Desktop, sandboxed with nixpak";
     launchers = mkOption {

@@ -154,6 +154,17 @@ single-user Nix store, and an environment doc for the Claude running inside.
   which it could reap first, so the launcher panicked with `waitid: no child
   processes`. The module applies it through `nixpakPkgs`, whose `callPackage`
   patches the package nixpak builds from its `launcher/`.
+- `nix/home/claude-desktop/request-send.nix` and `cmd/request-send/`: the host commands `request-send` and
+  `request-send-write` (README, request-send), `permissions.request-send` on each launcher, imported by
+  `default.nix`. `consent.title` and each command's `consent` are the user's words in the notification and the
+  window: plain, for someone who isn't technical, without ranges (the window's Details show those from the schemas).
+  The binary (`request-send --help`) sends one HTTP request per call: it reads the call, checks every argument again
+  (the origin against the `--origin`s the module passes, each with its `--env` and `--ca`, the method against the
+  scope's, the path, that origin and path make a URL on that origin, and the body), reads the origin's certificate at
+  each call and checks it's the TPM key's and valid now, and sends over TLS 1.3 trusting only the origin's `--ca`, the
+  TPM key as a `crypto.Signer` that has `step kms sign` sign the handshake's digest (retrying the TPM's intermittent
+  "structure is the wrong size", checking the signature). No redirects followed, no proxy; the answer is refused over
+  8 MiB or when it isn't UTF-8. Exits 2 on what it refuses, 1 when sending fails.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker, rewritten for
   the broker as gateway (declared host tools, host sockets at stable
@@ -166,7 +177,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
-`packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`.
+`packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
+`packages.<system>.request-send`.
 Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
@@ -356,7 +368,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   before the user is asked and told the scope, the window getting the call asking with its arguments whole
   (opaque ones by digest); the notification's summary ("Claude wants to" the title and the lease, the values left to the body) and its
   body's first line (the bounding values and the lease again, then the phrases), markup escaped, leases in hours and
-  minutes, word for word for a declaration shaped like agent-sandbox-plugins' windows-vm, a bounding value as long
+  minutes, word for word for a declaration shaped like nixos-windows-vm's windows-vm, a bounding value as long
   as a parameter may be whole in the body with the lease, and one with U+2028, U+202E and U+200B escaped in the
   summary, the body and the pending request's `bounds` (`consent_text_test.go`); phrases counted in characters (Danish
   and CJK at the cap); a granted request's reason on the grant; a once grant covering only
@@ -488,6 +500,22 @@ modules and a user alice (the `home-manager` input exists only for it).
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can.
+- `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
+  broker runs the binary, with the test binary as a fake `step` (its key standing in for the TPM's, every run
+  recorded) against an httptest TLS server that requires a client certificate from the test users CA: a read and
+  writes arriving as sent, the client certificate seen by the server, the TPM signing the handshake, the staging key
+  and certificate, the answer as it came (an error status, a redirect not followed), the TPM's intermittent error
+  retried and given up on, and exit 1 for an answer over 8 MiB or not UTF-8, a server from another CA, a certificate
+  of another key, an expired or missing one and step failing. Refusals with exit 2 before step runs: methods outside
+  the scope's, a GET with a body, paths that aren't from / or printable ASCII, too long, with a fragment or leaving
+  the origin, bodies too long or with control characters, missing, extra or mistyped arguments, origins not in the
+  list, bad flags.
+- `request-send-module` (`nix/checks/request-send.nix`, its eval tests in `claude-desktop-eval` as
+  `testRequestSend*`): both capabilities on the launchers that enable them with their own origins, CA, env and step,
+  the origin as the bounding enum and in `run`, their consent title and phrases, the read command's GET only and the
+  write one's GET and POST with a multiline body, the default step finding step-kms-plugin, origins that aren't https
+  origins or none failing to evaluate, the assertion without `permissions.enable`, and `permissions-broker serve`
+  loading the declaration while refusing a broken one. Not covered: the real osTicket API.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`: the NixOS VM test
   (`nix/checks/vm/`, needs KVM), in five parts that Nix runs in parallel;

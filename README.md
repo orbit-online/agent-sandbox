@@ -98,6 +98,50 @@ Claude did with it:
 
 The design: [`docs/permissions.md`](docs/permissions.md).
 
+### request-send
+
+Lets Claude make HTTP requests as you to services that take Orbit's users CA client certificates over the mesh, such
+as the osTicket helpdesk's `/api/orbit/v1` on its staff vhost (support.orbit.online's `mcp/` server is the client).
+The sandbox can't reach the mesh; the host sends. It declares two host command capabilities, each bounded by the
+service (`origin`) and with one command, `send`:
+
+- `request-send` sends GET requests, for reading.
+- `request-send-write` sends GET and POST requests, for writing: what a POST does there is done as you.
+
+Each call runs `request-send send` on the host with the call on stdin: the method, the path and query, and for a
+write the body, sent as `application/json`. Each origin has its `env` and `ca`: after checking that
+`~/.step/certs/cloud-<env>.crt` is the certificate of the TPM key `tpmkms:name=cloud-<env>` and valid now, it connects
+to the origin over TLS 1.3, trusting only the CAs in its `ca`, presents the certificate and has `step kms sign`
+(step-kms-plugin) sign the handshake. It follows no redirects and prints `{"status", "content_type", "body"}`,
+refused when the answer is over 8 MiB or not UTF-8. The call only names the request; the command fixes the origin to
+one of the module's, the headers and the TLS. The key never leaves the TPM and the sandbox never sees it, nor
+anything it could send on its own.
+
+```nix
+agent-sandbox.claude-desktop.permissions = {
+  enable = true;
+  request-send = {
+    enable = true;
+    # Each env's staff vhost, with that env's users CA certificate (cloud-<env>) and the machines CA its
+    # certificate is from (nixos-workstation's orbit-cas package)
+    origins = {
+      "https://support-staff.org-production.orbit.dev" = { env = "production"; ca = orbit-cas.production.machines_ca; };
+      "https://support-staff.org-staging.orbit.dev" = { env = "staging"; ca = orbit-cas.staging.machines_ca; };
+    };
+  };
+  # Reads without asking; writes still ask, once or for a lease
+  grants = [ { capability = "request-send"; params.origin = "https://support-staff.org-production.orbit.dev"; } ];
+};
+```
+
+Without a grant in `permissions.grants`, reads ask like writes do. The module adds none: a standing grant is yours to
+declare. A call that asks shows its arguments in the Permissions window (Options on the notification), a write's body
+whole; allow it once to see each request before it's sent, or for a time to let Claude work on its own.
+
+The calls run as you on the host and use the TPM, so you need the TPM's device (on NixOS
+`security.tpm2.enable = true` and your user in `tss`), the certificate from `step` as you have it for the users CA,
+and the mesh. The default `step` is nixpkgs' step-cli with step-kms-plugin on its PATH; `step` takes another.
+
 ## State and maintenance
 
 Everything the sandbox keeps lives in `~/.local/share/claude-desktop` on the

@@ -890,7 +890,7 @@ description says that a call may ask the user, and how its grant is scoped.
 
 ## Host commands planned
 
-windows-vm, as a Nix module in secoya/agent-sandbox-plugins: `screenshot`, `click`, `keys` (an enum of key names),
+windows-vm, as a Nix module in secoya/nixos-windows-vm: `screenshot`, `click`, `keys` (an enum of key names),
 `type` and `exec`, each one QMP or guest agent command on the VM given by `vm`, with the instance glob above. Raw QMP
 never reaches the sandbox.
 
