@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"os/exec"
@@ -114,18 +115,27 @@ func testBus(t *testing.T) (string, *fakeNotifications) {
 		0o600); err != nil {
 		t.Fatal(err)
 	}
-	daemon := exec.Command("dbus-daemon", "--nofork", "--config-file="+conf)
-	if err := daemon.Start(); err != nil {
+	// The socket file appears at bind(), before listen(), when a connect is refused; --print-address writes the
+	// address only once the bus listens
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	daemon := exec.Command("dbus-daemon", "--nofork", "--config-file="+conf, "--print-address=3")
+	daemon.ExtraFiles = []*os.File{w}
+	err = daemon.Start()
+	w.Close()
+	if err != nil {
 		t.Fatal("No dbus-daemon:", err)
 	}
 	t.Cleanup(func() { daemon.Process.Kill(); daemon.Wait() })
-	addr := "unix:path=" + dir + "/bus"
-	for range 100 {
-		if _, err := os.Stat(dir + "/bus"); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
+	// The deadline bounds a failure only
+	r.SetReadDeadline(time.Now().Add(60 * time.Second))
+	if _, err := bufio.NewReader(r).ReadString('\n'); err != nil {
+		t.Fatalf("dbus-daemon's address: %v", err)
 	}
+	addr := "unix:path=" + dir + "/bus"
 	f := &fakeNotifications{conn: busConn(t, addr), name: "fake", shown: map[uint32][]string{},
 		bodies: map[uint32]string{}, sums: map[uint32]string{}, posted: make(chan uint32, 8)}
 	if err := f.conn.Export(f, notifyPath, notifyIface); err != nil {
@@ -272,18 +282,31 @@ func TestNotificationDefaultGuards(t *testing.T) {
 	notifyMature = 300 * time.Millisecond
 	id, answer = ask(t, addr, f)
 	f.clickBody(t, id)
+	var again uint32
 	select {
-	case again := <-f.posted:
-		time.Sleep(notifyMature)
-		f.clickBody(t, again)
+	case again = <-f.posted:
 	case a := <-answer:
 		t.Fatalf("A click on the body at once answered %q", a)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Not asked again")
 	}
-	if a := answered(t, answer); a != "deny" {
-		t.Errorf("A click on the body later answered %q", a)
+	// The broker starts the clock when Notify has returned, after the fake posted, so a click notifyMature after the
+	// post can still come early and be asked again; one after that answers
+	for range 10 {
+		time.Sleep(notifyMature)
+		f.clickBody(t, again)
+		select {
+		case a := <-answer:
+			if a != "deny" {
+				t.Errorf("A click on the body later answered %q", a)
+			}
+			return
+		case again = <-f.posted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("No answer")
+		}
 	}
+	t.Fatal("Clicks on the body later were all asked again")
 }
 
 // A host command's notification says what Claude wants to do and for how long in its summary, and what the grant
