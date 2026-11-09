@@ -100,10 +100,14 @@ func (b *broker) runCall(c *capability, name string, cmd *hostcmd.Command, g *gr
 	}
 	unit := unitPrefix(b.cfg.Launcher) + "call-" + randomID()
 	// The grant ending stops the unit, whatever it started included. Until the call returns, as the end may come
-	// before systemd has the unit
-	finished := make(chan struct{})
-	defer close(finished)
+	// before systemd has the unit; the call returns once the stopping did, so no stop comes after it
+	finished, stopped := make(chan struct{}), make(chan struct{})
+	defer func() {
+		close(finished)
+		<-stopped
+	}()
 	go func() {
+		defer close(stopped)
 		select {
 		case <-g.ended:
 		case <-finished:

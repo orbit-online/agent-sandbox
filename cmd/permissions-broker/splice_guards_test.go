@@ -28,13 +28,14 @@ func TestRevokeWhileDialing(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.caps[c.id()] = c
+	// Set before the grant starts the address's accept loop, which reads it: the loop's start orders the two
+	dialing, revoked := make(chan struct{}), make(chan struct{})
+	beforeDial = func() { close(dialing); <-revoked }
+	t.Cleanup(func() { beforeDial = func() {} })
 	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{}`, "PT1H"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	dialing, revoked := make(chan struct{}), make(chan struct{})
-	beforeDial = func() { close(dialing); <-revoked }
-	t.Cleanup(func() { beforeDial = func() {} })
 	client, err := hostsock.DialPath(filepath.Join(b.cfg.GrantDir, socketsDir, "agent"), time.Second)
 	if err != nil {
 		t.Fatal(err)
