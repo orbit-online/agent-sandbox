@@ -10,8 +10,9 @@
 # Electron takes the windows' Wayland app ID and X11 WM_CLASS from package.json's desktopName alone (it sets
 # CHROME_DESKTOP from it at startup), so the launcher's DESKTOP_NAME, its .desktop file, gives its windows that file's
 # taskbar entry.
-# Once its first window is ready to show, the app prints $READY on stdout, where the launcher waits for it to end its
-# splash and tell systemd the app is up
+# The first time one of its windows is visible with its page loaded, the app prints $READY on stdout, where the launcher
+# waits for it to end its splash and tell systemd the app is up. Not ready-to-show: that only fires for a window not
+# shown yet, and the app shows its main window at creation
 : "${ASAR:?}" "${out:?}" "${DESKTOP_NAME:?}" "${READY:?}"
 asar extract "$ASAR" app
 jq --arg d "$DESKTOP_NAME" '.desktopName = $d' app/package.json >package.json
@@ -19,8 +20,9 @@ mv package.json app/package.json
 main=app/$(jq -er .main app/package.json)
 sed -i '1s/^"use strict";/&require("electron").safeStorage.setUsePlainTextEncryption(true);/' "$main"
 grep -q setUsePlainTextEncryption "$main"
-ready="require(\"electron\").app.once(\"browser-window-created\",(e,w)=>w.once(\"ready-to-show\",()=>console.log($(jq -n --arg r "$READY" '$r'))));"
-sed -i "1s|^\"use strict\";|&$ready|" "$main"
+ready="(()=>{let d=!1;const r=w=>{d||w.isDestroyed()||!w.isVisible()||w.webContents.isLoading()||(d=!0,console.log($(jq -n --arg r "$READY" '$r')))};require(\"electron\").app.on(\"browser-window-created\",(e,w)=>{w.webContents.once(\"did-finish-load\",()=>r(w));w.on(\"show\",()=>r(w))})})();"
+# Its JS holds no # or &, which sed would take as the delimiter or the match
+sed -i "1s#^\"use strict\";#&$ready#" "$main"
 grep -qF "$ready" "$main"
 gnome='\|\|[A-Za-z0-9_$]+\(\)==="gnome"(\|\|[A-Za-z0-9_$.]+\.nativeTheme\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png")'
 mapfile -t files < <(grep -rlE --include='*.js' "$gnome" app)

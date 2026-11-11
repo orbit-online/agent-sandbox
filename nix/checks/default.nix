@@ -1132,8 +1132,8 @@ in
           jq -e '.slice == "claude\\x2ddesktop.slice" and .launcher == "" and .permissions == null
             and any(.splash[]; test("^--agent-logo=/nix/store/.+/share/icons/hicolor/256x256/apps/claude-desktop\\.png$"))' \
             "$dcfg0" >/dev/null || { echo "the default launcher's config: $(<"$dcfg0")" >&2; exit 1; }
-          # The asar prints the ready line once its first window is ready to show
-          grep -qaF 'app.once("browser-window-created",(e,w)=>w.once("ready-to-show",()=>console.log("agent-sandbox: ready")))' "$asar" ||
+          # The asar prints the ready line once one of its windows is visible with its page loaded
+          grep -qaF 'w.webContents.isLoading()||(d=!0,console.log("agent-sandbox: ready"))};require("electron").app.on("browser-window-created"' "$asar" ||
             { echo "the asar lacks the ready line" >&2; exit 1; }
           # cgrun on the sandbox's PATH
           [[ -x $(grep -- '-claude-desktop-sw$' "$paths")/bin/cgrun ]] || { echo "the sandbox's PATH lacks cgrun" >&2; exit 1; }
