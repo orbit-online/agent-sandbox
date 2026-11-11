@@ -121,6 +121,9 @@
       workstation.wait_until_succeeds("grep -q from-the-sandbox /run/user/1000/fake-portal-uris", timeout=30)
       opened = json.loads(workstation.succeed("grep from-the-sandbox /run/user/1000/fake-portal-uris"))
       assert opened["app"] == "com.anthropic.Claude", f"the portal saw the caller as {opened}"
+      # Also by name without PATH, from the FHS env's /usr/bin, where a launch with the default path finds it
+      in_sandbox("env -u PATH xdg-open https://example.test/no-path")
+      workstation.wait_until_succeeds("grep -q no-path /run/user/1000/fake-portal-uris", timeout=30)
       # A method of an allowed name that no rule lists
       status, out = bus_call("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
                              "org.freedesktop.portal.OpenURI.SchemeSupported", "https", "@a{sv} {}")

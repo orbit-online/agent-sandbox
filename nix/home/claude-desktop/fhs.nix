@@ -170,6 +170,9 @@ in
               for f in {bin,sbin}/new{u,g}idmap; do
                 ln -sf ${sl.packages.subid-broker}/bin/''${f#*/} $out/usr/$f
               done
+              # Where a bare xdg-open is found without the app's PATH: the app's links (Electron runs xdg-open by
+              # name) failed with "LaunchProcess: failed to execvp" while PATH had the wrapper
+              ln -sf ${sl.xdgOpen}/bin/xdg-open $out/usr/bin/xdg-open
             '';
           }
         );

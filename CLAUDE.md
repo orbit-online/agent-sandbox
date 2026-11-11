@@ -604,7 +604,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   the store sync, the app's tray item (it owns
   `StatusNotifierItem-<pid>-1` through the proxy at the pid `app-pid.sh`
   set, with no capabilities left), D-Bus through the proxy (`notify-send` reaching the fake portal's
-  notifications; `xdg-open` reaching its OpenURI from a caller whose `/.flatpak-info` names the app; a
+  notifications; `xdg-open` reaching its OpenURI from a caller whose `/.flatpak-info` names the app, also by bare name
+  without PATH, as Electron runs it (`/usr/bin/xdg-open`); a
   method of the portal no rule lists refused, a name without rules hidden (no owner, not listed); a
   fake Plasma on the fake portal's process: the tray's
   registration reaches it, its notification server, clipboard and another kded
