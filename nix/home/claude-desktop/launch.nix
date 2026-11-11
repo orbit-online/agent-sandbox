@@ -78,12 +78,15 @@ in
   options.splash = {
     logo = mkOption {
       type = types.nullOr types.path;
-      default = null;
+      # A copy, see assets/README.md
+      default = ./assets/orbit-landskab-farve.svg;
+      defaultText = lib.literalMD "the Orbit logo, `assets/orbit-landskab-farve.svg`";
       description = "The main logo of the splash the launcher shows while the sandbox starts, for a light background.";
     };
     logoDark = mkOption {
       type = types.nullOr types.path;
-      default = null;
+      default = ./assets/orbit-landskab-farve-negativ.svg;
+      defaultText = lib.literalMD "the Orbit logo for dark backgrounds, `assets/orbit-landskab-farve-negativ.svg`";
       description = "The splash's main logo for a dark background, when the desktop is dark. `logo` without it.";
     };
     agentLogo = mkOption {

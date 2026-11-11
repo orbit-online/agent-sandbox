@@ -1130,7 +1130,9 @@ in
             and .ready == "agent-sandbox: ready" and (.splash[0] | endswith("/bin/sandbox-splash"))
             and .splash[1] == "--title=Claude (work)"' "$wcfg" >/dev/null || { echo "work's launcher config: $(<"$wcfg")" >&2; exit 1; }
           jq -e '.slice == "claude\\x2ddesktop.slice" and .launcher == "" and .permissions == null
-            and any(.splash[]; test("^--agent-logo=/nix/store/.+/share/icons/hicolor/256x256/apps/claude-desktop\\.png$"))' \
+            and any(.splash[]; test("^--agent-logo=/nix/store/.+/share/icons/hicolor/256x256/apps/claude-desktop\\.png$"))
+            and any(.splash[]; test("^--logo=/nix/store/[^/]+-orbit-landskab-farve\\.svg$"))
+            and any(.splash[]; test("^--logo-dark=/nix/store/[^/]+-orbit-landskab-farve-negativ\\.svg$"))' \
             "$dcfg0" >/dev/null || { echo "the default launcher's config: $(<"$dcfg0")" >&2; exit 1; }
           # The asar prints the ready line once one of its windows is visible with its page loaded
           grep -qaF 'w.webContents.isLoading()||(d=!0,console.log("agent-sandbox: ready"))};require("electron").app.on("browser-window-created"' "$asar" ||

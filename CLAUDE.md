@@ -170,7 +170,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   paths to its own Qt's, Plasma's style and platform theme included: the
   host's may be another Qt. Where the compositor leaves decorations to the window (GNOME), they're Adwaita's
   (`qadwaitadecorations-qt6`, `QT_WAYLAND_DECORATION=adwaita` on the Permissions window), with a shadow. The package also builds `sandbox-splash` (`splash/`, `sandbox-splash --help`), the
-  launcher's splash: the main logo (the `splash.logo` and `splash.logoDark` options, none by default) with the agent's
+  launcher's splash: the main logo (the `splash.logo` and `splash.logoDark` options, by default the Orbit logo copied into
+  `nix/home/claude-desktop/assets/`, whose README says from where, and that the MIT licence doesn't cover it) with the agent's
   beside it a bit smaller (`splash.agentLogo`, the app's icon), the step and its progress, light or dark as the
   desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
   closes it; JSON lines on stdin (`state.go`) drive it. SVG logos load through qtsvg; around them the clear space
