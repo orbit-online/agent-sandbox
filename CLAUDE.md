@@ -71,7 +71,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `cmd/launcher/`: the launcher (`launcher --help`), one binary for the user's entry and the app's unit:
   `main.go` (arguments, the config `launch.nix` writes), `enter.go` (`--permissions`, `--shell`, the re-entry into the
   running app through nsenter after joining its cgroup, the unit started and its result, Ctrl-C or a hangup while it
-  starts stopping the unit), `supervise.go` (the unit:
+  starts stopping the unit, a launch while the unit runs without a sandbox (it starts, or shows an error) handing
+  supervise the caller's `XDG_ACTIVATION_TOKEN` in a file and SIGUSR1 to bring the splash to the front, or saying so
+  without one, as from a terminal), `supervise.go` (the unit:
   the sandbox's state and store prepared, nixpak's launcher run with its output pumped to the journal and a tail
   kept, the app's ready line ending the splash and sending READY=1, a failure shown with that tail, the splash's Abort
   stopping nixpak's launcher (SIGTERM, SIGKILL after 5 s) and the start, shown for at least a second), `store.go` (the
@@ -186,7 +188,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `--title-font`), the step and its progress with the agent's logo small at the right above the bar
   (`splash.agentLogo`, the app's icon), light or dark as the
   desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
-  closes it; JSON lines on stdin (`state.go`) drive it. After 10 seconds it offers Abort, which says "Aborting startup"
+  closes it; JSON lines on stdin (`state.go`) drive it, `activate` with an xdg-activation token bringing the window to
+  the front (Qt's `requestActivate` takes it from the environment). After 10 seconds it offers Abort, which says "Aborting startup"
   at once and prints `abort` on its stdout for the launcher. SVG logos load through qtsvg; around them the clear space
   brand logos ask for, half the symbol's height.
 - `nix/patches/`: patches to what the module builds from its inputs, each
@@ -545,14 +548,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can. `splash/splash_test.go`: the splash loads without QML warnings through a start and a
-  failure without logos, Abort once it shows writing the command and turning to aborting, and a line sets what it names (a new step's progress unknown until it says).
+  failure without logos, Abort once it shows writing the command and turning to aborting, an `activate` line putting its token in the
+  environment and telling the window, and a line sets what it names (a new step's progress unknown until it says).
 - `launcher`: the package build runs the Go tests of `cmd/launcher` and `internal/` with fake tools (the state
   script, nix-store, nixpak's launcher and the splash as scripts) and a notify socket of the test's: supervise
   sending READY=1 on the app's ready line and passing its arguments and output on, a refusal (a missing bind source)
   left in the result file before READY=1 with nixpak's launcher never run, an app failing before it's up shown in the
   splash with its status and last output, no splash being no obstacle, the tail's size, an abort from the splash while
   the app starts (nixpak's launcher stopped with SIGTERM, the result, READY=1, at least a second shown), Ctrl-C while
-  the unit starts stopping it (`abort_test.go`); the store sync deleting nix/
+  the unit starts stopping it (`abort_test.go`); a launch while the unit runs leaving its token and signalling
+  supervise, or failing without a token, and an inactive unit started; SIGUSR1 handing the token to the splash of a
+  failed start and of the app ended (`activate_test.go`); the store sync deleting nix/
   without a record, copying only what the store lacks with its progress short of 1, leaving a recorded store alone,
   refusing a store dir that is a link and deleting nix/ for a swapped one; the id maps (`maps_test.go`: the subuid
   range around the user's own id, an identity map and its subuid lines with the own id at either end, inside and

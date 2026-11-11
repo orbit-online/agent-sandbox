@@ -21,7 +21,8 @@ Usage:
 
 Reads JSON lines on stdin, each setting what it names: dark (the desktop's
 colour scheme), text (the step, with progress from 0 to 1 when known), error
-and log (why the start failed and the app's last output). Closes when stdin
+and log (why the start failed and the app's last output); activate, an
+xdg-activation token, brings the window to the front. Closes when stdin
 does, unless it shows an error: then when the user closes it. After 10 seconds
 it offers Abort, which prints "abort" on stdout for the launcher.
 
@@ -61,12 +62,7 @@ func main() {
 		in.Buffer(make([]byte, 64<<10), 1<<20)
 		for in.Scan() {
 			line := append([]byte(nil), in.Bytes()...)
-			mainthread.Start(func() {
-				if err := st.apply(line); err != nil {
-					slog.Warn("Splash", "err", err)
-				}
-				publish(splash, st)
-			})
+			mainthread.Start(func() { take(splash, st, line) })
 		}
 		// The launcher closed it: the app is up, or the launcher ended. An error stays until the user closes it
 		mainthread.Start(func() {
@@ -113,12 +109,26 @@ func load(opts docopt.Opts, path string, warn func(string)) (*qml.QQmlApplicatio
 	return engine, splash
 }
 
+// take applies a line from the launcher and shows the result. Qt's requestActivate takes an activation token from the
+// environment, once (QWaylandXdgSurface), so it's set before the QML hears of the activation
+func take(m *qml.QQmlPropertyMap, st *state, line []byte) {
+	if err := st.apply(line); err != nil {
+		slog.Warn("Splash", "err", err)
+	}
+	if st.Token != "" {
+		os.Setenv("XDG_ACTIVATION_TOKEN", st.Token)
+		st.Token = ""
+	}
+	publish(m, st)
+}
+
 func publish(m *qml.QQmlPropertyMap, s *state) {
 	m.Insert("dark", qt.NewQVariant8(s.Dark))
 	m.Insert("text", qt.NewQVariant14(s.Text))
 	m.Insert("progress", qt.NewQVariant9(s.Progress))
 	m.Insert("error", qt.NewQVariant14(s.Error))
 	m.Insert("log", qt.NewQVariant14(s.Log))
+	m.Insert("activations", qt.NewQVariant4(s.Activations))
 }
 
 func fileURL(path string) string {

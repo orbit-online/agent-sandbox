@@ -31,6 +31,7 @@ type splashState struct {
 	Progress *float64 `json:"progress,omitempty"` // 0 to 1; none for a step of unknown length
 	Error    string   `json:"error,omitempty"`    // Shown until the user closes the window
 	Log      string   `json:"log,omitempty"`      // The app's last output, beneath the error
+	Activate string   `json:"activate,omitempty"` // An xdg-activation token: the window to the front
 }
 
 func showSplash(cfg *config) *splash {

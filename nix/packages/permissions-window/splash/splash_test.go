@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"testing"
@@ -65,6 +66,16 @@ func qmlCheck() []string {
 		publish(splash, st)
 		qt.QCoreApplication_ProcessEvents()
 	}
+	// An activation with the error up: the token where Qt's requestActivate looks, the window told
+	os.Unsetenv("XDG_ACTIVATION_TOKEN")
+	take(splash, st, []byte(`{"activate":"token-1"}`))
+	qt.QCoreApplication_ProcessEvents()
+	if got := os.Getenv("XDG_ACTIVATION_TOKEN"); got != "token-1" {
+		warnings = append(warnings, "Activation token "+got)
+	}
+	if got := root.Property("activations").ToInt(); got != 1 {
+		warnings = append(warnings, fmt.Sprintf("The window heard of %d activations", got))
+	}
 	return warnings
 }
 
@@ -87,6 +98,9 @@ func TestApply(t *testing.T) {
 	}
 	if err := s.apply([]byte(`{"text":"Starting"}`)); err != nil || s.Progress != -1 || !s.Dark {
 		t.Errorf("A new step: %+v, %v", s, err)
+	}
+	if err := s.apply([]byte(`{"activate":"t"}`)); err != nil || s.Token != "t" || s.Activations != 1 || s.Text != "Starting" {
+		t.Errorf("An activation: %+v, %v", s, err)
 	}
 	if err := s.apply([]byte(`not json`)); err == nil {
 		t.Error("Took a broken line")

@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,7 +25,19 @@ import (
 // colour scheme and tells systemd (Type=notify) once the app is up, or why it didn't start, which it leaves for start
 // in the result file first. Its stdout and stderr are the unit's, the journal
 func supervise(cfg *config, vars, args []string) error {
+	// A launch while the unit runs without a sandbox asks for the splash at the front (activateUnit). First, as
+	// SIGUSR1 ends the process until it's caught
+	usr1 := make(chan os.Signal, 1)
+	signal.Notify(usr1, syscall.SIGUSR1)
+	defer signal.Stop(usr1)
+	var shown atomic.Pointer[splash]
 	sp := showSplash(cfg)
+	shown.Store(sp)
+	go func() {
+		for range usr1 {
+			activate(cfg, shown.Load())
+		}
+	}()
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		slog.Warn("No session bus", "err", err)
@@ -115,7 +129,9 @@ func supervise(cfg *config, vars, args []string) error {
 	case <-ready:
 		// It ran: the error window on its own, as the app's
 		slog.Error("The app ended", "status", exit)
-		showSplash(cfg).fail(fmt.Sprintf("Claude ended with an error (%s).", exit), tail.String())
+		failed := showSplash(cfg)
+		shown.Store(failed)
+		failed.fail(fmt.Sprintf("Claude ended with an error (%s).", exit), tail.String())
 	default:
 		failStart(cfg, sp, fmt.Sprintf("The app didn't start (%s).", exit), tail.String())
 	}
@@ -232,6 +248,17 @@ func failStart(cfg *config, sp *splash, msg, log string) error {
 	daemon.SdNotify(false, daemon.SdNotifyReady)
 	sp.fail(msg, log)
 	return exitError(1)
+}
+
+// activate hands the token a launch left to sp, which brings its window to the front with it
+func activate(cfg *config, sp *splash) {
+	token, err := os.ReadFile(activationFile(cfg))
+	os.Remove(activationFile(cfg))
+	if err != nil || len(token) == 0 {
+		slog.Warn("Asked to bring the splash to the front without a token", "err", err)
+		return
+	}
+	sp.send(splashState{Activate: string(token)})
 }
 
 // pump copies r to w line by line, keeping the lines in tail and handing each to line

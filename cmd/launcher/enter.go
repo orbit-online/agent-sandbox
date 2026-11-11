@@ -142,6 +142,9 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 	if err := os.MkdirAll(filepath.Dir(result), 0o700); err != nil {
 		return err
 	}
+	if running, err := activateUnit(cfg); running {
+		return err
+	}
 	if err := os.Remove(result); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -185,6 +188,35 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 		return fmt.Errorf("The app didn't start, see journalctl --user -u %s", cfg.Unit)
 	}
 	return nil
+}
+
+// activateUnit brings the splash of the app's unit to the front when the unit runs without a sandbox: it starts, or it
+// shows why the start failed or the app ended. The caller's activation token goes to supervise in a file, which
+// SIGUSR1 tells it to read. Without one, as from a terminal, it says so instead. running is false when the unit
+// doesn't run, or systemctl fails and systemd-run will say what's wrong
+func activateUnit(cfg *config) (running bool, err error) {
+	out, _ := exec.Command(cfg.Tools.Systemctl, "--user", "show", "-P", "ActiveState", cfg.Unit).Output()
+	switch strings.TrimSpace(string(out)) {
+	case "", "inactive", "failed":
+		return false, nil
+	}
+	token := os.Getenv("XDG_ACTIVATION_TOKEN")
+	if token == "" {
+		return true, errors.New("The app is starting, or its window shows why it didn't start or ended: switch to that window")
+	}
+	if err := os.WriteFile(activationFile(cfg), []byte(token), 0o600); err != nil {
+		return true, err
+	}
+	if out, err := exec.Command(cfg.Tools.Systemctl, "--user", "kill", "--kill-whom=main", "--signal=SIGUSR1",
+		cfg.Unit).CombinedOutput(); err != nil {
+		return true, fmt.Errorf("Bring %s's window to the front: %w: %s", cfg.Unit, err, out)
+	}
+	return true, nil
+}
+
+// activationFile is where start leaves its activation token for supervise, next to the result file
+func activationFile(cfg *config) string {
+	return filepath.Join(filepath.Dir(resultFile(cfg)), cfg.Unit+".activate")
 }
 
 func unitOwnVar(name string) bool {

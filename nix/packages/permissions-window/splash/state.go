@@ -13,6 +13,9 @@ type state struct {
 	Progress float64 `json:"progress"` // -1: a step of unknown length
 	Error    string  `json:"error"`
 	Log      string  `json:"log"`
+	// How often the launcher asked to bring the window to the front, and the activation token for the next time
+	Activations int    `json:"-"`
+	Token       string `json:"-"`
 }
 
 func newState() *state { return &state{Text: "Starting", Progress: -1} }
@@ -25,6 +28,7 @@ func (s *state) apply(line []byte) error {
 		Progress *float64 `json:"progress"`
 		Error    *string  `json:"error"`
 		Log      *string  `json:"log"`
+		Activate *string  `json:"activate"`
 	}
 	if err := json.Unmarshal(line, &l); err != nil {
 		return fmt.Errorf("Read a line from the launcher: %w", err)
@@ -44,6 +48,10 @@ func (s *state) apply(line []byte) error {
 	}
 	if l.Log != nil {
 		s.Log = *l.Log
+	}
+	if l.Activate != nil {
+		s.Token = *l.Activate
+		s.Activations++
 	}
 	return nil
 }

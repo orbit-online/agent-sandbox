@@ -14,6 +14,9 @@ ApplicationWindow {
     readonly property color bgColor: splash.dark ? "#1f1f22" : "#fafafa"
     readonly property color fgColor: splash.dark ? "#ececee" : "#1d1d1f"
     readonly property color mutedColor: splash.dark ? "#a1a1a6" : "#6e6e73"
+    // The launcher asks for the window at the front when the app is launched again while this shows
+    property int activations: splash.activations
+    onActivationsChanged: root.requestActivate()
     Timer {
         interval: 10000
         running: !root.failed
