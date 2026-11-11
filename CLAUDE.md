@@ -223,7 +223,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
-`packages.<system>.request-send`, `packages.<system>.launcher`.
+`packages.<system>.request-send`, `packages.<system>.launcher`, and for CI
+`legacyPackages.<system>.vm-loop-full` (see Testing).
 Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
@@ -254,7 +255,11 @@ twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 
 ## Testing
 
-`nix flake check` runs everything below; run it before every commit. Inside
+`nix flake check` runs everything below; run it before every commit. While
+iterating, build only the checks a change reaches (`nix build .#launcher
+.#permissions-window`, whose builds run their tests, for the launcher and the
+splash): a change to anything in the sandbox's closure rebuilds
+the VM images and runs every VM part. Inside
 the Claude Desktop sandbox, run heavy jobs under `cgrun`, so going past the
 limit kills the job, not the app or the desktop: `cgrun --memory=24G -- nix
 flake check -L --max-jobs 4 --cores 4` (at Nix's defaults, 32 jobs with every
@@ -592,8 +597,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
   journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, `cgrun` refusing, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
   its permissions broker, `live` the broker's state machine tests, `loop` the
-  default launcher launched and stopped 100 times, none failing (about 4 minutes; it prints
-  the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
+  default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which
+  CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
   some, see `nix/patches/`). A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself, which listens on 443. On the
@@ -692,7 +697,7 @@ CI runs on pushes to `main` and on pull requests, split by what changed
 (`.github/workflows/test-*.yaml`, each with its own `paths:`): `test-go`
 builds the Go packages with their tests, `test-module` the eval tests, the
 app's closure and shellcheck, `test-vm` the VM test's parts (one job,
-in parallel), and `test-models`
+in parallel, the loop at 100 launches), and `test-models`
 runs `models/check`. A change to docs alone runs none.
 
 Every new test gets the revert check: break the implementation, see the test

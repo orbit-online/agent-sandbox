@@ -987,9 +987,17 @@ let
   vmChecks = lib.mapAttrs' (part: lib.nameValuePair "vm-${part}") vmParts // {
     vm = pkgs.linkFarm "vm-tests" vmParts;
   };
+  # vm-loop at 100 launches, for CI: the flake check's 20 keep a local run short
+  vmLoopFull =
+    (import ./vm {
+      inherit pkgs aliceModule dbusProxy;
+      broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
+      launches = 100;
+    }).loop;
 in
 {
   tests = evalTests // requestSend.tests;
+  inherit vmLoopFull;
 
   checks = vmChecks // {
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})

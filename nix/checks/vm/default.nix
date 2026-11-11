@@ -7,6 +7,8 @@
   aliceModule,
   broker,
   dbusProxy,
+  # How often vm-loop launches the default launcher
+  launches ? 20,
 }:
 let
   inherit (pkgs) lib;
@@ -310,6 +312,7 @@ let
             gdbus
             stateDir
             sandboxHome
+            launches
             workStateDir
             ;
           mcpArgs = nodes.workstation.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.work.mcpServers.permissions.args;

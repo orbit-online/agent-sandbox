@@ -54,5 +54,7 @@
       checks = forAllSystems (system: (checksFor system).checks);
       # nix-unit's, run by checks.claude-desktop-eval
       tests = forAllSystems (system: (checksFor system).tests);
+      # Built by CI, not by nix flake check: checks.vm-loop at 100 launches
+      legacyPackages = forAllSystems (system: { vm-loop-full = (checksFor system).vmLoopFull; });
     };
 }

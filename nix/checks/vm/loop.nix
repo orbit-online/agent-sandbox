@@ -1,11 +1,12 @@
-# The default launcher launched 100 times in a row, each to the stub app's log, then stopped: none may fail. nixpak's
+# The default launcher launched launches times in a row (20 in the flake check, 100 in CI's vm-loop-full), each to the
+# stub app's log, then stopped: none may fail. nixpak's
 # launcher without nix/patches/nixpak-launcher-reaper.patch panics in some ("panic: waitid: no child processes": its
 # reaper took the pasta child StartPasta waits for)
-{ sandboxHome, ... }:
+{ sandboxHome, launches, ... }:
 ''
   start_portal()
   workstation.succeed("mkdir -p /srv/project")
-  n = 100
+  n = ${toString launches}
   applog = "${sandboxHome}/stub-app.log"
   failed = []
   with subtest(f"{n} launches of the default launcher"):

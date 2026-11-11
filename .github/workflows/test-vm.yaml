@@ -54,7 +54,7 @@ jobs:
           extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
       # What earlier runs built themselves, cache.nixos.org has the rest
       - uses: ./.github/actions/nix-cache-restore
-      # vm: vm-launch, vm-store, vm-work, vm-live and vm-loop
-      - run: nix build -L .#checks.x86_64-linux.vm
+      # vm: vm-launch, vm-store, vm-work, vm-live and vm-loop (20 launches); vm-loop-full the loop at 100
+      - run: nix build -L .#checks.x86_64-linux.vm .#legacyPackages.x86_64-linux.vm-loop-full
       - uses: ./.github/actions/nix-cache-save
         if: ${{ !cancelled() }}
