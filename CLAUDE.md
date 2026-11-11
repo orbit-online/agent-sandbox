@@ -76,7 +76,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   closure copied into the sandbox's store through `confine.sh`, its progress from the export stream's bytes against
   the NAR sizes), `theme.go` (the portal's colour scheme as the sandbox's GTK theme, live) and `splash.go` (the
   splash's process and its JSON lines). The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
-  `patch-asar.sh` adds: once its first window is ready to show. `internal/sandbox`: finding a launcher's running
+  `patch-asar.sh` adds: the first time one of its windows is visible with its page loaded (not `ready-to-show`, which
+  skips a window shown at creation, as the app's main window is). `internal/sandbox`: finding a launcher's running
   sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
 - `cmd/netns-macvlan/`: the Go helper that gives the sandbox's netns
   its macvlan (`netns-macvlan --help`).
