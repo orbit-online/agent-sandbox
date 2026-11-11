@@ -12,6 +12,7 @@ always needs the user's go first.
 <!-- memo-doc: topic=sandbox # The sandbox you run in: its home, what survives a restart, its namespaces -->
 <!-- memo-doc: topic=nix # Nix: building, running and installing packages, the Nix store -->
 <!-- memo-doc: topic=containers # Containers and user namespaces: podman, unshare, subordinate ids -->
+<!-- memo-doc: activity=self-diagnostic # Checking that the agent's setup works as its config says -->
 
 ## First startup
 
@@ -128,3 +129,41 @@ closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,
 which `claude-desktop-store-gc` picks up.
+
+## Self-check
+<!-- memo: activity=self-diagnostic environment=bwrap -->
+
+The sandbox:
+
+- Each bind under Binds in `/etc/claude/environment.md` is a mount in
+  `/proc/self/mountinfo`, read-write or read-only as listed. One marked as
+  present only if the host has it may be missing.
+- The binaries of each package under PATH there resolve on PATH.
+- pid 1 is `bwrap`, and `/proc/self/uid_map` and `gid_map` hold 65536 ids
+  with your own kept as themselves.
+- `/nix/var/nix/gcroots/claude-desktop` resolves.
+- A `SessionStart` hook in Claude Code's settings, managed ones in
+  `/etc/claude-code/managed-settings.d/` included, starts
+  `claude-desktop-store-gc` and `claude-desktop-scratchpad-prune`
+  detached, and each one's log, where the hook writes it, ends without a
+  failure. Without such a hook the check fails.
+- `/tmp` is a tmpfs, with Claude Code's temp dir bound on top.
+- The host's `127.0.0.1` is out of reach, the LAN and the internet aren't
+  (`scripts/nettest.sh` in a checkout of orbit-online/agent-sandbox tests
+  this).
+
+## Permissions self-check
+<!-- memo: activity=self-diagnostic environment=bwrap -->
+
+The `permissions` MCP server:
+
+- `/run/permissions/request.sock` is a socket.
+- `list` shows each capability the launcher's config declares, with the
+  instances it allows, and `status` the standing grants, each with lease
+  `standing`.
+- Each host socket capability has its address under
+  `/run/permissions/sockets/`; a connection without a grant is closed at
+  once.
+- With the user's go: `request` a read-only grant of a folder `list`
+  offers, read a file through it under `/run/permissions`, then `release`
+  it and see it gone from `status` and the mount gone.
