@@ -3,8 +3,9 @@
 # the user's. U2 maps all of U1's ids as themselves. The launcher's bwrap (cmd/launcher bwrap.go) writes both maps.
 #
 # init userns (host)
-# │  runs: nixpak launcher, dbus-proxy (in a bwrap of nixpak's), the pasta-slot script (netSetup), bwrap's parent,
-# │        netns-macvlan (cap_net_admin, creates eth0 in N), subid-broker (writes maps below U1 on request)
+# │  runs: the launcher's supervise (the app's unit), nixpak launcher, dbus-proxy (in a bwrap of nixpak's), bwrap's
+# │        parent, the launcher's bwrap helper (U1's maps, the cgroups, the netns), netns-macvlan (cap_net_admin,
+# │        creates eth0 in N), subid-broker (writes maps below U1 on request)
 # │
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
 #    │  owns: N (netns: lo + eth0 macvlan), M1 (sandbox mount tree), MU (udhcpc's mount tree, made from the
@@ -12,7 +13,7 @@
 #    │        the app's unit's delegated cgroup, see cmd/launcher bwrap.go)
 #    │  runs (in N, M1, P): bwrap's init and the FHS env script as uid 1000 without capabilities
 #    │       (in N, MU, P): udhcpc + dhcpScript (net_admin and net_raw only)
-#    │       (in N and the host's mount ns): netSetup's ip calls; the permissions broker's helpers, which join M1
+#    │       (in N and the host's mount ns): the bwrap helper's ip calls; the permissions broker's helpers, which join M1
 #    │        only after their exec
 #    │
 #    └─ U2  buildFHSEnv's bwrap (all of U1's ids)

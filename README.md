@@ -49,9 +49,22 @@ to be in it. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
 Other options: `extraPath` (directories ahead of the PATH packages),
 `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
-(appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray` and `sandbox` (extra
-nixpak configuration). The descriptions are in
-[`default.nix`](nix/home/claude-desktop/default.nix).
+(appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
+`sandbox` (extra nixpak configuration). The descriptions are in the feature modules in
+[`nix/home/claude-desktop/`](nix/home/claude-desktop/), the general ones in
+[`options.nix`](nix/home/claude-desktop/options.nix).
+
+## Launching
+
+`claude-desktop` starts the sandbox as a user unit and shows a splash while it
+gets ready: the step it's at, with a progress bar while it copies the
+sandbox's programs into its store (the first launch after a rebuild), until
+the app's first window is up. When the start fails, the splash shows why with
+the app's last output; so it does when the app ends with an error later. After
+10 seconds it offers Abort, which stops the start; so does Ctrl-C when you
+started it from a terminal, which gets the same messages. The splash shows
+the Orbit logo with the app's icon beside it, smaller: `splash.logo`,
+`splash.logoDark` and `splash.agentLogo` take other files, `null` for none.
 
 ## memo
 

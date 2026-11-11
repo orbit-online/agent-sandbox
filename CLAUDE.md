@@ -14,7 +14,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   own state dir, app ID, MAC and `claude-desktop-<name>`. Each launcher, the default one included, is a
   `submoduleWith` of the same feature modules, which take `launcherName` (null for the default one), Home Manager's
   config as `hm` and the shared helpers of `lib.nix` as `sl`, and meet in the internal `build` options
-  (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's and the app unit's variables, the
+  (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's JSON config (`cmd/launcher`), the
   `.desktop` actions, assertions): `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
   launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
   `/run/current-system/sw`), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
