@@ -167,11 +167,13 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `--permissions` and the `.desktop` file's "Permissions" action; the broker
   opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
   paths to its own Qt's, Plasma's style and platform theme included: the
-  host's may be another Qt. The package also builds `sandbox-splash` (`splash/`, `sandbox-splash --help`), the
+  host's may be another Qt. Where the compositor leaves decorations to the window (GNOME), they're Adwaita's
+  (`qadwaitadecorations-qt6`, `QT_WAYLAND_DECORATION=adwaita` on the Permissions window), with a shadow. The package also builds `sandbox-splash` (`splash/`, `sandbox-splash --help`), the
   launcher's splash: the main logo (the `splash.logo` and `splash.logoDark` options, none by default) with the agent's
   beside it a bit smaller (`splash.agentLogo`, the app's icon), the step and its progress, light or dark as the
-  desktop is, and when the start fails why and the app's last output until the user closes it; JSON lines on stdin
-  (`state.go`) drive it.
+  desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
+  closes it; JSON lines on stdin (`state.go`) drive it. SVG logos load through qtsvg; around them the clear space
+  brand logos ask for, half the symbol's height.
 - `nix/patches/`: patches to what the module builds from its inputs, each
   with a header saying why. `nixpak-launcher-reaper.patch` (meant for
   upstream, in `git format-patch` form below the header) keeps nixpak's

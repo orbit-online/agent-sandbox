@@ -3,6 +3,7 @@
   kdePackages,
   lib,
   makeWrapper,
+  qadwaitadecorations-qt6,
   pkg-config,
   writeShellApplication,
   ...
@@ -22,6 +23,10 @@ let
     kdePackages.qtwayland
     kdePackages.plasma-integration
     kdePackages.qqc2-desktop-style
+    # Adwaita's decorations, with a shadow, where the window draws its own (GNOME): Qt's default has none
+    qadwaitadecorations-qt6
+    # SVG images, the splash's logos
+    kdePackages.qtsvg
   ];
 in
 buildGoModule (finalAttrs: {
@@ -96,6 +101,8 @@ buildGoModule (finalAttrs: {
       wrapProgram $out/bin/$b --set QML_IMPORT_PATH ${qmlPath} --set QT_PLUGIN_PATH ${pluginPath} \
         --unset QML2_IMPORT_PATH --set QML_DISABLE_DISTANCEFIELD 1
     done
+    # Only where the compositor leaves decorations to the window: Plasma and COSMIC draw their own
+    wrapProgram $out/bin/permissions-window --set QT_WAYLAND_DECORATION adwaita
   '';
   # The window against a mock broker, for working on its looks (preview.sh)
   passthru.preview = writeShellApplication {

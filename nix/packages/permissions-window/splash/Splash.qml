@@ -12,22 +12,31 @@ ApplicationWindow {
     readonly property color fgColor: splash.dark ? "#ececee" : "#1d1d1f"
     readonly property color mutedColor: splash.dark ? "#a1a1a6" : "#6e6e73"
 
-    width: failed ? 640 : 420
-    height: failed ? 480 : 240
+    width: failed ? 640 : 460
+    height: failed ? 480 : 260
     visible: true
     title: windowTitle
     color: bgColor
+    // The controls (the progress bar, the log, the button) follow the splash, which follows the desktop
+    palette.window: bgColor
+    palette.windowText: fgColor
+    palette.base: splash.dark ? "#2a2a2e" : "#ffffff"
+    palette.text: fgColor
+    palette.button: splash.dark ? "#3a3a3e" : "#f0f0f0"
+    palette.buttonText: fgColor
+    palette.mid: splash.dark ? "#4a4a4f" : "#c8c8cc"
     flags: failed ? Qt.Window : (Qt.SplashScreen | Qt.FramelessWindowHint)
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 28
+        // Brand logos want clear space of half their symbol's height around them: about 29 px at 64
+        anchors.margins: 32
         spacing: 18
 
         RowLayout {
             objectName: "logos"
             Layout.alignment: Qt.AlignHCenter
-            spacing: 20
+            spacing: 32
 
             Image {
                 objectName: "logo"
