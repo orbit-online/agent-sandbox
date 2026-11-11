@@ -46,6 +46,7 @@ type response struct {
 	Log          []logEntry       `json:"log,omitempty"`
 	Standing     []standingGrant  `json:"standing,omitempty"`
 	Overview     json.RawMessage  `json:"overview,omitempty"`
+	Agent        string           `json:"agent,omitempty"`
 	Held         []held           `json:"held,omitempty"`
 	Calls        []callRecord     `json:"calls,omitempty"`
 }

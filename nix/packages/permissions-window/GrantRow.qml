@@ -70,6 +70,7 @@ Card {
             opacity: 0.8
         }
         Quote {
+            agent: grant.view.agent
             visible: grant.modelData.lease !== "standing"
             textName: "reason-" + grant.gid
             text: grant.modelData.reason ? grant.view.shown(grant.modelData.reason) : "No reason recorded"

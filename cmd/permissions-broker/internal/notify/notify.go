@@ -17,9 +17,11 @@ import (
 
 // The notification's question and the user's answer: allow, deny or options
 type Prompt struct {
+	// Who asks: the agent's name, as the broker's config has it
+	Agent                  string
 	Summary, Reason, Lease string
 	// Host commands: what the grant covers, shown before the reason, and the bounding values it's on. With them, the
-	// summary says what Claude wants to do, and for how long
+	// summary says what the agent wants to do, and for how long
 	Scope, Bounds string
 	// Host commands: the consent's title, which the summary uses without the bounding values: a server cuts the
 	// summary to a line, and the body has them
@@ -84,7 +86,7 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 			actions = append(actions, options, "Options…")
 		}
 		var id uint32
-		if err := server.CallWithContext(ctx, notifyIface+".Notify", 0, "Claude permissions", uint32(0),
+		if err := server.CallWithContext(ctx, notifyIface+".Notify", 0, p.Agent+" permissions", uint32(0),
 			"security-medium", summary, body, actions, map[string]dbus.Variant{"urgency": dbus.MakeVariant(byte(2))},
 			int32(0)).Store(&id); err != nil {
 			if ctx.Err() != nil {
@@ -98,11 +100,11 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 			return "", err
 		}
 		if ctx.Err() != nil {
-			title, text := "Claude's request timed out", "Not granted: "+escapeMarkup(p.Summary)
+			title, text := p.Agent+"'s request timed out", "Not granted: "+escapeMarkup(p.Summary)
 			if errors.Is(context.Cause(ctx), ErrAnswered) {
 				title, text = "Answered in the Permissions window", escapeMarkup(p.Summary)
 			}
-			_ = server.Call(notifyIface+".Notify", 0, "Claude permissions", id, "security-medium", title, text,
+			_ = server.Call(notifyIface+".Notify", 0, p.Agent+" permissions", id, "security-medium", title, text,
 				[]string{}, map[string]dbus.Variant{}, int32(10000)).Err
 			return "deny", nil
 		}
@@ -116,13 +118,13 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 // Text is the notification's summary and body, markup escaped, with hint, a line saying what a click on the body does,
 // before the reason
 func Text(p Prompt, hint string) (string, string) {
-	summary := "Claude asks for " + escapeMarkup(p.Summary)
+	summary := escapeMarkup(p.Agent) + " asks for " + escapeMarkup(p.Summary)
 	if p.Scope != "" {
 		what := p.Summary
 		if p.Title != "" {
 			what = p.Title
 		}
-		summary = "Claude wants to " + escapeMarkup(what) + " " + leaseLabel(p.Lease)
+		summary = escapeMarkup(p.Agent) + " wants to " + escapeMarkup(what) + " " + leaseLabel(p.Lease)
 	}
 	// Ahead of the reason: a server may cut what's long, and the scope is what's granted. The bounding values and the
 	// lease again, since the sandbox chose the values and a long one pushes the rest of a summary out where it's cut
@@ -139,7 +141,7 @@ func Text(p Prompt, hint string) (string, string) {
 	if hint != "" {
 		lines = append(lines, hint)
 	}
-	reason := "Claude's reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
+	reason := escapeMarkup(p.Agent) + "'s reason, in its own words: " + escapeMarkup(strconv.Quote(p.Reason))
 	return summary, strings.Join(append(lines, reason), "\n")
 }
 

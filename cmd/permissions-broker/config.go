@@ -10,6 +10,8 @@ import (
 
 // The config the module writes, which serve and cleanup read
 type config struct {
+	// The agent's name, which the notifications and the window put in their words ("Claude wants to …")
+	Agent         string `json:"agent"`
 	AppID         string `json:"appId"`
 	Launcher      string `json:"launcher"`
 	GrantDir      string `json:"grantDir"`
@@ -41,6 +43,10 @@ func readConfig(path string) (config, error) {
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("Parse config %s: %w", path, err)
+	}
+	// Code that knows no agent says so plainly; the module names it
+	if cfg.Agent == "" {
+		cfg.Agent = "The agent"
 	}
 	for _, p := range []*string{&cfg.GrantDir, &cfg.ControlSocket} {
 		*p = os.ExpandEnv(*p)

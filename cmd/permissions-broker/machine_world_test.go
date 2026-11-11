@@ -98,7 +98,7 @@ func newWorld(t *rapid.T, f *fixture) *world {
 	if err := os.Symlink(w.outside, w.root+"/x/link"); err != nil {
 		t.Fatal(err)
 	}
-	w.cfg = config{Launcher: "test", GrantDir: dir + "/grants", ControlSocket: dir + "/control.sock",
+	w.cfg = config{Agent: "Claude", Launcher: "test", GrantDir: dir + "/grants", ControlSocket: dir + "/control.sock",
 		SandboxGrantDir: dir + "/inside", Window: []string{"window"}, Grants: standingGrants, Denied: []string{w.root + "/d/secret"}}
 	w.startStandIn()
 	fd, err := unix.PidfdOpen(os.Getpid(), 0)

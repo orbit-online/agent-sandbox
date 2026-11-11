@@ -160,7 +160,7 @@ func busConn(t *testing.T, addr string) *dbus.Conn {
 // ask asks on a connection of its own to the test bus, and returns the notification's id and a channel for the answer
 func ask(t *testing.T, addr string, f *fakeNotifications) (uint32, <-chan string) {
 	t.Helper()
-	return askWith(t, addr, f, Prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H"})
+	return askWith(t, addr, f, Prompt{Agent: "Claude", Summary: "the test thing", Reason: "testing", Lease: "PT1H"})
 }
 
 func askWith(t *testing.T, addr string, f *fakeNotifications, p Prompt) (uint32, <-chan string) {
@@ -237,12 +237,12 @@ func TestNotificationDefault(t *testing.T) {
 	notifyMature = 0
 	t.Cleanup(func() { notifyMature = time.Second })
 	addr, f := testBus(t)
-	window := Prompt{Summary: "the test thing", Reason: "testing", Lease: "PT1H", Options: true}
+	window := Prompt{Agent: "Claude", Summary: "the test thing", Reason: "testing", Lease: "PT1H", Options: true}
 	for _, c := range []struct {
 		server string
 		p      Prompt
 		want   string
-	}{{"fake", window, "deny"}, {cosmicServer, window, "options"}, {cosmicServer, Prompt{Summary: "x", Reason: "y"}, "deny"}} {
+	}{{"fake", window, "deny"}, {cosmicServer, window, "options"}, {cosmicServer, Prompt{Agent: "Claude", Summary: "x", Reason: "y"}, "deny"}} {
 		f.mu.Lock()
 		f.name = c.server
 		f.mu.Unlock()
@@ -313,7 +313,7 @@ func TestNotificationDefaultGuards(t *testing.T) {
 // when there is one, and what the grant covers ahead of the reason. The lease is said in hours and minutes
 func TestNotificationCovers(t *testing.T) {
 	addr, f := testBus(t)
-	id, _ := askWith(t, addr, f, Prompt{Summary: `control the VM "win<11>"`, Reason: "testing", Lease: "PT1H30M",
+	id, _ := askWith(t, addr, f, Prompt{Agent: "Claude", Summary: `control the VM "win<11>"`, Reason: "testing", Lease: "PT1H30M",
 		Scope: "⚠ Run any PowerShell; Take screenshots"})
 	f.mu.Lock()
 	summary, body := f.sums[id], f.bodies[id]
@@ -324,11 +324,11 @@ func TestNotificationCovers(t *testing.T) {
 	if want := "For 1 h 30 min: ⚠ Run any PowerShell; Take screenshots\nClaude's reason"; !strings.HasPrefix(body, want) {
 		t.Errorf("Body %q", body)
 	}
-	if _, body := Text(Prompt{Summary: "x", Lease: "lock", Scope: "Take screenshots", Bounds: `vm "a", n 1`}, ""); !strings.HasPrefix(body, `On vm "a", n 1 until the screen locks: Take screenshots`+"\n") {
+	if _, body := Text(Prompt{Agent: "Claude", Summary: "x", Lease: "lock", Scope: "Take screenshots", Bounds: `vm "a", n 1`}, ""); !strings.HasPrefix(body, `On vm "a", n 1 until the screen locks: Take screenshots`+"\n") {
 		t.Errorf("Body %q", body)
 	}
 	// With the consent's title, the summary leaves the bounding values to the body: a server cuts it to a line
-	if summary, _ := Text(Prompt{Summary: `control the VM "a-very-long-name"`, Title: "control the VM", Lease: "PT1H",
+	if summary, _ := Text(Prompt{Agent: "Claude", Summary: `control the VM "a-very-long-name"`, Title: "control the VM", Lease: "PT1H",
 		Scope: "Take screenshots", Bounds: `"a-very-long-name"`}, ""); summary != "Claude wants to control the VM for 1 h" {
 		t.Errorf("Summary with a title %q", summary)
 	}
@@ -340,5 +340,13 @@ func TestNotificationCovers(t *testing.T) {
 		if got := spokenDuration(d); got != want {
 			t.Errorf("spokenDuration(%s) = %q", d, got)
 		}
+	}
+}
+
+// The words name the agent the broker's config does, escaped as the rest
+func TestTextAgent(t *testing.T) {
+	summary, body := Text(Prompt{Agent: "Codex <x>", Summary: "a folder", Reason: "notes", Lease: "PT1H"}, "")
+	if summary != "Codex &lt;x&gt; asks for a folder" || !strings.HasPrefix(body, "Codex &lt;x&gt;'s reason") {
+		t.Errorf("Summary %q, body %q", summary, body)
 	}
 }

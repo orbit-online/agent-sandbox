@@ -1225,7 +1225,7 @@ in
           jq -e '.permissions.dir == "permissions-work" and .permissions.unit == "claude-desktop-work-permissions"' "$wcfg" >/dev/null ||
             { echo "work's launcher config lacks the broker" >&2; exit 1; }
           pcfg=$(jq -r .permissions.config "$wcfg")
-          jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work"
+          jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work" and .agent == "Claude"
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
             and .unit == "claude-desktop-work-permissions.service"

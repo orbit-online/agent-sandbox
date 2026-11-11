@@ -205,7 +205,7 @@ func testBroker(t *testing.T, answers ...string) (*broker, *fakeAsker) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	dir := t.TempDir()
 	f := &fakeAsker{answers: answers}
-	cfg := config{Launcher: "test", GrantDir: filepath.Join(dir, "grants"), ControlSocket: filepath.Join(dir, "control.sock"),
+	cfg := config{Agent: "Claude", Launcher: "test", GrantDir: filepath.Join(dir, "grants"), ControlSocket: filepath.Join(dir, "control.sock"),
 		SandboxGrantDir: "/run/permissions"}
 	b, err := newBroker(cfg, map[string]*capability{}, ownSandbox(t, os.Getpid()), f.ask)
 	if err != nil {

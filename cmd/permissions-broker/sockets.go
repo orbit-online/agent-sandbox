@@ -140,6 +140,7 @@ func (b *broker) handleControl(_ *net.UnixConn, p peer, req wire.Request) respon
 		b.mu.Unlock()
 		res.Standing = b.standingViews()
 		res.Overview = b.overviewState()
+		res.Agent = b.cfg.Agent
 	case "options":
 		err = b.markOptions(req.Pending)
 	case "answer":

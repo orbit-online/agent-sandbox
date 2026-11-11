@@ -13,6 +13,7 @@ TestCase {
     QtObject {
         id: mock
         property string state: JSON.stringify({
+            agent: "Claude",
             pending: [{ id: "p1", capability: "folders/folder", params: { path: "/srv/notes", ro: true },
                         summary: 'a folder (path="/srv/notes", ro=true)', reason: "read the notes", lease: "PT1H" }],
             grants: [{ id: "g1", capability: "test-thing", params: {}, summary: "the test thing", lease: "lock",

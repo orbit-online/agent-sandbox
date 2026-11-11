@@ -130,6 +130,7 @@ Card {
     }
 
     Quote {
+        agent: request.view.agent
         textName: "reason-" + request.modelData.id
         text: request.view.shown(request.modelData.reason)
     }

@@ -139,7 +139,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   mounts, to share the grant directory and mount and unmount grants there, the
   grant's mount and the holders' scan; it takes the sandbox as an interface).
   Package main is the core, one concern per file: `main.go` (the arguments),
-  `config.go` (the config, the capabilities loaded from it), `run.go` (serving
+  `config.go` (the config, the capabilities loaded from it; its `agent` names who asks in the notifications and the
+  window, "The agent" without it, the module's "Claude"), `run.go` (serving
   until the sandbox ends), `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
   logind), `standing.go` (the standing grants from the config), `views.go` (and

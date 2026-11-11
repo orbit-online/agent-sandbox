@@ -10,6 +10,8 @@ Item {
     required property var broker
 
     readonly property var st: root.broker.state ? JSON.parse(root.broker.state) : ({})
+    // Who asks, as the broker's config names it
+    readonly property string agent: st.agent || "The agent"
     readonly property var pending: st.pending || []
     readonly property var grants: st.grants || []
     readonly property var log: (st.log || []).slice().reverse().slice(0, 30)
@@ -209,8 +211,8 @@ Item {
     function headline(req) {
         const cap = caps[req.capability] || {}
         if (cap.type === "command")
-            return "Claude wants to " + (cap.title || req.summary)
-        return "Claude asks for " + (cap.description || req.summary)
+            return root.agent + " wants to " + (cap.title || req.summary)
+        return root.agent + " asks for " + (cap.description || req.summary)
     }
     // A grant's line: the same words, as a sentence of its own
     function grantTitle(g) {
@@ -264,7 +266,7 @@ Item {
     // rows above it
     function coversHeading(lease) {
         const p = leasePhrase(lease)
-        return "A grant on these values, " + p + ", lets Claude"
+        return "A grant on these values, " + p + ", lets " + root.agent
     }
     // What a grant of a host command capability covers in detail, one command or free argument a line, unrestricted
     // ones first, with the values of an enum the broker counts rather than lists (more than its maxListedEnum, 8)
@@ -469,6 +471,7 @@ Item {
                                 text: root.shown(entry.modelData.summary)
                             }
                             Quote {
+                                agent: root.agent
                                 Layout.leftMargin: 12
                                 visible: !!entry.modelData.reason
                                 text: root.shown(entry.modelData.reason || "")
@@ -478,7 +481,7 @@ Item {
                     // The log as plain text, for the tests
                     property string text: root.log.map(e => Qt.formatDateTime(new Date(e.time), "yyyy-MM-dd HH:mm")
                                                        + ": " + e.decision + ", " + e.summary
-                                                       + (e.reason ? ". Claude's reason: " + JSON.stringify(e.reason)
+                                                       + (e.reason ? ". " + root.agent + "'s reason: " + JSON.stringify(e.reason)
                                                                    : "")).join("\n")
                     objectName: "log"
                 }

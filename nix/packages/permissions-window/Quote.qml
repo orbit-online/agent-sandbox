@@ -2,10 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Claude's words, set apart: a caption, then the text beside a bar, so it never reads as the window's own
+// The agent's words, set apart: a caption, then the text beside a bar, so it never reads as the window's own
 ColumnLayout {
     id: quote
-    property string caption: "Claude's reason, in its own words"
+    property string agent: "The agent"
+    property string caption: agent + "'s reason, in its own words"
     property string text: ""
     property string textName: ""
     Layout.fillWidth: true

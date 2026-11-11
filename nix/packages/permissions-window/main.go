@@ -35,7 +35,7 @@ func main() {
 	socket, _ := opts.String("<control-socket>")
 	title, _ := opts.String("<title>")
 	if title == "" {
-		title = "Claude permissions"
+		title = "Permissions"
 	}
 	// The package installs the QML in share/, beside the bin/ the binary runs from (its wrapper execs it there)
 	exe, err := os.Executable()

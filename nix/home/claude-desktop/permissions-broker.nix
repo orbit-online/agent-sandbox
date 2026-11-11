@@ -44,6 +44,8 @@ let
   }";
   permissionsConfig = pkgs.writeText "permissions${ids.suffix}.json" (
     builtins.toJSON {
+      # Who the notifications and the window say asks
+      agent = "Claude";
       inherit (ids) appId;
       # Empty for the default launcher: no named one can take that name
       launcher = if launcherName == null then "" else launcherName;
