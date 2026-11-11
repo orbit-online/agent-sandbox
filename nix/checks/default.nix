@@ -134,11 +134,11 @@ let
           asar pack "$1" "$1.asar" --unpack '*.node'
         }
         app one "$pick"
-        ASAR=$PWD/one.asar DESKTOP_NAME=x.desktop out=$PWD/patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
+        ASAR=$PWD/one.asar DESKTOP_NAME=x.desktop READY=ready out=$PWD/patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
         grep -qaF '(!1&&Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),' patched.asar ||
           { echo "the native notification backend can still be picked" >&2; exit 1; }
         app two "$pick;$pick"
-        if ASAR=$PWD/two.asar DESKTOP_NAME=x.desktop out=$PWD/patched-two.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}; then
+        if ASAR=$PWD/two.asar DESKTOP_NAME=x.desktop READY=ready out=$PWD/patched-two.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}; then
           echo "patch-asar.sh took an app with two places picking the notification backend" >&2
           exit 1
         fi
@@ -1111,26 +1111,30 @@ in
 
           # The work launcher: its own state dir, app ID and MAC, ~/.claude in its home, its own .desktop file
           [[ $(ls $work/bin) == claude-desktop-work ]] || { echo "work has more than its wrapper: $(ls $work/bin)" >&2; exit 1; }
-          wrapper=$(readlink -f $work/bin/claude-desktop-work)
-          for line in \
-            "readonly APP_ID=com.anthropic.Claude.work" \
-            "HOME_DIRS=(/home/alice/.local/share/claude-desktop-work/home)" \
-            "readonly STORE_ROOTS_LINK=store-roots-work"; do
-            grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
-          done
-          # The launchers' slices: the app as a unit of the wrapper's in its own, the broker and its calls as units of
-          # their own there
-          for line in \
-            "readonly SLICE='claude\\x2ddesktop\\x2dwork.slice'" \
-            "readonly APP_UNIT=claude-desktop-work-app.service"; do
-            grep -qxF -- "$line" "$wrapper" || { echo "work's wrapper lacks: $line" >&2; exit 1; }
-          done
-          grep -qxF -- "readonly SLICE='claude\\x2ddesktop.slice'" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
-            { echo "the default launcher's wrapper lacks its slice" >&2; exit 1; }
-          appRun=$(grep -oP '^readonly APP_RUN=\K/nix/store/\S+' "$wrapper") || { echo "work's wrapper lacks APP_RUN" >&2; exit 1; }
-          grep -qP '^readonly NIXPAK_LAUNCHER=/nix/store/\S+-nixpak-' "$appRun" &&
-            grep -qF 'exec env -i "''${VARS[@]}" "$NIXPAK_LAUNCHER" --password-store=basic "$@"' "$appRun" ||
-            { echo "work's app unit doesn't exec nixpak's launcher" >&2; exit 1; }
+          # A launcher's config, which its wrapper runs the Go launcher with
+          configOf() {
+            local w
+            w=$(readlink -f "$1")
+            grep -qF '${lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.launcher} start --config=' "$w" ||
+              { echo "$1 doesn't run the launcher" >&2; exit 1; }
+            grep -oP -- '--config=\K/nix/store/\S+\.json' "$w"
+          }
+          wcfg=$(configOf $work/bin/claude-desktop-work)
+          dcfg0=$(configOf ${sandboxed}/bin/claude-desktop)
+          # The launchers' slices: the app as a unit of the launcher's in its own, the broker and its calls as units of
+          # their own there. The app's unit runs nixpak's launcher, waiting for the app's ready line, with a splash
+          jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work"
+            and .homeDirs == ["/home/alice/.local/share/claude-desktop-work/home"]
+            and .storeRootsLink == "store-roots-work" and .slice == "claude\\x2ddesktop\\x2dwork.slice"
+            and .unit == "claude-desktop-work-app.service" and (.nixpakLauncher | test("^/nix/store/[^/]+-nixpak-"))
+            and .ready == "agent-sandbox: ready" and (.splash[0] | endswith("/bin/sandbox-splash"))
+            and .splash[1] == "--title=Claude (work)"' "$wcfg" >/dev/null || { echo "work's launcher config: $(<"$wcfg")" >&2; exit 1; }
+          jq -e '.slice == "claude\\x2ddesktop.slice" and .launcher == "" and .permissions == null
+            and any(.splash[]; test("^--agent-logo=/nix/store/.+/share/icons/hicolor/256x256/apps/claude-desktop\\.png$"))' \
+            "$dcfg0" >/dev/null || { echo "the default launcher's config: $(<"$dcfg0")" >&2; exit 1; }
+          # The asar prints the ready line once its first window is ready to show
+          grep -qaF 'app.once("browser-window-created",(e,w)=>w.once("ready-to-show",()=>console.log("agent-sandbox: ready")))' "$asar" ||
+            { echo "the asar lacks the ready line" >&2; exit 1; }
           # cgrun on the sandbox's PATH
           [[ -x $(grep -- '-claude-desktop-sw$' "$paths")/bin/cgrun ]] || { echo "the sandbox's PATH lacks cgrun" >&2; exit 1; }
           # What the launcher writes in its home, confined to the directories in HOME_DIRS
@@ -1145,8 +1149,8 @@ in
           jq -e '.[0].name == "vm" and .[0].commands.shot.result == "image/png" and (.[0].commands.shot | has("run") or has("consent") | not) and (.[0] | has("consent") | not)' \
             "$(jq -r '.permissions.args[2]' "$workMcp")" >/dev/null || { echo "work's MCP host commands are off" >&2; exit 1; }
           # The default launcher's ~/.claude is bound from /srv/claude, its ~/.config/Claude from the host's
-          grep -qxF -- "HOME_DIRS=(/home/alice/.local/share/claude-desktop/home /srv/claude /home/alice/.config/Claude)" \
-            "$(readlink -f ${sandboxed}/bin/claude-desktop)" || { echo "the default launcher's HOME_DIRS are wrong" >&2; exit 1; }
+          jq -e '.homeDirs == ["/home/alice/.local/share/claude-desktop/home", "/srv/claude", "/home/alice/.config/Claude"]' \
+            "$dcfg0" >/dev/null || { echo "the default launcher's homeDirs are wrong" >&2; exit 1; }
           # The name netns-macvlan salts the MAC with
           name() { grep -h '^readonly NAME=' "$(grep -- '-pasta$' "$1")/bin/pasta"; }
           [[ $(name "$paths") == "readonly NAME='''" && $(name "$workClosure/store-paths") == "readonly NAME=work" ]] ||
@@ -1180,8 +1184,9 @@ in
             jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and $a[. + 2] == "/run/permissions")' "$workArgs" >/dev/null ||
             { echo "work's bwrap args lack the read-only /run/permissions" >&2; exit 1; }
           ! jq -e 'any(.[]; . == "/run/permissions")' "$args" >/dev/null || { echo "the default launcher binds /run/permissions" >&2; exit 1; }
-          grep -qxF "readonly PERMISSIONS_DIR=permissions-work" "$wrapper" || { echo "work's wrapper lacks PERMISSIONS_DIR" >&2; exit 1; }
-          pcfg=$(grep -oP '^readonly PERMISSIONS_CONFIG=\K/nix/store/\S+' "$wrapper") || { echo "work's wrapper lacks the broker's config" >&2; exit 1; }
+          jq -e '.permissions.dir == "permissions-work" and .permissions.unit == "claude-desktop-work-permissions"' "$wcfg" >/dev/null ||
+            { echo "work's launcher config lacks the broker" >&2; exit 1; }
+          pcfg=$(jq -r .permissions.config "$wcfg")
           jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work"
             and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
             and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
@@ -1223,15 +1228,13 @@ in
             { echo "work's overview doesn't show its D-Bus config" >&2; exit 1; }
           jq -e 'has("dbus") or has("dbusControl") | not' "$pcfg" >/dev/null ||
             { echo "work's broker config has D-Bus capabilities: $(<"$pcfg")" >&2; exit 1; }
-          grep -qxF "readonly PERMISSIONS_CONFIG='''" "$(readlink -f ${sandboxed}/bin/claude-desktop)" ||
-            { echo "the default launcher starts the broker" >&2; exit 1; }
           # Each launcher's app ID names its .desktop file, the only one it installs, its StartupWMClass and its
           # windows' app ID, which Electron takes from desktopName (an asar stores its files as they are): the
           # portal names the app's notifications by the ID in /.flatpak-info, and gnome-shell drops them unless
           # <ID>.desktop exists
           same_id() {
             local pkg=$1 bin=$2 c=$3 id=$4 apps
-            grep -qxF "readonly APP_ID=$id" "$(readlink -f "$pkg/bin/$bin")" || { echo "$bin's APP_ID isn't $id" >&2; exit 1; }
+            jq -e --arg id "$id" '.appId == $id' "$(configOf "$pkg/bin/$bin")" >/dev/null || { echo "$bin's appId isn't $id" >&2; exit 1; }
             grep -qxF "name=$id" "$(grep -- '-flatpak-shim-info$' "$c")" || { echo "$bin's /.flatpak-info doesn't name $id" >&2; exit 1; }
             apps=$(ls "$pkg/share/applications")
             [[ $apps == "$id.desktop" ]] || { echo "$bin's .desktop files: $apps" >&2; exit 1; }

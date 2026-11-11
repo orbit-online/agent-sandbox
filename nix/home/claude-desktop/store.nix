@@ -1,5 +1,5 @@
 # The sandbox's own single-user Nix store (lib.nix, nixConf): stateDir/nix bound at /nix, the store roots' closure
-# copied in before every launch (store-sync.sh), and the maintenance scripts the user's hooks run
+# copied in before every launch (cmd/launcher/store.go), and the maintenance scripts the user's hooks run
 {
   lib,
   pkgs,
@@ -45,21 +45,6 @@ let
         done <"$closure/store-paths"
         printf '%s\n' ${lib.escapeShellArgs roots} >$out
       '';
-  storeSync = sl.script "store-sync.sh" {
-    name = "claude-desktop-store-sync";
-    runtimeInputs = [
-      pkgs.coreutils
-      osConfig.nix.package
-    ];
-    vars = {
-      STATE_DIR = ids.stateDir;
-      STORE_ROOTS = "${storeRoots}";
-      STATE = lib.getExe config.build.state;
-      UNSHARE = lib.getExe' pkgs.util-linux "unshare";
-    };
-    # unshare runs newuidmap and newgidmap from PATH
-    prelude = "PATH=$PATH:${osConfig.security.wrapperDir}\n";
-  };
 in
 {
   env.NIX_CONF_DIR = "${sl.nixConf}";
@@ -81,9 +66,8 @@ in
     scratchpadPrune
   ];
   build.nixpak = [ { bubblewrap.extraStorePaths = [ storeRoots ]; } ];
-  build.launcherVars = {
-    STORE_SYNC = lib.getExe storeSync;
-    STORE_ROOTS = "${storeRoots}";
-    STORE_ROOTS_LINK = "store-roots${ids.suffix}";
+  build.launcherConfig = {
+    storeRoots = "${storeRoots}";
+    storeRootsLink = "store-roots${ids.suffix}";
   };
 }

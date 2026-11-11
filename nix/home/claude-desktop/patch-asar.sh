@@ -9,14 +9,19 @@
 # Electron's, libnotify, which NOTIFY_FORCE_PORTAL sends through the portal.
 # Electron takes the windows' Wayland app ID and X11 WM_CLASS from package.json's desktopName alone (it sets
 # CHROME_DESKTOP from it at startup), so the launcher's DESKTOP_NAME, its .desktop file, gives its windows that file's
-# taskbar entry
-: "${ASAR:?}" "${out:?}" "${DESKTOP_NAME:?}"
+# taskbar entry.
+# Once its first window is ready to show, the app prints $READY on stdout, where the launcher waits for it to end its
+# splash and tell systemd the app is up
+: "${ASAR:?}" "${out:?}" "${DESKTOP_NAME:?}" "${READY:?}"
 asar extract "$ASAR" app
 jq --arg d "$DESKTOP_NAME" '.desktopName = $d' app/package.json >package.json
 mv package.json app/package.json
 main=app/$(jq -er .main app/package.json)
 sed -i '1s/^"use strict";/&require("electron").safeStorage.setUsePlainTextEncryption(true);/' "$main"
 grep -q setUsePlainTextEncryption "$main"
+ready="require(\"electron\").app.once(\"browser-window-created\",(e,w)=>w.once(\"ready-to-show\",()=>console.log($(jq -n --arg r "$READY" '$r'))));"
+sed -i "1s|^\"use strict\";|&$ready|" "$main"
+grep -qF "$ready" "$main"
 gnome='\|\|[A-Za-z0-9_$]+\(\)==="gnome"(\|\|[A-Za-z0-9_$.]+\.nativeTheme\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png")'
 mapfile -t files < <(grep -rlE --include='*.js' "$gnome" app)
 ((${#files[@]} == 1)) || { echo "patch-asar: ${#files[@]} files pick the tray icon by GNOME, want 1" >&2; exit 1; }

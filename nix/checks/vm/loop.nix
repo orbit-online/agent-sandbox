@@ -11,8 +11,8 @@
   with subtest(f"{n} launches of the default launcher"):
       for i in range(n):
           workstation.succeed(f"rm -f {applog}")
-          # As launch() starts it. It returns once it started the app's unit, which ends early when nixpak's launcher fails
-          workstation.succeed(
+          # As launch() starts it. It returns once the app is up, or fails when nixpak's launcher did
+          workstation.execute(
               "systemd-run --user -M alice@ --wait --pipe --quiet -E WAYLAND_DISPLAY=wayland-0"
               " -- /etc/profiles/per-user/alice/bin/claude-desktop"
           )

@@ -1,20 +1,16 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"github.com/orbit-online/agent-sandbox/internal/proc"
+	sbx "github.com/orbit-online/agent-sandbox/internal/sandbox"
 )
 
 // The running sandbox: the outer bwrap's child, which nixpak's bwrapinfo.json names, in M1. Its user (U1), mount
@@ -26,8 +22,7 @@ type sandbox struct {
 	userns, mnt, uts *os.File
 }
 
-// findSandbox waits up to a minute for the launcher's sandbox, found as claude-desktop.sh's sandbox_pid finds it: the
-// nixpak instance whose info names appID, and whose child-pid is in a mount namespace other than ours
+// findSandbox waits up to a minute for the launcher's sandbox (sandbox.Find), pinned
 func findSandbox(appID string) (*sandbox, error) {
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	for range 300 {
@@ -40,73 +35,16 @@ func findSandbox(appID string) (*sandbox, error) {
 }
 
 func lookupSandbox(runtime, appID string) (*sandbox, error) {
-	dirs, _ := filepath.Glob(filepath.Join(runtime, ".flatpak", "nixpak-app-*"))
-	for _, d := range dirs {
-		meta, err := os.ReadFile(filepath.Join(d, "info"))
-		if err != nil || !bytes.Contains(append([]byte("\n"), meta...), []byte("\nname="+appID+"\n")) {
-			continue
-		}
-		info, err := readBwrapInfo(filepath.Join(d, "bwrapinfo.json"))
-		if err != nil || sameNs(info.ChildPid, "mnt") {
-			continue
-		}
-		fd, err := unix.PidfdOpen(info.ChildPid, 0)
-		if err != nil {
-			continue
-		}
-		// A stale instance directory names a pid another process may hold by now, in a nested pid namespace or another
-		// sandbox: the pid must still be in the namespaces bwrap reported, and its parent, the outer bwrap, a process
-		// of ours. The pidfd, taken first, keeps the answers about the one process
-		if !info.names(info.ChildPid) || !parentIsOurs(info.ChildPid) {
-			unix.Close(fd)
-			continue
-		}
-		sb, err := pinSandbox(info.ChildPid, fd)
-		if err != nil {
-			unix.Close(fd)
-			continue
-		}
-		return sb, nil
-	}
-	return nil, errors.New("Not running")
-}
-
-// What bwrap's --info-fd wrote: its child's pid and the inodes of the namespaces it made
-type bwrapInfo struct {
-	ChildPid int    `json:"child-pid"`
-	Mnt      uint64 `json:"mnt-namespace"`
-	Pid      uint64 `json:"pid-namespace"`
-}
-
-func readBwrapInfo(path string) (bwrapInfo, error) {
-	var info bwrapInfo
-	data, err := os.ReadFile(path)
+	pid, fd, err := sbx.Find(runtime, appID)
 	if err != nil {
-		return info, err
+		return nil, err
 	}
-	if err := json.Unmarshal(data, &info); err != nil || info.ChildPid <= 0 || info.Mnt == 0 || info.Pid == 0 {
-		return info, fmt.Errorf("No child-pid and namespaces in %s", path)
+	sb, err := pinSandbox(pid, fd)
+	if err != nil {
+		unix.Close(fd)
+		return nil, err
 	}
-	return info, nil
-}
-
-// names reports whether pid is in the mount and pid namespaces bwrap made
-func (i bwrapInfo) names(pid int) bool {
-	return nsIno(pid, "mnt") == i.Mnt && nsIno(pid, "pid") == i.Pid
-}
-
-func nsIno(pid int, kind string) uint64 {
-	var st unix.Stat_t
-	if unix.Stat(fmt.Sprintf("/proc/%d/ns/%s", pid, kind), &st) != nil {
-		return 0
-	}
-	return st.Ino
-}
-
-// parentIsOurs reports whether pid's parent is in our user namespace
-func parentIsOurs(pid int) bool {
-	ppid, _, err := parent(pid)
-	return err == nil && ppid > 0 && sameNs(ppid, "user")
+	return sb, nil
 }
 
 // pinSandbox opens the namespaces of the sandbox at pid: its mount namespace, the user namespace owning it, which
@@ -201,37 +139,9 @@ func (s *sandbox) Mountinfo() ([]mountinfo.Line, error) {
 }
 
 // sameNs reports whether pid is in our namespace of the kind (mnt, user), false when it can't tell
-func sameNs(pid int, kind string) bool {
-	var a, b unix.Stat_t
-	if unix.Stat(fmt.Sprintf("/proc/%d/ns/%s", pid, kind), &a) != nil || unix.Stat("/proc/self/ns/"+kind, &b) != nil {
-		return false
-	}
-	return a.Ino == b.Ino && a.Dev == b.Dev
-}
-
 // Namespaces are the sandbox's pinned namespaces: the user namespace owning its mount namespace, the mount namespace
 // and its uts namespace
 func (s *sandbox) Namespaces() (user, mnt, uts *os.File) { return s.userns, s.mnt, s.uts }
 
 // alive reports whether the sandbox still runs: a pidfd turns readable when its process exits
 func (s *sandbox) alive() bool { return proc.Alive(s.pidfd) }
-
-// parent returns pid's parent and whether pid is the init of its pid namespace (its innermost NSpid is 1)
-func parent(pid int) (int, bool, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
-	if err != nil {
-		return 0, false, fmt.Errorf("Read status of %d: %w", pid, err)
-	}
-	ppid, nsInit := 0, false
-	for _, line := range strings.Split(string(data), "\n") {
-		k, v, _ := strings.Cut(line, ":")
-		f := strings.Fields(v)
-		switch {
-		case k == "PPid" && len(f) == 1:
-			ppid, _ = strconv.Atoi(f[0])
-		case k == "NSpid" && len(f) > 0:
-			nsInit = f[len(f)-1] == "1"
-		}
-	}
-	return ppid, nsInit, nil
-}

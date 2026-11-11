@@ -55,6 +55,9 @@ rec {
       ]
     );
 
+  # What the app prints on stdout once its first window is ready (patch-asar.sh), which ends the launcher's splash
+  readyLine = "agent-sandbox: ready";
+
   # The launcher names, the default one as null
   names = [ null ] ++ lib.attrNames cfg.launchers;
   # A named launcher's suffix to file names, empty for the default one

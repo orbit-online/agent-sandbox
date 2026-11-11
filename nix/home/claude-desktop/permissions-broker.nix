@@ -143,13 +143,22 @@ in
       ];
     }
   );
-  build.launcherVars = {
-    PERMISSIONS_CONFIG = lib.optionalString config.permissions.enable "${permissionsConfig}";
-    PERMISSIONS_DIR = permissionsDir;
-    PERMISSIONS_UNIT = permissionsUnit;
-    PERMISSIONS_BROKER = lib.getExe sl.packages.permissions-broker;
-    PERMISSIONS_WINDOW = lib.getExe sl.packages.permissions-window;
-    PERMISSIONS_TITLE = permissionsTitle;
-  };
+  build.launcherConfig.permissions =
+    if config.permissions.enable then
+      {
+        config = "${permissionsConfig}";
+        dir = permissionsDir;
+        unit = permissionsUnit;
+        broker = lib.getExe sl.packages.permissions-broker;
+        window = [
+          (lib.getExe sl.packages.permissions-window)
+          "--app-id=${ids.appId}"
+          "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock"
+          permissionsTitle
+        ];
+      }
+    else
+      null;
+
   build.desktopActions = lib.mkIf config.permissions.enable { Permissions = "--permissions"; };
 }

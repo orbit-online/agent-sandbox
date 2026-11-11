@@ -3,6 +3,7 @@ module github.com/orbit-online/agent-sandbox
 go 1.26.0
 
 require (
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/modelcontextprotocol/go-sdk v1.8.0

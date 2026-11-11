@@ -49,6 +49,7 @@
         permissions-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-broker { };
         permissions-window = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-window { };
         request-send = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/request-send { };
+        launcher = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/launcher { };
       });
       checks = forAllSystems (system: (checksFor system).checks);
       # nix-unit's, run by checks.claude-desktop-eval

@@ -52,6 +52,10 @@ buildGoModule (finalAttrs: {
       ./tst_permissions.qml
       ./Preview.qml
       ./preview-state.json
+      ./splash/main.go
+      ./splash/state.go
+      ./splash/splash_test.go
+      ./splash/Splash.qml
     ];
   };
   vendorHash = "sha256-ZkZIt1u0K249lyb24g9vuPaVwz2q/NDBVzHbQaeScwU=";
@@ -85,8 +89,13 @@ buildGoModule (finalAttrs: {
     install -Dm644 -t $out/share/permissions-window Main.qml Permissions.qml Section.qml TabPage.qml Card.qml \
       FieldRow.qml Quote.qml CallList.qml RequestRow.qml GrantRow.qml \
       Badges.qml Badge.qml ReadOnlyText.qml CommandScope.qml Preview.qml preview-state.json
-    wrapProgram $out/bin/permissions-window --set QML_IMPORT_PATH ${qmlPath} --set QT_PLUGIN_PATH ${pluginPath} \
-      --unset QML2_IMPORT_PATH --set QML_DISABLE_DISTANCEFIELD 1
+    install -Dm644 -t $out/share/sandbox-splash splash/Splash.qml
+    # The splash a sandbox's launcher shows while it starts (sandbox-splash --help)
+    mv $out/bin/splash $out/bin/sandbox-splash
+    for b in permissions-window sandbox-splash; do
+      wrapProgram $out/bin/$b --set QML_IMPORT_PATH ${qmlPath} --set QT_PLUGIN_PATH ${pluginPath} \
+        --unset QML2_IMPORT_PATH --set QML_DISABLE_DISTANCEFIELD 1
+    done
   '';
   # The window against a mock broker, for working on its looks (preview.sh)
   passthru.preview = writeShellApplication {

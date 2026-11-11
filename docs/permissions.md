@@ -162,7 +162,7 @@ host (user, no capabilities)                       sandbox
 
 ### Handle on the sandbox, and restarts
 
-The daemon finds the sandbox the way `claude-desktop.sh`'s `sandbox_pid` does: nixpak's `bwrapinfo.json` for the
+The daemon finds the sandbox as the launcher does (`internal/sandbox`'s `Find`): nixpak's `bwrapinfo.json` for the
 launcher's app ID gives the outer bwrap's `child-pid`, valid once its mount namespace differs from the host's. The
 daemon takes a pidfd for it and accepts it only while the pid is in the mount and pid namespaces `bwrapinfo.json`
 reports, its parent is a process in the daemon's user namespace, and its user namespace, which owns its mount
@@ -920,7 +920,7 @@ It carries no consent: nothing in it can be changed from the window. A config ch
 
 ## Launcher
 
-`claude-desktop[-<name>] --permissions` opens the window. `claude-desktop.sh` handles it first, before it looks for a
+`claude-desktop[-<name>] --permissions` opens the window. The launcher handles it first, before it looks for a
 running sandbox: otherwise it would hand the flag to the running app through nsenter, as it does with `claude://`
 URLs. With no sandbox running, the window says so. The recent decisions it lists are the daemon's, kept in memory:
 a daemon started again starts them afresh.

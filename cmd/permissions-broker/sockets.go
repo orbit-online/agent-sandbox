@@ -117,7 +117,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req wire.Request) respon
 // handleControl serves the Permissions window and the launcher, which run on the host: a peer in another user
 // namespace (anything in the sandbox, whatever path it reaches the socket by) gets nothing
 func (b *broker) handleControl(_ *net.UnixConn, p peer, req wire.Request) response {
-	if !sameNs(p.pid, "user") || p.gone() {
+	if !proc.SameNs(p.pid, "user") || p.gone() {
 		return response{Error: "Only from the host"}
 	}
 	var res response

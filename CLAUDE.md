@@ -28,10 +28,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   file of that name exists. The default launcher's is upstream's, so its
   `.desktop` file keeps upstream's name and stands in for upstream's. Each runs its
   sandbox as a unit in a slice of its own, `claude\x2ddesktop[\x2d<name>].slice`
-  (escaped, as a `-` nests one slice in another): `claude-desktop.sh` prepares
-  the state where the caller sees a refusal, then starts `app-unit.sh` as
-  `claude-desktop[-<name>]-app.service` there with the caller's environment,
-  `Delegate=yes` and `DelegateSubgroup=supervisor`. `bwrap-subid.sh` lays out
+  (escaped, as a `-` nests one slice in another): the launcher, `cmd/launcher` (`launcher start`, behind a
+  generated bash wrapper that expands the sandbox's environment from the caller's), starts `launcher supervise` as
+  `claude-desktop[-<name>]-app.service` there with the caller's environment, `Type=notify`, `Delegate=yes` and
+  `DelegateSubgroup=supervisor`, and returns once supervise says the app is up or why it isn't (the result file),
+  which it prints. `bwrap-subid.sh` lays out
   the cgroups below it: nixpak's launcher and the host side in `supervisor/`,
   the sandbox in `sandbox/app/`, its cgroup namespace rooted at `sandbox/`
   (at most 64 cgroups, 4 deep, capped on the unit's cgroup, out of its reach),
@@ -67,6 +68,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   packages included) and the `internal/` packages it uses, each with its own `vendorHash` (Go vendors only what the
   binary imports). permissions-window has a module of its own, so miqt's cgo
   and Qt stay out of the others' closures.
+- `cmd/launcher/`: the launcher (`launcher --help`), one binary for the user's entry and the app's unit:
+  `main.go` (arguments, the config `launch.nix` writes), `enter.go` (`--permissions`, `--shell`, the re-entry into the
+  running app through nsenter after joining its cgroup, the unit started and its result), `supervise.go` (the unit:
+  the sandbox's state and store prepared, nixpak's launcher run with its output pumped to the journal and a tail
+  kept, the app's ready line ending the splash and sending READY=1, a failure shown with that tail), `store.go` (the
+  closure copied into the sandbox's store through `confine.sh`, its progress from the export stream's bytes against
+  the NAR sizes), `theme.go` (the portal's colour scheme as the sandbox's GTK theme, live) and `splash.go` (the
+  splash's process and its JSON lines). The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
+  `patch-asar.sh` adds: once its first window is ready to show. `internal/sandbox`: finding a launcher's running
+  sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
 - `cmd/netns-macvlan/`: the Go helper that gives the sandbox's netns
   its macvlan (`netns-macvlan --help`).
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
@@ -98,7 +109,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
-  with `permissions.enable`, off by default: `claude-desktop.sh` starts it as a
+  with `permissions.enable`, off by default: the launcher's supervise starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
   Its own packages are in `cmd/permissions-broker/internal/`, each auditable on
@@ -156,7 +167,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `--permissions` and the `.desktop` file's "Permissions" action; the broker
   opens it on a notification's Options. Its wrapper sets Qt's plugin and QML
   paths to its own Qt's, Plasma's style and platform theme included: the
-  host's may be another Qt.
+  host's may be another Qt. The package also builds `sandbox-splash` (`splash/`, `sandbox-splash --help`), the
+  launcher's splash: the main logo (the `splash.logo` and `splash.logoDark` options, none by default) with the agent's
+  beside it a bit smaller (`splash.agentLogo`, the app's icon), the step and its progress, light or dark as the
+  desktop is, and when the start fails why and the app's last output until the user closes it; JSON lines on stdin
+  (`state.go`) drive it.
 - `nix/patches/`: patches to what the module builds from its inputs, each
   with a header saying why. `nixpak-launcher-reaper.patch` (meant for
   upstream, in `git format-patch` form below the header) keeps nixpak's
@@ -188,7 +203,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
-`packages.<system>.request-send`.
+`packages.<system>.request-send`, `packages.<system>.launcher`.
 Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
@@ -277,20 +292,21 @@ modules and a user alice (the `home-manager` input exists only for it).
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
   default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
   the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
-  `HOME_DIRS` and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
+  `homeDirs` in its launcher config and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
   set the pid, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
-  references in the closure), `cgrun` on the sandbox's PATH. The launchers' slices: each wrapper's `SLICE`, work's
-  `APP_UNIT`, its app unit execing nixpak's launcher, its broker's
+  references in the closure), `cgrun` on the sandbox's PATH. The launchers' configs, which their wrappers run the Go launcher
+  with: their slices, work's app unit and nixpak's launcher, the ready line, the splash with its title and the
+  agent's logo from the unwrapped app, the asar's ready hook, its broker's
   slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
   netns-macvlan gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, memo's config in the FHS env with the store
   right after the embedded ones, the store in the closure), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the wrapper's variables; no
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, no `claude://` handler; both launchers' actions running the launcher by name, no store path). For both launchers, their app
-  ID in the wrapper and `/.flatpak-info`, which names their only `.desktop`
+  ID in the launcher config and `/.flatpak-info`, which names their only `.desktop`
   file, its `StartupWMClass` and the `desktopName` their asar gets; the
   default launcher's `.desktop` file keeps the `claude://` handler and
   upstream's actions, and lacks the Permissions action. For `work`, the
@@ -510,7 +526,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   Details (the scope) and the call asking, its arguments a row each, its lease still editable (once
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
-  them; Qt Quick Test can.
+  them; Qt Quick Test can. `splash/splash_test.go`: the splash loads without QML warnings through a start and a
+  failure without logos, and a line sets what it names (a new step's progress unknown until it says).
+- `launcher`: the package build runs the Go tests of `cmd/launcher` and `internal/` with fake tools (the state
+  script, nix-store, nixpak's launcher and the splash as scripts) and a notify socket of the test's: supervise
+  sending READY=1 on the app's ready line and passing its arguments and output on, a refusal (a missing bind source)
+  left in the result file before READY=1 with nixpak's launcher never run, an app failing before it's up shown in the
+  splash with its status and last output, no splash being no obstacle, the tail's size; the store sync deleting nix/
+  without a record, copying only what the store lacks with its progress short of 1, leaving a recorded store alone,
+  refusing a store dir that is a link and deleting nix/ for a swapped one; `internal/sandbox`'s `AppPid` on a real pid
+  namespace tree (the app one level below the init, not one further down, two at its level ambiguous).
 - `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
   broker runs the binary, with the test binary as a fake `step` (its key standing in for the TPM's, every run
   recorded) against an httptest TLS server that requires a client certificate from the test users CA: a read and
@@ -567,7 +592,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   client on the host and ending with the app), the scratchpad bind (mode 0700) and
   `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
   marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
-  launch, live, and the watcher ending with the app), the macvlan's DHCP
+  launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), the macvlan's DHCP
   lease, route and DNS (udhcpc in a mount namespace of its own with its
   closure and the sandbox's home, none of alice's files), the launcher `work` running next to the default
   sandbox (its own namespaces, MAC and lease, its own tray item at another

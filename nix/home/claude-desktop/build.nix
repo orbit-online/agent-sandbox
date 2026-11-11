@@ -23,12 +23,8 @@ in
     fhsBwrapArgs = list types.str;
     # Packages on the sandbox's /run/current-system/sw besides PATH's
     sw = list types.package;
-    # The launcher's readonly variables (see claude-desktop.sh)
-    launcherVars = internal (types.attrsOf types.str) // {
-      default = { };
-    };
-    # The app unit's (see app-unit.sh)
-    appUnitVars = internal (types.attrsOf types.str) // {
+    # The launcher's config (cmd/launcher/main.go), as JSON
+    launcherConfig = internal (types.attrsOf types.anything) // {
       default = { };
     };
     # The .desktop file's actions after Shell, each the argument it runs the launcher with

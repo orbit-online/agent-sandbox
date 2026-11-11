@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
+	"github.com/orbit-online/agent-sandbox/internal/proc"
 	"golang.org/x/sys/unix"
 )
 
@@ -88,12 +89,12 @@ func TestLookupSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	instance := func(mnt uint64) {
-		info := fmt.Sprintf(`{"child-pid": %d, "mnt-namespace": %d, "pid-namespace": %d}`, pid, mnt, nsIno(pid, "pid"))
+		info := fmt.Sprintf(`{"child-pid": %d, "mnt-namespace": %d, "pid-namespace": %d}`, pid, mnt, proc.NsIno(pid, "pid"))
 		if err := os.WriteFile(filepath.Join(dir, "bwrapinfo.json"), []byte(info), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	instance(nsIno(pid, "mnt"))
+	instance(proc.NsIno(pid, "mnt"))
 	sb, err := lookupSandbox(runtime, "app")
 	if err != nil {
 		t.Fatal(err)
@@ -104,13 +105,13 @@ func TestLookupSandbox(t *testing.T) {
 		t.Errorf("Found another app's sandbox: %d", sb.pid)
 	}
 	// A stale instance: its pid is in other namespaces than bwrap made
-	instance(nsIno(pid, "mnt") + 1)
+	instance(proc.NsIno(pid, "mnt") + 1)
 	if sb, err := lookupSandbox(runtime, "app"); err == nil {
 		t.Errorf("Took a stale instance's pid %d", sb.pid)
 	}
 	// The pid in the namespaces named, but not below ours: a nested sandbox's
 	move(t, stdin, out)
-	instance(nsIno(pid, "mnt"))
+	instance(proc.NsIno(pid, "mnt"))
 	if sb, err := lookupSandbox(runtime, "app"); err == nil {
 		t.Errorf("Took pid %d in a user namespace that isn't a child of ours", sb.pid)
 	}

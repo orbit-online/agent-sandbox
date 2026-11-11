@@ -86,6 +86,7 @@ let
     ];
     ASAR = asar;
     DESKTOP_NAME = ids.desktopFile;
+    READY = sl.readyLine;
   } "source ${./patch-asar.sh}";
   # The FHS env's runScript, see app-pid.sh
   appPidScript = sl.script "app-pid.sh" {

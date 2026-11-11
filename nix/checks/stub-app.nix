@@ -2,7 +2,7 @@
 # holding lib/claude-desktop/resources/app.asar), so the module's asar patch and FHS overrides apply as they do to the
 # real app. Launched plainly, it logs its pid, netns, mount ns, pid ns and effective capabilities to ~/stub-app.log,
 # then the session bus's reply to its RequestName for the tray item's name (StatusNotifierItem-<pid>-1, 1 when it got
-# it, denied when the proxy refused), and stays up as the first instance.
+# it, denied when the proxy refused), prints the ready line the launcher waits for, and stays up as the first instance.
 # `--exec CMD...` runs CMD instead, which through the wrapper's claude:// re-entry means inside the running sandbox.
 {
   lib,
@@ -32,6 +32,8 @@ let
       bus=''${BASH_REMATCH[1]}
     fi
     echo "$$ $(ns net) $(ns mnt) $(ns pid) $caps $bus" >>"$HOME/stub-app.log"
+    # What the real app's patched asar prints once its first window is ready
+    echo 'agent-sandbox: ready'
     exec ${lib.getExe' coreutils "sleep"} infinity
   '';
   unwrapped = stdenvNoCC.mkDerivation {

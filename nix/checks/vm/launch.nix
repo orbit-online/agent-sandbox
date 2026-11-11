@@ -371,10 +371,12 @@
       # It holds the sandbox's netns, whose macvlan's MAC would then block the next sandbox's
       workstation.succeed("systemctl stop bob-in-alice-ns")
 
-  with subtest("the theme watcher ends with the app"):
-      workstation.succeed("pgrep -u alice -f claude-desktop-gtk-theme-watch")
+  with subtest("the launcher's supervise, which follows the theme, is the app's unit and ends it"):
+      main = workstation.succeed("systemctl --user -M alice@ show -P MainPID claude-desktop-app").strip()
+      assert "launcher\x00supervise\x00" in workstation.succeed(f"cat /proc/{main}/cmdline"), main
       workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-app")
-      workstation.wait_until_fails("pgrep -u alice -f 'claude-desktop-gtk-theme-watch|gdbus monitor'", timeout=30)
+      workstation.wait_until_fails("systemctl --user -M alice@ -q is-active claude-desktop-app", timeout=30)
+      workstation.wait_until_fails("pgrep -u alice -f 'launcher supervise'", timeout=30)
       workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
       workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")
 ''
