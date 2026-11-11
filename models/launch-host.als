@@ -43,7 +43,7 @@ one sig
   PidfdExit,   // run.go: run returns when the sandbox's pidfd turns readable
   BindsTo,     // call units BindsTo= the daemon's unit (README.md, Principals 9)
   ParentCheck, // subid-broker dieWith: getppid() after the prctl, against the pid bwrap-subid.sh passes
-  StartLimit   // claude-desktop.sh: the broker unit's StartLimitBurst=3 in 10 min
+  StartLimit   // launcher supervise.go:166-170: the broker unit's StartLimitBurst=3 in 10 min
   extends Guard {}
 
 pred live[t: Thing] { t in Alive }
@@ -51,7 +51,7 @@ pred become[add, del: set Thing, m: set Mark] {
   Alive' = Alive - del + add and Marks' = Marks + m
 }
 
-// claude-desktop.sh:109-117: the broker's unit starts ahead of nixpak
+// supervise.go:157-172 (prepare), ahead of nixpak's launcher at :64: the broker's unit starts first
 pred brokerStart { no Marks and not live[Broker] and become[Broker, none, none] }
 pred subidSpawn { live[Shell] and not live[SubidB] and no Marks & (Armed + Exec) and become[SubidB, none, none] }
 // serve's first step. Without ParentCheck a parent gone by now never
@@ -170,7 +170,7 @@ one sig
   // directories it works in, where a planted link reaches no host file,
   // and files replaced by a rename, which replaces a link
   Confined,
-  // store-sync.sh: a store dir that's a link stops the launch, before
+  // launcher store.go:24-26: a store dir that's a link stops the launch, before
   // nixpak's bind would follow it on the host
   StoreLinkRefused
   extends Guard {}

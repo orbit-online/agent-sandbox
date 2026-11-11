@@ -68,9 +68,9 @@ in the init namespaces unless noted.
    `org.freedesktop.Notifications`. A call to an owner's unique name
    is checked against the rules of every name it holds. Its rules are
    fixed at start.
-6. **Launcher**: `claude-desktop.sh`, nixpak's launcher, `bwrap-subid.sh`
-   (`SUBID_MAP=subid` on the host), `net-setup.sh` in nixpak's pasta slot,
-   the GTK theme scripts, `store-sync.sh`. What they do in the sandbox's
+6. **Launcher**: `cmd/launcher` (the user's entry, the app's unit with the
+   store sync and the GTK theme), nixpak's launcher, `bwrap-subid.sh`
+   (`SUBID_MAP=subid` on the host), `net-setup.sh` in nixpak's pasta slot. What they do in the sandbox's
    home and store runs confined (`confine.sh` and `state.sh`: a bwrap with
    only its closure and those directories). Re-entries (`claude://`,
    `--shell`) and `--permissions` go through it.
@@ -151,7 +151,7 @@ joining needs CAP_SYS_ADMIN in init).
 | helper binaries | nsenter, setpriv, the launcher's scripts | resolved on the host's mounts, or in MU's closure binds | never in M1 or M2, where the sandbox can swap a directory (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
-| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; a store dir other than the one the launch recorded (`store-sync.sh`, by device and inode), or no record, and `nix/` is deleted and the closure synced into a fresh one |
+| `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; a store dir other than the one the launch recorded (the launcher's `store.go`, by device and inode), or no record, and `nix/` is deleted and the closure synced into a fresh one |
 
 ## Trust boundaries
 

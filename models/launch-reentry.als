@@ -1,6 +1,6 @@
 /*
  * Step 4, the running sandbox from the host's side (README.md, L5-L7):
- * how claude-desktop.sh finds the sandbox and the app to re-enter
+ * how the launcher (cmd/launcher enter.go) finds the sandbox and the app to re-enter
  * (sandbox_pid, app_pid, then nsenter by pid), what `--permissions` does
  * instead, and the broker's handle on the sandbox (sandbox.go:39
  * lookupSandbox). The launch itself is in launch.als.
@@ -47,7 +47,7 @@ fact reentryShape {
 }
 
 abstract sig Mode {}
-// claude:// (the branch at claude-desktop.sh:82), --shell (:60), --permissions (:54)
+// claude:// (the branch at enter.go:41-47), --shell (:37), --permissions (:27)
 one sig Url, Shell, Perms extends Mode {}
 one sig Cfg {
   mode: one Mode,
@@ -59,10 +59,10 @@ one sig Cfg {
 
 abstract sig Guard {}
 one sig
-  AppLevel,         // claude-desktop.sh app_pid: the match's pid ns is one below the sandbox's, and it's the only one
-  NnpOnEntry,       // claude-desktop.sh:52: setpriv --no-new-privs on the host, ahead of nsenter, for both modes
-  PermissionsFirst, // claude-desktop.sh:54-57, ahead of sandbox_pid
-  MntCheck          // sandbox.go:47 and :55, claude-desktop.sh:24: not in our mount ns
+  AppLevel,         // internal/sandbox find.go:99, AppPid: the match's pid ns is one below the sandbox's, and it's the only one
+  NnpOnEntry,       // enter.go:110: setpriv --no-new-privs on the host, ahead of nsenter, for both modes
+  PermissionsFirst, // enter.go:27-35, ahead of sandbox.Find
+  MntCheck          // internal/sandbox find.go:35: not in our mount ns, for the broker and the launcher
   extends Guard {}
 
 abstract sig Move {}
@@ -344,7 +344,7 @@ run reentryRuns {
 } for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // L6: --permissions never enters the sandbox: its only process is the
-// window, on the host (claude-desktop.sh:54-57).
+// window, on the host (enter.go:27-35).
 pred l6 {
   Cfg.mode = Perms implies always no Reentry
   always all w: principal.WindowP | w.userns = InitUserNS and w.mnt = HostMnt and w.pidns = InitPidNS

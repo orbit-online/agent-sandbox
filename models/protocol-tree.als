@@ -6,7 +6,7 @@
  * Sources: members.go (contains, members: the
  * sandbox's processes by user namespace), mountinfo.go (grantMountOf),
  * scan.go (holdersAfter, viewMounts, holds, file, mapped), holders.go
- * (endHolders), attach.go (detachGrant), claude-desktop.sh (re-entries
+ * (endHolders), attach.go (detachGrant), the launcher's enter.go (re-entries
  * through nsenter).
  */
 open sandbox

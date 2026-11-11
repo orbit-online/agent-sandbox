@@ -91,7 +91,7 @@ pred writes[p: Process, f: File] {
 // ---------------------------------------------------------------------
 // Host files. The grant directory, control.sock and the .flatpak
 // instance dirs (bwrapinfo.json, info) are in $XDG_RUNTIME_DIR; the
-// sandbox's home, store and scratchpad in the launcher's state dir (hm/default.nix:90, 535-547, 855-857).
+// sandbox's home, store and scratchpad in the launcher's state dir (hm/lib.nix:84-94, hm/store.nix:52-62).
 
 one sig FsRoot, RuntimeDir, GrantDir, FlatpakDir, StateDir,
   SandboxHome, SandboxNix, Scratch extends File {}
@@ -122,7 +122,7 @@ fact links { Link in rwRoots.*~up - rwRoots }
 // The host's mount namespace: its mounts carry no locks (the host made
 // them). M1: bwrap's binds of host mounts, the home, store and
 // scratchpad rw, the store's closure and the grant directory read-only
-// (hm/default.nix:532-548, 806-825), the user's binds, and the grants.
+// (hm/core.nix:147-161, hm/store.nix:52-68, hm/permissions-broker.nix:134-145), the user's binds, and the grants.
 fact m1 {
   all m: SMount | m.ns = HostMnt implies (m.how in IsRoot + Fresh and m.root not in Anon)
   all m: SMount | m.ns = M1 implies {
@@ -173,7 +173,7 @@ fact { BindsAsserted in Guards.on implies defaultBinds }
 // directory isn't modelled (README, Not modelled).
 
 // The denied list: every launcher's state dir and $XDG_RUNTIME_DIR
-// (hm/default.nix:866).
+// (hm/permissions-broker.nix:62).
 one sig Denied { dirs: set File }
 fact { Denied.dirs = StateDir + RuntimeDir }
 

@@ -122,7 +122,7 @@ pred hostPlaced {
 // in MU, which shows it a part of what M1 does (the closure, the home,
 // P's /proc): it stays in M1 here, which gives the attacker more. The
 // app, sessions and re-entries in U2 without any (hm/app-pid.sh:9,
-// hm/claude-desktop.sh:50).
+// cmd/launcher enter.go:110).
 pred sandboxStart {
   all p: sandboxProcs {
     p.uid = HostUser
@@ -290,7 +290,7 @@ check S8ownerChainRevert for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
 
 // ---------------------------------------------------------------------
 // Store paths the host execs with capabilities in a sandbox namespace.
-// The sandbox's /nix is its own, rw (hm/default.nix:533-536); nixpak
+// The sandbox's /nix is its own, rw (hm/store.nix:52-62); nixpak
 // binds storeRoots' closure read-only over it and /nix/store on its own.
 // A path outside the closure is the sandbox's to write. A path inside it
 // is too, wherever the sandbox's processes see the mount tree: from a
@@ -304,7 +304,7 @@ check S8ownerChainRevert for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
 sig StorePath { refs: set StorePath }
 one sig FhsEnv, BwrapFhs, BrokerBin, NetSetup, UtilLinux, Busybox, Iproute2,
   DhcpScript extends StorePath {}
-// storeRoots' list (hm/default.nix:632-647)
+// storeRoots' list (hm/build.nix:19, hm/store.nix:37-46)
 sig Root in StorePath {}
 fun closure: set StorePath { Root.*refs }
 
@@ -322,13 +322,13 @@ sig LaterExec extends Exec {}
 
 fact store {
   FhsEnv + NetSetup in Root
-  // the FHS env's bwrap is bwrapFhs (hm/default.nix:735), which names
-  // the broker for share (hm/default.nix:80-85)
+  // the FHS env's bwrap is bwrapFhs (hm/fhs.nix:156), which names
+  // the broker for share (hm/lib.nix:119-124)
   BwrapFhs in FhsEnv.refs
   BrokerBin in BwrapFhs.refs
   // net-setup's vars and runtimeInputs
   UtilLinux + Busybox + DhcpScript + Iproute2 in NetSetup.refs
-  // udhcpc.sh's runtimeInputs (hm/default.nix:165-169)
+  // udhcpc.sh's runtimeInputs (hm/network.nix:15-19)
   Iproute2 in DhcpScript.refs
   BrokerHelper.bin = BrokerBin and BrokerHelper.keeps = Cap
   NetSetupSetpriv.bin = UtilLinux and NetSetupSetpriv.keeps = Cap

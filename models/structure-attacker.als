@@ -11,8 +11,8 @@
  * Exec gains nothing beyond what a process has, except all
  * capabilities for inner root of its own user namespace: bwrap sets
  * no_new_privs for everything in the sandbox, so setuid and file
- * capabilities don't apply (hm/default.nix:731, hm/claude-desktop.sh:
- * 79-81). Takeover ignores Yama, so the attacker here is stronger than
+ * capabilities don't apply (bwrap sets it for what it starts, cmd/launcher
+ * enter.go:110 for re-entries). Takeover ignores Yama, so the attacker here is stronger than
  * on a host with ptrace_scope 1.
  */
 open structure
