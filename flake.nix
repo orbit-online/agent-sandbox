@@ -12,10 +12,8 @@
       url = "github:nixpak/nixpak";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    llm-agents = {
-      url = "github:numtide/llm-agents.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # Its own nixpkgs-unstable: it's only built and tested against that, and breaks on a stable release
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =

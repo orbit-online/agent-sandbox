@@ -273,8 +273,9 @@ checks are in `nix/checks/default.nix` and use a test NixOS system with both
 modules and a user alice (the `home-manager` input exists only for it).
 
 - `claude-desktop-eval`: nix-unit runs the flake's `tests` output, with every
-  input passed in from the store. Run them directly with `nix run
-  --inputs-from . nixpkgs#nix-unit -- --flake .#tests.x86_64-linux`. They
+  input passed in from the store. Run them directly with `ulimit -s 61440; nix run
+  --inputs-from . nixpkgs#nix-unit -- --flake .#tests.x86_64-linux` (nix-unit keeps the shell's stack, and 8 MiB
+  overflows). They
   check that the assertions hold (with memo too), the memo assertion, the
   sandbox's store in memo's config on the host, the
   files, package and `environmentFile` a launcher with `memo.enable` gets

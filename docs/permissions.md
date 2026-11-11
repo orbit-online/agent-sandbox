@@ -84,10 +84,10 @@ On kernel 6.18, bubblewrap 0.12.0, Claude Code 2.1.309 (`scripts/ns-inject-spike
 7. xdg-dbus-proxy takes its rules from its arguments only; there is no way to change them while it runs.
 8. Tested on the host on 2026-11-01, and failed: Claude Code doesn't pick up tools an MCP server adds mid-session
    with `notifications/tools/list_changed`, in the app's Code tab or in `claude -p`. The documentation said it would.
-9. nixpak (as locked here) starts one D-Bus proxy, `XDG_DBUS_PROXY_EXE` with the argv from `XDG_DBUS_PROXY_ARGS`
-   (bus address, outside path, its `dbus.args`, `--filter`) plus `--fd=3`, and waits for a byte on that fd
-   (`launcher/dbus_proxy.go`). Its launcher wrapper sets `XDG_DBUS_PROXY_EXE` at build time (`makeWrapper --set`) to
-   a script of its own that runs `pkgs.xdg-dbus-proxy` in a bwrap with `/.flatpak-info`, because portals read
+9. nixpak (as locked here) starts one D-Bus proxy, `dbusProxy.exe` from its launcher's JSON config with the argv
+   from `dbusProxy.args` (bus address, outside path, its `dbus.args`, `--filter`) plus `--fd=3`, and waits for a byte
+   on that fd (`launcher/dbus_proxy.go`). It writes that config at build time, with `dbusProxy.exe` a script of its
+   own that runs `pkgs.xdg-dbus-proxy` in a bwrap with `/.flatpak-info`, because portals read
    `/proc/<caller>/root/.flatpak-info` and the caller they see is the proxy (`modules/launch.nix`). `dbus.args` are
    passed literally, without expanding variables; nixpak's `modules/dbus.nix` makes them from `dbus.policies` and
    `dbus.rules`, as xdg-dbus-proxy's flags, and appends what else is set.
@@ -505,8 +505,8 @@ a bwrap, by rules fixed at its start. Unlike it, it is in Go.
 
 The session bus: the module keeps nixpak's `dbus.enable` and calls nixpak with a `pkgs` whose `xdg-dbus-proxy` is
 the new proxy (its binary under that name). Then nixpak's launcher still starts it in the wrapper that carries
-`/.flatpak-info` and waits on `--fd=3` (verified, 9); `XDG_DBUS_PROXY_EXE` can't be pointed elsewhere, since
-nixpak's wrapper sets it at build time.
+`/.flatpak-info` and waits on `--fd=3` (verified, 9); `dbusProxy.exe` can't be pointed elsewhere, since nixpak
+writes its config at build time.
 
 The proxy takes the bus address and the path to listen on, `--fd` and `--filter` as nixpak passes them, and its rules
 from `--config=<file>`, which the module passes through nixpak's `dbus.args` and nothing else; nixpak's own

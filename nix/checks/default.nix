@@ -1031,6 +1031,8 @@ in
         export HOME=$PWD
         unset NIX_STORE
         export NIX_STORE_DIR=${builtins.storeDir} NIX_REMOTE=$HOME/storedata
+        # The stack nix gives its evaluator and nix-unit doesn't; 8 MiB overflows
+        ulimit -s 61440
         nix-unit --extra-experimental-features flakes ${
           lib.escapeShellArgs (overrides "" (removeAttrs inputs [ "self" ]))
         } --flake ${self}#tests.${pkgs.stdenv.hostPlatform.system}
@@ -1079,11 +1081,11 @@ in
           ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
           grep -qE '^coreutils, .*, nix\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
 
-          # nixpak's launcher starts our D-Bus proxy: its XDG_DBUS_PROXY_EXE wrapper runs the module's dbus-proxy, and
-          # xdg-dbus-proxy isn't in the closure
-          launcher=$(grep -rlE '^export XDG_DBUS_PROXY_EXE=' $(grep -- '-nixpak-' "$paths")) || { echo "no launcher sets XDG_DBUS_PROXY_EXE" >&2; exit 1; }
-          for l in $launcher; do
-            exe=$(grep -oP "^export XDG_DBUS_PROXY_EXE='?\K/nix/store/[^' ]+" "$l")
+          # nixpak's launcher starts our D-Bus proxy: the dbusProxy wrapper in its config runs the module's dbus-proxy,
+          # and xdg-dbus-proxy isn't in the closure
+          configs=$(grep -E -- '-nixpak-config\.json$' "$paths") || { echo "no nixpak launcher config" >&2; exit 1; }
+          for c in $configs; do
+            exe=$(jq -er '.dbusProxy.exe' "$c") || { echo "$c starts no D-Bus proxy" >&2; exit 1; }
             grep -qF -- '${dbusProxy}/bin/xdg-dbus-proxy "$@"' "$exe" || { echo "$exe doesn't run ${dbusProxy}" >&2; exit 1; }
           done
           ! grep -qxF -- "${pkgs.xdg-dbus-proxy}" "$paths" || { echo "xdg-dbus-proxy is in the closure" >&2; exit 1; }
