@@ -478,8 +478,8 @@ let
           "org.freedesktop.portal.Desktop"
           "org.kde.StatusNotifierWatcher"
         ];
-        portal = 5;
-        workPortal = 4;
+        portal = 6;
+        workPortal = 5;
       };
     };
     # nixpak's own D-Bus rules would be argv the proxy refuses, and a name the proxy refuses fails at launch
@@ -1253,7 +1253,7 @@ in
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []
-            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 4 and (has("broadcast") | not)
+            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 5 and (has("broadcast") | not)
               and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
             and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }

@@ -114,6 +114,9 @@ in
             # libnotify with NOTIFY_FORCE_PORTAL; its GDBusProxy loads the interface's version with GetAll
             "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
             "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
+            # Chromium >= 153 reads Settings' color-scheme only once Get of FileChooser's version succeeds; without it,
+            # its GTK fallback lags one switch behind
+            "org.freedesktop.DBus.Properties.Get@/org/freedesktop/portal/desktop"
           ];
         };
       }
