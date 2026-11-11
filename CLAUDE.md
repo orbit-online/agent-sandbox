@@ -18,7 +18,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `.desktop` actions, assertions): `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
   launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
   `/run/current-system/sw`), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
-  `mcp.nix`, `dbus.nix` (and the tray), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
+  `mcp.nix` (with `channels.js`, which `patch-asar.sh` hooks into the app for `mcpChannels`), `dbus.nix` (and the tray), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
   `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
   `agent-sandbox.launcherModules` join them on every launcher, for a plugin's own options. The app ID,
   `com.anthropic.Claude[.<name>]`, also names the launcher's `.desktop`
@@ -291,7 +291,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   the devices (`/dev/kvm` once, from `kvm` and `devices`) and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
-  refused), nixpak's launcher the patched one (its reaper's `Start` in the binary, one launcher in each
+  refused), the channel hook (on a 4.23118-shaped asar: `channels.js` only with `mcpChannels`, hooked into the
+  sessions' MCP client with the session manager's chunk, an app with two such clients refused), nixpak's launcher the patched one (its reaper's `Start` in the binary, one launcher in each
   launcher's closure), nixpak's D-Bus proxy wrapper running our `dbus-proxy` (no
   xdg-dbus-proxy in the closure) with the bus address, the socket, `--config` and `--filter` as its argv for
   both launchers, work's config the portal's rules alone and its overview the same, and nixpak's

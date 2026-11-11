@@ -12,8 +12,9 @@
 # taskbar entry.
 # The first time one of its windows is visible with its page loaded, the app prints $READY on stdout, where the launcher
 # waits for it to end its splash and tell systemd the app is up. Not ready-to-show: that only fires for a window not
-# shown yet, and the app shows its main window at creation
-: "${ASAR:?}" "${out:?}" "${DESKTOP_NAME:?}" "${READY:?}"
+# shown yet, and the app shows its main window at creation.
+# With servers in $CHANNELS (JSON), channels.js delivers their notifications/claude/channel into Code sessions
+: "${ASAR:?}" "${out:?}" "${DESKTOP_NAME:?}" "${READY:?}" "${CHANNELS:?}" "${CHANNELS_JS:?}"
 asar extract "$ASAR" app
 jq --arg d "$DESKTOP_NAME" '.desktopName = $d' app/package.json >package.json
 mv package.json app/package.json
@@ -39,6 +40,26 @@ if grep -rqE --include='*.js' 'telemetryName="freedesktop"|"1358149550"' app; th
   ((found == 1)) || { echo "patch-asar: $found places pick a notification backend by probe, want 1" >&2; exit 1; }
   sed -i -E "s/$native/!1\&\&\1/" "${files[0]}"
   [[ $(grep -oE "!1&&$native" "${files[0]}" | wc -l) == 1 ]] || exit 1
+fi
+if [[ $CHANNELS != '[]' ]]; then
+  # The session-side host's client for server \2 (clientInfo local-agent-mode-<name>), right before its roots handler
+  # shellcheck disable=SC2016 # the JS template literal's ${...}
+  hook='(name:`local-agent-mode-\$\{([A-Za-z0-9_$]+)\}`[^;]*\)),(([A-Za-z0-9_$]+)&&([A-Za-z0-9_$]+)\.setRequestHandler\("roots/list",)'
+  mapfile -t files < <(grep -rlE --include='*.js' "$hook" app)
+  ((${#files[@]} == 1)) || { echo "patch-asar: ${#files[@]} files make the sessions' MCP clients, want 1" >&2; exit 1; }
+  found=$(grep -oE "$hook" "${files[0]}" | wc -l)
+  ((found == 1)) || { echo "patch-asar: $found places make the sessions' MCP clients, want 1" >&2; exit 1; }
+  # Where the app's tools get the session manager: its chunk and export
+  manager='\{claudeCodeSessionManager:[A-Za-z0-9_$]+\}=await Promise\.resolve\(\)\.then\(\(\(\)=>require\("\./([A-Za-z0-9_.-]+\.js)"\)\)\)\.then\(\(([A-Za-z0-9_$]+)=>\2\.([A-Za-z0-9_$]+)\)\)'
+  mapfile -t found < <(grep -rhoE --include='*.js' "$manager" app | sed -E "s#$manager#\1 \3#" | sort -u)
+  ((${#found[@]} == 1)) || { echo "patch-asar: ${#found[@]} ways to the session manager, want 1" >&2; exit 1; }
+  read -r chunk export <<<"${found[0]}"
+  dir=$(dirname "${files[0]}")
+  [[ -f $dir/$chunk ]] || { echo "patch-asar: the session manager's chunk isn't next to the MCP clients'" >&2; exit 1; }
+  sed -e "s|@servers@|$CHANNELS|" -e "s|@chunk@|$chunk|g" -e "s|@export@|$export|" "$CHANNELS_JS" \
+    >"$dir/agent-sandbox-channels.js"
+  sed -i -E "s#$hook#\1,require(\"./agent-sandbox-channels.js\")(\5,\2),\3#" "${files[0]}"
+  grep -qF 'require("./agent-sandbox-channels.js")(' "${files[0]}" || exit 1
 fi
 asar pack app app.asar --unpack '{*.node,github-mcp-server}'
 # Bound at the original path, the patched asar reads the original app.asar.unpacked, so the lists must match

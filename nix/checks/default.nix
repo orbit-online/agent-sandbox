@@ -111,18 +111,22 @@ let
     ) null sys.config.home-manager.users.alice.home.packages;
   sandboxed = sandboxedOf system;
   dbusProxy = self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
-  # patch-asar.sh on an asar holding the app's notification backend choice as 4.x has it (the app the checks build
-  # predates it): the native backend's condition made false, and the build refusing an app with two of them
-  notificationPatch =
-    pkgs.runCommand "claude-desktop-notification-patch"
+  # patch-asar.sh on stub asars: the app's notification backend choice as 4.x has it (the app the checks build predates
+  # it) made false, and the sessions' MCP clients and the way to the session manager as 4.23118 has them, with
+  # channels.js hooked into the clients; the build refusing an app with two of either place
+  asarPatch =
+    pkgs.runCommand "claude-desktop-asar-patch"
       {
         nativeBuildInputs = [
           pkgs.asar
           pkgs.jq
+          pkgs.nodejs
         ];
       }
       ''
         pick='(Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),P.info("NotificationService initialized"))'
+        client='p=new t.vct({name:`local-agent-mode-''${e}`,version:"1.0.0"},{capabilities:C}),b&&p.setRequestHandler("roots/list",(async()=>({roots:[]})))'
+        manager='let{claudeCodeSessionManager:s}=await Promise.resolve().then((()=>require("./index.chunk-m.js"))).then((e=>e.t))'
         app() {
           mkdir -p "$1/.vite/build"
           echo '{"main": "main.js"}' >"$1/package.json"
@@ -130,16 +134,37 @@ let
           echo 'function c(e){return e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"}' >>"$1/main.js"
           echo "nJr=new class{constructor(){this.telemetryName=\"freedesktop\"}};async function i(){$2}" \
             >"$1/.vite/build/index.chunk-x.js"
+          echo "async function c(e,t,b){$3}" >"$1/.vite/build/index.chunk-c.js"
+          echo 'exports.t={claudeCodeSessionManager:{}}' >"$1/.vite/build/index.chunk-m.js"
           touch "$1/stub.node"
           asar pack "$1" "$1.asar" --unpack '*.node'
         }
-        app one "$pick"
-        ASAR=$PWD/one.asar DESKTOP_NAME=x.desktop READY=ready out=$PWD/patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
-        grep -qaF '(!1&&Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),' patched.asar ||
+        patch() {
+          rm -rf app app.asar app.asar.unpacked
+          ASAR=$PWD/$1.asar DESKTOP_NAME=x.desktop READY=ready CHANNELS=$2 CHANNELS_JS=${../home/claude-desktop/channels.js} \
+            out=$PWD/$1-patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
+        }
+        app one "$pick" "$client;$manager"
+        patch one '[]'
+        grep -qaF '(!1&&Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),' one-patched.asar ||
           { echo "the native notification backend can still be picked" >&2; exit 1; }
-        app two "$pick;$pick"
-        if ASAR=$PWD/two.asar DESKTOP_NAME=x.desktop READY=ready out=$PWD/patched-two.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}; then
+        ! grep -qaF agent-sandbox-channels one-patched.asar || { echo "channels.js hooked in without channels" >&2; exit 1; }
+        patch one '["osticket"]'
+        asar extract one-patched.asar one-out
+        grep -qF '{capabilities:C}),require("./agent-sandbox-channels.js")(p,e),b&&p.setRequestHandler' \
+          one-out/.vite/build/index.chunk-c.js || { echo "channels.js isn't hooked into the MCP client" >&2; exit 1; }
+        grep -qF 'new Set(["osticket"])' one-out/.vite/build/agent-sandbox-channels.js
+        grep -qF 'require("./index.chunk-m.js").t.claudeCodeSessionManager' one-out/.vite/build/agent-sandbox-channels.js
+        node --check one-out/.vite/build/agent-sandbox-channels.js
+        node --check one-out/.vite/build/index.chunk-c.js
+        app two "$pick;$pick" ""
+        if patch two '[]'; then
           echo "patch-asar.sh took an app with two places picking the notification backend" >&2
+          exit 1
+        fi
+        app three "$pick" "$client;$client;$manager"
+        if patch three '["osticket"]'; then
+          echo "patch-asar.sh took an app with two places making the sessions' MCP clients" >&2
           exit 1
         fi
         touch $out
@@ -1017,7 +1042,7 @@ in
           workClosure = pkgs.closureInfo { rootPaths = [ work ]; };
           inherit work;
           customClosure = pkgs.closureInfo { rootPaths = [ customDoc ]; };
-          inherit notificationPatch;
+          inherit asarPatch;
         }
         ''
           paths=$closure/store-paths

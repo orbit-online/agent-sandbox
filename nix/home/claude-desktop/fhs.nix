@@ -87,6 +87,8 @@ let
     ASAR = asar;
     DESKTOP_NAME = ids.desktopFile;
     READY = sl.readyLine;
+    CHANNELS = builtins.toJSON config.mcpChannels;
+    CHANNELS_JS = ./channels.js;
   } "source ${./patch-asar.sh}";
   # The FHS env's runScript, see app-pid.sh
   appPidScript = sl.script "app-pid.sh" {
