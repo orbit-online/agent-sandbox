@@ -89,8 +89,11 @@ in
       '';
     };
     claude-desktop = mkOption {
+      # shorthandOnlyDefinesConfig as types.submodule sets it, here and on launchers: consumers extend both options
+      # with types.submodule, and the module system refuses to merge submodules that disagree on it
       type = types.submoduleWith {
         inherit specialArgs;
+        shorthandOnlyDefinesConfig = true;
         modules = launcherModules ++ [
           {
             config._module.args.launcherName = null;
@@ -100,6 +103,7 @@ in
                 type = types.attrsOf (
                   types.submoduleWith {
                     inherit specialArgs;
+                    shorthandOnlyDefinesConfig = true;
                     modules = launcherModules ++ [ ({ name, ... }: { _module.args.launcherName = name; }) ];
                   }
                 );
