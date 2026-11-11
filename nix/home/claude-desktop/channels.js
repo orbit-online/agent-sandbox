@@ -32,8 +32,13 @@ async function deliver(server, { content, meta } = {}) {
   await sessions.startSession({ cwd: s?.cwd ?? homedir(), title: `${server} event`, message: text });
 }
 
+// setNotificationHandler takes a bare method name only for the spec's notifications, so this one goes through the
+// fallback, which the SDK calls for any method without a handler of its own
 module.exports = (client, server) => {
-  if (servers.has(server))
-    client.setNotificationHandler("notifications/claude/channel", ({ params }) =>
-      deliver(server, params).catch((e) => console.warn(`[agent-sandbox] ${server}: delivering an event failed:`, e)));
+  if (!servers.has(server)) return;
+  const fallback = client.fallbackNotificationHandler;
+  client.fallbackNotificationHandler = (n) =>
+    n.method === "notifications/claude/channel"
+      ? deliver(server, n.params).catch((e) => console.warn(`[agent-sandbox] ${server}: delivering an event failed:`, e))
+      : fallback?.(n);
 };
