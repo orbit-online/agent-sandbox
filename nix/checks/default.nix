@@ -1159,8 +1159,8 @@ in
             and any(.splash[]; test("^--logo=/nix/store/[^/]+-orbit-landskab-farve\\.svg$"))
             and any(.splash[]; test("^--logo-dark=/nix/store/[^/]+-orbit-landskab-farve-negativ\\.svg$"))' \
             "$dcfg0" >/dev/null || { echo "the default launcher's config: $(<"$dcfg0")" >&2; exit 1; }
-          # The asar prints the ready line once one of its windows is visible with its page loaded
-          grep -qaF 'w.webContents.isLoading()||(d=!0,console.log("agent-sandbox: ready"))};require("electron").app.on("browser-window-created"' "$asar" ||
+          # The asar prints the ready line once one of its windows is visible, loaded or shown
+          grep -qaF '!w.isVisible()||(d=!0,o("agent-sandbox: ready"+String.fromCharCode(10)))};require("electron").app.on("browser-window-created"' "$asar" ||
             { echo "the asar lacks the ready line" >&2; exit 1; }
           # cgrun on the sandbox's PATH
           [[ -x $(grep -- '-claude-desktop-sw$' "$paths")/bin/cgrun ]] || { echo "the sandbox's PATH lacks cgrun" >&2; exit 1; }
