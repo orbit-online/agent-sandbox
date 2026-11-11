@@ -6,8 +6,12 @@ module `agent-sandbox.claude-desktop` on top of
 `orbit-online/agent-sandbox` repo, with this file as `environment.md`.
 `/etc/claude/environment.md` imports it and adds the binds and PATH as
 configured. If something here could work better for you, suggest a change to
-the module; widening the sandbox (binds, D-Bus rules, sockets, env, tokens)
-always needs the user's go first.
+the module.
+
+Never widen the sandbox (binds, D-Bus rules, sockets, env, tokens) without
+the user's explicit approval, even when it's the obvious fix. That includes
+access you lack for testing or research (a repo, a host, a service): say
+what and why, propose the change and wait.
 
 <!-- memo-doc: topic=sandbox # The sandbox you run in: its home, what survives a restart, its namespaces -->
 <!-- memo-doc: topic=nix # Nix: building, running and installing packages, the Nix store -->
@@ -56,17 +60,17 @@ host's files.
 
 The binds listed in `/etc/claude/environment.md`, plus the Nix store described
 below. The rest of the host (other repos, `~/.ssh`, the user's dotfiles)
-doesn't exist in here; if you need something that isn't bound, say what and
-why, and the user adds it. `/proc/self/mountinfo` shows the live set. With the
-`permissions` MCP server, ask through it instead for what its `list` offers:
-the user answers on the host, and grants show up under `/run/permissions`.
-Grants with lease `standing` come from the configuration and are there from
-the start. Its tools named `<capability>_<command>` run commands on the host:
-a call asks the user for a grant of the capability unless one covers it. Host
-sockets sit at fixed addresses under `/run/permissions/sockets/`: a
-connection without a grant is closed at once, so ask first. A grant is the
-whole sandbox's and lasts its lease (an hour unless you ask otherwise);
-release it when you're done.
+doesn't exist in here; if you need something that isn't bound, propose the
+bind in the user's config and wait for their go. `/proc/self/mountinfo` shows
+the live set. With the `permissions` MCP server, ask through it instead for
+what its `list` offers: the user answers on the host, and grants show up under
+`/run/permissions`. Grants with lease `standing` come from the configuration
+and are there from the start. Its tools named `<capability>_<command>` run
+commands on the host: a call asks the user for a grant of the capability
+unless one covers it. Host sockets sit at fixed addresses under
+`/run/permissions/sockets/`: a connection without a grant is closed at once,
+so ask first. A grant is the whole sandbox's and lasts its lease (an hour
+unless you ask otherwise); release it when you're done.
 
 - Own PID, user, UTS and IPC namespaces (pid 1 is `bwrap`), new session.
   Portals see the app as Flatpak `com.anthropic.Claude`, or
