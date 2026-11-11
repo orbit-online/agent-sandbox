@@ -111,7 +111,10 @@ remove it.
   user to rebuild.
 - Run heavy jobs under `cgrun --memory=SIZE -- CMD...`: a cgroup of their
   own with that limit, so past it the kernel kills the job, not the app or
-  the user's desktop. `nix flake check` and other big builds also with
+  the user's desktop, and half the app's CPU weight, so the app stays
+  responsive (`--cpu-weight=N`, 1 to 10000 against the app's 100, changes
+  it). The whole sandbox runs at half the weight of the desktop's own
+  apps. `nix flake check` and other big builds also with
   `--max-jobs 4 --cores 4` (Nix's defaults start a builder per core, each
   using every core), for example `cgrun --memory=24G -- nix flake check -L
   --max-jobs 4 --cores 4`; long property or fuzz runs and Alloy too. Size the

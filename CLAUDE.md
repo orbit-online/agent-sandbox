@@ -41,7 +41,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   cgroup2 mount of its own in nested namespaces gets around inside its subtree
   (`docs/permissions.md`, Launcher). The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
   `cgrun.sh` (`cgrun` on the sandbox's PATH) runs a job in a `sandbox/cgrun-<pid>/`
-  with a memory limit. The broker and its host command calls are units in
+  with a memory limit and a CPU weight (50 against `app/`'s 100: `sandbox/` gets the `cpu` controller where the unit
+  has it, which systemd's `user@.service` delegates). Each launcher's slice has `CPUWeight=50`, between
+  `app.slice`'s 100 and `background.slice`'s 30 (`default.nix`). The broker and its host command calls are units in
   the slice too. Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
@@ -653,7 +655,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
   launcher's in a unit and slice of its own, the broker and a host command call units in the
   slice, both re-entries in `app/`; inside, `/sys/fs/cgroup` the sandbox's subtree alone, writable, without a unit's
-  name, the host's cgroup2 with `nsdelegate`, the caps (66 and 5) on the unit's cgroup; `cgrun` giving a job a cgroup of its own with its `memory.max`, killing one past 64M with the app running
+  name, the host's cgroup2 with `nsdelegate`, the caps (66 and 5) on the unit's cgroup; `cgrun` giving a job a cgroup of its own with its `memory.max` and `cpu.weight` (50, or `--cpu-weight`'s, a bad one
+  refused), the work slice's `cpu.weight` 50, killing one past 64M with the app running
   on, and removing the cgroup; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
   process in its root, unmounting the bind from a nested user namespace, a 64th cgroup and a fifth level, both still
   refused after it lifts `sandbox/`'s own caps from a nested cgroup namespace rooted at `app/` (which nsdelegate allows),

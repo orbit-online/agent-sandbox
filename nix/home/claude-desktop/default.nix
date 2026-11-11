@@ -144,6 +144,11 @@ in
     }) sl.hmMcpServers
     ++ lib.concatMap (l: l.build.assertions) launchers;
     home.packages = map (l: l.build.package) launchers;
+    # Each launcher's slice weighted between app.slice and session.slice (100) and background.slice (30), so a busy
+    # sandbox leaves the desktop two thirds of the CPU
+    systemd.user.slices = lib.listToAttrs (
+      map (n: lib.nameValuePair (lib.removeSuffix ".slice" (sl.sliceOf n)) { Slice.CPUWeight = 50; }) sl.names
+    );
     # The sandbox's store right after memo's embedded ones (mkOrder 550, ahead of the default), by its store path, so
     # memo on the host answers as it does inside
     programs = lib.optionalAttrs (options ? programs.agent-memos) {

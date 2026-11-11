@@ -97,6 +97,12 @@
       out = in_work("cgrun --memory=64M -- sh -c 'cat /proc/self/cgroup; cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'")
       cg, limit = out.split()
       assert re.fullmatch(r"0::/cgrun-\d+", cg) and limit == str(64 << 20), out
+      # Its CPU weight below the app's, 50 unless asked otherwise, and the launcher's slice below app.slice's
+      for args, want in [("", "50"), ("--cpu-weight=200 ", "200")]:
+          got = in_work(f"cgrun --memory=64M {args}-- sh -c 'cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/cpu.weight'")
+          assert got.strip() == want, (args, got)
+      in_work("sh -c 'cgrun --memory=64M --cpu-weight=0 -- true; test $? = 2'")
+      assert workstation.succeed(f"cat '/sys/fs/cgroup{work_slice}/cpu.weight'").strip() == "50"
       out = in_work("sh -c 'cgrun --memory=64M -- sh -c \"head -c 512M /dev/zero | tail\"; echo exit=$?'")
       assert out.strip().splitlines()[-1] == "exit=137", out
       # Its cgroup gone after it

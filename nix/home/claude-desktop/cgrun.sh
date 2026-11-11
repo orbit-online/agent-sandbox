@@ -1,10 +1,13 @@
 # shellcheck shell=bash
 # cgrun: runs a command in a cgroup of its own under the sandbox's, with a memory limit, so the kernel's OOM killer
-# ends that command (all of it: memory.oom.group) when it goes past the limit, not the app.
+# ends that command (all of it: memory.oom.group) when it goes past the limit, not the app, and a CPU weight below
+# the app's, so the app stays responsive while it runs.
 #
-# Usage: cgrun --memory=SIZE [--] CMD [ARG...]
+# Usage: cgrun --memory=SIZE [--cpu-weight=WEIGHT] [--] CMD [ARG...]
 #
-#   SIZE  memory.max, in bytes or with a K, M, G or T suffix (the kernel's syntax). No swap: memory.swap.max is 0.
+#   SIZE    memory.max, in bytes or with a K, M, G or T suffix (the kernel's syntax). No swap: memory.swap.max is 0.
+#   WEIGHT  cpu.weight, 1 to 10000 against the app's 100 [default: 50]. Without the cpu controller (a host whose
+#           user@.service doesn't delegate it) the command runs at the sandbox's weight, with a warning.
 #
 # The sandbox's cgroup is mounted at /sys/fs/cgroup, its processes in app/ beneath it. The command's cgroup is
 # cgrun-<pid> next to app/, removed once the command and whatever it left running have ended. Exits with the
@@ -12,14 +15,16 @@
 root=/sys/fs/cgroup
 
 usage() {
-  echo "Usage: cgrun --memory=SIZE [--] CMD [ARG...]" >&2
+  echo "Usage: cgrun --memory=SIZE [--cpu-weight=WEIGHT] [--] CMD [ARG...]" >&2
   exit 2
 }
 
 memory=
+cpu_weight=50
 while (($#)); do
   case $1 in
   --memory=*) memory=${1#--memory=} ;;
+  --cpu-weight=*) cpu_weight=${1#--cpu-weight=} ;;
   --) shift; break ;;
   -h | --help) usage ;;
   -*) echo "cgrun: Unknown option $1" >&2; usage ;;
@@ -64,6 +69,12 @@ if ! echo "$memory" >"$cg/memory.max"; then
   exit 2
 fi
 [[ ! -e $cg/memory.swap.max ]] || echo 0 >"$cg/memory.swap.max"
+if [[ ! -e $cg/cpu.weight ]]; then
+  echo "cgrun: The cpu controller isn't enabled in $root, so the command runs without a CPU weight of its own" >&2
+elif ! echo "$cpu_weight" >"$cg/cpu.weight"; then
+  echo "cgrun: Bad --cpu-weight=$cpu_weight" >&2
+  exit 2
+fi
 echo 1 >"$cg/memory.oom.group"
 
 # Handlers, not ignored signals: the command gets them as usual, and this shell waits for it, then cleans up

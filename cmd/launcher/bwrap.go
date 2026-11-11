@@ -285,12 +285,13 @@ func layOutCgroups(spec *helperSpec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The controllers the unit got, for sandbox/ and below
+	// The controllers the unit got, for sandbox/ and below: cpu for cgrun's weights (systemd's user@.service
+	// delegates pids, memory and cpu to the user's manager)
 	have, err := os.ReadFile(spec.CgRoot + "/cgroup.controllers")
 	if err != nil {
 		return "", err
 	}
-	for _, c := range []string{"memory", "pids"} {
+	for _, c := range []string{"memory", "pids", "cpu"} {
 		for _, h := range strings.Fields(string(have)) {
 			if h == c {
 				spec.Ctl = append(spec.Ctl, "+"+c)
