@@ -8,7 +8,7 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: root
     readonly property bool failed: splash.error !== ""
-    // Abort shows after 10 s; clicked, the step says so at once while the launcher tears the start down
+    // The button offers Abort after 10 s; clicked, the step says so at once while the launcher tears the start down
     property bool canAbort: false
     property bool aborting: false
     readonly property color bgColor: splash.dark ? "#1f1f22" : "#fafafa"
@@ -117,20 +117,6 @@ ApplicationWindow {
             indeterminate: splash.progress < 0
             value: Math.max(splash.progress, 0)
         }
-        // Its place is kept from the start, so the window doesn't grow when it shows
-        Button {
-            objectName: "abort"
-            visible: !root.failed
-            opacity: root.canAbort ? 1 : 0
-            enabled: root.canAbort && !root.aborting
-            text: "Abort"
-            Layout.alignment: Qt.AlignRight
-            onClicked: {
-                root.aborting = true
-                splash.command = "abort"
-            }
-        }
-
         ScrollView {
             visible: root.failed && splash.log !== ""
             Layout.fillWidth: true
@@ -147,12 +133,22 @@ ApplicationWindow {
                 background: Rectangle { color: splash.dark ? "#2a2a2e" : "#ffffff" }
             }
         }
+        // Abort while the sandbox starts, its place kept from the start so the window doesn't grow when it shows; Close
+        // once the start failed
         Button {
-            objectName: "close"
-            visible: root.failed
-            text: "Close"
+            objectName: "action"
+            opacity: root.failed || root.canAbort ? 1 : 0
+            enabled: root.failed || (root.canAbort && !root.aborting)
+            text: root.failed ? "Close" : "Abort"
             Layout.alignment: Qt.AlignRight
-            onClicked: root.close()
+            onClicked: {
+                if (root.failed) {
+                    root.close()
+                    return
+                }
+                root.aborting = true
+                splash.command = "abort"
+            }
         }
     }
 }

@@ -189,8 +189,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`splash.agentLogo`, the app's icon), light or dark as the
   desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
   closes it; JSON lines on stdin (`state.go`) drive it, `activate` with an xdg-activation token bringing the window to
-  the front (Qt's `requestActivate` takes it from the environment). After 10 seconds it offers Abort, which says "Aborting startup"
-  at once and prints `abort` on its stdout for the launcher. SVG logos load through qtsvg; around them the clear space
+  the front (Qt's `requestActivate` takes it from the environment). Its one button offers Abort after 10 seconds, which says
+  "Aborting startup" at once and prints `abort` on its stdout for the launcher, and turns to Close once the start
+  failed. SVG logos load through qtsvg; around them the clear space
   brand logos ask for, half the symbol's height.
 - `nix/patches/`: patches to what the module builds from its inputs, each
   with a header saying why. `nixpak-launcher-reaper.patch` (meant for
@@ -553,7 +554,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can. `splash/splash_test.go`: the splash loads without QML warnings through a start and a
-  failure without logos, Abort once it shows writing the command and turning to aborting, an `activate` line putting its token in the
+  failure without logos, the button's Abort once it shows writing the command and turning to aborting, then Close after a failure closing the window, an `activate` line putting its token in the
   environment and telling the window, and a line sets what it names (a new step's progress unknown until it says).
 - `launcher`: the package build runs the Go tests of `cmd/launcher` and `internal/` with fake tools (the state
   script, nix-store, nixpak's launcher and the splash as scripts) and a notify socket of the test's: supervise

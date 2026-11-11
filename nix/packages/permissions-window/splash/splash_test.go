@@ -46,9 +46,14 @@ func qmlCheck() []string {
 	}
 	root.SetProperty("canAbort", qt.NewQVariant8(true))
 	qt.QCoreApplication_ProcessEvents()
-	if abort := find(root, "abort"); abort == nil {
-		warnings = append(warnings, "No Abort button")
-	} else if !qt.QMetaObject_InvokeMethod4(abort, "click") {
+	button := find(root, "action")
+	if button == nil {
+		return append(warnings, "No button")
+	}
+	if got := button.Property("text").ToString(); got != "Abort" {
+		warnings = append(warnings, "The button says "+got+" while starting")
+	}
+	if !qt.QMetaObject_InvokeMethod4(button, "click") {
 		warnings = append(warnings, "Clicking Abort failed")
 	}
 	qt.QCoreApplication_ProcessEvents()
@@ -65,6 +70,16 @@ func qmlCheck() []string {
 		}
 		publish(splash, st)
 		qt.QCoreApplication_ProcessEvents()
+	}
+	// The same button closes the window once the start failed
+	if got := button.Property("text").ToString(); got != "Close" || !button.Property("enabled").ToBool() {
+		warnings = append(warnings, "The button after a failure: "+got)
+	} else if !qt.QMetaObject_InvokeMethod4(button, "click") {
+		warnings = append(warnings, "Clicking Close failed")
+	}
+	qt.QCoreApplication_ProcessEvents()
+	if root.Property("visible").ToBool() {
+		warnings = append(warnings, "Close left the window up")
 	}
 	// An activation with the error up: the token where Qt's requestActivate looks, the window told
 	os.Unsetenv("XDG_ACTIVATION_TOKEN")
