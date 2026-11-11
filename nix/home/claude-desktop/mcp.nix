@@ -48,9 +48,17 @@ in
     mcpServers = {
       filesystem = {
         command = lib.getExe (
-          sl.script "mcp-server-filesystem.sh" {
+          pkgs.writeShellApplication {
+            name = "mcp-server-filesystem";
             runtimeInputs = [ pkgs.jq ];
-            vars.MCP_SERVER_FILESYSTEM = lib.getExe pkgs.mcp-server-filesystem;
+            # Claude Desktop rejects the draft-07 $schema the server declares (modelcontextprotocol/servers#4841).
+            # The client's roots are dropped, so the CLI args stay the allowed dirs
+            text = ''
+              jq -c --unbuffered 'select(.method != "notifications/roots/list_changed")
+                | if .method == "initialize" then del(.params.capabilities.roots) end' |
+                ${lib.getExe pkgs.mcp-server-filesystem} "$@" |
+                jq -c --unbuffered 'walk(if type == "object" then del(."$schema") else . end)'
+            '';
           }
         );
         args = lib.attrNames (lib.filterAttrs (_: b: b.enable && b.mcp) config.binds);
