@@ -3,17 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // splash, windowTitle, logo, logoDark and agentLogo are context properties from main.go. While the sandbox starts: the
-// main logo with the agent's beside it, a bit smaller, the step and its progress. When the start fails: why, and the
-// app's last output, until the user closes it. Light or dark as the desktop is
+// title, the main logo, the step and its progress, the agent's logo small at the right over the bar. When the start fails: why,
+// and the app's last output, until the user closes it. Light or dark as the desktop is
 ApplicationWindow {
     id: root
     readonly property bool failed: splash.error !== ""
     readonly property color bgColor: splash.dark ? "#1f1f22" : "#fafafa"
     readonly property color fgColor: splash.dark ? "#ececee" : "#1d1d1f"
     readonly property color mutedColor: splash.dark ? "#a1a1a6" : "#6e6e73"
+    // Brand logos want clear space of half their symbol's height around them: about 29 px at 64
+    readonly property int clear: 32
 
     width: failed ? 640 : 460
-    height: failed ? 480 : 260
+    height: failed ? 520 : 330
     visible: true
     title: windowTitle
     color: bgColor
@@ -29,42 +31,67 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent
-        // Brand logos want clear space of half their symbol's height around them: about 29 px at 64
-        anchors.margins: 32
+        anchors.margins: root.clear
         spacing: 18
 
-        RowLayout {
-            objectName: "logos"
+        Label {
+            objectName: "title"
+            text: "Agent Sandbox"
+            color: root.fgColor
+            font.pixelSize: 30
+            font.weight: Font.DemiBold
             Layout.alignment: Qt.AlignHCenter
-            spacing: 32
+        }
+        Image {
+            objectName: "logo"
+            visible: logo !== ""
+            source: splash.dark ? logoDark : logo
+            Layout.topMargin: root.clear - parent.spacing
+            Layout.bottomMargin: root.clear - parent.spacing
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredHeight: 64
+            Layout.preferredWidth: implicitHeight > 0 ? 64 * implicitWidth / implicitHeight : 0
+            fillMode: Image.PreserveAspectFit
+            sourceSize.height: 128
+        }
 
-            Image {
-                objectName: "logo"
-                visible: logo !== ""
-                source: splash.dark ? logoDark : logo
-                Layout.preferredHeight: 64
-                Layout.preferredWidth: implicitHeight > 0 ? 64 * implicitWidth / implicitHeight : 0
-                fillMode: Image.PreserveAspectFit
-                sourceSize.height: 128
+        // The step, centred, and the agent's logo small at the right, over the progress bar or beside the error
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.failed ? Math.max(24, errorLabel.implicitHeight) : 24
+
+            Label {
+                objectName: "step"
+                visible: !root.failed
+                text: splash.text
+                color: root.mutedColor
+                anchors.centerIn: parent
+            }
+            Label {
+                id: errorLabel
+                objectName: "error"
+                visible: root.failed
+                text: splash.error
+                color: root.fgColor
+                font.bold: true
+                wrapMode: Text.Wrap
+                anchors.left: parent.left
+                anchors.right: agentIcon.left
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
             }
             Image {
+                id: agentIcon
                 objectName: "agentLogo"
                 visible: agentLogo !== ""
                 source: agentLogo
-                Layout.preferredHeight: 44
-                Layout.preferredWidth: implicitHeight > 0 ? 44 * implicitWidth / implicitHeight : 0
-                Layout.alignment: Qt.AlignVCenter
+                width: 24
+                height: 24
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
                 fillMode: Image.PreserveAspectFit
-                sourceSize.height: 88
+                sourceSize.height: 48
             }
-        }
-
-        Label {
-            objectName: "step"
-            visible: !root.failed
-            text: splash.text
-            color: root.mutedColor
-            Layout.alignment: Qt.AlignHCenter
         }
         ProgressBar {
             objectName: "progress"
@@ -74,15 +101,6 @@ ApplicationWindow {
             value: Math.max(splash.progress, 0)
         }
 
-        Label {
-            objectName: "error"
-            visible: root.failed
-            text: splash.error
-            color: root.fgColor
-            font.bold: true
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
         ScrollView {
             visible: root.failed && splash.log !== ""
             Layout.fillWidth: true
