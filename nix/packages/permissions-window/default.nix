@@ -2,6 +2,7 @@
   buildGoModule,
   kdePackages,
   lib,
+  lexend,
   makeWrapper,
   qadwaitadecorations-qt6,
   pkg-config,
@@ -101,6 +102,8 @@ buildGoModule (finalAttrs: {
       wrapProgram $out/bin/$b --set QML_IMPORT_PATH ${qmlPath} --set QT_PLUGIN_PATH ${pluginPath} \
         --unset QML2_IMPORT_PATH --set QML_DISABLE_DISTANCEFIELD 1
     done
+    # The splash title in the brand's title font, Lexend
+    wrapProgram $out/bin/sandbox-splash --add-flags --title-font=${lexend}/share/fonts/truetype/lexend/lexend/Lexend-SemiBold.ttf
     # Only where the compositor leaves decorations to the window: Plasma and COSMIC draw their own
     wrapProgram $out/bin/permissions-window --set QT_WAYLAND_DECORATION adwaita
   '';

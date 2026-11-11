@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// splash, windowTitle, logo, logoDark and agentLogo are context properties from main.go. While the sandbox starts: the
+// splash, windowTitle, logo, logoDark, agentLogo and titleFont are context properties from main.go. While the sandbox starts: the
 // title, the main logo, the step and its progress, the agent's logo small at the right over the bar. When the start fails: why,
 // and the app's last output, until the user closes it. Light or dark as the desktop is
 ApplicationWindow {
@@ -11,6 +11,11 @@ ApplicationWindow {
     readonly property color bgColor: splash.dark ? "#1f1f22" : "#fafafa"
     readonly property color fgColor: splash.dark ? "#ececee" : "#1d1d1f"
     readonly property color mutedColor: splash.dark ? "#a1a1a6" : "#6e6e73"
+    // The title's font, from the package (--title-font), not whatever the host has
+    FontLoader {
+        id: titleFontLoader
+        source: titleFont
+    }
     // Brand logos want clear space of half their symbol's height around them: about 29 px at 64
     readonly property int clear: 32
 
@@ -38,6 +43,7 @@ ApplicationWindow {
             objectName: "title"
             text: "Agent Sandbox"
             color: root.fgColor
+            font.family: titleFontLoader.status === FontLoader.Ready ? titleFontLoader.font.family : root.font.family
             font.pixelSize: 30
             font.weight: Font.DemiBold
             Layout.alignment: Qt.AlignHCenter

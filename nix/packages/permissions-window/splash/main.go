@@ -16,6 +16,7 @@ const usage = `sandbox-splash - What a sandbox's launcher shows while the sandbo
 
 Usage:
   sandbox-splash --app-id=<id> [--title=<title>] [--logo=<file>] [--logo-dark=<file>] [--agent-logo=<file>]
+                 [--title-font=<file>]
 
 Reads JSON lines on stdin, each setting what it names: dark (the desktop's
 colour scheme), text (the step, with progress from 0 to 1 when known), error
@@ -29,6 +30,7 @@ Options:
   --logo=<file>        The main logo, beside the agent's, on a light background
   --logo-dark=<file>   The main logo on a dark background [default: the --logo]
   --agent-logo=<file>  The agent's logo, smaller
+  --title-font=<file>  The font of the "Agent Sandbox" title, a font file
 `
 
 func main() {
@@ -94,8 +96,9 @@ func load(opts docopt.Opts, path string, warn func(string)) (*qml.QQmlApplicatio
 		logoDark = logo
 	}
 	agentLogo, _ := opts.String("--agent-logo")
+	titleFont, _ := opts.String("--title-font")
 	for name, v := range map[string]string{"windowTitle": title, "logo": fileURL(logo), "logoDark": fileURL(logoDark),
-		"agentLogo": fileURL(agentLogo)} {
+		"agentLogo": fileURL(agentLogo), "titleFont": fileURL(titleFont)} {
 		ctx.SetContextProperty2(name, qt.NewQVariant14(v))
 	}
 	engine.Load(qt.QUrl_FromLocalFile(path))

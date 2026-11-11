@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 func qmlCheck() []string {
 	qt.NewQGuiApplication([]string{"test"})
 	var warnings []string
-	opts := docopt.Opts{"--title": "Claude", "--logo": "", "--logo-dark": "", "--agent-logo": ""}
+	opts := docopt.Opts{"--title": "Claude", "--logo": "", "--logo-dark": "", "--agent-logo": "", "--title-font": ""}
 	engine, splash := load(opts, "Splash.qml", func(w string) { warnings = append(warnings, w) })
 	if len(engine.RootObjects()) == 0 {
 		return append(warnings, "The splash didn't load")

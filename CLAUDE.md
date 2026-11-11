@@ -172,7 +172,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`qadwaitadecorations-qt6`, `QT_WAYLAND_DECORATION=adwaita` on the Permissions window), with a shadow. The package also builds `sandbox-splash` (`splash/`, `sandbox-splash --help`), the
   launcher's splash: the main logo (the `splash.logo` and `splash.logoDark` options, by default the Orbit logo copied into
   `nix/home/claude-desktop/assets/`, whose README says from where, and that the MIT licence doesn't cover it) under an "Agent
-  Sandbox" title, the step and its progress with the agent's logo small at the right above the bar
+  Sandbox" title (in Lexend SemiBold, the brand's title font, from nixpkgs' `lexend`, which the wrapper passes as
+  `--title-font`), the step and its progress with the agent's logo small at the right above the bar
   (`splash.agentLogo`, the app's icon), light or dark as the
   desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
   closes it; JSON lines on stdin (`state.go`) drive it. SVG logos load through qtsvg; around them the clear space
