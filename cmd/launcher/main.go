@@ -20,6 +20,9 @@ Usage:
   launcher supervise --config=<file> --vars-file=<file> [--] [<arg>...]
   launcher store-sync --config=<file>
   launcher theme --config=<file> [<scheme>]
+  launcher bwrap --mode=<mode> --bwrap=<exe> --newuidmap=<exe> --newgidmap=<exe> [--subid-broker=<exe>]
+                 [--permissions-broker=<exe>] [--net=<json>] [--] [<arg>...]
+  launcher bwrap-helper <spec>
 
 start is the launcher on the host's PATH. A first argument --permissions opens
 the Permissions window, --shell a login shell where the app runs. A running
@@ -36,10 +39,24 @@ ends with an error, it shows the error with the app's last output.
 store-sync copies the sandbox's closure into its store, theme sets its GTK theme
 from the portal's colour scheme, or <scheme> (1 dark), once.
 
+bwrap is bwrap for the sandbox, with a range of ids mapped into its user
+namespace (bwrap.go): mode subid is nixpak's bwrap on the host, with the user's
+/etc/subuid range, the sandbox's cgroups and, with --net, its network; mode
+parent the FHS env's inside, mapping the parent user namespace's ids as
+themselves. bwrap-helper is its helper, which it starts itself.
+
 Options:
   --config=<file>      The launcher's config, from the Home Manager module
   --vars-fd=<fd>       The sandbox's environment, NUL-separated, on this fd
   --vars-file=<file>   The same in a file, which supervise deletes once read
+  --mode=<mode>        subid or parent
+  --bwrap=<exe>        bwrap itself
+  --newuidmap=<exe>    newuidmap (on the host the setuid wrapper, inside the
+  --newgidmap=<exe>    subid-broker's shims), newgidmap the same
+  --subid-broker=<exe>        subid-broker, for mode subid
+  --permissions-broker=<exe>  The permissions broker, which shares
+                              /run/permissions in mode parent
+  --net=<json>         The network setup, for mode subid (helper.go, netSetup)
 `
 
 // The launcher's config, as launch.nix writes it
@@ -84,6 +101,13 @@ func main() {
 		os.Exit(2)
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if opts["bwrap"] == true || opts["bwrap-helper"] == true {
+		if err := runTool(opts); err != nil {
+			fmt.Fprintf(os.Stderr, "claude-desktop: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	path, _ := opts.String("--config")
 	cfg, err := loadConfig(path)
 	if err == nil {
@@ -119,6 +143,29 @@ func run(cfg *config, path string, opts docopt.Opts) error {
 	}
 	scheme, _ := opts.String("<scheme>")
 	return setTheme(cfg, scheme)
+}
+
+// runTool runs the subcommands that take no launcher config: bwrap and its helper
+func runTool(opts docopt.Opts) error {
+	if opts["bwrap-helper"] == true {
+		spec, _ := opts.String("<spec>")
+		return runHelper(spec)
+	}
+	o := bwrapOpts{}
+	o.mode, _ = opts.String("--mode")
+	o.bwrap, _ = opts.String("--bwrap")
+	o.newuidmap, _ = opts.String("--newuidmap")
+	o.newgidmap, _ = opts.String("--newgidmap")
+	o.subidBroker, _ = opts.String("--subid-broker")
+	o.permissionsBroker, _ = opts.String("--permissions-broker")
+	if n, _ := opts.String("--net"); n != "" {
+		o.net = &netSetup{}
+		if err := json.Unmarshal([]byte(n), o.net); err != nil {
+			return fmt.Errorf("--net: %w", err)
+		}
+	}
+	args, _ := opts["<arg>"].([]string)
+	return runBwrap(o, args)
 }
 
 // exitError ends the launcher with its status, having said why already

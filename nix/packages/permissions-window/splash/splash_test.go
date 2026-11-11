@@ -29,6 +29,34 @@ func qmlCheck() []string {
 	if len(engine.RootObjects()) == 0 {
 		return append(warnings, "The splash didn't load")
 	}
+	// Abort, once it shows, writes the command for the launcher
+	root := engine.RootObjects()[0]
+	var find func(o *qt.QObject, name string) *qt.QObject
+	find = func(o *qt.QObject, name string) *qt.QObject {
+		if o.ObjectName() == name {
+			return o
+		}
+		for _, c := range o.Children() {
+			if f := find(c, name); f != nil {
+				return f
+			}
+		}
+		return nil
+	}
+	root.SetProperty("canAbort", qt.NewQVariant8(true))
+	qt.QCoreApplication_ProcessEvents()
+	if abort := find(root, "abort"); abort == nil {
+		warnings = append(warnings, "No Abort button")
+	} else if !qt.QMetaObject_InvokeMethod4(abort, "click") {
+		warnings = append(warnings, "Clicking Abort failed")
+	}
+	qt.QCoreApplication_ProcessEvents()
+	if got := splash.Value("command").ToString(); got != "abort" {
+		warnings = append(warnings, "Abort sent "+got)
+	}
+	if !root.Property("aborting").ToBool() {
+		warnings = append(warnings, "Not aborting after the click")
+	}
 	st := newState()
 	for _, line := range []string{`{"dark":true}`, `{"text":"Copying","progress":0.5}`, `{"error":"No","log":"a\nb"}`} {
 		if err := st.apply([]byte(line)); err != nil {

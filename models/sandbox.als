@@ -52,7 +52,7 @@ abstract sig Principal { domain: one Domain }
 // Host side: the user's own processes (terminal, host Claude Code), the
 // permissions broker daemon and its helpers, the Permissions window, the
 // notification daemon, nixpak's xdg-dbus-proxy, the launcher scripts
-// (cmd/launcher, nixpak's launcher, bwrap-subid.sh, net-setup.sh),
+// (cmd/launcher with its bwrap and helper, nixpak's launcher),
 // subid-broker, the netns-macvlan setcap wrapper, the call units of host
 // commands, and what host commands and host sockets reach (a VM, a host
 // socket's server).

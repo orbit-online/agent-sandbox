@@ -1179,9 +1179,20 @@ in
           jq -e '.homeDirs == ["/home/alice/.local/share/claude-desktop/home", "/srv/claude", "/home/alice/.config/Claude"]' \
             "$dcfg0" >/dev/null || { echo "the default launcher's homeDirs are wrong" >&2; exit 1; }
           # The name netns-macvlan salts the MAC with
-          name() { grep -h '^readonly NAME=' "$(grep -- '-pasta$' "$1")/bin/pasta"; }
-          [[ $(name "$paths") == "readonly NAME='''" && $(name "$workClosure/store-paths") == "readonly NAME=work" ]] ||
-            { echo "pasta's NAME isn't empty for the default launcher and work for work" >&2; exit 1; }
+          # nixpak's bwrap, the launcher's mode subid, whose --net names it; the FHS env's, mode parent, has no --net
+          name() {
+            local b
+            for b in $(grep -- '-bwrap$' "$1"); do
+              [[ -x $b/bin/bwrap ]] && grep -q -- '--mode=subid' "$b/bin/bwrap" || continue
+              grep -oP -- "'--net=\K[^']*" "$b/bin/bwrap" | jq -r '.name // ""'
+            done
+          }
+          [[ $(name "$paths") == "" && $(name "$workClosure/store-paths") == "work" ]] ||
+            { echo "nixpak's bwrap's --net doesn't name work for work and nothing for the default launcher" >&2; exit 1; }
+          for c in "$paths" "$workClosure/store-paths"; do
+            [[ $(for b in $(grep -- '-bwrap$' "$c"); do grep -l -- '--mode=subid' "$b/bin/bwrap" 2>/dev/null; done | wc -l) == 1 ]] ||
+              { echo "not one nixpak bwrap in mode subid in $c" >&2; exit 1; }
+          done
           doc=$(grep -- '-claude-environment\.md$' "$workClosure/store-paths")
           for line in \
             '- `/srv/work` (rw, MCP)' \

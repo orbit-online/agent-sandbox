@@ -139,7 +139,7 @@ in
       # For app-pid.sh, which drops it
       "--cap-add CAP_CHECKPOINT_RESTORE"
       "--ro-bind ${patchedAsar} ${asar}"
-      # Written by bwrap-subid.sh
+      # Written by the launcher's bwrap, mode parent
       "--ro-bind-data 22 /etc/subuid"
       "--ro-bind-data 23 /etc/subgid"
     ];

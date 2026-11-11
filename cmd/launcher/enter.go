@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -163,6 +164,18 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 	argv = append(append(argv, "--", self, "supervise", "--config="+cfgPath, "--vars-file="+varsFile, "--"), args...)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	// Ctrl-C, or the terminal going away, while the app starts stops its unit: the whole start, as the splash's Abort
+	// does. Once it's up, this has returned
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	go func() {
+		if _, ok := <-signals; ok {
+			exec.Command(cfg.Tools.Systemctl, "--user", "stop", cfg.Unit).Run()
+			fmt.Fprintf(os.Stderr, "%s: Startup aborted\n", progName(cfg))
+			os.Exit(130)
+		}
+	}()
 	runErr := cmd.Run()
 	if msg, err := os.ReadFile(result); err == nil && len(msg) > 0 {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", progName(cfg), strings.TrimSpace(string(msg)))

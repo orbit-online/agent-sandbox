@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,9 +11,13 @@ import (
 )
 
 // splash is the window the launcher shows while the sandbox starts, and its errors after: a process of its own (Qt,
-// see the permissions-window package's sandbox-splash), told what to show as JSON lines on its stdin. Best effort:
+// see the permissions-window package's sandbox-splash), told what to show as JSON lines on its stdin; its Abort
+// button prints "abort" on its stdout. Best effort:
 // without a display, or when it fails, the launcher goes on without it
 type splash struct {
+	// Closed when the user aborts the start from the splash
+	aborted chan struct{}
+
 	mu  sync.Mutex
 	cmd *exec.Cmd
 	in  io.WriteCloser
@@ -29,13 +34,17 @@ type splashState struct {
 }
 
 func showSplash(cfg *config) *splash {
-	s := &splash{}
+	s := &splash{aborted: make(chan struct{})}
 	if len(cfg.Splash) == 0 {
 		return s
 	}
 	cmd := exec.Command(cfg.Splash[0], append(cfg.Splash[1:], "--app-id="+cfg.AppID)...)
 	cmd.Stderr = os.Stderr
 	in, err := cmd.StdinPipe()
+	var out io.ReadCloser
+	if err == nil {
+		out, err = cmd.StdoutPipe()
+	}
 	if err == nil {
 		err = cmd.Start()
 	}
@@ -44,6 +53,16 @@ func showSplash(cfg *config) *splash {
 		return s
 	}
 	s.cmd, s.in, s.enc = cmd, in, json.NewEncoder(in)
+	// Its Abort button's line
+	go func() {
+		lines := bufio.NewScanner(out)
+		for lines.Scan() {
+			if lines.Text() == "abort" {
+				close(s.aborted)
+				return
+			}
+		}
+	}()
 	return s
 }
 
@@ -56,7 +75,9 @@ func (s *splash) send(st splashState) {
 	}
 }
 
-func (s *splash) step(text string, progress *float64) { s.send(splashState{Text: text, Progress: progress}) }
+func (s *splash) step(text string, progress *float64) {
+	s.send(splashState{Text: text, Progress: progress})
+}
 
 func (s *splash) dark(dark bool) { s.send(splashState{Dark: &dark}) }
 

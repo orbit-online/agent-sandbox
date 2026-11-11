@@ -220,7 +220,6 @@ in
                 bundlePackage = graphicsDrivers;
               };
               bubblewrap = {
-                package = sl.bwrapHost;
                 bindEntireStore = false;
                 bind.rw = binds true;
                 # Claude Code's temp dir, so the session scratchpads survive restarts (pruned by scratchpad-prune.sh).

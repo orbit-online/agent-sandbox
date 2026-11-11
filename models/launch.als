@@ -8,18 +8,18 @@
  *
  * Two stages, each its own initial state:
  *
- * - outer: nixpak's launcher runs bwrap through bwrap-subid.sh
- *   (SUBID_MAP=subid): bwrap's child waits on --userns-block-fd while a
- *   helper writes U1's maps with newuidmap and newgidmap, kills it if
- *   they fail, then forwards the info that names the child to nixpak.
- *   nixpak runs net-setup.sh in its pasta slot while the child waits on
- *   nixpak's --block-fd (launcher/main.go: StartPasta runs to completion
- *   before NotifySandboxFinished). net-setup waits for /.flatpak-info in
- *   the child's root, adds eth0 and starts udhcpc in N and P, in MU: a
- *   mount namespace of its own made from the host's (dhcp-root.sh), not
- *   M1, where the sandbox can swap /nix/store (S12).
+ * - outer: nixpak's launcher runs bwrap through the launcher's bwrap
+ *   (cmd/launcher bwrap.go, mode subid): bwrap's child waits on
+ *   --userns-block-fd while its helper (helper.go) writes U1's maps with
+ *   newuidmap and newgidmap and kills it if they fail. Then the helper
+ *   unblocks it, waits for /.flatpak-info in the child's root, adds eth0
+ *   and starts udhcpc in N and P, in MU: a mount namespace of its own made
+ *   from the host's (dhcp-root.sh), not M1, where the sandbox can swap
+ *   /nix/store (S12). Only then does it forward the info that names the
+ *   child to nixpak, which holds the child on its --block-fd until it has
+ *   it (launcher/main.go: its pasta slot is a no-op now).
  * - fhs: the FHS env's script in U1 asks the broker to `share`, its bwrap
- *   (bwrap-subid.sh, SUBID_MAP=parent) copies M1 into M2 and waits for
+ *   (the launcher's bwrap, mode parent) copies M1 into M2 and waits for
  *   U2's maps, app-pid.sh sets ns_last_pid with CAP_CHECKPOINT_RESTORE
  *   and starts the app. udhcpc already runs, and counts as the attacker.
  *
@@ -67,7 +67,7 @@ fact launchShape {
 abstract sig Flag {}
 one sig
   RootFinal,       // bwrap pivoted: /.flatpak-info shows in the child's root
-  NetDone,         // net-setup.sh exited, so nixpak may write the block fd
+  NetDone,         // the helper set up the network and forwarded the info, so nixpak may write the block fd
   UdhcpcHostRoot,  // udhcpc started with the pre-pivot root (the host's tree)
   ShareTried,      // the FHS env's script ran `permissions-broker share`
   M1Shared,        // /run/permissions is a shared mount in M1
@@ -78,7 +78,7 @@ one sig
   extends Flag {}
 var sig On in Flag {}
 
-// Waiting on --userns-block-fd (bwrap-subid.sh's fd 21)
+// Waiting on --userns-block-fd (bwrap.go's fd 21)
 var sig Blocked in Process {}
 // Waiting on nixpak's --block-fd
 var sig Held in Process {}
@@ -90,13 +90,13 @@ var sig Root, Fhs, FhsChild, AppPidS in Process {}
 
 abstract sig Guard {}
 one sig
-  KillOnMapFail,      // bwrap-subid.sh:103-106 kill -KILL "$pid" $$, and fd 21 written only after
-  WaitRootFinal,      // net-setup.sh:8-15 waits for /proc/$pid/root/.flatpak-info
+  KillOnMapFail,      // helper.go:55-59 kills the child and bwrap, and fd 21 written only after (:88)
+  WaitRootFinal,      // helper.go:109-118 waits for /proc/$pid/root/.flatpak-info
   NetCapsOnly,        // dhcp-root.sh:31-33 setpriv's inheritable, ambient and bounding sets
-  OwnMountNs,         // net-setup.sh:26 unshare --mount from the host's mounts, not nsenter -m
+  OwnMountNs,         // helper.go:135 unshare --mount from the host's mounts, not nsenter -m
   DropCapsBeforeFork, // app-pid.sh:9-10 setpriv --inh-caps=-all --ambient-caps=-all, then setsid
   DropCapsOnFail,     // app-pid.sh:12 the same setpriv when the ns_last_pid write fails
-  ShareBeforeCopy     // bwrap-subid.sh:78-82 share before line 112's exec of bwrap
+  ShareBeforeCopy     // bwrap.go:119-123 share before line 177's exec of bwrap
   extends Guard {}
 
 abstract sig Move {}
@@ -150,7 +150,7 @@ pred skip {
 // ---------------------------------------------------------------------
 // Events, outer stage
 
-// bwrap-subid.sh:112: bwrap clones its child into U1, N, M1, P. Unmapped,
+// bwrap.go:177: bwrap clones its child into U1, N, M1, P. Unmapped,
 // it runs as the overflow id, with every capability in U1
 pred clone {
   no Root
@@ -162,8 +162,8 @@ pred clone {
   keepMaps and On' = On and Eth0In' = Eth0In
 }
 
-// The helper (bwrap-subid.sh:103) writes the waiting child's maps: U1's from
-// /etc/subuid (lines 26-27), U2's as U1's ids (lines 68-69, through the
+// The helper (helper.go:78-87) writes the waiting child's maps: U1's from
+// /etc/subuid (maps.go:29), U2's as U1's ids (maps.go:46, through the
 // subid-broker shims)
 pred writeMap {
   some c: Blocked | no c.userns.mapped and {
@@ -213,8 +213,8 @@ pred pivot {
   keepMaps and keepWaits and Eth0In' = Eth0In
 }
 
-// net-setup.sh, given the child-pid once the helper forwarded the info
-// (bwrap-subid.sh:107, after the maps): netns-macvlan into the child's
+// The helper's network setup (helper.go:106-136), after the maps and before
+// it forwards the info (:96): netns-macvlan into the child's
 // netns, then nsenter -U -n -p --keep-caps, unshare --mount and
 // dhcp-root.sh's pivot into udhcpc's closure, and setpriv to udhcpc. It
 // daemonizes (-b), so its parent becomes P's init, the child
@@ -276,10 +276,10 @@ pred outer[g: set Guard] {
 // ---------------------------------------------------------------------
 // Properties
 
-// L1: nothing of the sandbox runs as the overflow id (bwrap-subid.sh:102-
-// 108: the child stays on fd 21 until the maps are written, and dies if
-// they can't be), and the maps are exactly the subuid range plus the
-// user's ids (U1, lines 26-27) and U1's ids (U2, lines 68-69).
+// L1: nothing of the sandbox runs as the overflow id (helper.go:55-88:
+// the child stays on fd 21 until the maps are written, and dies if they
+// can't be), and the maps are exactly the subuid range plus the user's
+// ids (U1, maps.go:29) and U1's ids (U2, maps.go:46).
 pred l1 {
   always all p: Process - Blocked | p.principal.domain = Sandbox implies p.uid != Overflow
   always (some U1.mapped implies U1.mapped = HostUser + SubIds)
@@ -301,8 +301,8 @@ run outerRuns {
   eventually (some principal.UdhcpcP and no Held and some Root)
 } for 4 but 9 OwnedNS, 1..8 steps expect 1
 
-// L2: netns-macvlan puts eth0 only in N, and net-setup enters the child
-// only once its root is final (net-setup.sh:8-15). Before bwrap's last
+// L2: netns-macvlan puts eth0 only in N, and the helper enters the child
+// only once its root is final (helper.go:109-118). Before bwrap's last
 // pivot_root, /proc/<child>/root is the host's tree, which nsenter -r
 // would give udhcpc.
 pred l2 { always (Eth0In in N and UdhcpcHostRoot not in On) }

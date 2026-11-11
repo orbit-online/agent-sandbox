@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/godbus/dbus/v5"
@@ -31,8 +33,16 @@ func supervise(cfg *config, vars, args []string) error {
 			sp.dark(s == 1)
 		}
 	}
-	if err := prepare(cfg, sp); err != nil {
-		return failStart(cfg, sp, err.Error(), "")
+	prepared := make(chan error, 1)
+	go func() { prepared <- prepare(cfg, sp) }()
+	select {
+	case err := <-prepared:
+		if err != nil {
+			return failStart(cfg, sp, err.Error(), "")
+		}
+	case <-sp.aborted:
+		// What prepare still runs ends with the unit; a store sync cut off goes on at the next start (store.go)
+		return abortStart(cfg, sp, nil)
 	}
 	// The GTK theme, now and on every change, until the app ends
 	if conn != nil {
@@ -88,6 +98,8 @@ func supervise(cfg *config, vars, args []string) error {
 		sp.close()
 		daemon.SdNotify(false, daemon.SdNotifyReady)
 	case <-exited:
+	case <-sp.aborted:
+		return abortStart(cfg, sp, cmd)
 	}
 	<-exited
 	err = cmd.Wait()
@@ -173,6 +185,42 @@ func prepare(cfg *config, sp *splash) error {
 		}
 	}
 	return nil
+}
+
+// Aborting the start takes at least this long to show, so the click is seen to do something; nixpak's launcher gets
+// abortGrace after SIGTERM before SIGKILL
+const (
+	abortShown = time.Second
+	abortGrace = 5 * time.Second
+)
+
+// abortStart ends a start the user aborted from the splash, which says so already: nixpak's launcher, when it runs,
+// stopped and waited for (its process, not its output: what it started may hold that until the unit ends), the result
+// left for start, systemd told. Exiting ends the unit, and the rest of its cgroup with it
+func abortStart(cfg *config, sp *splash, cmd *exec.Cmd) error {
+	shown := time.After(abortShown)
+	slog.Info("Startup aborted from the splash")
+	if cmd != nil {
+		done := make(chan struct{})
+		go func() {
+			cmd.Wait()
+			close(done)
+		}()
+		cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-done:
+		case <-time.After(abortGrace):
+			cmd.Process.Kill()
+			<-done
+		}
+	}
+	<-shown
+	if err := os.WriteFile(resultFile(cfg), []byte("Startup aborted\n"), 0o600); err != nil {
+		slog.Error("Write the result file", "err", err)
+	}
+	daemon.SdNotify(false, daemon.SdNotifyReady)
+	sp.close()
+	return exitError(1)
 }
 
 // failStart leaves why the app didn't start for start, tells systemd, and shows it until the user closes the splash

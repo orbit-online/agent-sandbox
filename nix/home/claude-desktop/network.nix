@@ -45,29 +45,42 @@ let
         UDHCPC_SCRIPT = lib.getExe dhcpScript;
       };
     };
-  # Runs in nixpak's pasta slot, see net-setup.sh
-  netSetup = sl.script "net-setup.sh" {
+  # nixpak's bwrap, mode subid (cmd/launcher bwrap.go), whose helper sets up the netns before nixpak's launcher
+  # hears the sandbox is there and lets the app start (helper.go, netSetup)
+  bwrapHost = sl.bwrapOf [
+    "--mode=subid"
+    "--newuidmap=${osConfig.security.wrapperDir}/newuidmap"
+    "--newgidmap=${osConfig.security.wrapperDir}/newgidmap"
+    "--subid-broker=${lib.getExe sl.packages.subid-broker}"
+    "--net=${
+      builtins.toJSON (
+        {
+          netnsMacvlan = "${osConfig.security.wrapperDir}/netns-macvlan";
+          dhcpRoot = lib.getExe dhcpRoot;
+          nsenter = lib.getExe' pkgs.util-linux "nsenter";
+          unshare = lib.getExe' pkgs.util-linux "unshare";
+          ip = lib.getExe' pkgs.iproute2 "ip";
+        }
+        # Salts the macvlan's MAC, so launchers don't clash on the LAN
+        // lib.optionalAttrs (launcherName != null) { name = launcherName; }
+      )
+    }"
+  ];
+  # nixpak's pasta slot, where it runs pasta after bwrap's info and before it lets the app start. A no-op: the bwrap
+  # helper set the netns up already. nixpak only gives the sandbox a netns of its own with pasta on
+  netSetup = pkgs.writeShellApplication {
     name = "pasta";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.util-linux
-      pkgs.iproute2
-    ];
-    vars = {
-      NETNS_MACVLAN = "${osConfig.security.wrapperDir}/netns-macvlan";
-      DHCP_ROOT = lib.getExe dhcpRoot;
-      # Salts the macvlan's MAC, so launchers don't clash on the LAN
-      NAME = lib.optionalString (launcherName != null) launcherName;
-    };
+    text = ":";
   };
   nixpak = config.build.sandboxed.config;
 in
 {
-  build.storeRoots = [ netSetup ];
+  build.storeRoots = [ bwrapHost ];
   # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in fhs.nix), no
   # extra pasta args
   build.nixpak = [
     {
+      bubblewrap.package = bwrapHost;
       bubblewrap.network = lib.mkForce true;
       pasta = {
         enable = lib.mkForce true;

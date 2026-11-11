@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# udhcpc's mount namespace, run by net-setup.sh through unshare --mount in the sandbox's user, net and pid namespaces
+# udhcpc's mount namespace, run by the launcher's bwrap helper (cmd/launcher helper.go) through unshare --mount in the sandbox's user, net and pid namespaces
 # with every capability in its user namespace. udhcpc parses packets from the LAN, so it gets no more of the host than
 # it needs, and nothing of M1: there the sandbox can swap /nix/store for a directory of its own (models/README.md,
 # S12), and udhcpc execs its script on every lease. Its root: a tmpfs holding its closure read-only from the host's

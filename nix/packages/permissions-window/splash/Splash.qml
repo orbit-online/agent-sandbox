@@ -8,9 +8,17 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: root
     readonly property bool failed: splash.error !== ""
+    // Abort shows after 10 s; clicked, the step says so at once while the launcher tears the start down
+    property bool canAbort: false
+    property bool aborting: false
     readonly property color bgColor: splash.dark ? "#1f1f22" : "#fafafa"
     readonly property color fgColor: splash.dark ? "#ececee" : "#1d1d1f"
     readonly property color mutedColor: splash.dark ? "#a1a1a6" : "#6e6e73"
+    Timer {
+        interval: 10000
+        running: !root.failed
+        onTriggered: root.canAbort = true
+    }
     // The title's font, from the package (--title-font), not whatever the host has
     FontLoader {
         id: titleFontLoader
@@ -20,7 +28,7 @@ ApplicationWindow {
     readonly property int clear: 32
 
     width: failed ? 640 : 460
-    height: failed ? 520 : 330
+    height: failed ? 520 : 380
     visible: true
     title: windowTitle
     color: bgColor
@@ -69,7 +77,7 @@ ApplicationWindow {
             Label {
                 objectName: "step"
                 visible: !root.failed
-                text: splash.text
+                text: root.aborting ? "Aborting startup" : splash.text
                 color: root.mutedColor
                 anchors.centerIn: parent
             }
@@ -105,6 +113,19 @@ ApplicationWindow {
             Layout.fillWidth: true
             indeterminate: splash.progress < 0
             value: Math.max(splash.progress, 0)
+        }
+        // Its place is kept from the start, so the window doesn't grow when it shows
+        Button {
+            objectName: "abort"
+            visible: !root.failed
+            opacity: root.canAbort ? 1 : 0
+            enabled: root.canAbort && !root.aborting
+            text: "Abort"
+            Layout.alignment: Qt.AlignRight
+            onClicked: {
+                root.aborting = true
+                splash.command = "abort"
+            }
         }
 
         ScrollView {

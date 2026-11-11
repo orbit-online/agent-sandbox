@@ -20,7 +20,7 @@ let
     u.group == "users"
     || lib.elem "users" u.extraGroups
     || lib.elem name config.users.groups.users.members;
-  # The sandbox maps the first one into its user namespace, see bwrap-subid.sh
+  # The sandbox maps the first one into its user namespace, see cmd/launcher's bwrap.go
   hasSubIds =
     name:
     let

@@ -22,8 +22,8 @@ open sandbox
 
 // ---------------------------------------------------------------------
 // Ids. U1 maps inner 0-999 and 1001-65535 to the user's /etc/subuid
-// range and 1000 to 1000 (hm/bwrap-subid.sh:26-27); U2 maps all of
-// U1's ids as themselves (hm/bwrap-subid.sh:68-69). SubStart is inner
+// range and 1000 to 1000 (cmd/launcher maps.go:29); U2 maps all of
+// U1's ids as themselves (maps.go:46). SubStart is inner
 // 0 of both, SubId the rest of the range. Other Id atoms are other host
 // users.
 
@@ -91,9 +91,9 @@ pred hostAt[p: Process] {
 //   namespace (tree.go);
 // - subid-broker's write-map: the target's parent user namespace only
 //   (subid-broker/main.go:223);
-// - net-setup's unshare and dhcp-root.sh, before setpriv execs udhcpc:
+// - the launcher's bwrap helper's unshare and dhcp-root.sh, before setpriv execs udhcpc:
 //   U1, N, P with every capability, in MU, made from the host's mounts
-//   and pivoted to the closure's binds (hm/net-setup.sh,
+//   and pivoted to the closure's binds (cmd/launcher helper.go,
 //   hm/dhcp-root.sh). MU is as the host's here: no sandbox process
 //   reaches it.
 // All stay in the init pid namespace but the last.
@@ -122,7 +122,7 @@ pred hostPlaced {
 // in MU, which shows it a part of what M1 does (the closure, the home,
 // P's /proc): it stays in M1 here, which gives the attacker more. The
 // app, sessions and re-entries in U2 without any (hm/app-pid.sh:9,
-// cmd/launcher enter.go:110).
+// cmd/launcher enter.go:111).
 pred sandboxStart {
   all p: sandboxProcs {
     p.uid = HostUser
@@ -314,7 +314,7 @@ abstract sig Exec { bin: one StorePath, resolvesIn: one MountNS, inNs: one Mount
 // helper joins after the exec (permissions-broker/helpers.go)
 one sig BrokerHelper extends Exec {}
 // dhcp-root.sh's setpriv with every capability in U1, and udhcpc and its
-// script's ip with net_admin and net_raw (hm/net-setup.sh,
+// script's ip with net_admin and net_raw (cmd/launcher helper.go,
 // hm/dhcp-root.sh, hm/udhcpc.sh)
 one sig NetSetupSetpriv, Udhcpc, UdhcpcIp extends Exec {}
 // Today's helpers; a later one would be another Exec
@@ -326,7 +326,7 @@ fact store {
   // the broker for share (hm/lib.nix:119-124)
   BwrapFhs in FhsEnv.refs
   BrokerBin in BwrapFhs.refs
-  // net-setup's vars and runtimeInputs
+  // the bwrap helper's --net (hm/network.nix)
   UtilLinux + Busybox + DhcpScript + Iproute2 in NetSetup.refs
   // udhcpc.sh's runtimeInputs (hm/network.nix:15-19)
   Iproute2 in DhcpScript.refs

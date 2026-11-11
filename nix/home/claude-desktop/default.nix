@@ -1,6 +1,6 @@
 # Namespaces of the sandbox. U1 maps the user's /etc/subuid and /etc/subgid range, inner id x as host start+x, except
 # the user's own uid and gid (1000 and 100 below), which stay themselves: everything the app writes to host paths is
-# the user's. U2 maps all of U1's ids as themselves. bwrap-subid.sh writes both maps.
+# the user's. U2 maps all of U1's ids as themselves. The launcher's bwrap (cmd/launcher bwrap.go) writes both maps.
 #
 # init userns (host)
 # │  runs: nixpak launcher, dbus-proxy (in a bwrap of nixpak's), the pasta-slot script (netSetup), bwrap's parent,
@@ -9,7 +9,7 @@
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
 #    │  owns: N (netns: lo + eth0 macvlan), M1 (sandbox mount tree), MU (udhcpc's mount tree, made from the
 #    │        host's: its closure, /proc and the sandbox's home), P (pid ns), ipc, uts, cgroup (rooted at sandbox/ in
-#    │        the app's unit's delegated cgroup, see bwrap-subid.sh)
+#    │        the app's unit's delegated cgroup, see cmd/launcher bwrap.go)
 #    │  runs (in N, M1, P): bwrap's init and the FHS env script as uid 1000 without capabilities
 #    │       (in N, MU, P): udhcpc + dhcpScript (net_admin and net_raw only)
 #    │       (in N and the host's mount ns): netSetup's ip calls; the permissions broker's helpers, which join M1

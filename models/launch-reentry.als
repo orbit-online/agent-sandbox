@@ -47,7 +47,7 @@ fact reentryShape {
 }
 
 abstract sig Mode {}
-// claude:// (the branch at enter.go:41-47), --shell (:37), --permissions (:27)
+// claude:// (the branch at enter.go:41-48), --shell (:38), --permissions (:28)
 one sig Url, Shell, Perms extends Mode {}
 one sig Cfg {
   mode: one Mode,
@@ -60,8 +60,8 @@ one sig Cfg {
 abstract sig Guard {}
 one sig
   AppLevel,         // internal/sandbox find.go:99, AppPid: the match's pid ns is one below the sandbox's, and it's the only one
-  NnpOnEntry,       // enter.go:110: setpriv --no-new-privs on the host, ahead of nsenter, for both modes
-  PermissionsFirst, // enter.go:27-35, ahead of sandbox.Find
+  NnpOnEntry,       // enter.go:111: setpriv --no-new-privs on the host, ahead of nsenter, for both modes
+  PermissionsFirst, // enter.go:28-37, ahead of sandbox.Find
   MntCheck          // internal/sandbox find.go:35: not in our mount ns, for the broker and the launcher
   extends Guard {}
 
@@ -344,7 +344,7 @@ run reentryRuns {
 } for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // L6: --permissions never enters the sandbox: its only process is the
-// window, on the host (enter.go:27-35).
+// window, on the host (enter.go:28-37).
 pred l6 {
   Cfg.mode = Perms implies always no Reentry
   always all w: principal.WindowP | w.userns = InitUserNS and w.mnt = HostMnt and w.pidns = InitPidNS

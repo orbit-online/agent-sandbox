@@ -112,7 +112,7 @@ host (user, no capabilities)                       sandbox
 ```
 
 - `permissions-broker`, Go, in `cmd/permissions-broker/`. One per launcher, as the transient user unit
-  `claude-desktop[-<name>]-permissions.service` with `Restart=on-failure`, which `bwrap-subid.sh` starts with
+  `claude-desktop[-<name>]-permissions.service` with `Restart=on-failure`, which the launcher's supervise starts with
   `systemd-run --user` before it execs bwrap. It listens on:
   - `request.sock` in the grant directory, for the sandbox.
   - `control.sock` in the launcher's runtime directory on the host, mode 0600, for the window and the launcher. It
@@ -187,7 +187,7 @@ happen.
 
 ### Sharing the grant directory
 
-The FHS env's bwrap copies M1 when it starts. Before it does, `bwrap-subid.sh` (`SUBID_MAP=parent`, inside M1)
+The FHS env's bwrap copies M1 when it starts. Before it does, the launcher's bwrap (mode parent, inside M1)
 sends `share` on `request.sock` and waits for the answer (up to 10 s, for the daemon to come up). The daemon
 checks that the client is in M1 and makes
 `/run/permissions` shared there. In M1 that mount is a bind of the host directory, so it stays a slave of the host
@@ -556,7 +556,7 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   answers some of those. SASL lines are at most 16 KiB.
 - A reply is a reply by its type. xdg-dbus-proxy takes any message with a reply serial for one, so a method call
   carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
-- `--filter` is required (nixpak and `bwrap-subid.sh` always pass it): there is no mode that passes everything.
+- `--filter` is required (nixpak and the launcher's bwrap always pass it): there is no mode that passes everything.
   Monitoring and eavesdropping are refused whatever the rules, and an `AddMatch` without an interface counts.
 - Names in the config are exact: xdg-dbus-proxy's `.*` wildcards are refused,
   so the proxy never lists the bus's names to find their owners. After `Hello` the client's next message waits until
@@ -583,7 +583,7 @@ nixpak's static config, and the proxy, broker, module and models are smaller wit
 when one is needed. Live rule sets would differ from static ones in one more way: their call and broadcast rules pass
 only the broadcasts a broadcast rule matches, and their see, talk and own what those static policies pass.
 
-The system bus: a second instance, for a launcher with D-Bus capabilities on the system bus. `bwrap-subid.sh` starts
+The system bus: a second instance, for a launcher with D-Bus capabilities on the system bus. the launcher's bwrap starts
 it as the transient user unit `claude-desktop[-<name>]-system-bus` before it execs nixpak's bwrap, and waits up to five
 seconds for its socket (a unit can't be handed an `--fd`). It runs in a bwrap of its own holding its closure, the
 host's system bus socket and its two directories, in user, IPC, network, UTS and cgroup namespaces of its own but the
@@ -713,7 +713,7 @@ description.
 | `release` | `grant`                                             | ends the grant                                 |
 | `status`  |                                                     | the live grants                                |
 | `watch`   |                                                     | a stream of grant events, one JSON per line, the first `watching` once it follows them |
-| `share`   |                                                     | (from `bwrap-subid.sh` only, see above)        |
+| `share`   |                                                     | (from the launcher's bwrap only, see above)        |
 
 `request` grants ahead of use: a folder, a host socket, or a host command capability before its first
 call (`params` holds the bounding values). `call` asks only when no grant covers it.
@@ -928,7 +928,7 @@ a daemon started again starts them afresh.
 ### The sandbox's cgroups and nsdelegate
 
 The sandbox gets its cgroup subtree writable at `/sys/fs/cgroup`, for `cgrun`, only when the host's cgroup2 has
-`nsdelegate` (`bwrap-subid.sh` reads it from the mount's options at launch). Without it the kernel neither keeps the
+`nsdelegate` (the launcher's bwrap reads it from the mount's options at launch). Without it the kernel neither keeps the
 sandbox from writing its root's files nor checks process moves against its cgroup namespace, so the launcher binds
 the subtree read-only, logs a warning to the app unit's journal, and `cgrun` refuses, saying why. The read-only bind
 stops writes through `/sys/fs/cgroup` and no more: cgroup2 can be mounted from a user namespace that owns the cgroup
@@ -1047,7 +1047,7 @@ Each can be revisited.
     sets `XDG_DBUS_PROXY_EXE` to its own wrapper at build time (verified, 9), so pointing the variable elsewhere
     can't work, and a wrapper of our own would have to copy nixpak's `.flatpak-info` handling. The override keeps
     both of nixpak's.
-14. The system-bus proxy is started by `bwrap-subid.sh`, like the broker, since nixpak's launcher starts only one
+14. The system-bus proxy is started by the launcher's bwrap, like the broker, since nixpak's launcher starts only one
     proxy. It runs in a bwrap of its own: the system bus has no portals to read `/.flatpak-info`.
 15. A D-Bus revoke closes the client connections that used the rule set, rather than only removing the rules: that
     is the one way to drop the names, match rules and exported objects the grant let a client set up.

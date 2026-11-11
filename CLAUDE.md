@@ -32,7 +32,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   generated bash wrapper that expands the sandbox's environment from the caller's), starts `launcher supervise` as
   `claude-desktop[-<name>]-app.service` there with the caller's environment, `Type=notify`, `Delegate=yes` and
   `DelegateSubgroup=supervisor`, and returns once supervise says the app is up or why it isn't (the result file),
-  which it prints. `bwrap-subid.sh` lays out
+  which it prints. The launcher's bwrap (`launcher bwrap`, mode subid, nixpak's bwrap) lays out
   the cgroups below it: nixpak's launcher and the host side in `supervisor/`,
   the sandbox in `sandbox/app/`, its cgroup namespace rooted at `sandbox/`
   (at most 64 cgroups, 4 deep, capped on the unit's cgroup, out of its reach),
@@ -70,22 +70,30 @@ single-user Nix store, and an environment doc for the Claude running inside.
   and Qt stay out of the others' closures.
 - `cmd/launcher/`: the launcher (`launcher --help`), one binary for the user's entry and the app's unit:
   `main.go` (arguments, the config `launch.nix` writes), `enter.go` (`--permissions`, `--shell`, the re-entry into the
-  running app through nsenter after joining its cgroup, the unit started and its result), `supervise.go` (the unit:
+  running app through nsenter after joining its cgroup, the unit started and its result, Ctrl-C or a hangup while it
+  starts stopping the unit), `supervise.go` (the unit:
   the sandbox's state and store prepared, nixpak's launcher run with its output pumped to the journal and a tail
-  kept, the app's ready line ending the splash and sending READY=1, a failure shown with that tail), `store.go` (the
+  kept, the app's ready line ending the splash and sending READY=1, a failure shown with that tail, the splash's Abort
+  stopping nixpak's launcher (SIGTERM, SIGKILL after 5 s) and the start, shown for at least a second), `store.go` (the
   closure copied into the sandbox's store through `confine.sh`, its progress from the export stream's bytes against
   the NAR sizes), `theme.go` (the portal's colour scheme as the sandbox's GTK theme, live) and `splash.go` (the
   splash's process and its JSON lines). The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
   `patch-asar.sh` adds: the first time one of its windows is visible once its page loaded or when it's shown (not
   `ready-to-show`, which skips a window shown at creation, as the app's main window is, and not gated on
-  `isLoading()`, which a frame still loading keeps true), through stdout's write as it was at startup. `internal/sandbox`: finding a launcher's running
+  `isLoading()`, which a frame still loading keeps true), through stdout's write as it was at startup. `bwrap.go`, `helper.go` and `maps.go`: `launcher bwrap`, the bwrap
+  that nixpak (mode subid) and the FHS env (mode parent) run, which maps a range of ids into bwrap's user namespace:
+  it starts itself as `bwrap-helper` with bwrap's info and block pipes, then execs into bwrap; the helper writes the
+  maps once bwrap made the namespace (killing bwrap and its child when they fail), lays out the cgroups and on the host
+  sets up the network (`--net`: netns-macvlan, the links up, udhcpc in a mount namespace of its own through
+  `dhcp-root.sh`) before it passes bwrap's info on to nixpak, whose pasta slot is a no-op that only keeps the netns.
+  `internal/sandbox`: finding a launcher's running
   sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
 - `cmd/netns-macvlan/`: the Go helper that gives the sandbox's netns
   its macvlan (`netns-macvlan --help`).
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
-  (`subid-broker --help`). `bwrap-subid.sh` in the module, the bwrap nixpak
-  and the FHS env run, maps the user's subuid range in and starts it.
+  (`subid-broker --help`). The launcher's bwrap, which nixpak and the FHS env run, maps the user's subuid
+  range in and starts it.
 - `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
   (`docs/permissions.md`, D-Bus), taking nixpak's argv and its rules from a
   JSON config, the module's `dbus` option, which the module passes as
@@ -113,7 +121,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
   with `permissions.enable`, off by default: the launcher's supervise starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
-  and `bwrap-subid.sh` asks it to share that mount before the FHS env's bwrap.
+  and the launcher's bwrap (mode parent) asks it to share that mount before the FHS env's bwrap.
   Its own packages are in `cmd/permissions-broker/internal/`, each auditable on
   its own: `schema` (the JSON Schema subset
   arguments are checked against), `duration` (the ISO 8601 durations of leases
@@ -177,7 +185,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `--title-font`), the step and its progress with the agent's logo small at the right above the bar
   (`splash.agentLogo`, the app's icon), light or dark as the
   desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
-  closes it; JSON lines on stdin (`state.go`) drive it. SVG logos load through qtsvg; around them the clear space
+  closes it; JSON lines on stdin (`state.go`) drive it. After 10 seconds it offers Abort, which says "Aborting startup"
+  at once and prints `abort` on its stdout for the launcher. SVG logos load through qtsvg; around them the clear space
   brand logos ask for, half the symbol's height.
 - `nix/patches/`: patches to what the module builds from its inputs, each
   with a header saying why. `nixpak-launcher-reaper.patch` (meant for
@@ -535,14 +544,20 @@ modules and a user alice (the `home-manager` input exists only for it).
   and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can. `splash/splash_test.go`: the splash loads without QML warnings through a start and a
-  failure without logos, and a line sets what it names (a new step's progress unknown until it says).
+  failure without logos, Abort once it shows writing the command and turning to aborting, and a line sets what it names (a new step's progress unknown until it says).
 - `launcher`: the package build runs the Go tests of `cmd/launcher` and `internal/` with fake tools (the state
   script, nix-store, nixpak's launcher and the splash as scripts) and a notify socket of the test's: supervise
   sending READY=1 on the app's ready line and passing its arguments and output on, a refusal (a missing bind source)
   left in the result file before READY=1 with nixpak's launcher never run, an app failing before it's up shown in the
-  splash with its status and last output, no splash being no obstacle, the tail's size; the store sync deleting nix/
+  splash with its status and last output, no splash being no obstacle, the tail's size, an abort from the splash while
+  the app starts (nixpak's launcher stopped with SIGTERM, the result, READY=1, at least a second shown), Ctrl-C while
+  the unit starts stopping it (`abort_test.go`); the store sync deleting nix/
   without a record, copying only what the store lacks with its progress short of 1, leaving a recorded store alone,
-  refusing a store dir that is a link and deleting nix/ for a swapped one; `internal/sandbox`'s `AppPid` on a real pid
+  refusing a store dir that is a link and deleting nix/ for a swapped one; the id maps (`maps_test.go`: the subuid
+  range around the user's own id, an identity map and its subuid lines with the own id at either end, inside and
+  outside a range); `launcher bwrap` in mode parent against a fake bwrap (`bwrap_test.go`: the maps written once it
+  reported its child, then unblocked, the subuid and subgid lines on fds 22 and 23, its arguments after the
+  launcher's; a failing newuidmap killing bwrap before it's unblocked); `internal/sandbox`'s `AppPid` on a real pid
   namespace tree (the app one level below the init, not one further down, two at its level ambiguous).
 - `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
   broker runs the binary, with the test binary as a fake `step` (its key standing in for the TPM's, every run

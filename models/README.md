@@ -69,12 +69,13 @@ in the init namespaces unless noted.
    is checked against the rules of every name it holds. Its rules are
    fixed at start.
 6. **Launcher**: `cmd/launcher` (the user's entry, the app's unit with the
-   store sync and the GTK theme), nixpak's launcher, `bwrap-subid.sh`
-   (`SUBID_MAP=subid` on the host), `net-setup.sh` in nixpak's pasta slot. What they do in the sandbox's
+   store sync and the GTK theme, and bwrap for nixpak, mode subid, whose
+   helper writes the maps, lays out the cgroups and sets up the network),
+   nixpak's launcher. What they do in the sandbox's
    home and store runs confined (`confine.sh` and `state.sh`: a bwrap with
    only its closure and those directories). Re-entries (`claude://`,
    `--shell`) and `--permissions` go through it.
-7. **subid-broker**: started by `bwrap-subid.sh`, dies with bwrap
+7. **subid-broker**: started by the launcher's bwrap, dies with bwrap
    (`PR_SET_PDEATHSIG`, and at once if the shell that started it is gone
    by then). Writes uid and gid maps for user namespaces in
    the sandbox, on `/run/subid-broker.sock`.
@@ -92,8 +93,8 @@ in the init namespaces unless noted.
 Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 
 11. **bwrap's init and the FHS env script**: in U1, N, M1, P, without
-    capabilities. The script runs `bwrap-subid.sh` with `SUBID_MAP=parent`
-    and sends `share`.
+    capabilities. The script runs the launcher's bwrap in mode parent,
+    which sends `share`.
 12. **udhcpc** and its event script: in U1, N, P with `net_admin` and
     `net_raw` only (inheritable, ambient and bounding sets), in MU: a
     mount namespace made from the host's and pivoted to a tmpfs with its
@@ -120,7 +121,7 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 | U1 | user | init, owner uid 1000 | nixpak's bwrap (`--unshare-user`, maps by subid) | every host process of uid 1000 (owner rule); bwrap's setup before it drops them; udhcpc (net_admin, net_raw); the broker's helpers after `nsenter --user` |
 | N | net | U1 | nixpak's bwrap | as U1; netns-macvlan adds `eth0` from init with `cap_net_admin` there |
 | M1 | mnt | U1 | nixpak's bwrap | as U1 |
-| MU | mnt | U1 | net-setup's `unshare --mount`, from the host's mounts | as U1 |
+| MU | mnt | U1 | the bwrap helper's `unshare --mount`, from the host's mounts | as U1 |
 | P | pid | U1 | nixpak's bwrap | as U1; bwrap's init is pid 1 here, the broker's `sandbox.pid` |
 | ipc, uts, cgroup | | U1 | nixpak's bwrap | as U1 |
 | U2 | user | U1, owner uid 1000 | the FHS env's bwrap (identity map of U1's ids) | every process of uid 1000 in U1 or init (owner rule); app-pid.sh with CAP_CHECKPOINT_RESTORE until it drops it |
@@ -157,7 +158,7 @@ joining needs CAP_SYS_ADMIN in init).
 
 - B1: host processes | everything in U1 and below. Crossed by the sockets
   above, binds, D-Bus through the proxy, the macvlan, and the host's own
-  `nsenter`s (net-setup, the broker's helpers, re-entries).
+  `nsenter`s (the bwrap helper, the broker's helpers, re-entries).
 - B2: U1 | U2. U1 holds the capabilities over N, M1, P; nothing in U2 has
   any there. Crossed by the FHS env's start and the propagation of
   `/run/permissions`.
@@ -347,7 +348,7 @@ process whose principal is in the Sandbox domain, at any time.
   failed map write kills bwrap's child, so nothing runs as the overflow
   id. U1 maps exactly the subuid range plus the user's own ids; U2 maps
   exactly U1's.
-- L2. net-setup acts on the sandbox's pid only once its root is final, and
+- L2. The bwrap helper acts on the sandbox's pid only once its root is final, and
   netns-macvlan only on N (S8).
 - L3. udhcpc and its script run in N, MU, P with `net_admin` and
   `net_raw` alone, so a compromise of it gains nothing beyond S2's, and

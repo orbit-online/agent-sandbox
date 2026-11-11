@@ -12,7 +12,7 @@
  * capabilities for inner root of its own user namespace: bwrap sets
  * no_new_privs for everything in the sandbox, so setuid and file
  * capabilities don't apply (bwrap sets it for what it starts, cmd/launcher
- * enter.go:110 for re-entries). Takeover ignores Yama, so the attacker here is stronger than
+ * enter.go:111 for re-entries). Takeover ignores Yama, so the attacker here is stronger than
  * on a host with ptrace_scope 1.
  */
 open structure
@@ -158,8 +158,8 @@ fact moves {
 // S1: no attacker process has a capability in the init user namespace,
 // so none over any namespace the host owns. Holds. Revert: start bwrap's
 // init in the init user namespace (bwrap without --unshare-user, which
-// dropping nixpak's --unshare-user-try prevents, hm/bwrap-subid.sh:
-// 31-32): it owns U1, and S2, S3 and S4 get counterexamples (found).
+// dropping nixpak's --unshare-user-try prevents, cmd/launcher
+// bwrap.go:86): it owns U1, and S2, S3 and S4 get counterexamples (found).
 // S1 itself holds even then, as nothing gains a capability in init
 // under no_new_privs.
 assert S1noInitCaps {

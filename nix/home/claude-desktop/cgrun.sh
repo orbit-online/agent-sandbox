@@ -29,7 +29,7 @@ while (($#)); do
 done
 [[ -n $memory && $# -gt 0 ]] || usage
 
-# The launcher binds the sandbox's cgroup read-only when the host's cgroup2 lacks nsdelegate (bwrap-subid.sh), which
+# The launcher binds the sandbox's cgroup read-only when the host's cgroup2 lacks nsdelegate (cmd/launcher bwrap.go), which
 # is also gone from the mount's options here then, unless the host's mount changed since
 flags=
 while read -r line; do

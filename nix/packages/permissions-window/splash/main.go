@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,7 +22,8 @@ Usage:
 Reads JSON lines on stdin, each setting what it names: dark (the desktop's
 colour scheme), text (the step, with progress from 0 to 1 when known), error
 and log (why the start failed and the app's last output). Closes when stdin
-does, unless it shows an error: then when the user closes it.
+does, unless it shows an error: then when the user closes it. After 10 seconds
+it offers Abort, which prints "abort" on stdout for the launcher.
 
 Options:
   --app-id=<id>        The window's Wayland app ID: the sandbox's, so it shows
@@ -81,6 +83,12 @@ func main() {
 func load(opts docopt.Opts, path string, warn func(string)) (*qml.QQmlApplicationEngine, *qml.QQmlPropertyMap) {
 	splash := qml.NewQQmlPropertyMap()
 	publish(splash, newState())
+	// The QML writes command; abort goes to the launcher as a line on stdout
+	splash.OnValueChanged(func(key string, value *qt.QVariant) {
+		if key == "command" && value.ToString() == "abort" {
+			fmt.Println("abort")
+		}
+	})
 	engine := qml.NewQQmlApplicationEngine()
 	engine.OnWarnings(func(warnings []qml.QQmlError) {
 		for _, e := range warnings {

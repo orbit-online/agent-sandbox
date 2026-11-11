@@ -1,7 +1,7 @@
 /*
  * Step 4, the launch path's second stage (README.md, L1 for U2, L4, L9):
  * the FHS env's script in U1 asks the broker to `share`, its bwrap
- * (bwrap-subid.sh, SUBID_MAP=parent) copies M1 into M2 and waits for U2's
+ * (the launcher's bwrap, mode parent) copies M1 into M2 and waits for U2's
  * maps, app-pid.sh sets ns_last_pid with CAP_CHECKPOINT_RESTORE and starts
  * the app. It starts where launch.als's outer stage ends, with udhcpc
  * running as the attacker; the signatures, frames and l1 are launch.als's.
@@ -17,7 +17,7 @@ open launch
 // ---------------------------------------------------------------------
 // Events, fhs stage
 
-// bwrap-subid.sh:78-82: the FHS env's script asks for `share`. It may
+// bwrap.go:119-123: the FHS env's bwrap asks for `share`. It may
 // fail (the broker isn't up within the client's 10 s); the launch goes on
 pred fhsShare {
   ShareTried not in On
@@ -35,7 +35,7 @@ pred lateShare {
   keepMaps and keepWaits and Eth0In' = Eth0In
 }
 
-// bwrap-subid.sh:112 in parent mode: the FHS env's bwrap child in U2, M2
+// bwrap.go:177 in mode parent: the FHS env's bwrap child in U2, M2
 // (a copy of M1: a shared mount there turns a slave, a private one stays
 // private), P2
 pred fhsCopy[g: set Guard] {
@@ -161,7 +161,7 @@ check L4revert for 7 but 9 OwnedNS, 1..9 steps expect 1
 // /run/permissions receives what it mounts in M1.
 //
 // Holds with udhcpc's late `share` among the moves: when the FHS env's
-// own `share` failed (the launch goes on, bwrap-subid.sh:80-81), shareFrom
+// own `share` failed (the launch goes on, bwrap.go:120-122), shareFrom
 // takes one only from a client in M1, and udhcpc runs in MU (L3). It was
 // a known finding while udhcpc ran in M1: the broker then granted attach
 // into M1, where nothing but bwrap's init and udhcpc saw it.

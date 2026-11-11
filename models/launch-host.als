@@ -22,11 +22,11 @@ open sandbox
 
 abstract sig Thing {}
 one sig
-  Shell,     // bwrap-subid.sh before line 112's exec
+  Shell,     // the launcher's bwrap (bwrap.go) before line 177's exec
   BwrapHost, // the same pid as bwrap, its parent half on the host
   SubidB,    // subid-broker, started at line 44
   Sandbox,   // the outer bwrap's child, with P and all in it
-  Udhcpc,    // in P (net-setup.sh:26)
+  Udhcpc,    // in P (helper.go:135)
   Reentry,   // in P2, under a host nsenter
   Broker,    // the permissions broker's unit
   CallUnit         // a host command call's transient unit
@@ -42,8 +42,8 @@ one sig
   Pdeathsig,   // subid-broker dieWith: PR_SET_PDEATHSIG, fired when its parent exits
   PidfdExit,   // run.go: run returns when the sandbox's pidfd turns readable
   BindsTo,     // call units BindsTo= the daemon's unit (README.md, Principals 9)
-  ParentCheck, // subid-broker dieWith: getppid() after the prctl, against the pid bwrap-subid.sh passes
-  StartLimit   // launcher supervise.go:166-170: the broker unit's StartLimitBurst=3 in 10 min
+  ParentCheck, // subid-broker dieWith: getppid() after the prctl, against the pid bwrap.go:196 passes
+  StartLimit   // launcher supervise.go:178-181: the broker unit's StartLimitBurst=3 in 10 min
   extends Guard {}
 
 pred live[t: Thing] { t in Alive }
@@ -51,7 +51,7 @@ pred become[add, del: set Thing, m: set Mark] {
   Alive' = Alive - del + add and Marks' = Marks + m
 }
 
-// supervise.go:157-172 (prepare), ahead of nixpak's launcher at :64: the broker's unit starts first
+// supervise.go:169-186 (prepare), ahead of nixpak's launcher at :74: the broker's unit starts first
 pred brokerStart { no Marks and not live[Broker] and become[Broker, none, none] }
 pred subidSpawn { live[Shell] and not live[SubidB] and no Marks & (Armed + Exec) and become[SubidB, none, none] }
 // serve's first step. Without ParentCheck a parent gone by now never
@@ -61,7 +61,7 @@ pred subidArm[g: set Guard] {
   (ParentCheck in g and no (Shell + BwrapHost) & Alive) implies become[none, SubidB, Armed]
   else become[none, none, Armed]
 }
-// bwrap-subid.sh: no socket within 5 s, exit 1. An armed subid-broker
+// bwrap.go:197-210: no socket within 5 s, exit 1. An armed subid-broker
 // gets its death signal
 pred shellAbort[g: set Guard] {
   live[Shell] and Exec not in Marks
@@ -119,7 +119,7 @@ pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + CallUni
 assert L8 { lifetimes[Guard] implies l8 }
 check L8 for 4 but 1..15 steps expect 0
 
-// L8, revert: without ParentCheck, bwrap-subid.sh gives up on the socket
+// L8, revert: without ParentCheck, the launcher's bwrap gives up on the socket
 // after 5 s and exits while subid-broker hasn't reached its prctl yet;
 // the death signal is set after the parent is gone and never fires, so
 // subid-broker listens on a socket no sandbox binds until logout.

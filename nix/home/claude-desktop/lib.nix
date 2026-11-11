@@ -96,32 +96,21 @@ rec {
       opt = "agent-sandbox.claude-desktop: ${lib.optionalString (name != null) "launchers.${name}."}";
     };
 
-  # bwrap with a range of ids, see bwrap-subid.sh: nixpak's (on the host) and the FHS env's (inside)
-  bwrapSubid =
-    vars:
-    script "bwrap-subid.sh" {
+  # bwrap with a range of ids, see cmd/launcher bwrap.go: the FHS env's inside, mode parent, which shares the
+  # permissions broker's grant directory first. nixpak's, mode subid, is network.nix's, as it sets up the launcher's
+  # network
+  bwrapOf =
+    args:
+    pkgs.writeShellApplication {
       name = "bwrap";
-      runtimeInputs = [
-        pkgs.coreutils
-        pkgs.gnugrep
-      ];
-      vars = {
-        BWRAP = lib.getExe' pkgs.bubblewrap "bwrap";
-      }
-      // vars;
+      text = "exec ${lib.getExe packages.launcher} bwrap --bwrap=${lib.getExe' pkgs.bubblewrap "bwrap"} ${lib.escapeShellArgs args} -- \"$@\"\n";
     };
-  bwrapHost = bwrapSubid {
-    SUBID_MAP = "subid";
-    NEWUIDMAP = "${osConfig.security.wrapperDir}/newuidmap";
-    NEWGIDMAP = "${osConfig.security.wrapperDir}/newgidmap";
-    SUBID_BROKER = lib.getExe packages.subid-broker;
-  };
-  bwrapFhs = bwrapSubid {
-    SUBID_MAP = "parent";
-    NEWUIDMAP = lib.getExe' packages.subid-broker "newuidmap";
-    NEWGIDMAP = lib.getExe' packages.subid-broker "newgidmap";
-    PERMISSIONS_BROKER = lib.getExe packages.permissions-broker;
-  };
+  bwrapFhs = bwrapOf [
+    "--mode=parent"
+    "--newuidmap=${lib.getExe' packages.subid-broker "newuidmap"}"
+    "--newgidmap=${lib.getExe' packages.subid-broker "newgidmap"}"
+    "--permissions-broker=${lib.getExe packages.permissions-broker}"
+  ];
 
   # Written by the host's activation, bound from its /etc
   hostEtc = [
