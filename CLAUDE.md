@@ -10,8 +10,17 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `agent-sandbox.claude-desktop` (`default.nix`, with a diagram of the
   sandbox's namespaces at the top). Its options configure the default
   launcher; `launchers.<name>` adds sandboxes next to it with the same
-  options, each built by `launcher` from the module's defaults alone, with its
-  own state dir, app ID, MAC and `claude-desktop-<name>`. The app ID,
+  options, each starting from the module's defaults alone, with its
+  own state dir, app ID, MAC and `claude-desktop-<name>`. Each launcher, the default one included, is a
+  `submoduleWith` of the same feature modules, which take `launcherName` (null for the default one), Home Manager's
+  config as `hm` and the shared helpers of `lib.nix` as `sl`, and meet in the internal `build` options
+  (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's and the app unit's variables, the
+  `.desktop` actions, assertions): `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
+  launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
+  `/run/current-system/sw`), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
+  `mcp.nix`, `dbus.nix` (and the tray), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
+  `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
+  `agent-sandbox.launcherModules` join them on every launcher, for a plugin's own options. The app ID,
   `com.anthropic.Claude[.<name>]`, also names the launcher's `.desktop`
   file, its `StartupWMClass`, the asar's `desktopName` (its windows' app
   ID) and the Permissions window's `--app-id`: the portal names the app's
@@ -39,7 +48,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `programs.agent-memos.settings.stores` by its store path, so the host's memo config lists it too
   (`<!-- memo-doc: ... -->` lines document its values). The store also injects `environment`, the frontmatter's name
   for the environment. Then the module's scripts (`*.sh`; `store-gc.sh` and
-  `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks, `cgrun.sh` for its jobs). `default.nix` loads them with its `script` helper: Nix values
+  `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks, `cgrun.sh` for its jobs). The modules load them with `lib.nix`'s `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
   with `: "${VAR:?}"` at the top.
   What the host does in the sandbox's home and store, which the sandbox can
@@ -156,8 +165,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   processes`. The module applies it through `nixpakPkgs`, whose `callPackage`
   patches the package nixpak builds from its `launcher/`.
 - `nix/home/claude-desktop/request-send.nix` and `cmd/request-send/`: the host commands `request-send` and
-  `request-send-write` (README, request-send), `permissions.request-send` on each launcher, imported by
-  `default.nix`. `consent.title` and each command's `consent` are the user's words in the notification and the
+  `request-send-write` (README, request-send), `permissions.request-send` on each launcher, a launcher
+  module. `consent.title` and each command's `consent` are the user's words in the notification and the
   window: plain, for someone who isn't technical, without ranges (the window's Details show those from the schemas).
   The binary (`request-send --help`) sends one HTTP request per call: it reads the call, checks every argument again
   (the origin against the `--origin`s the module passes, each with its `--env` and `--ca`, the method against the

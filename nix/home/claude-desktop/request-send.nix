@@ -1,18 +1,17 @@
-# request-send as host commands of the permissions broker: `permissions.request-send` on the default launcher and on
-# each of `launchers.<name>`. Enabled, it declares the capabilities request-send, which sends GET requests, and
+# request-send as host commands of the permissions broker: `permissions.request-send` on every launcher. Enabled, it declares the capabilities request-send, which sends GET requests, and
 # request-send-write, which sends GET and POST requests, in that launcher's `permissions.commands`, each to the
 # configured origins
-{ inputs }:
 {
   config,
   lib,
   pkgs,
+  sl,
+  launcherName,
   ...
 }:
 let
   inherit (lib) mkOption types;
-  cfg = config.agent-sandbox.claude-desktop;
-  bin = lib.getExe inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.request-send;
+  bin = lib.getExe sl.packages.request-send;
   # step finds its plugins on PATH
   stepWithKms = pkgs.writeShellScript "step" ''
     PATH=${pkgs.step-kms-plugin}/bin''${PATH:+:$PATH} exec ${lib.getExe pkgs.step-cli} "$@"
@@ -143,40 +142,18 @@ let
     };
   };
 
-  launcherModule =
-    { config, ... }:
-    {
-      options.permissions.request-send = options;
-      config.permissions.commands = lib.mkIf config.permissions.request-send.enable (
-        capabilities config.permissions.request-send
-      );
-    };
 in
 {
-  options.agent-sandbox.claude-desktop = {
-    permissions.request-send = options;
-    launchers = mkOption {
-      type = types.attrsOf (types.submodule launcherModule);
-    };
-  };
-
+  options.permissions.request-send = options;
   config = {
-    agent-sandbox.claude-desktop.permissions.commands = lib.mkIf cfg.permissions.request-send.enable (
-      capabilities cfg.permissions.request-send
+    permissions.commands = lib.mkIf config.permissions.request-send.enable (
+      capabilities config.permissions.request-send
     );
-    assertions =
-      lib.mapAttrsToList
-        (name: lcfg: {
-          assertion = !lcfg.permissions.request-send.enable || lcfg.permissions.enable;
-          message = "agent-sandbox.claude-desktop: ${
-            lib.optionalString (name != "") "launchers.${name}."
-          }permissions.request-send needs permissions.enable";
-        })
-        (
-          {
-            "" = cfg;
-          }
-          // cfg.launchers
-        );
+    build.assertions = [
+      {
+        assertion = !config.permissions.request-send.enable || config.permissions.enable;
+        message = "${(sl.idsOf launcherName).opt}permissions.request-send needs permissions.enable";
+      }
+    ];
   };
 }
