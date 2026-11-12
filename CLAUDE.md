@@ -98,7 +98,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). The launcher's bwrap, which nixpak and the FHS env run, maps the user's subuid
-  range in and starts it.
+  range in and starts it as a unit, `claude-desktop[-<name>]-subid.service`; its helper starts udhcpc as
+  `claude-desktop[-<name>]-dhcp.service`. Both are transient units in the launcher's slice with `BindsTo=` the app's
+  unit (`hostUnits` in `helper.go`), so each logs as a unit of its own and stops with the app.
 - `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
   (`docs/permissions.md`, D-Bus), taking nixpak's argv and its rules from a
   JSON config, the module's `dbus` option, which the module passes as

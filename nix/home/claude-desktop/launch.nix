@@ -45,7 +45,7 @@ let
           scratchpad
           ;
         launcher = if launcherName == null then "" else launcherName;
-        unit = "claude-desktop${ids.suffix}-app.service";
+        unit = ids.appUnit;
         inherit (config.build) homeDirs;
         requiredBinds = lib.mapAttrsToList (_: b: b.src) (
           lib.filterAttrs (_: b: b.enable && !b.optional) config.binds

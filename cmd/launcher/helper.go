@@ -32,6 +32,30 @@ type netSetup struct {
 	Name         string `json:"name,omitempty"` // The launcher's, which salts the macvlan's MAC; empty for the default one
 }
 
+// The host's units for the sandbox's daemons, in the launcher's slice and bound to the app's unit, so they stop with
+// it and log to the journal as units of their own
+type hostUnits struct {
+	SystemdRun string `json:"systemdRun"`
+	App        string `json:"app"`    // The app's unit
+	Prefix     string `json:"prefix"` // Their names', claude-desktop[-<name>]
+	Slice      string `json:"slice"`
+}
+
+// Starts the unit <prefix>-<name> running argv and returns once it started. Not After= the app's unit: that one is
+// still starting, and waits for this
+func (u *hostUnits) start(name string, props []string, argv ...string) error {
+	args := []string{"--user", "--quiet", "--collect", "--unit=" + u.Prefix + "-" + name, "--slice=" + u.Slice,
+		"-p", "BindsTo=" + u.App}
+	for _, p := range props {
+		args = append(args, "-p", p)
+	}
+	out, err := exec.Command(u.SystemdRun, append(append(args, "--"), argv...)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Start %s-%s: %w: %s", u.Prefix, name, err, out)
+	}
+	return nil
+}
+
 var childPidRe = regexp.MustCompile(`"child-pid":\s*([0-9]+)`)
 
 func runHelper(specJSON string) error {
@@ -89,7 +113,7 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 		return err
 	}
 	if spec.Net != nil {
-		if err := spec.Net.run(pid); err != nil {
+		if err := spec.Net.run(pid, spec.Units); err != nil {
 			return err
 		}
 	}
@@ -103,7 +127,7 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 	return nil
 }
 
-func (n *netSetup) run(pid int) error {
+func (n *netSetup) run(pid int, u *hostUnits) error {
 	// bwrap's parent reports the pid while the child is still building the mount tree; nixpak binds /.flatpak-info
 	// last, so once it shows up the sandbox's root is final
 	marker := fmt.Sprintf("/proc/%d/root/.flatpak-info", pid)
@@ -131,8 +155,9 @@ func (n *netSetup) run(pid int) error {
 		}
 	}
 	// udhcpc in a mount namespace of its own, made from the host's (see dhcp-root.sh), in the sandbox's pid ns so it
-	// dies with it. It goes to the background once it has a lease or gives up
-	return runCmd(n.Nsenter, append(ns, "-p", n.Unshare, "--mount", "--propagation", "private", n.DHCPRoot)...)
+	// dies with it. It goes to the background once it has a lease or gives up, which ends the unit's start
+	return u.start("dhcp", []string{"Type=forking"},
+		append(append([]string{n.Nsenter}, ns...), "-p", n.Unshare, "--mount", "--propagation", "private", n.DHCPRoot)...)
 }
 
 func runCmd(name string, args ...string) error {

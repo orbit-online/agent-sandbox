@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,25 +35,23 @@ const (
 type bwrapOpts struct {
 	mode, bwrap, newuidmap, newgidmap, subidBroker, permissionsBroker string
 	net                                                               *netSetup
+	units                                                             *hostUnits
 }
 
 // What the helper does, as its argument
 type helperSpec struct {
-	NewUIDMap string    `json:"newuidmap"`
-	NewGIDMap string    `json:"newgidmap"`
-	UIDMap    []int     `json:"uidMap"`
-	GIDMap    []int     `json:"gidMap"`
-	CgRoot    string    `json:"cgRoot,omitempty"` // The app's unit's cgroup, on the host
-	Ctl       []string  `json:"ctl,omitempty"`    // The controllers for sandbox/
-	Forward   bool      `json:"forward"`          // Whether fd 5 is nixpak's info fd, to pass the info on to
-	Net       *netSetup `json:"net,omitempty"`
+	NewUIDMap string     `json:"newuidmap"`
+	NewGIDMap string     `json:"newgidmap"`
+	UIDMap    []int      `json:"uidMap"`
+	GIDMap    []int      `json:"gidMap"`
+	CgRoot    string     `json:"cgRoot,omitempty"` // The app's unit's cgroup, on the host
+	Ctl       []string   `json:"ctl,omitempty"`    // The controllers for sandbox/
+	Forward   bool       `json:"forward"`          // Whether fd 5 is nixpak's info fd, to pass the info on to
+	Net       *netSetup  `json:"net,omitempty"`
+	Units     *hostUnits `json:"units,omitempty"`
 }
 
 func runBwrap(o bwrapOpts, args []string) error {
-	// subid-broker's death signal is armed against the thread that forked it, and execve ends every other thread:
-	// forked from any thread but the one that execs into bwrap, it would die at once. So this goroutine keeps one
-	// thread, which forks the broker and the helper and execs
-	runtime.LockOSThread()
 	uid, gid := os.Getuid(), os.Getgid()
 	u, err := user.Current()
 	if err != nil {
@@ -98,7 +95,10 @@ func runBwrap(o bwrapOpts, args []string) error {
 				pass = append(pass, args[i])
 			}
 		}
-		sock, err := startSubidBroker(o.subidBroker)
+		if o.units == nil {
+			return errors.New("Mode subid needs --units")
+		}
+		sock, err := startSubidBroker(o.units, o.subidBroker)
 		if err != nil {
 			return err
 		}
@@ -109,6 +109,7 @@ func runBwrap(o bwrapOpts, args []string) error {
 		}
 		pass = append(append(pass, cgBind, spec.CgRoot+"/sandbox", "/sys/fs/cgroup"), rest...)
 		spec.Net = o.net
+		spec.Units = o.units
 	case "parent":
 		if err := parentMaps(&spec, u.Username, uid, gid); err != nil {
 			return err
@@ -186,17 +187,15 @@ func readSubid(path, user string, own int) ([]int, error) {
 	return subidMap(f, user, own)
 }
 
-// startSubidBroker starts subid-broker on a socket of this process, which becomes bwrap. Its parent death signal fires
-// when bwrap exits; it ends at once if this process is gone by then
-func startSubidBroker(broker string) (string, error) {
+// startSubidBroker starts subid-broker as a unit, on a socket of this process, which becomes bwrap: it ends when bwrap
+// does, or with the app's unit
+func startSubidBroker(u *hostUnits, broker string) (string, error) {
 	sock := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "claude-desktop", fmt.Sprintf("subid-broker-%d.sock", os.Getpid()))
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return "", err
 	}
-	cmd := exec.Command(broker, sock, strconv.Itoa(os.Getpid()))
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("Start subid-broker: %w", err)
+	if err := u.start("subid", nil, broker, sock, strconv.Itoa(os.Getpid())); err != nil {
+		return "", err
 	}
 	for range 50 {
 		if fi, err := os.Stat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {

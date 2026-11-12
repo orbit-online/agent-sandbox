@@ -196,6 +196,12 @@
           f" {shim.removesuffix('subid-broker')}newuidmap $! 0 1000 1; s=$?; kill $!; exit $s"
       ))
       assert status != 0 and "Client isn't in a sandbox" in out, f"{status} {out}"
+      # A unit of its own in the launcher's slice, bound to the app's
+      broker = workstation.succeed("pgrep -u alice subid-broker").split()[0]
+      assert workstation.succeed(f"cat /proc/{broker}/cgroup").strip().endswith(
+          "/claude\\x2ddesktop.slice/claude-desktop-subid.service"), broker
+      assert "claude-desktop-app.service" in workstation.succeed(
+          "systemctl --user -M alice@ show -P BindsTo claude-desktop-subid"), "subid-broker isn't bound to the app"
 
   with subtest("scratchpad prune"):
       as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(
@@ -306,6 +312,11 @@
       assert not any("stub" in p or "claude-desktop-store-roots" in p for p in store), store
       workstation.succeed(f"test -f /proc/{udhcpc}/root/home/alice/.config/resolv.conf")
       workstation.fail(f"test -e /proc/{udhcpc}/root/home/alice/victim-a")
+      # A unit of its own beside the app's, outside the sandbox's cgroups, bound to the app's
+      assert workstation.succeed(f"cat /proc/{udhcpc}/cgroup").strip().endswith(
+          "/claude\\x2ddesktop.slice/claude-desktop-dhcp.service"), udhcpc
+      assert "claude-desktop-app.service" in workstation.succeed(
+          "systemctl --user -M alice@ show -P BindsTo claude-desktop-dhcp"), "udhcpc isn't bound to the app"
 
   with subtest("Own hosts file"):
       workstation.succeed("grep -qw host-only.test /etc/hosts")
@@ -382,4 +393,6 @@
       workstation.wait_until_fails("pgrep -u alice -f 'launcher supervise'", timeout=30)
       workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
       workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")
+      for unit in ["subid", "dhcp"]:
+          workstation.wait_until_fails(f"systemctl --user -M alice@ -q is-active claude-desktop-{unit}", timeout=30)
 ''

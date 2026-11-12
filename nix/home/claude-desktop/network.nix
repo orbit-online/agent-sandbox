@@ -52,6 +52,14 @@ let
     "--newuidmap=${osConfig.security.wrapperDir}/newuidmap"
     "--newgidmap=${osConfig.security.wrapperDir}/newgidmap"
     "--subid-broker=${lib.getExe sl.packages.subid-broker}"
+    "--units=${
+      builtins.toJSON {
+        systemdRun = lib.getExe' osConfig.systemd.package "systemd-run";
+        app = ids.appUnit;
+        prefix = ids.unitPrefix;
+        inherit (ids) slice;
+      }
+    }"
     "--net=${
       builtins.toJSON (
         {

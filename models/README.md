@@ -75,10 +75,12 @@ in the init namespaces unless noted.
    home and store runs confined (`confine.sh` and `state.sh`: a bwrap with
    only its closure and those directories). Re-entries (`claude://`,
    `--shell`) and `--permissions` go through it.
-7. **subid-broker**: started by the launcher's bwrap, dies with bwrap
-   (`PR_SET_PDEATHSIG`, and at once if the shell that started it is gone
-   by then). Writes uid and gid maps for user namespaces in
-   the sandbox, on `/run/subid-broker.sock`.
+7. **subid-broker**: started by the launcher's bwrap as the transient
+   unit `claude-desktop[-<name>]-subid.service` in the launcher's slice,
+   `BindsTo=` the app's unit. Exits when bwrap does (a pidfd on it, opened
+   before the socket exists, while the launcher still waits for it), or at
+   once if bwrap is gone already. Writes uid and gid maps for user
+   namespaces in the sandbox, on `/run/subid-broker.sock`.
 8. **netns-macvlan**: setcap `cap_net_admin` wrapper, group `users`.
    Creates `eth0` in the sandbox's netns.
 9. **Call units**: `perm[-<launcher>]_call-<id>`, one transient user
@@ -367,7 +369,8 @@ process whose principal is in the Sandbox domain, at any time.
   redirected to a host process or a nested one.
 - L8. The broker exits when the sandbox's pidfd turns readable, and stops
   restarting when it never finds one; subid-broker when bwrap exits, or at
-  once when its parent is gone already; call units when the broker's
+  once when bwrap is gone already, and with the app's unit; udhcpc with
+  the sandbox's pid ns and the app's unit; call units when the broker's
   unit stops.
 - L9. `share` runs before the FHS env's bwrap copies M1, or the launcher
   goes on without attach (which the broker then refuses, P3).

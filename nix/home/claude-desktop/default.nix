@@ -5,7 +5,7 @@
 # init userns (host)
 # │  runs: the launcher's supervise (the app's unit), nixpak launcher, dbus-proxy (in a bwrap of nixpak's), bwrap's
 # │        parent, the launcher's bwrap helper (U1's maps, the cgroups, the netns), netns-macvlan (cap_net_admin,
-# │        creates eth0 in N), subid-broker (writes maps below U1 on request)
+# │        creates eth0 in N), subid-broker (writes maps below U1 on request; a unit of its own, as udhcpc is)
 # │
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
 #    │  owns: N (netns: lo + eth0 macvlan), M1 (sandbox mount tree), MU (udhcpc's mount tree, made from the

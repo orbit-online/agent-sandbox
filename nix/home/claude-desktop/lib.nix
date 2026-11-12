@@ -90,6 +90,9 @@ rec {
       desktopFile = "${appId}.desktop";
       appPid = appPidOf name;
       slice = sliceOf name;
+      # The app's unit, and the start of the names of the host's units for its daemons (cmd/launcher hostUnits)
+      appUnit = "claude-desktop${suffixOf name}-app.service";
+      unitPrefix = "claude-desktop${suffixOf name}";
       home = "${stateDir}/home";
       scratchpad = "${stateDir}/tmp-scratchpad";
       # Where the option's definitions say so in messages

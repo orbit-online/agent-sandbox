@@ -22,15 +22,15 @@ import (
 const usage = `subid-broker - Write uid and gid maps for user namespaces inside a sandbox
 
 Usage:
-  subid-broker <socket> <parent>
+  subid-broker <socket> <pid>
 
 Listens on <socket> for map requests from inside the sandbox, which reaches it
 at /run/subid-broker.sock. The client and the target process must belong to
 the client's uid, the client must be in a user namespace other than the
 broker's, and the target's user namespace must be below the client's. The
 broker writes the map from the target's parent user namespace, where the kernel
-checks that the outer ids are mapped. Exits when its parent does, which must be
-the process <parent> (its pid), or right away if that is gone already.
+checks that the outer ids are mapped. Exits when the process <pid> (bwrap's)
+does, or right away if it's gone already.
 
 Called as newuidmap or newgidmap, it takes shadow's arguments
 (<pid> <inner> <outer> <count>...) and sends the request to
@@ -63,12 +63,12 @@ func main() {
 		os.Exit(2)
 	}
 	socket, _ := opts.String("<socket>")
-	parent, err := opts.Int("<parent>")
+	pid, err := opts.Int("<pid>")
 	if err != nil {
-		slog.Error("Parse <parent>", "err", err)
+		slog.Error("Parse <pid>", "err", err)
 		os.Exit(2)
 	}
-	if err := serve(socket, parent); err != nil {
+	if err := serve(socket, pid); err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
@@ -134,9 +134,11 @@ func client(kind string, args []string) int {
 	return 0
 }
 
-func serve(socket string, parent int) error {
-	if err := dieWith(parent); err != nil {
-		return err
+func serve(socket string, pid int) error {
+	// Opened before the socket exists: the launcher waits for it, so pid is still bwrap's
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return fmt.Errorf("Open pidfd for %d: %w", pid, err)
 	}
 	unix.Umask(0o077)
 	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: socket, Net: "unixpacket"})
@@ -148,6 +150,10 @@ func serve(socket string, parent int) error {
 	signal.Notify(sig, unix.SIGTERM, unix.SIGINT)
 	go func() {
 		<-sig
+		l.Close()
+	}()
+	go func() {
+		waitExit(pidfd)
 		l.Close()
 	}()
 	for {
@@ -170,16 +176,14 @@ func serve(socket string, parent int) error {
 	}
 }
 
-// Ends this process with its parent, started by the wrapper that execs into bwrap, so when bwrap exits. A parent that
-// exited before the death signal was set never sends it: the reaper adopted the process, which getppid then shows
-func dieWith(parent int) error {
-	if err := unix.Prctl(unix.PR_SET_PDEATHSIG, uintptr(unix.SIGTERM), 0, 0, 0); err != nil {
-		return fmt.Errorf("Set parent death signal: %w", err)
+// Returns once the pidfd's process has exited: the pidfd turns readable then
+func waitExit(pidfd int) {
+	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	for {
+		if _, err := unix.Poll(fds, -1); err != unix.EINTR {
+			return
+		}
 	}
-	if ppid := unix.Getppid(); ppid != parent {
-		return fmt.Errorf("Parent %d is gone (parent now %d)", parent, ppid)
-	}
-	return nil
 }
 
 func handle(conn *net.UnixConn) error {

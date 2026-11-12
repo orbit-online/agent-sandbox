@@ -21,7 +21,7 @@ Usage:
   launcher store-sync --config=<file>
   launcher theme --config=<file> [<scheme>]
   launcher bwrap --mode=<mode> --bwrap=<exe> --newuidmap=<exe> --newgidmap=<exe> [--subid-broker=<exe>]
-                 [--permissions-broker=<exe>] [--net=<json>] [--] [<arg>...]
+                 [--permissions-broker=<exe>] [--net=<json>] [--units=<json>] [--] [<arg>...]
   launcher bwrap-helper <spec>
 
 start is the launcher on the host's PATH. A first argument --permissions opens
@@ -57,6 +57,8 @@ Options:
   --permissions-broker=<exe>  The permissions broker, which shares
                               /run/permissions in mode parent
   --net=<json>         The network setup, for mode subid (helper.go, netSetup)
+  --units=<json>       The host units for subid-broker and udhcpc, for mode subid
+                       (helper.go, hostUnits)
 `
 
 // The launcher's config, as launch.nix writes it
@@ -162,6 +164,12 @@ func runTool(opts docopt.Opts) error {
 		o.net = &netSetup{}
 		if err := json.Unmarshal([]byte(n), o.net); err != nil {
 			return fmt.Errorf("--net: %w", err)
+		}
+	}
+	if u, _ := opts.String("--units"); u != "" {
+		o.units = &hostUnits{}
+		if err := json.Unmarshal([]byte(u), o.units); err != nil {
+			return fmt.Errorf("--units: %w", err)
 		}
 	}
 	args, _ := opts["<arg>"].([]string)

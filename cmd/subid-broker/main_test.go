@@ -5,27 +5,22 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 // Re-executed as the processes authorize inspects. wait: blocks until stdin closes. nest: also starts a wait child
-// in a user namespace of its own and prints its pid. die-with: dieWith($SUBID_BROKER_TEST_PARENT)
+// in a user namespace of its own and prints its pid
 func TestMain(m *testing.M) {
 	switch os.Getenv("SUBID_BROKER_TEST") {
 	case "wait":
 		io.Copy(io.Discard, os.Stdin)
-		os.Exit(0)
-	case "die-with":
-		parent, _ := strconv.Atoi(os.Getenv("SUBID_BROKER_TEST_PARENT"))
-		if err := dieWith(parent); err != nil {
-			os.Stderr.WriteString(err.Error() + "\n")
-			os.Exit(1)
-		}
 		os.Exit(0)
 	case "nest":
 		child, _, err := start()
@@ -149,21 +144,43 @@ func TestAuthorize(t *testing.T) {
 	}
 }
 
-// The death signal only helps while the parent that started the broker is still its parent
-func TestDieWith(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		parent int
-		ok     bool
-	}{
-		{"its parent", os.Getpid(), true},
-		// As after the wrapper gave up on the socket and exited: the reaper is the parent now
-		{"parent gone", os.Getpid() + 1<<20, false},
-	} {
-		cmd := exec.Command("/proc/self/exe")
-		cmd.Env = append(os.Environ(), "SUBID_BROKER_TEST=die-with", "SUBID_BROKER_TEST_PARENT="+strconv.Itoa(tc.parent))
-		if err := cmd.Run(); (err == nil) != tc.ok {
-			t.Errorf("%s: err = %v, want ok %t", tc.name, err, tc.ok)
+// The broker exits once the process it serves does, and refuses to start for one that's gone
+func TestServeEndsWithPid(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "sock")
+	if err := serve(sock, 1<<22); err == nil || !strings.Contains(err.Error(), "Open pidfd") {
+		t.Errorf("Gone pid: %v", err)
+	}
+	cmd, stdin, err := start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- serve(sock, cmd.Process.Pid) }()
+	for i := 0; ; i++ {
+		if _, err := os.Stat(sock); err == nil {
+			break
 		}
+		if i == 100 {
+			t.Fatal("No socket")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Ended while the process runs: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	stdin.Close()
+	cmd.Wait()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Still serving after the process ended")
+	}
+	if _, err := os.Stat(sock); err == nil {
+		t.Error("Socket left behind")
 	}
 }
