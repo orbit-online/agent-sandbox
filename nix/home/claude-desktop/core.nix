@@ -234,22 +234,22 @@ in
                     ids.scratchpad
                     (sloth.concat' "/tmp/claude-" sloth.uid)
                   ]
-                  # The journal namespace's syslog socket, after nixpak's /dev like the devices
+                  # The sandbox's journal namespace's syslog socket, after nixpak's /dev like the devices
                   [
-                    "/run/systemd/journal.${ids.journal}/dev-log"
+                    "/run/systemd/journal.${ids.sandboxJournal}/dev-log"
                     "/dev/log"
                   ]
                 ]
                 ++ devices;
-                # Its native and stream sockets, where sd-journal and systemd-cat look; its files are bound at launch
-                # (cmd/launcher bwrap.go), by the machine-id
+                # Its native and stream sockets, where sd-journal and systemd-cat look; the namespaces' files are bound
+                # at launch (cmd/launcher bwrap.go), by the machine-id. None of the host side's sockets
                 bind.ro = binds false ++ [
                   [
-                    "/run/systemd/journal.${ids.journal}/socket"
+                    "/run/systemd/journal.${ids.sandboxJournal}/socket"
                     "/run/systemd/journal/socket"
                   ]
                   [
-                    "/run/systemd/journal.${ids.journal}/stdout"
+                    "/run/systemd/journal.${ids.sandboxJournal}/stdout"
                     "/run/systemd/journal/stdout"
                   ]
                 ];

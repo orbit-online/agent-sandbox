@@ -58,7 +58,7 @@ let
         systemctl = lib.getExe' osConfig.systemd.package "systemctl";
         app = ids.appUnit;
         prefix = ids.unitPrefix;
-        inherit (ids) slice journal;
+        inherit (ids) slice journal sandboxJournal;
         systemdCat = lib.getExe' osConfig.systemd.package "systemd-cat";
       }
     }"

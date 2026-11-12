@@ -22,12 +22,12 @@
           )
           if workstation.execute(f"test -s {applog}")[0] != 0:
               failed.append(i)
-              print(f"launch {i} failed:\n" + workstation.succeed("journalctl --namespace=claude-desktop _UID=1000 --no-pager -n 40 -o cat"))
+              print(f"launch {i} failed:\n" + workstation.succeed("journalctl --namespace=claude-desktop_sandbox _UID=1000 --no-pager -n 40 -o cat"))
           workstation.execute("systemctl --user -M alice@ kill --kill-whom=main -s KILL claude-desktop-app")
           workstation.wait_until_succeeds("! systemctl --user -M alice@ -q is-active claude-desktop-app", timeout=60)
           workstation.execute("systemctl --user -M alice@ reset-failed claude-desktop-app")
           workstation.wait_until_succeeds("! pgrep -x bwrap && ! pgrep -x udhcpc", timeout=60)
-      panics = workstation.succeed("journalctl --namespace=claude-desktop _UID=1000 --no-pager -o cat | grep -c 'waitid: no child' || true").strip()
+      panics = workstation.succeed("journalctl --namespace=claude-desktop_sandbox _UID=1000 --no-pager -o cat | grep -c 'waitid: no child' || true").strip()
       print(f"loop: {n - len(failed)} of {n} launches ok, failed: {failed}, waitid panics: {panics}")
       assert not failed, f"{len(failed)} of {n} launches failed: {failed}"
 ''

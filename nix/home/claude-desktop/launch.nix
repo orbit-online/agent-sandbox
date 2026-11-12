@@ -46,7 +46,7 @@ let
           ;
         launcher = if launcherName == null then "" else launcherName;
         unit = ids.appUnit;
-        inherit (ids) journal;
+        inherit (ids) journal sandboxJournal;
         inherit (config.build) homeDirs;
         requiredBinds = lib.mapAttrsToList (_: b: b.src) (
           lib.filterAttrs (_: b: b.enable && !b.optional) config.binds

@@ -20,13 +20,23 @@ let
     u.group == "users"
     || lib.elem "users" u.extraGroups
     || lib.elem name config.users.groups.users.members;
-  # Each launcher's journald namespace, see the Home Manager module's lib.nix (ids.journal)
+  # Each launcher's journald namespaces, the host side's and the sandbox's, see the Home Manager module's lib.nix
+  # (ids.journal, ids.sandboxJournal)
   journals = lib.unique (
     lib.concatMap (
       u:
-      map (n: "claude-desktop${lib.optionalString (n != null) "-${n}"}") (
-        [ null ] ++ lib.attrNames config.home-manager.users.${u}.agent-sandbox.claude-desktop.launchers
-      )
+      lib.concatMap
+        (
+          n:
+          let
+            j = "claude-desktop${lib.optionalString (n != null) "-${n}"}";
+          in
+          [
+            j
+            "${j}_sandbox"
+          ]
+        )
+        ([ null ] ++ lib.attrNames config.home-manager.users.${u}.agent-sandbox.claude-desktop.launchers)
     ) users
   );
   # The sandbox maps the first one into its user namespace, see cmd/launcher's bwrap.go
@@ -48,8 +58,8 @@ in
       group = "users";
       permissions = "u+rx,g+x";
     };
-    # A journald namespace per launcher (systemd-journald@.service): the sandbox writes to its sockets and reads its
-    # files, which the launcher binds, so the directory has to be there before journald first starts
+    # Two journald namespaces per launcher (systemd-journald@.service), whose files the launcher binds into the sandbox,
+    # so their directories have to be there before journald first starts
     systemd.targets.sockets.wants = map (j: "systemd-journald@${j}.socket") journals;
     systemd.tmpfiles.rules = map (j: "d /var/log/journal/%m.${j} 2755 root systemd-journal - -") journals;
     assertions = lib.concatMap (name: [

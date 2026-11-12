@@ -1,12 +1,16 @@
 /*
- * A journald namespace per launcher, as of f44e791 (README.md, Crossings,
- * S15); the fix below is not built. The host enables systemd-journald@claude-desktop; the
+ * The launcher's journald namespaces (README.md, Crossings, S15): the
+ * plan, one namespace (d8ca1ad), and the fix that's built, the host side's
+ * and the sandbox's (cmd/launcher supervise.go appLog, helper.go
+ * hostUnits, nix/home/claude-desktop/lib.nix ids). In the plan the host enables systemd-journald@claude-desktop; the
  * sandbox gets its `socket`, `stdout` and `dev-log` at
  * /run/systemd/journal/socket, /run/systemd/journal/stdout and /dev/log,
  * and its storage read-only. The host helpers (supervise and
  * the D-Bus proxy in supervisor/, the permissions broker's and
  * subid-broker's units, through systemd-cat: internal/journal) log into
- * the same namespace, udhcpc too (helper.go, identifier udhcpc).
+ * the same namespace, udhcpc too (helper.go, identifier udhcpc), and
+ * supervise pumps nixpak's launcher's output there, the app's stderr among
+ * it, as its own lines.
  *
  * journald (systemd 260.5, src/journal) stamps the trusted fields of an
  * entry from the sender's credentials and from /proc/<pid> of the pid in
@@ -84,8 +88,9 @@ one sig
 
 abstract sig Guard {}
 one sig
-  HelpersApart, // the fix: the helpers' units log into HostNS (LogNamespace=)
+  HelpersApart, // the fix: the helpers log into HostNS, systemd-cat --namespace=claude-desktop[-<name>]
   DhcpInSbx,    // the fix: the dhcp unit logs into SbxNS, being the attacker's
+  PumpInSbx,    // the fix: supervise pumps nixpak's output into SbxNS (supervise.go appLog)
   OnlySbxBound  // only SbxNS's sockets are bound into the sandbox
   extends Guard {}
 
@@ -120,6 +125,16 @@ pred send[g: set Guard] {
   }
   Stamped' = Stamped and mcg' = mcg and keepProcs
 }
+// supervise writes a line the attacker wrote to its stderr (the app's,
+// through nixpak's launcher), with its own pid
+pred relay[g: set Guard] {
+  some p: Live & cg.Supervisor, q: Live, m: Msg - Sent,
+       n: ((HelpersApart in g and PumpInSbx not in g) implies HostNS else SbxNS) {
+    side[q] = Attacker and m.ident = Host
+    Sent' = Sent + m and author' = author + m -> q and mpid' = mpid + m -> p.pid and mns' = mns + m -> n
+  }
+  Stamped' = Stamped and mcg' = mcg and keepProcs
+}
 // journald stamps it: the cgroup of whatever runs at the pid now
 pred stamp {
   some m: Sent - Stamped {
@@ -131,7 +146,7 @@ pred stay { keepProcs and keepMsgs }
 
 pred sys[g: set Guard] {
   no Live + Born and no pid and no Sent + Stamped and no author and no mpid and no mns and no mcg
-  always (spawn or exit or send[g] or stamp or stay)
+  always (spawn or exit or send[g] or relay[g] or stamp or stay)
 }
 pred noReuse { always all disj p, q: Born | p.pid != q.pid }
 
@@ -145,10 +160,10 @@ pred s15[r: Reader] { always all m: Stamped | hostSide[r, m] implies side[m.auth
 assert S15plan { sys[OnlySbxBound] implies s15[ByCgroup] }
 check S15plan for 4 but 1..8 steps expect 1
 
-// S15 in the plan without pid reuse. Holds: the attacker's own cgroups,
-// or none once its process is gone.
+// S15 in the plan without pid reuse, known finding: supervise's pump
+// writes the app's stderr with supervise's pid, stamped Supervisor.
 assert S15noReuse { (sys[OnlySbxBound] and noReuse) implies s15[ByCgroup] }
-check S15noReuse for 4 but 1..8 steps expect 0
+check S15noReuse for 4 but 1..8 steps expect 1
 
 // S15, revert: a reader of everything outside sandbox/ takes udhcpc's
 // entries (the dhcp unit), and those whose sender was gone (no cgroup).
@@ -163,19 +178,24 @@ check S15identRevert for 4 but 1..8 steps expect 1
 // S15 with the fix: the helpers in a namespace of their own, read by
 // _NAMESPACE, which is the receiving instance's, so pid reuse changes
 // nothing. Holds.
-pred fixed { sys[HelpersApart + DhcpInSbx + OnlySbxBound] }
+pred fixed { sys[HelpersApart + DhcpInSbx + PumpInSbx + OnlySbxBound] }
 assert S15 { fixed implies s15[ByNs] }
 check S15 for 4 but 1..8 steps expect 0
 
 // S15 fix, revert: the dhcp unit logs with the helpers, and udhcpc
 // writes into their namespace.
-assert S15dhcpRevert { sys[HelpersApart + OnlySbxBound] implies s15[ByNs] }
+assert S15dhcpRevert { sys[HelpersApart + PumpInSbx + OnlySbxBound] implies s15[ByNs] }
 check S15dhcpRevert for 4 but 1..8 steps expect 1
 
 // S15 fix, revert: with the helpers' sockets bound in, the sandbox
 // writes there.
-assert S15boundRevert { sys[HelpersApart + DhcpInSbx] implies s15[ByNs] }
+assert S15boundRevert { sys[HelpersApart + DhcpInSbx + PumpInSbx] implies s15[ByNs] }
 check S15boundRevert for 4 but 1..8 steps expect 1
+
+// S15 fix, revert: supervise pumps the app's output into the helpers'
+// namespace, as its own lines.
+assert S15pumpRevert { sys[HelpersApart + DhcpInSbx + OnlySbxBound] implies s15[ByNs] }
+check S15pumpRevert for 4 but 1..8 steps expect 1
 
 // Vacuity: in the plan a helper's entry is host-side and the sandbox's
 // isn't.

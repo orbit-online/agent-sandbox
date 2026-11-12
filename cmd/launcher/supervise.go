@@ -90,11 +90,13 @@ func supervise(cfg *config, vars, args []string) error {
 	if err := cmd.Start(); err != nil {
 		return failStart(cfg, sp, fmt.Sprintf("Start nixpak's launcher: %v", err), "")
 	}
+	out, endLog := appLog(cfg)
+	defer endLog()
 	var pumps sync.WaitGroup
 	pumps.Add(2)
 	go func() {
 		defer pumps.Done()
-		pump(stdout, os.Stdout, tail, func(line string) {
+		pump(stdout, out, tail, func(line string) {
 			if line == cfg.Ready {
 				once.Do(func() { close(ready) })
 			}
@@ -102,7 +104,7 @@ func supervise(cfg *config, vars, args []string) error {
 	}()
 	go func() {
 		defer pumps.Done()
-		pump(stderr, os.Stderr, tail, nil)
+		pump(stderr, out, tail, nil)
 	}()
 	exited := make(chan struct{})
 	go func() {
@@ -262,6 +264,40 @@ func activate(cfg *config, sp *splash) {
 		return
 	}
 	sp.send(splashState{Activate: string(token)})
+}
+
+// appLog is where nixpak's launcher's output goes, the app's among it: the sandbox's journal namespace, which the app
+// can write to anyway, so a flood of it can't push the host side's entries out of theirs (models/journal.als). Its
+// own stdout and stderr when systemd-cat doesn't start. end closes it and waits for systemd-cat
+func appLog(cfg *config) (w io.Writer, end func()) {
+	if cfg.SandboxJournal == "" {
+		return os.Stderr, func() {}
+	}
+	cat := exec.Command(cfg.Tools.SystemdCat, "--namespace="+cfg.SandboxJournal, "--identifier="+progName(cfg))
+	in, err := cat.StdinPipe()
+	if err == nil {
+		err = cat.Start()
+	}
+	if err != nil {
+		slog.Warn("The app's output goes to the launcher's journal", "err", err)
+		return os.Stderr, func() {}
+	}
+	return &lockedWriter{w: in}, func() {
+		in.Close()
+		cat.Wait()
+	}
+}
+
+// Both pumps write whole lines to it, longer than a pipe takes in one write
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(b)
 }
 
 // pump copies r to w line by line, keeping the lines in tail and handing each to line

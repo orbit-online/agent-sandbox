@@ -188,7 +188,8 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 		return exitError(1)
 	}
 	if runErr != nil {
-		return fmt.Errorf("The app didn't start, see journalctl --namespace=%s --user-unit=%s", cfg.Journal, cfg.Unit)
+		return fmt.Errorf("The app didn't start, see journalctl --namespace=%s (the launcher) and --namespace=%s (the app)",
+			cfg.Journal, cfg.SandboxJournal)
 	}
 	return nil
 }

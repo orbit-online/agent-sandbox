@@ -96,8 +96,10 @@ rec {
       # The app's unit, and the start of the names of the host's units for its daemons (cmd/launcher hostUnits)
       appUnit = "claude-desktop${suffixOf name}-app.service";
       unitPrefix = "claude-desktop${suffixOf name}";
-      # The journald namespace its units and the sandbox log to; the NixOS module runs one per launcher
+      # Its journald namespaces, which the NixOS module runs: the host side's, which the sandbox reads but can't write
+      # to, and the sandbox's, with the app's output. _ is in no launcher name
       journal = "claude-desktop${suffixOf name}";
+      sandboxJournal = "claude-desktop${suffixOf name}_sandbox";
       home = "${stateDir}/home";
       scratchpad = "${stateDir}/tmp-scratchpad";
       # Where the option's definitions say so in messages

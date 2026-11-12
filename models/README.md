@@ -119,13 +119,15 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
     namespaces by `nsenter` from the host. Inside once joined, but their
     parent is a host process.
 
-Added with the journal (17, as of f44e791) and planned (18, not built):
+Added with the journal (17) and planned (18, not built):
 
-17. **journald@claude-desktop[-<name>]**: a journald namespace per
-    launcher, host side, root (`systemd-journald@.service`). Takes entries
-    from the sandbox and from the host helpers (through systemd-cat) (supervise
-    and the D-Bus proxy in `supervisor/`, the broker's and subid-broker's
-    units). Stamps the trusted fields (`_PID`, `_UID`, `_SYSTEMD_CGROUP`,
+17. **journald@claude-desktop[-<name>] and @claude-desktop[-<name>]_sandbox**:
+    two journald namespaces per launcher, host side, root
+    (`systemd-journald@.service`). The host side's takes entries from the
+    host helpers through systemd-cat (supervise and the D-Bus proxy in
+    `supervisor/`, the broker's and subid-broker's units); the sandbox's
+    from the sandbox, udhcpc's unit and supervise's pump of nixpak's
+    output (the app's stderr among it). Stamps the trusted fields (`_PID`, `_UID`, `_SYSTEMD_CGROUP`,
     `_COMM`, `_EXE`, ...) from the sender's credentials and from
     `/proc/<pid>` by pid (systemd 260.5 has no pidfd in journald).
 18. **systemd --user manager**: in the sandbox, uid 1000 in U2, M2, P2
@@ -181,8 +183,8 @@ joining needs CAP_SYS_ADMIN in init).
 | the daemon's config (ceilings, standing grants) | the Home Manager module, a read-only path in the host's Nix store | host only (the host's store isn't bound) | nothing writes it at runtime; what the user ends lives in the daemon's memory |
 | helper binaries | nsenter, setpriv, the launcher's scripts | resolved on the host's mounts, or in MU's closure binds | never in M1 or M2, where the sandbox can swap a directory (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
-| journal sockets (f44e791): `socket`, `stdout`, `dev-log` of the launcher's journald namespace at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; the host helpers and udhcpc too | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates the helpers' entries out of the namespace |
-| journal storage (f44e791): `/var/log/journal/<machine-id>.claude-desktop`, ro at `/var/log/journal/<machine-id>` | journald writes | the sandbox reads all of it | none: the helpers' entries are there too, with their messages, command lines, executables and host pids, which the pid namespace hides otherwise |
+| journal sockets: `socket`, `stdout`, `dev-log` of the launcher's sandbox journald namespace (`_sandbox`) at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; udhcpc and supervise's pump too; the host side's namespace's sockets aren't bound | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates only the sandbox's own namespace |
+| journal storage: `/var/log/journal/<machine-id>.claude-desktop[-<name>]_sandbox` ro at `/var/log/journal/<machine-id>`, and the host side's `.claude-desktop[-<name>]` ro under its own name | journald writes | the sandbox reads both | none: the helpers' messages (the proxy's refusals, which is why it's bound), command lines, executables and host pids, which the pid namespace hides otherwise |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
 | `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; a store dir other than the one the launch recorded (the launcher's `store.go`, by device and inode), or no record, and `nix/` is deleted and the closure synced into a fresh one |
 
@@ -301,16 +303,16 @@ process whose principal is in the Sandbox domain, at any time.
   the sandbox's identity (`bwrapinfo.json`, `info`, the daemon's
   config). The module's assertion refuses a bind holding a state dir or
   `$XDG_RUNTIME_DIR`, or in either's identity parts.
-- S15. As of f44e791 (`journal.als`): no entry a reader counts as a host
-  helper's was written by a sandbox process. Read by `_SYSTEMD_CGROUP`
-  (one of the helpers' cgroups, not merely outside `sandbox/`, which takes
-  udhcpc's dhcp unit and entries whose sender was gone), never by
-  `SYSLOG_IDENTIFIER` or `COMPONENT`. `_SYSTEMD_USER_UNIT` and
+- S15 (`journal.als`): no entry a reader counts as a host helper's was
+  written by a sandbox process. Read by `_NAMESPACE`, the host side's:
+  the sandbox has no socket of it, and udhcpc and supervise's pump of the
+  app's output log to the sandbox's. Never by `SYSLOG_IDENTIFIER` or
+  `COMPONENT`, nor by `_SYSTEMD_CGROUP` in one shared namespace (the
+  plan, known findings): the cgroup is read by pid at flush time, so a
+  sandbox process can hold a line until its pid serves a helper, and the
+  pump stamps the app's lines as supervise's. `_SYSTEMD_USER_UNIT` and
   `_SYSTEMD_INVOCATION_ID` are the app's unit for `supervisor/` and
-  `sandbox/` alike. Known finding: the cgroup is read by pid at
-  flush time, and a sandbox process can hold a line until its pid serves a
-  helper. With the helpers in a namespace of their own, read by
-  `_NAMESPACE`, and udhcpc kept with the sandbox's, it holds (not built).
+  `sandbox/` alike.
 
 ### Protocol (`protocol.als`)
 
@@ -480,7 +482,7 @@ check: that's the user's own mount and ceiling configuration.
 | `protocol.als` | 3 | P1-P17 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | planned | L11: the app's pid with a systemd --user manager in P2 |
-| `journal.als` | f44e791 | S15: the journald namespace's entries, the helpers' against the sandbox's |
+| `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine

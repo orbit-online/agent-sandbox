@@ -141,28 +141,36 @@
       exe = workstation.succeed(f"readlink /proc/{proxies[0]}/exe").strip()
       assert exe == "${dbusProxy}/bin/dbus-proxy", f"the D-Bus proxy runs {exe}"
 
-  with subtest("the launcher's journal namespace: the host side logs there by name and priority, the sandbox too, and reads it"):
-      def host_journal(args):
-          return workstation.succeed(f"journalctl --namespace=claude-desktop --no-pager -o cat {args}")
-      # The refusals above, as warnings
+  with subtest("the launcher's journal namespaces: the host side's by name and priority, which the sandbox reads but can't write to, and the sandbox's"):
+      def host_journal(ns, args):
+          return workstation.succeed(f"journalctl --namespace={ns} --no-pager -o cat {args}")
+      # The refusals above, as warnings, on the host side
       workstation.wait_until_succeeds(
           "journalctl --namespace=claude-desktop --no-pager -o cat -t dbus-proxy -p warning | grep -q member=getClipboardContents",
           timeout=30)
-      assert "time=" not in host_journal("-t dbus-proxy -p warning"), "slog's time in the journal"
-      # supervise and what it pumps (nixpak, bwrap, the app), and the units the launcher starts
-      for ident in ["claude-desktop", "udhcpc"]:
-          assert host_journal(f"-t {ident}").strip(), f"nothing from {ident}"
+      assert "time=" not in host_journal("claude-desktop", "-t dbus-proxy -p warning"), "slog's time in the journal"
+      # What supervise pumps (nixpak, bwrap, the app, its ready line among it) and udhcpc, in the sandbox's; supervise's
+      # own messages, under the same name, on the host side
+      assert "agent-sandbox: ready" in host_journal("claude-desktop_sandbox", "-t claude-desktop")
+      assert "agent-sandbox: ready" not in host_journal("claude-desktop", "")
+      assert host_journal("claude-desktop_sandbox", "-t udhcpc").strip(), "nothing from udhcpc"
+      assert not host_journal("claude-desktop", "-t udhcpc").strip(), "udhcpc on the host side"
       in_sandbox("logger -t probe-in hello-from-inside")
       in_sandbox("systemd-cat -t probe-cat echo hello-from-cat")
       workstation.wait_until_succeeds(sandbox_cmd("journalctl --no-pager -o cat -t probe-in -t probe-cat") + " | grep -c hello-from | grep -qx 2", timeout=30)
-      # The proxy's refusals, from inside: the user's journal file in the namespace, read through its ACL
-      assert "member=getClipboardContents" in in_sandbox("journalctl --no-pager -o cat -t dbus-proxy -p warning")
-      # Only the namespace's: the main journal's files aren't there
-      out = in_sandbox("ls /var/log/journal")
-      assert len(out.split()) == 1, out
-      host_entry = workstation.succeed(
-          "journalctl --namespace=claude-desktop --no-pager -o cat --output-fields=_SYSTEMD_CGROUP -t probe-in -n 1").strip()
-      assert host_entry.endswith("/claude-desktop-app.service/sandbox/app"), host_entry
+      # Nothing of the sandbox's reaches the host side's namespace
+      status, out = workstation.execute(sandbox_cmd("systemd-cat --namespace=claude-desktop echo forged") + " 2>&1")
+      assert status != 0, out
+      assert "forged" not in host_journal("claude-desktop", "")
+      assert not host_journal("claude-desktop", "-t probe-in").strip()
+      # The proxy's refusals, from inside: the host side's namespace, read through the user's journal file's ACL
+      assert "member=getClipboardContents" in in_sandbox("journalctl --namespace=claude-desktop --no-pager -o cat -t dbus-proxy -p warning")
+      # Only the launcher's namespaces: the main journal's files aren't there
+      out = sorted(in_sandbox("ls /var/log/journal").split())
+      assert len(out) == 2 and out[1] == out[0] + ".claude-desktop", out
+      cgroup = workstation.succeed(
+          "journalctl --namespace=claude-desktop_sandbox --no-pager -o cat --output-fields=_SYSTEMD_CGROUP -t probe-in -n 1").strip()
+      assert cgroup.endswith("/claude-desktop-app.service/sandbox/app"), cgroup
 
   with subtest("the launch replaced the planted links and left alice's files alone"):
       victims_untouched()

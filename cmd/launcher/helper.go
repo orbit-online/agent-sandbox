@@ -43,7 +43,8 @@ type hostUnits struct {
 	Prefix     string `json:"prefix"` // Their names', claude-desktop[-<name>]
 	Slice      string `json:"slice"`
 	SystemdCat string `json:"systemdCat"`
-	Journal    string `json:"journal"` // The journal namespace they log to
+	Journal    string `json:"journal"`        // The host side's journal namespace, subid-broker's
+	Sandbox    string `json:"sandboxJournal"` // The sandbox's, udhcpc's: it runs in the sandbox's namespaces
 }
 
 // Stops the unit <prefix>-<name>, whatever it's doing
@@ -51,15 +52,15 @@ func (u *hostUnits) stop(name string) {
 	_ = exec.Command(u.Systemctl, "--user", "stop", u.Prefix+"-"+name).Run()
 }
 
-// Starts the unit <prefix>-<name> running argv, logging as identifier, and returns once it started. Not After= the
-// app's unit: that one is still starting, and waits for this
-func (u *hostUnits) start(name, identifier string, props []string, argv ...string) error {
+// Starts the unit <prefix>-<name> running argv, logging to the journal namespace as identifier, and returns once it
+// started. Not After= the app's unit: that one is still starting, and waits for this
+func (u *hostUnits) start(name, namespace, identifier string, props []string, argv ...string) error {
 	args := []string{"--user", "--quiet", "--collect", "--unit=" + u.Prefix + "-" + name, "--slice=" + u.Slice,
 		"-p", "BindsTo=" + u.App}
 	for _, p := range props {
 		args = append(args, "-p", p)
 	}
-	argv = journal.Wrap(u.SystemdCat, u.Journal, identifier, argv...)
+	argv = journal.Wrap(u.SystemdCat, namespace, identifier, argv...)
 	out, err := exec.Command(u.SystemdRun, append(append(args, "--"), argv...)...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Start %s-%s: %w: %s", u.Prefix, name, err, out)
@@ -167,7 +168,7 @@ func (n *netSetup) run(pid int, u *hostUnits) error {
 	}
 	// udhcpc in a mount namespace of its own, made from the host's (see dhcp-root.sh), in the sandbox's pid ns so it
 	// dies with it. It goes to the background once it has a lease or gives up, which ends the unit's start
-	return u.start("dhcp", "udhcpc", []string{"Type=forking"},
+	return u.start("dhcp", u.Sandbox, "udhcpc", []string{"Type=forking"},
 		append(append([]string{n.Nsenter}, ns...), "-p", n.Unshare, "--mount", "--propagation", "private", n.DHCPRoot)...)
 }
 

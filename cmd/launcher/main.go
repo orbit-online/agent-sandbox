@@ -64,9 +64,10 @@ Options:
 // The launcher's config, as launch.nix writes it
 type config struct {
 	AppID          string   `json:"appId"`
-	Launcher       string   `json:"launcher"` // Its name, empty for the default launcher
-	Unit           string   `json:"unit"`     // The app's unit
-	Journal        string   `json:"journal"`  // The journal namespace the launcher's units log to
+	Launcher       string   `json:"launcher"`       // Its name, empty for the default launcher
+	Unit           string   `json:"unit"`           // The app's unit
+	Journal        string   `json:"journal"`        // The journal namespace the launcher's host side logs to
+	SandboxJournal string   `json:"sandboxJournal"` // The one the sandbox and the app's output log to
 	Slice          string   `json:"slice"`
 	AppPid         int      `json:"appPid"`
 	StateDir       string   `json:"stateDir"`

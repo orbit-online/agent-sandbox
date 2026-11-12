@@ -103,11 +103,13 @@ func runBwrap(o bwrapOpts, args []string) error {
 			return err
 		}
 		pass = append(pass, "--bind", sock, "/run/subid-broker.sock")
-		// The journal namespace's files, where journalctl inside looks for the machine's: by the machine-id, which the
-		// sandbox's /etc has too. Missing until the NixOS module's tmpfiles rule ran
+		// The journal namespaces' files where journalctl inside looks, by the machine-id, which the sandbox's /etc has
+		// too: the sandbox's as the machine's, the host side's under its own name. Missing until the NixOS module's
+		// tmpfiles rules ran
 		if mid, err := os.ReadFile("/etc/machine-id"); err == nil && o.units.Journal != "" {
 			dir := "/var/log/journal/" + strings.TrimSpace(string(mid))
-			pass = append(pass, "--ro-bind-try", dir+"."+o.units.Journal, dir)
+			pass = append(pass, "--ro-bind-try", dir+"."+o.units.Sandbox, dir,
+				"--ro-bind-try", dir+"."+o.units.Journal, dir+"."+o.units.Journal)
 		}
 		cgBind, err := layOutCgroups(&spec)
 		if err != nil {
@@ -200,7 +202,7 @@ func startSubidBroker(u *hostUnits, broker string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return "", err
 	}
-	if err := u.start("subid", "subid-broker", nil, broker, sock, strconv.Itoa(os.Getpid())); err != nil {
+	if err := u.start("subid", u.Journal, "subid-broker", nil, broker, sock, strconv.Itoa(os.Getpid())); err != nil {
 		return "", err
 	}
 	for range 50 {
