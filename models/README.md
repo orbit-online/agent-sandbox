@@ -79,9 +79,9 @@ in the init namespaces unless noted.
    unit `claude-desktop[-<name>]-subid.service` in the launcher's slice,
    `BindsTo=` the app's unit. Exits when bwrap does (a pidfd on it, opened
    before the socket exists, while the launcher still waits for it), or at
-   once if bwrap is gone already; when the launcher gave up on it first,
-   with whatever process took the launcher's pid, or the app's unit
-   (L8window in `launch-host.als`). Writes uid and gid maps for user
+   once if bwrap is gone already. A launcher that gives up on its socket
+   stops the unit before it exits, so the broker can't watch whatever
+   takes the pid next (L8window in `launch-host.als`). Writes uid and gid maps for user
    namespaces in the sandbox, on `/run/subid-broker.sock`.
 8. **netns-macvlan**: setcap `cap_net_admin` wrapper, group `users`.
    Creates `eth0` in the sandbox's netns.

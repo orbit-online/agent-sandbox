@@ -38,11 +38,17 @@ type netSetup struct {
 // it and log to the journal as units of their own
 type hostUnits struct {
 	SystemdRun string `json:"systemdRun"`
+	Systemctl  string `json:"systemctl"`
 	App        string `json:"app"`    // The app's unit
 	Prefix     string `json:"prefix"` // Their names', claude-desktop[-<name>]
 	Slice      string `json:"slice"`
 	SystemdCat string `json:"systemdCat"`
 	Journal    string `json:"journal"` // The journal namespace they log to
+}
+
+// Stops the unit <prefix>-<name>, whatever it's doing
+func (u *hostUnits) stop(name string) {
+	_ = exec.Command(u.Systemctl, "--user", "stop", u.Prefix+"-"+name).Run()
 }
 
 // Starts the unit <prefix>-<name> running argv, logging as identifier, and returns once it started. Not After= the

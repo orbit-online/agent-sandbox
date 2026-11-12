@@ -55,6 +55,7 @@ let
     "--units=${
       builtins.toJSON {
         systemdRun = lib.getExe' osConfig.systemd.package "systemd-run";
+        systemctl = lib.getExe' osConfig.systemd.package "systemctl";
         app = ids.appUnit;
         prefix = ids.unitPrefix;
         inherit (ids) slice journal;

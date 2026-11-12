@@ -58,7 +58,9 @@ one sig
   BindsToApp, // helper.go:48: BindsTo= the app's unit, for the subid and dhcp units
   PidfdExit,  // run.go: run returns when the sandbox's pidfd turns readable
   BindsTo,    // call units BindsTo= the daemon's unit (README.md, Principals 9)
-  StartLimit  // launcher supervise.go:195-196: the broker unit's StartLimitBurst=3 in 10 min
+  StartLimit, // launcher supervise.go:195-196: the broker unit's StartLimitBurst=3 in 10 min
+  StopOnAbort // bwrap.go startSubidBroker: giving up, the launcher stops the subid unit (systemctl waits for it)
+              // before it exits, while the pid is still its own
   extends Guard {}
 
 pred live[t: Thing] { t in Alive }
@@ -89,9 +91,12 @@ pred subidEnd[g: set Guard] {
   PidfdWatch in g and live[SubidB] and some Pidfd.on - Alive
   become[none, SubidB, none]
 }
-// bwrap.go:200-206: no socket within 5 s, the launcher exits 1 (the pid
-// is free once supervise reaps it)
-pred shellAbort { live[Shell] and Listening not in Marks and become[none, Shell, Ended] }
+// bwrap.go startSubidBroker: no socket within 5 s, the launcher stops the
+// subid unit and exits 1 (the pid is free once supervise reaps it)
+pred shellAbort[g: set Guard] {
+  live[Shell] and Listening not in Marks
+  become[none, Shell + (StopOnAbort in g implies SubidB else none), Ended]
+}
 // The exec keeps the pid, and the pidfd names the same process
 pred execBwrap {
   live[Shell] and Listening in Marks
@@ -136,7 +141,7 @@ pred stay { Alive' = Alive and Marks' = Marks and LPid.names' = LPid.names and P
 
 pred lifetimes[g: set Guard] {
   Alive = AppUnit + Shell and no Marks and LPid.names = Shell and no Pidfd.on
-  always (brokerStart or subidSpawn[g] or subidOpen or subidEnd[g] or shellAbort or execBwrap
+  always (brokerStart or subidSpawn[g] or subidOpen or subidEnd[g] or shellAbort[g] or execBwrap
     or reuse or otherExit or sandboxStart or udhcpcStart or reentryStart or brokerFinds or callStart
     or sandboxEnds or bwrapExit or appEnds or bindsStop[g] or brokerExit[g] or brokerGivesUp[g] or stay)
   // Weak fairness for the host's own reactions. Not for appEnds (the
@@ -167,32 +172,32 @@ pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + CallUni
 assert L8 { (lifetimes[Guard] and userCloses) implies l8 }
 check L8 for 4 but 1..18 steps expect 0
 
-// L8, known finding (harmless; since de94126, which replaced the death
-// signal and its getppid check): the launcher gives up on the socket
-// after 5 s and exits before subid-broker's pidfd_open, another host
-// process takes its pid, and the broker opens a pidfd on that one. It
-// serves until that process exits or the app's unit stops, which waits
-// for the user to close the error window. Its socket is in the
-// launchers' runtime dir, which no sandbox binds, so nothing reaches it,
-// unless the process that took the pid is another launcher's own
-// (bwrap.go:193 names the socket by pid alone): that one's broker can't
-// listen there, its launcher finds this broker's socket and its sandbox
-// uses it (the same binary and checks, none of them per launcher), until
-// this app's unit stops and takes the maps for nested namespaces with it.
-// The old leak (until logout) is gone: BindsTo= bounds it. A fix: the
-// launcher stops the subid unit (systemctl --user stop) before it gives
-// up, while its pid is still its own.
+// L8 whether or not the user closes the error window: the launcher that
+// gives up on the socket stops the subid unit first, so no broker is left
+// to open a pidfd on whatever takes the pid next. Holds.
 assert L8window { lifetimes[Guard] implies l8 }
-check L8window for 4 but 1..18 steps expect 1
+check L8window for 4 but 1..18 steps expect 0
+
+// L8window, revert: without the stop, the launcher gives up after 5 s
+// and exits before subid-broker's pidfd_open, another host process takes
+// its pid, and the broker opens a pidfd on that one. It serves until that
+// process exits or the app's unit stops, which waits for the user to
+// close the error window. Its socket is in the launchers' runtime dir,
+// which no sandbox binds, unless the process that took the pid is another
+// launcher's own (the socket is named by pid alone): that one's sandbox
+// would use this broker until this app's unit stops.
+assert L8stopRevert { lifetimes[Guard - StopOnAbort] implies l8 }
+check L8stopRevert for 4 but 1..18 steps expect 1
 
 // L8 without pid reuse, error window or not: the broker exits at once
-// when the pid is free. Holds, so the reuse is L8window's cause.
+// when the pid is free. Holds, so the reuse is L8stopRevert's cause.
 assert L8noReuse { (lifetimes[Guard] and always not live[Other]) implies l8 }
 check L8noReuse for 4 but 1..18 steps expect 0
 
-// L8, revert: without BindsTo= the app's unit, the broker on a reused
-// pid outlives the app's unit.
-assert L8bindsRevert { (lifetimes[Guard - BindsToApp] and userCloses) implies l8 }
+// L8, revert: BindsTo= the app's unit is the backstop for a launcher
+// that didn't get to stop the subid unit: without both, the broker on a
+// reused pid outlives the app's unit.
+assert L8bindsRevert { (lifetimes[Guard - BindsToApp - StopOnAbort] and userCloses) implies l8 }
 check L8bindsRevert for 4 but 1..18 steps expect 1
 
 // L8, revert: without StartLimit the broker that never finds a sandbox
@@ -227,9 +232,10 @@ run lifetimesRun {
   eventually (live[Udhcpc + Reentry + CallUnit + SubidB]) and eventually Ended in Marks
 } for 4 but 1..18 steps expect 1
 
-// Vacuity: the launcher gives up and the broker finds its pid free.
+// Vacuity: the launcher gives up and, without the stop, the broker finds
+// its pid free.
 run subidGoneRun {
-  lifetimes[Guard] and always not live[Other]
+  lifetimes[Guard - StopOnAbort] and always not live[Other]
   eventually (Ended in Marks and live[SubidB] and no Pidfd.on)
 } for 4 but 1..18 steps expect 1
 

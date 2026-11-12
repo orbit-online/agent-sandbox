@@ -209,6 +209,8 @@ func startSubidBroker(u *hostUnits, broker string) (string, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// Its pidfd may name another process by now, once this one is gone (models/launch-host.als, L8window)
+	u.stop("subid")
 	return "", errors.New("subid-broker didn't start")
 }
 
