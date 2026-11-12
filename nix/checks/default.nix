@@ -437,6 +437,64 @@ let
       );
       expected = 1;
     };
+    # A launcher with network.enable off: its netns without a netkit pair (no --net for the bwrap of nixpak) and no DNS
+    # followed (the launcher config), the default launcher with both, the assertions holding
+    testNetworkOff =
+      let
+        sys = nixos (lib.recursiveUpdate enabled { launchers.work.network.enable = false; });
+        c = sys.config.home-manager.users.alice.agent-sandbox.claude-desktop;
+        of = l: {
+          net = lib.any (r: lib.hasInfix "'--net=" (r.text or "")) l.build.storeRoots;
+          inherit (l.build.launcherConfig) network;
+        };
+      in
+      {
+        expr = {
+          default = of c;
+          work = of c.launchers.work;
+          failed = failedAssertions sys;
+        };
+        expected = {
+          default = {
+            net = true;
+            network = true;
+          };
+          work = {
+            net = false;
+            network = false;
+          };
+          failed = [ ];
+        };
+      };
+    # No standing port grant without a network
+    testNetworkOffPortGrant = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work = {
+                network.enable = false;
+                permissions = {
+                  enable = true;
+                  grants = [
+                    {
+                      capability = "port";
+                      params = {
+                        protocol = "tcp";
+                        port = 8080;
+                      };
+                    }
+                  ];
+                };
+              };
+            }
+          )
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no port grants with network.enable off, the sandbox has no network"
+      ];
+    };
     testExtraPath = {
       expr = lib.head (
         lib.splitString ":" alice.agent-sandbox.claude-desktop.mcpServers.claude-code.env.PATH

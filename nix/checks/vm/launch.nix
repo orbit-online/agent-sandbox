@@ -1,5 +1,6 @@
 # The default launcher: its launch, D-Bus, links planted in its state, subordinate ids, the scratchpad, store GC, the
-# theme, re-entries and --shell, the network on its netkit pair, /etc and the store, netns-netkit's refusals
+# theme, re-entries and --shell, the network on its netkit pair, /etc and the store, netns-netkit's refusals; a launcher
+# without a network
 {
   pkgs,
   gdbus,
@@ -601,4 +602,26 @@
       for a in [sb4, sb6]:
           workstation.fail(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(a)}")
       workstation.succeed("systemctl start sandbox-uplink")
+
+  with subtest("a launcher without a network: lo alone, no routes, no netkit pair, no DNS"):
+      launch("claude-desktop-offline", "/home/alice/.local/share/claude-desktop-offline/home")
+      def offline_cmd(cmd):
+          return alice_cmd(f"/etc/profiles/per-user/alice/bin/claude-desktop-offline --exec {cmd}")
+      links = workstation.succeed(offline_cmd("ip -o link show")).strip().splitlines()
+      assert len(links) == 1 and links[0].split()[1] == "lo:" and ",UP," in links[0], links
+      workstation.succeed(offline_cmd("python3 -c " + shlex.quote(
+          "import socket; s = socket.create_server(('127.0.0.1', 0)); socket.create_connection(s.getsockname(), 3)")))
+      routes = workstation.succeed(offline_cmd("ip -4 route show")) + workstation.succeed(offline_cmd("ip -6 route show default"))
+      assert routes.strip() == "", routes
+      for host in ["${routerIP}", "${internet4}", "${internet6}"]:
+          workstation.fail(offline_cmd(tcp_connect(host, 443)))
+      # Nothing of it on the host: no primary, pins or ExecStopPost of netns-netkit
+      workstation.fail("ip -o link show | grep sbx-")
+      workstation.fail("test -e /run/sandbox-uplink/1000-offline")
+      stop = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-offline-app")
+      assert "netns-netkit" not in stop, stop
+      # An empty resolv.conf, without the warning about it
+      workstation.fail(offline_cmd("test -s /etc/resolv.conf"))
+      journal = workstation.succeed("journalctl --namespace=claude-desktop-offline --no-pager")
+      assert "step=sandbox" in journal and "No DNS" not in journal, journal
 ''

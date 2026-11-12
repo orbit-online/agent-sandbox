@@ -1,6 +1,6 @@
 # The netns of the sandbox, connected through a netkit pair whose programs let it reach the network through the einat
 # uplinks alone (netns-netkit --help, nix/nixos/network.nix), so host services, routes and abstract sockets stay out of
-# reach. Always on: there is no option to share the host's
+# reach. With network.enable off, lo alone. Always its own netns: there is no option to share the host's
 {
   lib,
   pkgs,
@@ -14,22 +14,25 @@ let
   ids = sl.idsOf launcherName;
   # nixpak's bwrap, mode subid (cmd/launcher bwrap.go), whose helper sets up the netns before nixpak's launcher
   # hears the sandbox is there and lets the app start (helper.go, netSetup)
-  bwrapHost = sl.bwrapOf [
-    "--mode=subid"
-    "--newuidmap=${osConfig.security.wrapperDir}/newuidmap"
-    "--newgidmap=${osConfig.security.wrapperDir}/newgidmap"
-    "--subid-broker=${lib.getExe sl.packages.subid-broker}"
-    "--units=${
-      builtins.toJSON {
-        systemdRun = lib.getExe' osConfig.systemd.package "systemd-run";
-        systemctl = lib.getExe' osConfig.systemd.package "systemctl";
-        app = ids.appUnit;
-        prefix = ids.unitPrefix;
-        inherit (ids) slice journal sandboxJournal;
-        systemdCat = lib.getExe' osConfig.systemd.package "systemd-cat";
-      }
-    }"
-    "--net=${
+  bwrapHost = sl.bwrapOf (
+    [
+      "--mode=subid"
+      "--newuidmap=${osConfig.security.wrapperDir}/newuidmap"
+      "--newgidmap=${osConfig.security.wrapperDir}/newgidmap"
+      "--subid-broker=${lib.getExe sl.packages.subid-broker}"
+      "--units=${
+        builtins.toJSON {
+          systemdRun = lib.getExe' osConfig.systemd.package "systemd-run";
+          systemctl = lib.getExe' osConfig.systemd.package "systemctl";
+          app = ids.appUnit;
+          prefix = ids.unitPrefix;
+          inherit (ids) slice journal sandboxJournal;
+          systemdCat = lib.getExe' osConfig.systemd.package "systemd-cat";
+        }
+      }"
+    ]
+    # Without it the netns keeps what bwrap gives it: lo, up
+    ++ lib.optional config.network.enable "--net=${
       builtins.toJSON (
         {
           netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
@@ -39,7 +42,7 @@ let
         // lib.optionalAttrs (launcherName != null) { name = launcherName; }
       )
     }"
-  ];
+  );
   # nixpak's pasta slot, where it runs pasta after bwrap's info and before it lets the app start. A no-op: the bwrap
   # helper set the netns up already. nixpak only gives the sandbox a netns of its own with pasta on
   netSetup = pkgs.writeShellApplication {
@@ -49,6 +52,16 @@ let
   nixpak = config.build.sandboxed.config;
 in
 {
+  options.network.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = true;
+    description = ''
+      Join the netns of the sandbox to the network (netkit pair, DNS, `port` grants of the permissions broker). Off,
+      the sandbox keeps a netns of its own with `lo` alone, for local models say: it reaches servers of the host only
+      through host sockets of the permissions broker.
+    '';
+  };
+
   options.nameservers = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
@@ -63,7 +76,10 @@ in
 
   config = {
     build.storeRoots = [ bwrapHost ];
-    build.launcherConfig = { inherit (config) nameservers; };
+    build.launcherConfig = {
+      inherit (config) nameservers;
+      network = config.network.enable;
+    };
     # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in fhs.nix), no
     # extra pasta args
     build.nixpak = [

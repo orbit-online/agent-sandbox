@@ -124,6 +124,12 @@ unless you ask otherwise); release it when you're done.
   option, or none of its servers is reachable from here; the launcher logs
   a warning in the journal namespace of the host side then (see Services
   and logs).
+  A launcher with `network.enable` off (for local models) leaves you a
+  network namespace with `lo` alone (`ip link` shows no `eth0`): no
+  routes, an empty `/etc/resolv.conf` and no `port` capability. A model
+  server on the host is then reachable only through a host socket of the
+  permissions broker that the user configured, a Unix socket at
+  `/run/permissions/sockets/<name>`.
 - No SSH agent and no `~/.ssh`.
 
 ## User namespaces

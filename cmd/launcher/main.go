@@ -82,6 +82,7 @@ type config struct {
 	NixpakLauncher string   `json:"nixpakLauncher"`
 	Ready          string   `json:"ready"`       // The line the app prints on stdout when its first window is ready
 	Nameservers    []string `json:"nameservers"` // The sandbox's DNS servers, the host's (dns.go) when empty
+	Network        bool     `json:"network"`     // Off: lo alone in the netns of the sandbox, no netkit pair and no DNS
 	Tools          struct {
 		Journalctl string `json:"journalctl"`
 		Nsenter    string `json:"nsenter"`

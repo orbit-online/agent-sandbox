@@ -41,10 +41,10 @@ type dns struct {
 	last *string // What the file holds
 }
 
-// newDNS connects to the system bus unless the nameservers option is set
+// newDNS connects to the system bus unless the nameservers option is set or the sandbox has no network
 func newDNS(cfg *config) *dns {
 	d := &dns{cfg: cfg}
-	if len(cfg.Nameservers) == 0 {
+	if cfg.Network && len(cfg.Nameservers) == 0 {
 		bus, err := dbus.ConnectSystemBus()
 		if err != nil {
 			slog.Warn("No system bus for the DNS of the host", "err", err)
@@ -68,10 +68,10 @@ func (d *dns) update() error {
 		return fmt.Errorf("Write the resolv.conf of the sandbox: %w: %s", err, out)
 	}
 	d.last = &conf
-	if conf == "" {
+	if conf == "" && d.cfg.Network {
 		slog.Warn("No DNS in the sandbox: no nameservers option, and the DNS of the host has no server the sandbox reaches",
 			"source", source)
-	} else {
+	} else if conf != "" {
 		slog.Info("DNS of the sandbox", "source", source, "resolv.conf", conf)
 	}
 	return nil
@@ -79,6 +79,9 @@ func (d *dns) update() error {
 
 // read returns the resolv.conf the sandbox gets and where it came from
 func (d *dns) read() (string, string) {
+	if !d.cfg.Network {
+		return "", "no network"
+	}
 	if len(d.cfg.Nameservers) > 0 {
 		var b strings.Builder
 		for _, ns := range d.cfg.Nameservers {

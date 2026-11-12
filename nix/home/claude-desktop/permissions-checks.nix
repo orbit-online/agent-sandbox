@@ -24,6 +24,11 @@ in
           assertion = false;
           message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
         }
+      else if g.capability == "port" && !config.network.enable then
+        {
+          assertion = false;
+          message = "${opt}: no port grants with network.enable off, the sandbox has no network";
+        }
       else if g.capability == "port" then
         {
           # As the schema of the port capability in the broker (ports.go)

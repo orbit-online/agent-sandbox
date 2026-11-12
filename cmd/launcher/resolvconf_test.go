@@ -95,15 +95,19 @@ func TestNM(t *testing.T) {
 	}
 }
 
-// The option wins; without it and without a bus, no DNS
+// The option wins; without it and without a bus, no DNS; without a network none, the option set or not
 func TestDNSSources(t *testing.T) {
-	d := &dns{cfg: &config{Nameservers: []string{"192.168.1.1", "2001:db8::1"}}}
+	d := &dns{cfg: &config{Network: true, Nameservers: []string{"192.168.1.1", "2001:db8::1"}}}
 	if got, src := d.read(); got != "nameserver 192.168.1.1\nnameserver 2001:db8::1\n" || src != "nameservers option" {
 		t.Errorf("Static: %q from %s", got, src)
 	}
-	d = &dns{cfg: &config{}}
+	d = &dns{cfg: &config{Network: true}}
 	if got, src := d.read(); got != "" || src != "none" {
 		t.Errorf("Without a source: %q from %s", got, src)
+	}
+	d = newDNS(&config{Nameservers: []string{"192.168.1.1"}})
+	if got, src := d.read(); got != "" || src != "no network" || d.bus != nil {
+		t.Errorf("Without a network: %q from %s, bus %v", got, src, d.bus)
 	}
 }
 
@@ -112,6 +116,7 @@ func TestDNSUpdate(t *testing.T) {
 	w := newWorld(t)
 	out := filepath.Join(w.dir, "resolv.conf")
 	w.cfg.State = w.script("state", "cat >"+out)
+	w.cfg.Network = true
 	w.cfg.Nameservers = []string{"192.168.1.1"}
 	d := &dns{cfg: w.cfg}
 	for range 2 {

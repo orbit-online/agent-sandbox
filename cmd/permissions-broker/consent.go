@@ -17,6 +17,10 @@ import (
 // request asks the user for a grant, or finds one already there that covers it
 func (b *broker) request(p peer, req wire.Request) (*grant, error) {
 	c, ok := b.caps[req.Capability]
+	if !ok && req.Capability == portID {
+		// The module leaves the helper out of the config of a launcher without a network
+		return nil, refusef(refUnknown, "No capability %q: the sandbox has no network", portID)
+	}
 	if !ok {
 		return nil, refusef(refUnknown, "No capability %q: see list", req.Capability)
 	}

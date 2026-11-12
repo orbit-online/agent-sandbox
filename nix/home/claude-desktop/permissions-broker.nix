@@ -64,8 +64,10 @@ let
       # Every launcher's state directory and runtime directory, and anything holding one
       denied = map sl.stateDirOf sl.names ++ [ "\${XDG_RUNTIME_DIR}" ];
       inherit (config.permissions) folders;
-      # The helper of the port capability, the wrapper of the NixOS module
-      netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
+      # The helper of the port capability, the wrapper of the NixOS module; none, and no port capability, without a
+      # network
+      netnsNetkit =
+        if config.network.enable then "${osConfig.security.wrapperDir}/netns-netkit" else null;
       commands = commandsOf true;
       sockets = lib.mapAttrsToList (
         name: sock:
@@ -106,7 +108,11 @@ let
               );
           inherit (config.build) devices;
           dbus = config.build.dbusRules;
-          network = "Its own network namespace, joined to the host by a netkit pair whose programs let it out only through the uplinks, NATed: no host-only services, routes or abstract sockets";
+          network =
+            if config.network.enable then
+              "Its own network namespace, joined to the host by a netkit pair whose programs let it out only through the uplinks, NATed: no host-only services, routes or abstract sockets"
+            else
+              "Its own network namespace with lo alone: no network";
           implicit =
             lib.optional (socketsOn != [ ])
               "Sockets: ${lib.concatMapStringsSep ", " (s: sockets.${s} or s) socketsOn}"

@@ -217,6 +217,18 @@ func TestPortRefused(t *testing.T) {
 	}
 }
 
+// Without the helper (a launcher without a network) no port capability, and a request says why
+func TestPortNoNetwork(t *testing.T) {
+	b, f := testBroker(t, "allow")
+	if c, err := portCap(b.cfg); c != nil || err != nil {
+		t.Fatalf("Port capability without the helper: %v, %v", c, err)
+	}
+	_, err := b.request(peerAt(t, os.Getpid()), req(portID, `{"protocol": "tcp", "port": 8080}`, "PT1H"))
+	if refusalOf(err) != refUnknown || !strings.Contains(err.Error(), "no network") || f.count() != 0 {
+		t.Errorf("Refused %v, asked %d times", err, f.count())
+	}
+}
+
 // Standing grants of ports at start, and the cleanup a daemon stopping runs
 func TestPortStandingAndCleanup(t *testing.T) {
 	b, f, nk := portBroker(t)

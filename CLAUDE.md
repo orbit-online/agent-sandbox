@@ -123,7 +123,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   or `DnsManager.Configuration` of NetworkManager without resolved, read on the system bus without activating either, with
   the default-route uplinks from `netns-netkit uplinks`; written in place through `resolv` of the state script, before
   nixpak's launcher runs and again a second after each PropertiesChanged of either, their owners changing or a route
-  event, when the content changed; a warning in the namespace of the host side when empty), `resolvconf.go` (what
+  event, when the content changed; a warning in the namespace of the host side when empty; with `network.enable` off
+  an empty file, nothing followed and no warning), `resolvconf.go` (what
   the sandbox gets: servers on port 53 of those uplinks, global ones the host routes through them or that are public,
   never `vpn` entries of NetworkManager, loopback, link-local, multicast or host-local addresses, deduplicated, and
   the search domains of the same links, routing-only ones out)
@@ -139,7 +140,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   sets up the network (`--net`: `netns-netkit up`, then its addresses, `lo` and `eth0` up and the default routes in N,
   through `nsenter --keep-caps` and `ip -batch`) before it passes bwrap's info on to nixpak, whose pasta slot is a
   no-op that only keeps the netns. The unit of the app runs `netns-netkit down` as `ExecStopPost=` (`enter.go`),
-  however it ends.
+  however it ends. With `network.enable` off (`network.nix`) neither: no `--net`, so the netns keeps the `lo` bwrap
+  brings up, and `network` false in the launcher config.
   `internal/sandbox`: finding a launcher's running
   sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
 - `cmd/netns-netkit/`: the setcap helper that joins the netns of a sandbox to the host by a netkit pair
@@ -214,7 +216,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   until the sandbox ends), `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
   logind), `standing.go` (the standing grants from the config), `ports.go` (the port capability, through
-  `netns-netkit`), `views.go` (and
+  `netns-netkit`, which the module leaves out of the config with `network.enable` off: no port capability, a request
+  for it refused as without a network), `views.go` (and
   opening the window), `overview.go` (the config's overview, with what the sandbox's mount table lacks), `types.go`, `clock.go` (the time and timers of leases and
   answers, which tests fake), `capability.go` (a capability, its parameters and
   summary), `kind.go` (what a capability's type adds, which the core calls into:
@@ -328,8 +331,8 @@ sandbox ends (`internal/uplink`):
 - Module defaults only hold what the module can't work without (the Claude
   paths, the `/etc` entries, the Nix store). Machine- and user-dependent
   settings, such as extra binds, go in the consumer's config.
-- The sandbox always gets its own netns with a netkit pair. There is no option to
-  share the host's; the module asserts it.
+- The sandbox always gets its own netns, with a netkit pair unless `network.enable` is off (`lo` alone). There is no
+  option to share the host's; the module asserts it.
 - Gates and per-user opt-in live in the consumers.
 - `environment.md` is what Claude inside the sandbox knows about it, and
   stays generic: consumers replace it with `environmentFile`. A section only
@@ -377,7 +380,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   enables the module, setgid `sandbox-uplink`, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
   `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
   graphics assertions fire, the netns assertion fires when `sandbox`
-  overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
+  overrides `bubblewrap.network` or `pasta`, a launcher with `network.enable` off (no `--net` for its bwrap, `network`
+  false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
   name assertions (its characters, and its length at and past the cap, the
   `launcherNameMax` at which `cmd/permissions-broker/socketpath_test.go` binds
@@ -566,7 +570,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `revoke`, `grant` or `addr` of the helper failing leaving no grant and no port, a port, protocol or other key refused
   before asking, an answer from the window for another port refused, a standing port at start and `revoke --all` in the
   cleanup, with the sandbox found or not, and tried again while it fails until the sandbox ends, a grant of a port while the end of another revokes it (the revoke first, the
-  port on)
+  port on), no capability without the helper and a request refused as without a network
   (not without the sandbox); and a stateful property test (`ports_machine_test.go`) of requests answered, releases,
   revokes, time passing, the helper failing to grant, to print the addresses, to revoke or to revoke all and
   recovering, and a crash with its cleanup (trying again, the ports on, while the helper fails to revoke all): after
@@ -677,7 +681,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   resolved and NetworkManager, servers on the uplink kept, those of a VPN, by link or by the `vpn` of NetworkManager,
   dropped with their domains, loopback, link-local and host addresses, other ports and a global private server routed elsewhere
   dropped, a public one kept, duplicates once, the priority order of NetworkManager, routing-only domains out; the option
-  winning, no source giving an empty file, a write only on a change); SIGUSR1 handing the token to the splash of a
+  winning, no source giving an empty file, none without a network, the option set or not, a write only on a change); SIGUSR1 handing the token to the splash of a
   failed start and of the app ended (`activate_test.go`); the store sync deleting nix/
   without a record, copying only what the store lacks with its progress short of 1, leaving a recorded store alone,
   refusing a store dir that is a link and deleting nix/ for a swapped one; the id maps (`maps_test.go`: the subuid
@@ -727,7 +731,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `vm` builds them all. Each boots the same two machines (built once) and
   runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
-  network, `store` its store dir swapped or without a record, `--shell`
+  network (and the launcher `offline`, without one), `store` its store dir swapped or without a record, `--shell`
   starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
   sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
   its permissions broker, `live` the broker's state machine tests, `loop` the
@@ -828,7 +832,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   its checks on its own, and alice a netns of hers below a user namespace
   root made and mapped her uid into, a netns of bob taken and its pins and registration removed by sandbox-uplink
   once it is gone; the pins, primary and registration of the sandbox gone with the unit of the app (sandbox-uplink
-  stopped, so `ExecStopPost=` of the unit did it). bob's commands go through `runuser`,
+  stopped, so `ExecStopPost=` of the unit did it); then the launcher `offline` with `network.enable` off: inside `lo`
+  alone and up, no IPv4 route nor default route, the router and the internet stand-in unreachable, an empty resolv.conf;
+  on the host no `sbx-*` primary, no pins and no `ExecStopPost=` of netns-netkit, no DNS warning in its journal namespace.
+  bob's commands go through `runuser`,
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
   with `nix run .#checks.x86_64-linux.vm-<part>.driverInteractive`.
   The broker's state machine tests also run live there (`TestLiveMachine`,

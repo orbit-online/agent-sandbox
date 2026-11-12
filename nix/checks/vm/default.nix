@@ -125,6 +125,11 @@ let
               (_: {
                 source = pkgs.writeShellScript "hello" "exec ${lib.getExe pkgs.hello}";
               });
+          # Without a network, launched by the launch part
+          launchers.offline = {
+            package = stub;
+            network.enable = false;
+          };
           launchers.work = {
             package = stub;
             tray = true;
