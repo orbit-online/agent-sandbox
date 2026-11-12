@@ -1,3 +1,11 @@
 __pycache__/
 /result*
 **/testdata/rapid/
+# go build run inside a cmd/ directory
+/cmd/dbus-proxy/dbus-proxy
+/cmd/launcher/launcher
+/cmd/netns-netkit/netns-netkit
+/cmd/permissions-broker/permissions-broker
+/cmd/request-send/request-send
+/cmd/sandbox-uplink/sandbox-uplink
+/cmd/subid-broker/subid-broker
