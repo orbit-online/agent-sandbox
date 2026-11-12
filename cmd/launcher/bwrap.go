@@ -261,7 +261,7 @@ func dataFd(data string, fd int) error {
 // cgroup is bound. The sandbox gets sandbox/, the root of its cgroup namespace, with its processes in sandbox/app/:
 // bwrap's parent sits in sandbox/ while it clones the child, whose new cgroup namespace is rooted where its parent
 // is, then the helper moves the parent back to supervisor/ and the child, still blocked, into app/. sandbox/ holds no
-// process, so controllers can be enabled for its children (cgrun), and the kernel's nsdelegate keeps the sandbox from
+// process, so controllers can be enabled for its children (its systemd --user), and the kernel's nsdelegate keeps the sandbox from
 // writing its root's files (memory.max, cgroup.max.*) or moving a process out of it. It sees sandbox/ alone at
 // /sys/fs/cgroup. nsdelegate guards only the root of the writer's own cgroup namespace: from a nested one, rooted at
 // app/, the sandbox writes sandbox/'s files. So the caps on its cgroups go on the unit's cgroup, which it has no path to
@@ -294,7 +294,7 @@ func layOutCgroups(spec *helperSpec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The controllers the unit got, for sandbox/ and below: cpu for cgrun's weights (systemd's user@.service
+	// The controllers the unit got, for sandbox/ and below: cpu for its scopes' weights (systemd's user@.service
 	// delegates pids, memory and cpu to the user's manager)
 	have, err := os.ReadFile(spec.CgRoot + "/cgroup.controllers")
 	if err != nil {
@@ -318,7 +318,7 @@ func layOutCgroups(spec *helperSpec) (string, error) {
 // cgroupBind is --bind, or --ro-bind without nsdelegate. Without it the kernel neither keeps the sandbox from its
 // root's files nor checks moves against its namespace (any cgroup2 mount in the host's cgroup namespace without the
 // option clears it for all, as cilium's does): the sandbox gets its cgroup bound read-only, which stops writes through
-// /sys/fs/cgroup, and no cgrun. The bind doesn't keep it from its subtree: a cgroup2 mount of its own in nested user
+// /sys/fs/cgroup, and no systemd --user. The bind doesn't keep it from its subtree: a cgroup2 mount of its own in nested user
 // and cgroup namespaces (FS_USERNS_MOUNT) is writable, rooted at the new namespace's root, the cgroup the process is
 // in. So the sandbox can change its own cgroups' limits and freeze or kill its own processes, and nothing outside
 // sandbox/: not supervisor/, not the caps on the unit's cgroup. Nor can it clear nsdelegate: a cgroup2 mount sets the
@@ -345,7 +345,7 @@ func cgroupBind() (string, error) {
 		flags = "none"
 	}
 	fmt.Fprintf(os.Stderr, "claude-desktop: cgroup2 is mounted without nsdelegate (options: %s), so the sandbox's "+
-		"cgroup is bound read-only and cgrun won't work in it. The sandbox can still write its own cgroups through "+
+		"cgroup is bound read-only and it runs without its systemd --user. The sandbox can still write its own cgroups through "+
 		"a cgroup2 mount of its own, though nothing outside them. A cgroup2 mount in the host's cgroup namespace "+
 		"without the option clears it (cilium's at /run/cilium/cgroupv2 does). As root, 'mount -o "+
 		"remount,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting /sys/fs/cgroup' restores systemd's "+

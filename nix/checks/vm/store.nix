@@ -60,7 +60,7 @@
       assert cg.endswith("/claude\\x2ddesktop.slice/claude-desktop-app.service"), cg
       assert workstation.succeed(f"cat '/sys/fs/cgroup{cg}/sandbox/app/cgroup.procs'").split(), f"nothing in {cg}/sandbox/app"
 
-  with subtest("Without nsdelegate, the sandbox's cgroup is read-only and cgrun says why"):
+  with subtest("Without nsdelegate, the sandbox's cgroup is read-only and there's no systemd --user, which the launch says"):
       def cgroup2_flags():
           return workstation.succeed("grep -m1 ' - cgroup2 ' /proc/self/mountinfo").split()[-1]
       # systemd mounts cgroup2 with it
@@ -85,9 +85,11 @@
       assert status != 0, out
       # The bind alone: a cgroup2 mount of its own still writes its subtree, and reaches nothing above it
       fresh_cgroup2_mount(in_sandbox, f"/sys/fs/cgroup{cg}")
-      # cgrun refuses, naming nsdelegate
-      out = in_sandbox("sh -c 'cgrun --memory=64M -- echo ran 2>&1; echo exit=$?'")
-      assert "without nsdelegate" in out and "ran" not in out.split() and out.strip().endswith("exit=1"), out
+      # No systemd --user, as the launch said, so no scopes either
+      assert "No systemd --user" in workstation.succeed(
+          "journalctl --namespace=claude-desktop_sandbox --no-pager -o cat -t claude-desktop")
+      status, out = workstation.execute(sandbox_cmd("systemd-run --user --scope true") + " 2>&1")
+      assert status != 0, out
       # The remount the warning names restores it
       workstation.succeed("umount /run/test-cgroupv2")
       warning = workstation.succeed("journalctl --namespace=claude-desktop_sandbox _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -o \"'mount -o [^']*'\"")

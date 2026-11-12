@@ -82,8 +82,9 @@
       # Inside, /sys/fs/cgroup is the sandbox's subtree alone, writable: none of the session's units
       listing = in_work("ls /sys/fs/cgroup").split()
       assert "app" in listing and not [n for n in listing if n.endswith((".slice", ".service", ".scope"))], listing
-      dirs = in_work("find /sys/fs/cgroup -mindepth 1 -type d").split()
-      assert dirs == ["/sys/fs/cgroup/app"], dirs
+      # The app's, and the one its systemd --user starts in (its own below it)
+      dirs = sorted(in_work("find /sys/fs/cgroup -mindepth 1 -maxdepth 1 -type d").split())
+      assert dirs == ["/sys/fs/cgroup/app", "/sys/fs/cgroup/user"], dirs
       top = [l.split() for l in in_work("cat /proc/self/mountinfo").splitlines() if l.split()[4] == "/sys/fs/cgroup"][-1]
       assert top[3] == "/" and "rw" in top[5].split(","), top
       # The host's cgroup2 with nsdelegate, which systemd sets, so the launcher bound it writable
@@ -93,20 +94,19 @@
       caps = [workstation.succeed(f"cat '{unit_root}/cgroup.max.{f}'").strip() for f in ["descendants", "depth"]]
       assert caps == ["66", "5"], caps
 
-  with subtest("cgrun runs a job in a cgroup of its own, killed past its memory limit while the app runs on"):
-      out = in_work("cgrun --memory=64M -- sh -c 'cat /proc/self/cgroup; cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'")
-      cg, limit = out.split()
-      assert re.fullmatch(r"0::/cgrun-\d+", cg) and limit == str(64 << 20), out
-      # Its CPU weight below the app's, 50 unless asked otherwise, and the launcher's slice below app.slice's
-      for args, want in [("", "50"), ("--cpu-weight=200 ", "200")]:
-          got = in_work(f"cgrun --memory=64M {args}-- sh -c 'cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/cpu.weight'")
-          assert got.strip() == want, (args, got)
-      in_work("sh -c 'cgrun --memory=64M --cpu-weight=0 -- true; test $? = 2'")
+  with subtest("systemd-run --scope runs a job in a cgroup of its own, killed past its memory limit while the app runs on"):
+      job = "systemd-run --user --scope --quiet -p MemoryMax=64M -p MemorySwapMax=0 -p CPUWeight=50 -p OOMPolicy=kill"
+      out = in_work(f"{job} -- sh -c 'cat /proc/self/cgroup; cd /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup) && cat memory.max cpu.weight'")
+      cg, limit, weight = out.split()
+      assert re.fullmatch(r"0::/user/app\.slice/run-[^/]+\.scope", cg) and limit == str(64 << 20) and weight == "50", out
+      # The launcher's slice below app.slice's
       assert workstation.succeed(f"cat '/sys/fs/cgroup{work_slice}/cpu.weight'").strip() == "50"
-      out = in_work("sh -c 'cgrun --memory=64M -- sh -c \"head -c 512M /dev/zero | tail\"; echo exit=$?'")
+      out = in_work(f"sh -c '{job} -- sh -c \"head -c 512M /dev/zero | tail\"; echo exit=$?'")
       assert out.strip().splitlines()[-1] == "exit=137", out
-      # Its cgroup gone after it
-      assert not [n for n in in_work("ls /sys/fs/cgroup").split() if n.startswith("cgrun-")]
+      # What it leaves running ends with a stop of its scope (environment.md)
+      in_work("sh -c 'systemd-run --user --scope --quiet --unit=job -- sh -c \"sleep 600 & exit 0\" && systemctl --user stop job.scope'")
+      status, out = workstation.execute(work_cmd("pgrep -x sleep"))
+      assert status != 0, out
       workstation.succeed("systemctl --user -M alice@ is-active claude-desktop-work-app")
       workstation.succeed(f"test -e /proc/{app}")
       events = dict(l.split() for l in workstation.succeed(f"cat '{unit_root}/sandbox/memory.events'").splitlines())
@@ -125,10 +125,10 @@
       # own, shows its own cgroup's subtree and nothing above it
       refused("unshare --user --map-current-user --mount umount /sys/fs/cgroup")
       fresh_cgroup2_mount(in_work, unit_root)
-      # At most 64 cgroups below its root, app/ included
+      # At most 64 cgroups below its root, app/ and its systemd --user's included
       out = in_work("sh -c 'n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done;"
-                    " echo $n; rmdir /sys/fs/cgroup/d*'")
-      assert out.strip() == "63", f"made {out.strip()} cgroups"
+                    " find /sys/fs/cgroup -mindepth 1 -type d | wc -l; rmdir /sys/fs/cgroup/d*'")
+      assert out.strip() == "64", f"{out.strip()} cgroups"
       # At most 4 levels below its root
       out = in_work("sh -c 'mkdir -p /sys/fs/cgroup/a/b/c/d && echo 4; mkdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null && echo 5;"
                     " rmdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null;"
@@ -137,12 +137,13 @@
       # nsdelegate guards only the root of the writer's own cgroup namespace: from a nested one, rooted at app/, the
       # sandbox lifts sandbox/'s caps, and the unit's still hold
       nested = ("echo max >/sys/fs/cgroup/cgroup.max.descendants && echo max >/sys/fs/cgroup/cgroup.max.depth && echo lifted;"
-                " n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done; echo $n;"
+                " n=0; while [ $n -lt 80 ] && mkdir /sys/fs/cgroup/d$n 2>/dev/null; do n=$((n + 1)); done;"
+                " find /sys/fs/cgroup -mindepth 1 -type d | wc -l;"
                 " rmdir /sys/fs/cgroup/d*; mkdir -p /sys/fs/cgroup/a/b/c/d && echo 4; mkdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null && echo 5;"
                 " rmdir /sys/fs/cgroup/a/b/c/d/e 2>/dev/null;"
                 " rmdir /sys/fs/cgroup/a/b/c/d /sys/fs/cgroup/a/b/c /sys/fs/cgroup/a/b /sys/fs/cgroup/a")
       out = in_work("unshare --user --map-root-user --cgroup sh -c " + shlex.quote(nested))
-      assert out.split() == ["lifted", "63", "4"], out
+      assert out.split() == ["lifted", "64", "4"], out
 
   with subtest("The work launcher's broker"):
       # The permissions broker: its daemon runs, its grant directory is read-only inside, shared in the sandbox's

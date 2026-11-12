@@ -32,6 +32,11 @@ in
       default = { };
     };
     assertions = list types.attrs;
+    # Units of the sandbox's systemd --user (fhs.nix, app-pid.sh) by file name, each its text; a timer or path unit is
+    # wanted by timers.target or paths.target
+    userUnits = internal (types.attrsOf types.lines) // {
+      default = { };
+    };
     # Set by core.nix, fhs.nix and launch.nix: the devices bound (/dev/kvm with kvm, each once), the app in its FHS
     # env, nixpak's build, the confined state script and the launcher's package
     devices = internal (types.listOf types.str);

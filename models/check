@@ -19,14 +19,15 @@
 # so its `expect 1` can't go stale. Works from any directory. Each model
 # runs alone, under a 4 GiB JVM heap and an 8 GiB address space
 # (ALLOY_HEAP, ALLOY_VMEM_KIB): one that needs more has too big a scope.
-# In the Claude Desktop sandbox, the whole run goes under
-# `cgrun --memory=8G` too.
+# In the Claude Desktop sandbox, the whole run goes in a scope of the
+# sandbox's systemd --user capped at 8 GiB too.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# With cgrun on PATH (the Claude Desktop sandbox), in a cgroup of its own capped at 8 GiB, unless already in one
-if command -v cgrun >/dev/null && ! grep -q '/cgrun-[0-9]*$' /proc/self/cgroup; then
-  exec cgrun --memory=8G -- "$here/check" "$@"
+# In the Claude Desktop sandbox (its systemd --user's cgroup is there), in a scope capped at 8 GiB, unless already in one
+if [[ -d /sys/fs/cgroup/user ]] && ! grep -q '/models-check-[0-9]*\.scope$' /proc/self/cgroup; then
+  exec systemd-run --user --scope --quiet --unit="models-check-$$" -p MemoryMax=8G -p MemorySwapMax=0 \
+    -p OOMPolicy=kill -- "$here/check" "$@"
 fi
 if ! command -v alloy6 >/dev/null || ! command -v jq >/dev/null; then
   exec nix shell nixpkgs#alloy6 nixpkgs#jq --command "$here/check" "$@"

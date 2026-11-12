@@ -1,8 +1,8 @@
 /*
- * Planned, not built: a `systemd --user` manager inside the sandbox
- * (README.md, Principals 18, L11), and the app's pid. app-pid.sh
- * (nix/home/claude-desktop/app-pid.sh:9-10) writes APP_PID-1 to
- * ns_last_pid in P2 and forks the app, which then gets APP_PID as long as
+ * The sandbox's `systemd --user` manager (README.md, Principals 18, L11),
+ * and the app's pid. app-pid.sh (nix/home/claude-desktop/app-pid.sh:11-13)
+ * writes APP_PID-1 to ns_last_pid in P2 and forks the app as a background
+ * job, then starts the manager (:19-26); the app gets APP_PID as long as
  * nothing else in P2 forks in between: the D-Bus proxy's tray rule names
  * StatusNotifierItem-<APP_PID>-1 (dbus.nix:129), and the re-entries look
  * for the app at APP_PID (L5, launch-reentry.als).
@@ -70,13 +70,13 @@ pred startManager[o: Order] {
   forkBy[Manager, MgrStarted]
 }
 pred ready { Manager in Running and Ready not in Flags and keep and Flags' = Flags + Ready }
-// app-pid.sh:9, with CAP_CHECKPOINT_RESTORE
+// app-pid.sh:11, with CAP_CHECKPOINT_RESTORE
 pred write[o: Order] {
   Wrote not in Flags
   o != AppFirst implies Ready in Flags
   keep and Flags' = Flags + Wrote + Primed
 }
-// app-pid.sh:10 (setsid --fork, or the shell's own fork under AppFirst)
+// app-pid.sh:13, the shell's own fork of the background job (setsid --fork, under the plan)
 pred forkApp { Wrote in Flags and AppForked not in Flags and forkBy[App, AppForked] }
 // The stub at the wrong pid exits; app-pid.sh writes again
 pred retry[o: Order] {
@@ -123,9 +123,9 @@ check L11plan for 3 but 1..10 steps expect 1
 assert L11retry { sys[Retry] implies l11 }
 check L11retry for 3 but 1..10 steps expect 1
 
-// L11 with the manager started after the app's fork: between the write
-// and the fork nothing else runs in P2 but bwrap's init. Holds. Its
-// revert, the manager first, is L11plan.
+// L11 with the manager started after the app's fork, as app-pid.sh does:
+// between the write and the fork nothing else runs in P2 but bwrap's init.
+// Holds. Its revert, the manager first, is L11plan.
 assert L11 { sys[AppFirst] implies l11 }
 check L11 for 3 but 1..10 steps expect 0
 

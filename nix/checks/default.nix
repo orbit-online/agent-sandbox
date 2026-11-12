@@ -1187,8 +1187,13 @@ in
           # The asar prints the ready line once one of its windows is visible, loaded or shown
           grep -qaF '!w.isVisible()||(d=!0,o("agent-sandbox: ready"+String.fromCharCode(10)))};require("electron").app.on("browser-window-created"' "$asar" ||
             { echo "the asar lacks the ready line" >&2; exit 1; }
-          # cgrun on the sandbox's PATH
-          [[ -x $(grep -- '-claude-desktop-sw$' "$paths")/bin/cgrun ]] || { echo "the sandbox's PATH lacks cgrun" >&2; exit 1; }
+          # The sandbox's systemd --user's units: its timers and path unit wanted, none of systemd's own sockets
+          units=$(grep -- '-claude-desktop-user-units$' "$paths")
+          for u in timers.target.wants/claude-desktop-store-gc.timer timers.target.wants/claude-desktop-scratchpad-prune.timer \
+            paths.target.wants/claude-desktop-store-gc.path default.target; do
+            [[ -e $units/$u ]] || { echo "the user units lack $u: $(ls -R "$units")" >&2; exit 1; }
+          done
+          [[ ! -e $units/sockets.target.wants ]] || { echo "the user units want systemd's sockets" >&2; exit 1; }
           # What the launcher writes in its home, confined to the directories in HOME_DIRS
           workState=$(grep -- '-claude-desktop-work-state-inner$' "$workClosure/store-paths")/bin/claude-desktop-work-state-inner
           for line in \

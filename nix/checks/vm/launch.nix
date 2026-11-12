@@ -246,14 +246,16 @@
       assert left == ["./-p", "./-p/new", "./-p/new/scratchpad", "./-p/new/scratchpad/f", "./harness", "./new.json", "./owner", "./probe"], left
 
   gc_dir = "${stateDir}/nix/var/claude-desktop"
-  with subtest("store GC"):
-      workstation.succeed(f"test -e {gc_dir}/gc-pending")
-      assert "nix-store --gc" in in_sandbox("claude-desktop-store-gc")
-      workstation.succeed(f"test ! -e {gc_dir}/gc-pending && test -e {gc_dir}/gc-last")
-      # Not due: no marker and the last run is recent
-      assert in_sandbox("claude-desktop-store-gc") == ""
-      workstation.succeed(f"touch -d '8 days ago' {gc_dir}/gc-last")
-      assert "nix-store --gc" in in_sandbox("claude-desktop-store-gc")
+  with subtest("the sandbox's systemd --user: beside the app, its timers, and the store GC its path unit starts"):
+      assert in_sandbox("systemctl --user is-system-running").strip() == "running"
+      # In user/, not the app's cgroup, and the app kept its pid
+      assert in_sandbox("cat /sys/fs/cgroup/user/init.scope/cgroup.procs").strip()
+      assert "100" in in_sandbox("cat /sys/fs/cgroup/app/cgroup.procs").split()
+      timers = in_sandbox("systemctl --user list-timers --all --no-legend")
+      assert "claude-desktop-store-gc.timer" in timers and "claude-desktop-scratchpad-prune.timer" in timers, timers
+      # The launch moved the GC root; the path unit collects at once and the run removes the marker
+      workstation.wait_until_succeeds(f"test ! -e {gc_dir}/gc-pending", timeout=120)
+      assert "nix-store --gc" in in_sandbox("journalctl --no-pager -o cat -t claude-desktop-store-gc")
       # On the host it would collect the host's store
       gc = in_sandbox("readlink -f /run/current-system/sw/bin/claude-desktop-store-gc").strip()
       status, out = as_user("alice", gc)

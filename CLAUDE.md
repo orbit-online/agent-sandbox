@@ -40,19 +40,26 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `nsdelegate`, bound read-only with a warning in the journal otherwise, which a
   cgroup2 mount of its own in nested namespaces gets around inside its subtree
   (`docs/permissions.md`, Launcher). The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
-  `cgrun.sh` (`cgrun` on the sandbox's PATH) runs a job in a `sandbox/cgrun-<pid>/`
-  with a memory limit and a CPU weight (50 against `app/`'s 100: `sandbox/` gets the `cpu` controller where the unit
-  has it, which systemd's `user@.service` delegates). Each launcher's slice has `CPUWeight=50`, between
+  `app-pid.sh`, the FHS env's run script, forks the app at its pid and then starts the sandbox's `systemd --user` in
+  `sandbox/user/` (with the host's systemd, its units from `build.userUnits` in a curated dir, `fhs.nix`; no bus, its
+  units get the session bus): timers for the store GC and the scratchpad prune, and the scopes the sandbox runs heavy
+  jobs in with a memory limit and a CPU weight (50 against `app/`'s 100: `sandbox/` gets the `cpu` controller where the
+  unit has it, which systemd's `user@.service` delegates). Each launcher's slice has `CPUWeight=50`, between
   `app.slice`'s 100 and `background.slice`'s 30 (`default.nix`), with `X-SwitchMethod=keep-old` and
   `RefuseManualStop=true` so a switch never stops it and the app with it. The broker and its host command calls are units in
-  the slice too. Then
+  the slice too, as are subid-broker and udhcpc (`hostUnits` in `helper.go`). Logs go to two journald namespaces per
+  launcher, which the NixOS module runs (`ids.journal` and `ids.sandboxJournal` in `lib.nix`): the host side's
+  (supervise, the broker, subid-broker and the D-Bus proxy, through `systemd-cat`, with `internal/journal`'s priority
+  prefixes), whose files the sandbox reads and whose sockets it doesn't get, and the sandbox's (its sockets bound in,
+  udhcpc, supervise's pump of nixpak's output), so the sandbox can neither forge nor flood the host side's
+  (`models/journal.als`). Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
   `<!-- memo: FILTER -->` marker, the marked ones going into a memo store that the module adds to
   `programs.agent-memos.settings.stores` by its store path, so the host's memo config lists it too
   (`<!-- memo-doc: ... -->` lines document its values). The store also injects `environment`, the frontmatter's name
   for the environment. Then the module's scripts (`*.sh`; `store-gc.sh` and
-  `scratchpad-prune.sh` go on the sandbox's PATH for the user's hooks, `cgrun.sh` for its jobs). The modules load them with `lib.nix`'s `script` helper: Nix values
+  `scratchpad-prune.sh` go on the sandbox's PATH, run by its `systemd --user`'s timers). The modules load them with `lib.nix`'s `script` helper: Nix values
   arrive as readonly variables ahead of the script, which names its inputs
   with `: "${VAR:?}"` at the top.
   What the host does in the sandbox's home and store, which the sandbox can
@@ -266,14 +273,15 @@ iterating, build only the checks a change reaches (`nix build .#launcher
 .#permissions-window`, whose builds run their tests, for the launcher and the
 splash): a change to anything in the sandbox's closure rebuilds
 the VM images and runs every VM part. Inside
-the Claude Desktop sandbox, run heavy jobs under `cgrun`, so going past the
-limit kills the job, not the app or the desktop: `cgrun --memory=24G -- nix
-flake check -L --max-jobs 4 --cores 4` (at Nix's defaults, 32 jobs with every
+the Claude Desktop sandbox, run heavy jobs in a scope (`environment.md`, Tools), so going past the
+limit kills the job, not the app or the desktop: `systemd-run --user --scope --unit=check -p MemoryMax=24G
+-p MemorySwapMax=0 -p CPUWeight=50 -p OOMPolicy=kill -- nix flake check -L --max-jobs 4 --cores 4`, then
+`systemctl --user stop check.scope` (at Nix's defaults, 32 jobs with every
 core each, it can take the whole machine beside other test workers; at 4 and 4
-it peaks at about 21 GiB), extended property runs under `cgrun --memory=4G` (the
+it peaks at about 21 GiB), extended property runs with `-p MemoryMax=4G` (the
 broker's at `RAPID_CHECKS=1000 RAPID_STEPS=100` peaks at about 1 GiB in one
-process); `models/check` puts itself under `cgrun --memory=8G` when `cgrun` is on
-PATH (it peaks at about 1.1 GiB). The
+process); `models/check` puts itself in such a scope with `MemoryMax=8G` in the sandbox (it peaks at about 1.1
+GiB). The
 checks are in `nix/checks/default.nix` and use a test NixOS system with both
 modules and a user alice (the `home-manager` input exists only for it).
 
@@ -328,7 +336,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `homeDirs` in its launcher config and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
   set the pid, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
-  references in the closure), `cgrun` on the sandbox's PATH. The launchers' configs, which their wrappers run the Go launcher
+  references in the closure), the sandbox's user units (its timers and path unit wanted, none of systemd's own
+  sockets). The launchers' configs, which their wrappers run the Go launcher
   with: their slices, work's app unit and nixpak's launcher, the ready line, the splash with its title and the
   agent's logo from the unwrapped app, the asar's ready hook, its broker's
   slice. For `work`: its wrapper alone in `bin`, its app ID,
@@ -602,7 +611,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
   network, `store` its store dir swapped or without a record, `--shell`
   starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
-  journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, `cgrun` refusing, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
+  sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
   its permissions broker, `live` the broker's state machine tests, `loop` the
   default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which
   CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
@@ -634,8 +643,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   the shims and the broker, the shim in `/usr/bin`, a file written inside
   owned by alice, no capabilities over the netns, the broker refusing a
   client on the host and ending with the app), the scratchpad bind (mode 0700) and
-  `claude-desktop-scratchpad-prune`, `claude-desktop-store-gc` (due on the
-  marker and after a week, not otherwise, refused on the host), the GTK theme following the color scheme (at
+  `claude-desktop-scratchpad-prune`, the sandbox's `systemd --user` (running, in `user/` with the app at its pid in
+  `app/`, its timers listed, its path unit running `claude-desktop-store-gc` on the marker; the script refused on the
+  host), the journal namespaces (the proxy's refusals as warnings on the host side and readable inside, supervise's
+  pump and udhcpc in the sandbox's, `logger` and `systemd-cat` inside, the host side's not writable from inside, the
+  sandbox's entries stamped `sandbox/app`), the GTK theme following the color scheme (at
   launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), the macvlan's DHCP
   lease, route and DNS (udhcpc in a mount namespace of its own with its
   closure and the sandbox's home, none of alice's files), the launcher `work` running next to the default
@@ -659,9 +671,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   `supervisor/`, bwrap's child and the app in `sandbox/app/` with the launching unit's environment, the default
   launcher's in a unit and slice of its own, the broker and a host command call units in the
   slice, both re-entries in `app/`; inside, `/sys/fs/cgroup` the sandbox's subtree alone, writable, without a unit's
-  name, the host's cgroup2 with `nsdelegate`, the caps (66 and 5) on the unit's cgroup; `cgrun` giving a job a cgroup of its own with its `memory.max` and `cpu.weight` (50, or `--cpu-weight`'s, a bad one
-  refused), the work slice's `cpu.weight` 50, killing one past 64M with the app running
-  on, and removing the cgroup; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
+  name, the host's cgroup2 with `nsdelegate`, the caps (66 and 5) on the unit's cgroup; `systemd-run --scope` giving
+  a job a scope of its own with its `memory.max` and `cpu.weight`, the work slice's `cpu.weight` 50, killing one past
+  64M with the app running on, and a stop of its scope ending what it left running; the sandbox refused writing its root's `memory.max` and `cgroup.max.descendants`, a
   process in its root, unmounting the bind from a nested user namespace, a 64th cgroup and a fifth level, both still
   refused after it lifts `sandbox/`'s own caps from a nested cgroup namespace rooted at `app/` (which nsdelegate allows),
   and a cgroup2 mount of its own in a nested cgroup namespace rooted at `sandbox/app/`, without `supervisor/` or the unit's caps), its own `/etc/hosts`, the closure's GC root on the
@@ -720,7 +732,7 @@ peaks at about 21 GiB, a serial mutation run at 1.5 GiB, `models/check` at
 1.1 GiB. `models/check` caps itself (each model alone, a 4 GiB JVM heap with
 SAT4J inside it, an 8 GiB address space): a model that needs more has too big
 a scope, so shrink it and say what that costs; in the Claude Desktop sandbox
-it also runs under `cgrun --memory=8G`. There, the rest goes under `cgrun` as
+it also runs in a scope with `MemoryMax=8G`. There, the rest goes in scopes as
 above; elsewhere, `nix flake check -L --max-jobs 4 --cores 4`, and extended
 rapid runs and mutation runs one at a time under `prlimit --as=12884901888`
 (not with `-race`, whose shadow memory needs a large address space).

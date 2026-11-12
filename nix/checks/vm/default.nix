@@ -167,7 +167,7 @@ let
       networking.firewall.enable = false;
       # A host-only name, which the sandbox's own hosts file leaves out
       networking.hosts."127.0.0.1" = [ "host-only.test" ];
-      # The test instrumentation's 2 panics the VM on any OOM, a cgroup's included, which cgrun's subtest makes
+      # The test instrumentation's 2 panics the VM on any OOM, a cgroup's included, which the scope subtest makes
       boot.kernel.sysctl."vm.panic_on_oom" = 0;
       users.users.alice.linger = true;
       # For the switch part: the default launcher's slice with another CPU weight, and without its unit file

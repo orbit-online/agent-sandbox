@@ -169,8 +169,8 @@ roots them there too, at `$XDG_RUNTIME_DIR/claude-desktop/store-roots`: a GC
 after a rebuild leaves a running sandbox alone. The next launch replaces the
 root and logging out removes it.
 
-Two scripts on the sandbox's PATH keep it in check. Nothing runs them on its
-own; hook them into Claude Code's `SessionStart`, detached:
+A `systemd --user` in the sandbox keeps it in check with two timers, each
+caught up at the next start when the sandbox wasn't running:
 
 - `claude-desktop-store-gc` collects the sandbox's store after the launcher
   has moved its GC root (on every rebuild that changes the sandbox), and
@@ -178,4 +178,9 @@ own; hook them into Claude Code's `SessionStart`, detached:
 - `claude-desktop-scratchpad-prune` removes session scratchpads with nothing
   changed in 30 days.
 
-The shipped `environment.md` tells Claude to offer setting up that hook.
+Each launcher logs to two journald namespaces:
+`journalctl --namespace=claude-desktop[-<name>]` for the launcher, the
+permissions broker, subid-broker and the D-Bus proxy (its refusals:
+`-t dbus-proxy -p warning`), and `--namespace=claude-desktop[-<name>]_sandbox`
+for the app's output and what runs in the sandbox. The sandbox reads both and
+writes only to its own.

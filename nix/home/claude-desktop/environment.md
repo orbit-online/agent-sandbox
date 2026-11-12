@@ -18,20 +18,34 @@ what and why, propose the change and wait.
 <!-- memo-doc: topic=containers # Containers and user namespaces: podman, unshare, subordinate ids -->
 <!-- memo-doc: activity=self-diagnostic # Checking that the agent's setup works as its config says -->
 
-## First startup
+## Services and logs
 
-Two maintenance scripts come with the sandbox, on PATH. Nothing runs them on
-its own:
+A `systemd --user` runs in the sandbox, started right after the app in the
+cgroup `user/` beside the app's `app/`, and gone with it. `systemctl --user`
+reaches it over its private socket. It has no D-Bus, so `systemd-run`'s
+`--wait`, `--pipe`, `--pty` and `--shell` don't work; its units get the
+session bus. Its timers run `claude-desktop-store-gc` weekly and when the
+launcher moved the store's GC root (see Nix), and
+`claude-desktop-scratchpad-prune` daily (see Home), catching up after a time
+the sandbox wasn't running. Units of your own go in `~/.config/systemd/user`.
+Without the manager (see Tools, `nsdelegate`) none of this runs.
 
-- `claude-desktop-store-gc`: collects the sandbox's Nix store (see Nix)
-  when the launcher has moved its GC root or the last run is a week old.
-  Otherwise it exits right away.
-- `claude-desktop-scratchpad-prune`: removes session scratchpads with nothing
-  changed in 30 days (see Home).
+The launcher logs to two journald namespaces, `claude-desktop` for the
+default launcher and `claude-desktop-<name>` for a named one
+(`ls /var/log/journal` shows which):
 
-If no `SessionStart` hook in the user's Claude Code settings calls them, offer
-once to add one. It should start both detached (`setsid -f`, output to a log
-file), since a GC can take minutes and the session waits for its hooks.
+- The sandbox's, the one `journalctl`, `logger` and `systemd-cat` use by
+  default: the app's output (Chromium's stderr), the launcher's warnings
+  about the start, udhcpc and the manager's units.
+- The host side's, which you read but can't write to:
+  `journalctl --namespace=<it>`. The launcher, the permissions broker,
+  subid-broker and the D-Bus proxy. When something on the session bus
+  doesn't work, look for the proxy's refusals there
+  (`-t dbus-proxy -p warning`, `msg=Refused` with the call's destination,
+  path, interface and member).
+
+On the host they're `journalctl --namespace=claude-desktop[-<name>]` and
+`--namespace=claude-desktop[-<name>]_sandbox`.
 
 ## Home
 <!-- memo: topic=sandbox -->
@@ -110,20 +124,24 @@ remove it.
 - A tool is missing: work around it for now (`nix run`, `nix shell`), and in
   the same go add it to the module's `path` in the user's config and tell the
   user to rebuild.
-- Run heavy jobs under `cgrun --memory=SIZE -- CMD...`: a cgroup of their
-  own with that limit, so past it the kernel kills the job, not the app or
-  the user's desktop, and half the app's CPU weight, so the app stays
-  responsive (`--cpu-weight=N`, 1 to 10000 against the app's 100, changes
-  it). The whole sandbox runs at half the weight of the desktop's own
-  apps. `nix flake check` and other big builds also with
-  `--max-jobs 4 --cores 4` (Nix's defaults start a builder per core, each
-  using every core), for example `cgrun --memory=24G -- nix flake check -L
-  --max-jobs 4 --cores 4`; long property or fuzz runs and Alloy too. Size the
-  limit a little above the job's measured peak; the repo's CLAUDE.md may
-  name it. When the host mounts cgroup2 without `nsdelegate`, the launcher
-  binds the sandbox's cgroup read-only and `cgrun` refuses, saying so: run
-  the job without it, at those `--max-jobs` and `--cores`, and tell the user
-  (the launcher's journal says how to fix the host).
+- Run heavy jobs in a scope of their own, then stop the scope for what they
+  left running:
+  `systemd-run --user --scope --unit=NAME -p MemoryMax=SIZE -p MemorySwapMax=0 -p CPUWeight=50 -p OOMPolicy=kill -- CMD...`
+  and `systemctl --user stop NAME.scope`. Past the limit the kernel kills
+  the job, not the app or the user's desktop, and half the app's CPU weight
+  keeps the app responsive (1 to 10000 against the app's 100). The whole
+  sandbox runs at half the weight of the desktop's own apps. `nix flake
+  check` and other big builds also with `--max-jobs 4 --cores 4` (Nix's
+  defaults start a builder per core, each using every core), for example
+  with `-p MemoryMax=24G` and `nix flake check -L --max-jobs 4 --cores 4`;
+  long property or fuzz runs and Alloy too. Size the limit a little above
+  the job's measured peak (`systemctl --user show -P MemoryPeak NAME.scope`
+  before the stop); the repo's CLAUDE.md may name it. When the host mounts
+  cgroup2 without `nsdelegate`, the launcher binds the sandbox's cgroup
+  read-only and there's no `systemd --user`: run the job without it, at
+  those `--max-jobs` and `--cores`, and tell the user (the launcher's
+  warning in the sandbox's journal, `journalctl -t claude-desktop`, says how
+  to fix the host).
 
 ## Nix
 <!-- memo: topic={nix,sandbox} -->
@@ -136,7 +154,7 @@ gone then. No daemon, substitutes from cache.nixos.org only. The launcher copies
 closure in and roots it
 (`/nix/var/nix/gcroots/claude-desktop`); those paths are bound read-only on
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,
-which `claude-desktop-store-gc` picks up.
+which starts `claude-desktop-store-gc` (see Services and logs).
 
 ## Self-check
 <!-- memo: activity=self-diagnostic environment=bwrap -->
@@ -150,11 +168,12 @@ The sandbox:
 - pid 1 is `bwrap`, and `/proc/self/uid_map` and `gid_map` hold 65536 ids
   with your own kept as themselves.
 - `/nix/var/nix/gcroots/claude-desktop` resolves.
-- A `SessionStart` hook in Claude Code's settings, managed ones in
-  `/etc/claude-code/managed-settings.d/` included, starts
-  `claude-desktop-store-gc` and `claude-desktop-scratchpad-prune`
-  detached, and each one's log, where the hook writes it, ends without a
-  failure. Without such a hook the check fails.
+- `systemctl --user is-system-running` says `running`, and
+  `systemctl --user list-timers` shows `claude-desktop-store-gc.timer` and
+  `claude-desktop-scratchpad-prune.timer`.
+- `journalctl -n 1` and `journalctl --namespace=<the host side's> -n 1`
+  each show an entry, and `systemd-cat --namespace=<the host side's> true`
+  fails.
 - `/tmp` is a tmpfs, with Claude Code's temp dir bound on top.
 - The host's `127.0.0.1` is out of reach, the LAN and the internet aren't
   (`scripts/nettest.sh` in a checkout of orbit-online/agent-sandbox tests

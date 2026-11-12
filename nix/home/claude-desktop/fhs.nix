@@ -90,6 +90,27 @@ let
     CHANNELS = builtins.toJSON config.mcpChannels;
     CHANNELS_JS = ./channels.js;
   } "source ${./patch-asar.sh}";
+  # The units of the sandbox's systemd --user: systemd's targets and slices that its own need, without its other units
+  # (importd, machined, ...), then build.userUnits
+  userUnits =
+    let
+      stock = "${osConfig.systemd.package}/example/systemd/user";
+      wants = suffix: lib.filter (lib.hasSuffix suffix) (lib.attrNames config.build.userUnits);
+    in
+    pkgs.runCommand "claude-desktop-user-units" { } ''
+      mkdir -p $out/timers.target.wants $out/paths.target.wants
+      for u in default.target basic.target sockets.target timers.target paths.target shutdown.target exit.target         systemd-exit.service app.slice background.slice session.slice; do
+        cp ${stock}/$u $out/
+      done
+      ${lib.concatStrings (
+        lib.mapAttrsToList (n: text: "cp ${pkgs.writeText n text} $out/${n}
+") config.build.userUnits
+      )}
+      ${lib.concatMapStrings (n: "ln -s ../${n} $out/timers.target.wants/
+") (wants ".timer")}
+      ${lib.concatMapStrings (n: "ln -s ../${n} $out/paths.target.wants/
+") (wants ".path")}
+    '';
   # The FHS env's runScript, see app-pid.sh
   appPidScript = sl.script "app-pid.sh" {
     name = "claude-desktop-app-pid";
@@ -97,6 +118,8 @@ let
       APP_PID = toString ids.appPid;
       SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
       SETSID = lib.getExe' pkgs.util-linux "setsid";
+      SYSTEMD = "${osConfig.systemd.package}/lib/systemd/systemd";
+      USER_UNITS = "${userUnits}";
     };
   };
 in
@@ -107,14 +130,6 @@ in
     build.sw = [
       pkgs.bashInteractive
       osConfig.i18n.glibcLocales
-      # A command in a cgroup of its own with a memory limit, see environment.md
-      (sl.script "cgrun.sh" {
-        name = "cgrun";
-        runtimeInputs = [
-          pkgs.coreutils
-          pkgs.gnugrep
-        ];
-      })
     ];
     build.storeRoots = [
       config.build.app

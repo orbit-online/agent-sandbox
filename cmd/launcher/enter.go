@@ -101,7 +101,7 @@ func runningApp(cfg *config, tries int) (app int, running bool, err error) {
 }
 
 // enter joins the app's cgroup, then its namespaces, as cmd with the sandbox's environment. It stays the caller's
-// child, on its terminal, in the sandbox's cgroup namespace's subtree, so cgrun works there. Not nsenter -a: that also
+// child, on its terminal, in the sandbox's cgroup namespace's subtree, so systemd-run --user --scope works there. Not nsenter -a: that also
 // joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns. no_new_privs first, on the host,
 // as bwrap sets it for everything inside: nsenter holds every capability in U2 until it execs a path the sandbox
 // controls, whose file capabilities would otherwise count
@@ -135,7 +135,7 @@ var unitOwn = []string{"INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "M
 
 // startUnit starts the app's unit, supervise, with the caller's environment, not only the user manager's, and the
 // sandbox's the wrapper expanded from it. The unit outlives the caller's terminal or the desktop's app scope. Its cgroup is
-// delegated, so the sandbox can run jobs in cgroups of their own (cgrun); its processes start in supervisor/, the
+// delegated, so the sandbox can run jobs in cgroups of their own (its systemd --user); its processes start in supervisor/, the
 // cgroup root holds none. With Delegate=, OOMPolicy= defaults to continue: an OOM kill below it ends the process the
 // kernel picked, not the unit. Type=notify: systemd-run returns once supervise says the app is up or why it isn't,
 // which it leaves in the result file first; a store sync may take a while, hence no start timeout

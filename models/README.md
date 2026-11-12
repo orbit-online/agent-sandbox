@@ -119,7 +119,7 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
     namespaces by `nsenter` from the host. Inside once joined, but their
     parent is a host process.
 
-Added with the journal (17) and planned (18, not built):
+Added with the journal (17) and the sandbox's systemd --user (18):
 
 17. **journald@claude-desktop[-<name>] and @claude-desktop[-<name>]_sandbox**:
     two journald namespaces per launcher, host side, root
@@ -419,7 +419,7 @@ process whose principal is in the Sandbox domain, at any time.
 - L10. No host-side step reads a host file into the sandbox, or writes
   one, through a path the sandbox can write: its home, its store, the
   binds of `~/.claude` and `~/.config/Claude` (`launch-host.als`).
-- L11. Planned (`launch-pid.als`): when `app-pid.sh`'s write to
+- L11 (`launch-pid.als`): when `app-pid.sh`'s write to
   `ns_last_pid` succeeds, the app runs at `APP_PID` in P2 and keeps it,
   with the systemd --user manager (18) in P2: nothing else forks there
   between the write and the app's fork.
@@ -481,7 +481,7 @@ check: that's the user's own mount and ceiling configuration.
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
 | `protocol.als` | 3 | P1-P17 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
-| `launch-pid.als` | planned | L11: the app's pid with a systemd --user manager in P2 |
+| `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 

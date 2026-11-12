@@ -928,10 +928,11 @@ a daemon started again starts them afresh.
 
 ### The sandbox's cgroups and nsdelegate
 
-The sandbox gets its cgroup subtree writable at `/sys/fs/cgroup`, for `cgrun`, only when the host's cgroup2 has
+The sandbox gets its cgroup subtree writable at `/sys/fs/cgroup`, for its `systemd --user`, only when the host's cgroup2 has
 `nsdelegate` (the launcher's bwrap reads it from the mount's options at launch). Without it the kernel neither keeps the
 sandbox from writing its root's files nor checks process moves against its cgroup namespace, so the launcher binds
-the subtree read-only, logs a warning to the app unit's journal, and `cgrun` refuses, saying why. The read-only bind
+the subtree read-only, logs a warning to the sandbox's journal namespace, and the sandbox runs without its
+`systemd --user`, saying so there. The read-only bind
 stops writes through `/sys/fs/cgroup` and no more: cgroup2 can be mounted from a user namespace that owns the cgroup
 namespace (`FS_USERNS_MOUNT`), so from nested user, mount and cgroup namespaces the sandbox mounts it afresh,
 writable, rooted at the new cgroup namespace's root, the cgroup its process is in. Without `nsdelegate` it can then

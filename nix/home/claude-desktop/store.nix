@@ -1,5 +1,5 @@
 # The sandbox's own single-user Nix store (lib.nix, nixConf): stateDir/nix bound at /nix, the store roots' closure
-# copied in before every launch (cmd/launcher/store.go), and the maintenance scripts the user's hooks run
+# copied in before every launch (cmd/launcher/store.go), and the maintenance the sandbox's systemd --user runs
 {
   lib,
   pkgs,
@@ -14,13 +14,12 @@ let
   sys = {
     mcp = false;
   };
-  # Run by the user's own hooks, see environment.md
+  # Run by the sandbox's systemd --user (userUnits below), see environment.md
   storeGc = sl.script "store-gc.sh" {
     name = "claude-desktop-store-gc";
     runtimeInputs = [
       osConfig.nix.package
       pkgs.coreutils
-      pkgs.findutils
       pkgs.gnugrep
       pkgs.util-linux
     ];
@@ -66,6 +65,38 @@ in
     scratchpadPrune
   ];
   build.nixpak = [ { bubblewrap.extraStorePaths = [ storeRoots ]; } ];
+  # Weekly and when the launcher moved the GC root (gc-pending, which the script removes), and the prune daily, each
+  # caught up at the next start when the sandbox wasn't running
+  build.userUnits = {
+    "claude-desktop-store-gc.service" = ''
+      [Unit]
+      Description=Collect the sandbox's Nix store
+      [Service]
+      Type=oneshot
+      ExecStart=${lib.getExe storeGc}
+    '';
+    "claude-desktop-store-gc.timer" = ''
+      [Timer]
+      OnCalendar=weekly
+      Persistent=true
+    '';
+    "claude-desktop-store-gc.path" = ''
+      [Path]
+      PathExists=/nix/var/claude-desktop/gc-pending
+    '';
+    "claude-desktop-scratchpad-prune.service" = ''
+      [Unit]
+      Description=Prune Claude Code's session scratchpads
+      [Service]
+      Type=oneshot
+      ExecStart=${lib.getExe scratchpadPrune}
+    '';
+    "claude-desktop-scratchpad-prune.timer" = ''
+      [Timer]
+      OnCalendar=daily
+      Persistent=true
+    '';
+  };
   build.launcherConfig = {
     storeRoots = "${storeRoots}";
     storeRootsLink = "store-roots${ids.suffix}";
