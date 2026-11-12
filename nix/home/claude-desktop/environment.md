@@ -141,8 +141,8 @@ remove it.
   cgroup2 without `nsdelegate`, the launcher binds the sandbox's cgroup
   read-only and there's no `systemd --user`: run the job without it, at
   those `--max-jobs` and `--cores`, and tell the user (the launcher's
-  warning in the sandbox's journal, `journalctl -t claude-desktop`, says how
-  to fix the host).
+  warning in the host side's journal namespace, see Services and logs, says
+  how to fix the host: `journalctl --namespace=<it> -p warning`).
 
 ## Nix
 <!-- memo: topic={nix,sandbox} -->
