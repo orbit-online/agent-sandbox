@@ -21,7 +21,11 @@ let
   # with this callPackage, with its reaper leaving alone the children it waits for (nix/patches/nixpak-launcher-reaper.patch).
   # Everything else nixpak calls or takes sees nixpkgs as is
   nixpakPkgs = pkgs // {
-    xdg-dbus-proxy = sl.packages.dbus-proxy;
+    # Logging to the launcher's journal namespace: nixpak's wrapper binds /run into the proxy's bwrap
+    xdg-dbus-proxy = pkgs.writeShellApplication {
+      name = "xdg-dbus-proxy";
+      text = ''exec ${lib.getExe' osConfig.systemd.package "systemd-cat"} --namespace=${ids.journal} --identifier=dbus-proxy -- ${lib.getExe sl.packages.dbus-proxy} "$@"'';
+    };
     callPackage =
       fn: args:
       let
@@ -230,9 +234,25 @@ in
                     ids.scratchpad
                     (sloth.concat' "/tmp/claude-" sloth.uid)
                   ]
+                  # The journal namespace's syslog socket, after nixpak's /dev like the devices
+                  [
+                    "/run/systemd/journal.${ids.journal}/dev-log"
+                    "/dev/log"
+                  ]
                 ]
                 ++ devices;
-                bind.ro = binds false;
+                # Its native and stream sockets, where sd-journal and systemd-cat look; its files are bound at launch
+                # (cmd/launcher bwrap.go), by the machine-id
+                bind.ro = binds false ++ [
+                  [
+                    "/run/systemd/journal.${ids.journal}/socket"
+                    "/run/systemd/journal/socket"
+                  ]
+                  [
+                    "/run/systemd/journal.${ids.journal}/stdout"
+                    "/run/systemd/journal/stdout"
+                  ]
+                ];
                 tmpfs = [ "/tmp" ];
                 sockets = {
                   wayland = true;

@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/orbit-online/agent-sandbox/internal/sandbox"
+
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
 // start is the launcher the user runs: the Permissions window, a shell in the sandbox, a re-entry into the running
@@ -164,7 +166,8 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 			argv = append(argv, "--setenv="+kv)
 		}
 	}
-	argv = append(append(argv, "--", self, "supervise", "--config="+cfgPath, "--vars-file="+varsFile, "--"), args...)
+	argv = append(append(argv, "--"), journal.Wrap(cfg.Tools.SystemdCat, cfg.Journal, progName(cfg),
+		append([]string{self, "supervise", "--config=" + cfgPath, "--vars-file=" + varsFile, "--"}, args...)...)...)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	// Ctrl-C, or the terminal going away, while the app starts stops its unit: the whole start, as the splash's Abort
@@ -185,7 +188,7 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 		return exitError(1)
 	}
 	if runErr != nil {
-		return fmt.Errorf("The app didn't start, see journalctl --user -u %s", cfg.Unit)
+		return fmt.Errorf("The app didn't start, see journalctl --namespace=%s --user-unit=%s", cfg.Journal, cfg.Unit)
 	}
 	return nil
 }

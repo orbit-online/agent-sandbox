@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -29,6 +30,7 @@ that user namespace, cap_net_admin included.
 `
 
 func main() {
+	journal.Setup()
 	opts, err := docopt.ParseDoc(usage)
 	if err != nil {
 		slog.Error("Parse arguments", "err", err)

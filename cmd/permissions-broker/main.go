@@ -9,6 +9,7 @@ import (
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mcpserver"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mounts"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
 const usage = `permissions-broker - Grant a sandbox outside access while it runs
@@ -66,6 +67,7 @@ var (
 )
 
 func main() {
+	journal.Setup()
 	opts, err := docopt.ParseDoc(usage)
 	if err != nil {
 		slog.Error("Parse arguments", "err", err)

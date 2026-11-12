@@ -135,11 +135,34 @@
       assert status != 0 and "NameHasNoOwner" in out, f"GetNameOwner org.kde.klipper: {status} {out}"
       status, out = bus_call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.ListNames")
       assert status == 0 and "org.freedesktop.portal.Desktop" in out and "org.kde.klipper" not in out, f"ListNames: {out}"
-      # The proxy nixpak started is ours: its wrapper runs bin/xdg-dbus-proxy, a link to dbus-proxy
-      proxies = workstation.succeed("pgrep -u alice -x xdg-dbus-proxy").split()
+      # The proxy nixpak started is ours: its wrapper runs bin/xdg-dbus-proxy, which execs dbus-proxy through systemd-cat
+      proxies = workstation.succeed("pgrep -u alice -x dbus-proxy").split()
       assert len(proxies) == 1, f"proxies: {proxies}"
       exe = workstation.succeed(f"readlink /proc/{proxies[0]}/exe").strip()
       assert exe == "${dbusProxy}/bin/dbus-proxy", f"the D-Bus proxy runs {exe}"
+
+  with subtest("the launcher's journal namespace: the host side logs there by name and priority, the sandbox too, and reads it"):
+      def host_journal(args):
+          return workstation.succeed(f"journalctl --namespace=claude-desktop --no-pager -o cat {args}")
+      # The refusals above, as warnings
+      workstation.wait_until_succeeds(
+          "journalctl --namespace=claude-desktop --no-pager -o cat -t dbus-proxy -p warning | grep -q member=getClipboardContents",
+          timeout=30)
+      assert "time=" not in host_journal("-t dbus-proxy -p warning"), "slog's time in the journal"
+      # supervise and what it pumps (nixpak, bwrap, the app), and the units the launcher starts
+      for ident in ["claude-desktop", "udhcpc"]:
+          assert host_journal(f"-t {ident}").strip(), f"nothing from {ident}"
+      in_sandbox("logger -t probe-in hello-from-inside")
+      in_sandbox("systemd-cat -t probe-cat echo hello-from-cat")
+      workstation.wait_until_succeeds(sandbox_cmd("journalctl --no-pager -o cat -t probe-in -t probe-cat") + " | grep -c hello-from | grep -qx 2", timeout=30)
+      # The proxy's refusals, from inside: the user's journal file in the namespace, read through its ACL
+      assert "member=getClipboardContents" in in_sandbox("journalctl --no-pager -o cat -t dbus-proxy -p warning")
+      # Only the namespace's: the main journal's files aren't there
+      out = in_sandbox("ls /var/log/journal")
+      assert len(out.split()) == 1, out
+      host_entry = workstation.succeed(
+          "journalctl --namespace=claude-desktop --no-pager -o cat --output-fields=_SYSTEMD_CGROUP -t probe-in -n 1").strip()
+      assert host_entry.endswith("/claude-desktop-app.service/sandbox/app"), host_entry
 
   with subtest("the launch replaced the planted links and left alice's files alone"):
       victims_untouched()

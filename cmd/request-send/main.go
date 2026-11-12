@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
 const usage = `request-send - Send one HTTP request for a sandboxed Claude with your users CA certificate
@@ -99,7 +100,7 @@ var (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	journal.Setup()
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 

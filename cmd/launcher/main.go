@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
 const usage = `launcher - Starts a launcher's sandbox, or joins the running one
@@ -66,6 +66,7 @@ type config struct {
 	AppID          string   `json:"appId"`
 	Launcher       string   `json:"launcher"` // Its name, empty for the default launcher
 	Unit           string   `json:"unit"`     // The app's unit
+	Journal        string   `json:"journal"`  // The journal namespace the launcher's units log to
 	Slice          string   `json:"slice"`
 	AppPid         int      `json:"appPid"`
 	StateDir       string   `json:"stateDir"`
@@ -84,6 +85,7 @@ type config struct {
 		Setpriv    string `json:"setpriv"`
 		Systemctl  string `json:"systemctl"`
 		SystemdRun string `json:"systemdRun"`
+		SystemdCat string `json:"systemdCat"`
 		Unshare    string `json:"unshare"`
 		WrapperDir string `json:"wrapperDir"` // newuidmap and newgidmap, for unshare
 	} `json:"tools"`
@@ -102,7 +104,7 @@ func main() {
 	if err != nil {
 		os.Exit(2)
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	journal.Setup()
 	if opts["bwrap"] == true || opts["bwrap-helper"] == true {
 		if err := runTool(opts); err != nil {
 			fmt.Fprintf(os.Stderr, "claude-desktop: %v\n", err)

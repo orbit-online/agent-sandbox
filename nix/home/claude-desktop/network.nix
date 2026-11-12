@@ -57,7 +57,8 @@ let
         systemdRun = lib.getExe' osConfig.systemd.package "systemd-run";
         app = ids.appUnit;
         prefix = ids.unitPrefix;
-        inherit (ids) slice;
+        inherit (ids) slice journal;
+        systemdCat = lib.getExe' osConfig.systemd.package "systemd-cat";
       }
     }"
     "--net=${

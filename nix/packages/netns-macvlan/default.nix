@@ -9,6 +9,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/netns-macvlan
+      ../../../internal/journal
     ];
   };
   subPackages = [ "cmd/netns-macvlan" ];

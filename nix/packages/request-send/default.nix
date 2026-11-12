@@ -15,6 +15,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/request-send
+      ../../../internal/journal
     ];
   };
   subPackages = [ "cmd/request-send" ];

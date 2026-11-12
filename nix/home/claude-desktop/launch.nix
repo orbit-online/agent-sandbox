@@ -46,6 +46,7 @@ let
           ;
         launcher = if launcherName == null then "" else launcherName;
         unit = ids.appUnit;
+        inherit (ids) journal;
         inherit (config.build) homeDirs;
         requiredBinds = lib.mapAttrsToList (_: b: b.src) (
           lib.filterAttrs (_: b: b.enable && !b.optional) config.binds
@@ -59,6 +60,7 @@ let
           setpriv = lib.getExe' pkgs.util-linux "setpriv";
           systemctl = lib.getExe' osConfig.systemd.package "systemctl";
           systemdRun = lib.getExe' osConfig.systemd.package "systemd-run";
+          systemdCat = lib.getExe' osConfig.systemd.package "systemd-cat";
           unshare = lib.getExe' pkgs.util-linux "unshare";
           inherit (osConfig.security) wrapperDir;
         };

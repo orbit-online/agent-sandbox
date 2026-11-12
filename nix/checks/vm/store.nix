@@ -75,7 +75,7 @@
       workstation.wait_until_succeeds("test $(wc -l <${sandboxHome}/stub-app.log) -ge 3", timeout=300)
       # The launcher says so in its unit's journal, and starts the app
       workstation.wait_until_succeeds(
-          "journalctl _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -q 'cgroup2 is mounted without nsdelegate'",
+          "journalctl --namespace=claude-desktop _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -q 'cgroup2 is mounted without nsdelegate'",
           timeout=30)
       workstation.succeed("systemctl --user -M alice@ is-active claude-desktop-app")
       # Inside, its cgroup read-only
@@ -90,7 +90,7 @@
       assert "without nsdelegate" in out and "ran" not in out.split() and out.strip().endswith("exit=1"), out
       # The remount the warning names restores it
       workstation.succeed("umount /run/test-cgroupv2")
-      warning = workstation.succeed("journalctl _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -o \"'mount -o [^']*'\"")
+      warning = workstation.succeed("journalctl --namespace=claude-desktop _SYSTEMD_USER_UNIT=claude-desktop-app.service | grep -o \"'mount -o [^']*'\"")
       workstation.succeed(warning.strip().splitlines()[-1].strip("'"))
       assert cgroup2_flags() == flags, f"{cgroup2_flags()}, was {flags}"
 ''

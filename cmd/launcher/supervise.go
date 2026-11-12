@@ -19,6 +19,8 @@ import (
 
 	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/godbus/dbus/v5"
+
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
 // supervise is the app's unit: it prepares the sandbox under a splash, runs nixpak's launcher, follows the desktop's
@@ -191,10 +193,11 @@ func prepare(cfg *config, sp *splash) error {
 			// ExecStopPost ends its grants when it stops, a crash included: service units are bound to it, folder
 			// grants are detached. It fails when it finds no sandbox within a minute: the start limit ends the restarts
 			// then
-			out, err := exec.Command(cfg.Tools.SystemdRun, "--user", "--quiet", "--collect", "--unit="+p.Unit,
-				"--slice="+cfg.Slice, "-p", "Restart=on-failure", "-p", "StartLimitIntervalSec=10min",
-				"-p", "StartLimitBurst=3", "-p", "ExecStopPost="+p.Broker+" cleanup "+p.Config, "--",
-				p.Broker, "serve", p.Config).CombinedOutput()
+			args := append([]string{"--user", "--quiet", "--collect", "--unit=" + p.Unit, "--slice=" + cfg.Slice,
+				"-p", "Restart=on-failure", "-p", "StartLimitIntervalSec=10min", "-p", "StartLimitBurst=3",
+				"-p", "ExecStopPost=" + p.Broker + " cleanup " + p.Config, "--"},
+				journal.Wrap(cfg.Tools.SystemdCat, cfg.Journal, "permissions-broker", p.Broker, "serve", p.Config)...)
+			out, err := exec.Command(cfg.Tools.SystemdRun, args...).CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("Start the permissions broker: %w: %s", err, out)
 			}

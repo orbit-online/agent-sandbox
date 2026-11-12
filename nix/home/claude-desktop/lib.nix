@@ -42,6 +42,9 @@ rec {
     ++ [
       claudeCode
       osConfig.nix.package.out
+      # journalctl and systemctl ahead of the FHS env's systemd-minimal, which reads no compressed journal and has no
+      # user units; the host's, as the namespace's journald, and in the sandbox's closure already
+      osConfig.systemd.package
     ];
   # PATH for the app (so the Code tab's shells) and the claude-code MCP server
   searchPathOf =
@@ -93,6 +96,8 @@ rec {
       # The app's unit, and the start of the names of the host's units for its daemons (cmd/launcher hostUnits)
       appUnit = "claude-desktop${suffixOf name}-app.service";
       unitPrefix = "claude-desktop${suffixOf name}";
+      # The journald namespace its units and the sandbox log to; the NixOS module runs one per launcher
+      journal = "claude-desktop${suffixOf name}";
       home = "${stateDir}/home";
       scratchpad = "${stateDir}/tmp-scratchpad";
       # Where the option's definitions say so in messages

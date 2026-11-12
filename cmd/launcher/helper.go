@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
 // The helper bwrap.go starts before it execs into bwrap, with bwrap's info pipe on fd 3, its user namespace's block
@@ -39,16 +41,19 @@ type hostUnits struct {
 	App        string `json:"app"`    // The app's unit
 	Prefix     string `json:"prefix"` // Their names', claude-desktop[-<name>]
 	Slice      string `json:"slice"`
+	SystemdCat string `json:"systemdCat"`
+	Journal    string `json:"journal"` // The journal namespace they log to
 }
 
-// Starts the unit <prefix>-<name> running argv and returns once it started. Not After= the app's unit: that one is
-// still starting, and waits for this
-func (u *hostUnits) start(name string, props []string, argv ...string) error {
+// Starts the unit <prefix>-<name> running argv, logging as identifier, and returns once it started. Not After= the
+// app's unit: that one is still starting, and waits for this
+func (u *hostUnits) start(name, identifier string, props []string, argv ...string) error {
 	args := []string{"--user", "--quiet", "--collect", "--unit=" + u.Prefix + "-" + name, "--slice=" + u.Slice,
 		"-p", "BindsTo=" + u.App}
 	for _, p := range props {
 		args = append(args, "-p", p)
 	}
+	argv = journal.Wrap(u.SystemdCat, u.Journal, identifier, argv...)
 	out, err := exec.Command(u.SystemdRun, append(append(args, "--"), argv...)...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Start %s-%s: %w: %s", u.Prefix, name, err, out)
@@ -156,7 +161,7 @@ func (n *netSetup) run(pid int, u *hostUnits) error {
 	}
 	// udhcpc in a mount namespace of its own, made from the host's (see dhcp-root.sh), in the sandbox's pid ns so it
 	// dies with it. It goes to the background once it has a lease or gives up, which ends the unit's start
-	return u.start("dhcp", []string{"Type=forking"},
+	return u.start("dhcp", "udhcpc", []string{"Type=forking"},
 		append(append([]string{n.Nsenter}, ns...), "-p", n.Unshare, "--mount", "--propagation", "private", n.DHCPRoot)...)
 }
 

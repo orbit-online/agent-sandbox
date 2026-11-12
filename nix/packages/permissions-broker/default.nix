@@ -16,6 +16,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/permissions-broker
+      ../../../internal/journal
       ../../../internal/proc
       ../../../internal/sandbox
     ];

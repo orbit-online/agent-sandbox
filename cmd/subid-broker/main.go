@@ -16,6 +16,7 @@ import (
 	"github.com/docopt/docopt-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
@@ -43,6 +44,7 @@ const defaultSocket = "/run/subid-broker.sock"
 const nsenter = "nsenter"
 
 func main() {
+	journal.Setup()
 	switch filepath.Base(os.Args[0]) {
 	case "newuidmap":
 		os.Exit(client("uid", os.Args[1:]))

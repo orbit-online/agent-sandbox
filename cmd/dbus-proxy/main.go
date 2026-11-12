@@ -9,6 +9,7 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
+	"github.com/orbit-online/agent-sandbox/internal/journal"
 	"golang.org/x/sys/unix"
 )
 
@@ -80,6 +81,7 @@ func run(opts docopt.Opts) error {
 }
 
 func main() {
+	journal.Setup()
 	opts, err := docopt.ParseDoc(usage)
 	if err != nil {
 		slog.Error("Parse arguments", "err", err)

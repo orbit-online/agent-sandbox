@@ -14,6 +14,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/dbus-proxy
+      ../../../internal/journal
     ];
   };
   # The binary and its own internal/ packages, whose tests run too

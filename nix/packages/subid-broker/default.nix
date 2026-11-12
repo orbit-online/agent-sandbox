@@ -15,6 +15,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/subid-broker
+      ../../../internal/journal
       ../../../internal/proc
     ];
   };
