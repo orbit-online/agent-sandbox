@@ -54,13 +54,16 @@ in
     default = [ ];
     example = [ "192.168.1.1" ];
     description = ''
-      The DNS servers of the sandbox, which each launch writes to its resolv.conf. The sandbox reaches them through the
-      uplinks only: a resolver of the host, on 127.0.0.53 say, is out of its reach.
+      The DNS servers of the sandbox, which each launch writes to its resolv.conf. Empty: the launcher follows
+      systemd-resolved on the host, or NetworkManager without it, and gives the sandbox the servers of the uplink with
+      the default route (none of a VPN); with neither, the sandbox has no DNS. The sandbox reaches its servers through
+      the uplinks only: a resolver of the host, on 127.0.0.53 say, is out of its reach.
     '';
   };
 
   config = {
     build.storeRoots = [ bwrapHost ];
+    build.launcherConfig = { inherit (config) nameservers; };
     # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in fhs.nix), no
     # extra pasta args
     build.nixpak = [

@@ -78,8 +78,9 @@ func supervise(cfg *config, vars, args []string) error {
 			sp.dark(s == 1)
 		}
 	}
+	dns := newDNS(cfg)
 	prepared := make(chan error, 1)
-	go func() { prepared <- prepare(cfg, p) }()
+	go func() { prepared <- prepare(cfg, p, dns) }()
 	select {
 	case err := <-prepared:
 		if err != nil {
@@ -90,6 +91,7 @@ func supervise(cfg *config, vars, args []string) error {
 		// What prepare still runs ends with the unit; a store sync cut off goes on at the next start (store.go)
 		return abortStart(cfg, sp, nil)
 	}
+	dns.follow()
 	// The GTK theme, now and on every change, until the app ends
 	if conn != nil {
 		if err := watchScheme(conn, func(s uint32) {
@@ -187,7 +189,7 @@ func supervise(cfg *config, vars, args []string) error {
 }
 
 // prepare readies the sandbox's state where a refusal reaches the caller, before nixpak's launcher runs
-func prepare(cfg *config, p *progress) error {
+func prepare(cfg *config, p *progress, dns *dns) error {
 	// The sandbox can write its home and plant links there, so the files it expects (resolv.conf, user-dirs.dirs, the
 	// app's config) are written confined, see confine.sh. The directories themselves are bind sources, on paths it
 	// can't write
@@ -204,6 +206,9 @@ func prepare(cfg *config, p *progress) error {
 	state := exec.Command(cfg.State, append(append([]string{}, cfg.HomeDirs...), "--", "home")...)
 	if out, err := state.CombinedOutput(); err != nil {
 		return fmt.Errorf("Prepare the sandbox's home: %w: %s", err, out)
+	}
+	if err := dns.update(); err != nil {
+		return err
 	}
 	err := syncStore(cfg, p.copying)
 	p.copied()

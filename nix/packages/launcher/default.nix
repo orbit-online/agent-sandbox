@@ -22,7 +22,7 @@ buildGoModule {
     "cmd/launcher"
     "internal/..."
   ];
-  vendorHash = "sha256-/8ZEaaDmrjWPoU1AYxPbFqtdXaLJ1rEZpbUdYnU4OFo=";
+  vendorHash = "sha256-5Z5+FZ3a+Af7EjXgxh1DwwpGwx++zPBzrOoSMl+C0Tk=";
   env.CGO_ENABLED = 0;
   # internal/sandbox's tests make pid namespaces with unshare
   nativeCheckInputs = [ util-linux ];

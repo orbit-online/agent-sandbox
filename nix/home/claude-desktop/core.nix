@@ -66,7 +66,6 @@ let
       STATE_DIR = ids.stateDir;
       SANDBOX_HOME = ids.home;
       RESOLV_CONF = "${ids.home}/.config/resolv.conf";
-      NAMESERVERS = lib.concatStringsSep " " config.nameservers;
       DOT_CLAUDE = hostPath ".claude";
       CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
       MCP_SERVERS = "${pkgs.writeText "mcp-servers.json" (builtins.toJSON config.mcpServers)}";

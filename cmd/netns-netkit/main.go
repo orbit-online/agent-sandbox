@@ -25,6 +25,7 @@ Usage:
   netns-netkit up [--name=<name>] <pid>
   netns-netkit down [--name=<name>]
   netns-netkit addr [--name=<name>]
+  netns-netkit uplinks
   netns-netkit grant [--name=<name>] (tcp|udp) <port>
   netns-netkit revoke [--name=<name>] (--all | (tcp|udp) <port>)
 
@@ -40,7 +41,9 @@ capability over it by owning that user namespace, cap_net_admin included.
 What an earlier sandbox of <name> left goes first.
 
 down ends what up set up for <name>, once the sandbox ended. addr prints the
-addresses of the running sandbox of <name>, as up did. grant lets the host
+addresses of the running sandbox of <name>, as up did. uplinks prints the
+ifindexes of the einat uplinks with the default route of IPv4 and of IPv6, 0
+for none, as sandbox-uplink publishes them. grant lets the host
 reach a port of the sandbox over TCP or UDP, revoke ends that and the
 connections made under it, or with --all every grant and connection.
 
@@ -82,6 +85,9 @@ func run(opts docopt.Opts) error {
 	}
 	if err := humanCaller(); err != nil {
 		return err
+	}
+	if opts["uplinks"] == true {
+		return printUplinks()
 	}
 	uid := unix.Getuid()
 	dir := uplink.SandboxDir(uid, name)

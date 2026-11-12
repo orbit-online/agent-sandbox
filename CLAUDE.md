@@ -118,7 +118,15 @@ single-user Nix store, and an environment doc for the Claude running inside.
   the NAR sizes), `theme.go` (the portal's colour scheme as the sandbox's GTK theme, live), `splash.go` (the
   splash's process and its JSON lines), `progress.go` (the start's steps, from supervise and the markers the host
   side's helpers log, `Step step=<name>` from bwrap's helper and the proxy's `Listening`, and the bar estimated from
-  the durations to each step that supervise logs as `Started` once the app is up, the medians of the last 5 launches)
+  the durations to each step that supervise logs as `Started` once the app is up, the medians of the last 5 launches),
+  `dns.go` (the resolv.conf of the sandbox: the `nameservers` option, or else `Manager.DNSEx` and `Domains` of resolved,
+  or `DnsManager.Configuration` of NetworkManager without resolved, read on the system bus without activating either, with
+  the default-route uplinks from `netns-netkit uplinks`; written in place through `resolv` of the state script, before
+  nixpak's launcher runs and again a second after each PropertiesChanged of either, their owners changing or a route
+  event, when the content changed; a warning in the namespace of the host side when empty), `resolvconf.go` (what
+  the sandbox gets: servers on port 53 of those uplinks, global ones the host routes through them or that are public,
+  never `vpn` entries of NetworkManager, loopback, link-local, multicast or host-local addresses, deduplicated, and
+  the search domains of the same links, routing-only ones out)
   and `startlog.go` (journalctl on the two namespaces: following the host side's from the start on, the history, a
   failure's logs). On the host, `launcher bwrap` and its helper log into the host side's namespace themselves
   (`hostLog`), not into nixpak's launcher's output, which supervise pumps into the sandbox's. The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
@@ -142,7 +150,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   primary, `sbx-<uid in base 36>-<hash of the launcher name>`), `pair.go` (the pair, L3, both ends policy drop, the
   peer `eth0` made in the sandbox netns; host routes to the addresses and forwarding on the primary) and `bpf.go`
   (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants: `grant`, `revoke`, `revoke --all`
-  for the cleanup of the broker, and `addr`, the addresses of the running sandbox, which port grants report). `netkit.bpf.c` (dual MIT/GPL,
+  for the cleanup of the broker, `addr`, the addresses of the running sandbox, which port grants report, and `uplinks`,
+  the ifindexes in `gateways`, which the launcher picks DNS servers by and can't read itself). `netkit.bpf.c` (dual MIT/GPL,
   built by the package with clang): `peer` (`BPF_NETKIT_PEER`: multicast and broadcast dropped, any source but the
   sandbox addresses dropped, `bpf_fib_lookup` with `tot_len` 0; local delivery only for a recorded flow, out with
   `bpf_redirect_neigh` through an einat uplink, and what the host routes through any other device (a full-tunnel VPN,
@@ -664,7 +673,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   splash with its status and last output, no splash being no obstacle, the tail's size, an abort from the splash while
   the app starts (nixpak's launcher stopped with SIGTERM, the result, READY=1, at least a second shown), Ctrl-C while
   the unit starts stopping it (`abort_test.go`); a launch while the unit runs leaving its token and signalling
-  supervise, or failing without a token, and an inactive unit started; SIGUSR1 handing the token to the splash of a
+  supervise, or failing without a token, and an inactive unit started; the DNS selection (`resolvconf_test.go`: the shapes of
+  resolved and NetworkManager, servers on the uplink kept, those of a VPN, by link or by the `vpn` of NetworkManager,
+  dropped with their domains, loopback, link-local and host addresses, other ports and a global private server routed elsewhere
+  dropped, a public one kept, duplicates once, the priority order of NetworkManager, routing-only domains out; the option
+  winning, no source giving an empty file, a write only on a change); SIGUSR1 handing the token to the splash of a
   failed start and of the app ended (`activate_test.go`); the store sync deleting nix/
   without a record, copying only what the store lacks with its progress short of 1, leaving a recorded store alone,
   refusing a store dir that is a link and deleting nix/ for a swapped one; the id maps (`maps_test.go`: the subuid
@@ -725,7 +738,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   dnsmasq for DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself, which listens on 443, and it holds an address of each family off the LAN,
   behind the default routes of the workstation (the IPv6 one ahead of the one QEMU advertises on eth0); the
-  `nameservers` of the launchers name it. On the
+  `nameservers` of work name it, and the workstation runs resolved with it as the server of eth1 (beside `127.0.0.1`)
+  and a dummy `corp0` with a server and domain of a VPN, which the default launcher follows. On the
   workstation VM, alice launches the sandbox with a stub app
   (`nix/checks/stub-app.nix`, shaped like the real package so the asar patch
   and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
@@ -756,7 +770,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   steps from bwrap's helper and the proxy and supervise's `Started` durations there, supervise's
   pump in the sandbox's, `logger` and `systemd-cat` inside, the host side's not writable from inside, the
   sandbox's entries stamped `sandbox/app`), the GTK theme following the color scheme (at
-  launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), the netkit pair (`lo`
+  launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), DNS from resolved in the sandbox (only the
+  router and `lan.test`, a name resolving inside, a change of the server of eth1 reaching the file within seconds in place,
+  the same inode), the netkit pair (`lo`
   and `eth0`, its addresses from the blocks and default routes, the primary routed to with forwarding on, the pins and
   their modes, the registration, alice kept from the pins), the sandbox reaching the router and the internet stand-in
   over IPv4 and IPv6 and none of the LAN address of the host, a dummy interface, a host bridge or a container behind

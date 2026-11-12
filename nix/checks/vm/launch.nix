@@ -391,6 +391,21 @@
       # alice can't reach the pins herself, only through the wrapper
       assert as_user("alice", f"ls {pins}")[0] != 0
 
+  with subtest("DNS from the host's resolved: the uplink's server alone, followed in place"):
+      conf = "${sandboxHome}/.config/resolv.conf"
+      want = "nameserver ${routerIP}\nsearch lan.test\n"
+      assert workstation.succeed(f"cat {conf}") == want, workstation.succeed(f"cat {conf}")
+      assert in_sandbox("python3 -c 'import socket; print(socket.gethostbyname(\"github.com\"))'").strip() == "${routerIP}"
+      inode = workstation.succeed(f"stat -c %i {conf}")
+      workstation.succeed("resolvectl dns eth1 ${routerIP6}")
+      workstation.wait_until_succeeds(f"grep -qx 'nameserver ${routerIP6}' {conf}", timeout=10)
+      assert workstation.succeed(f"cat {conf}") == "nameserver ${routerIP6}\nsearch lan.test\n"
+      assert workstation.succeed(f"stat -c %i {conf}") == inode, "resolv.conf replaced, not written in place"
+      workstation.succeed(sandbox_cmd("grep -qx 'nameserver ${routerIP6}' /etc/resolv.conf"))
+      workstation.succeed("resolvectl dns eth1 ${routerIP} 127.0.0.1")
+      workstation.wait_until_succeeds(f"grep -qx 'nameserver ${routerIP}' {conf}", timeout=10)
+      assert workstation.succeed(f"cat {conf}") == want
+
   with subtest("the sandbox reaches the LAN and the internet stand-in, IPv4 and IPv6, and nothing of the host's"):
       for host in ["${routerIP}", "${routerIP6}", "${internet4}", "${internet6}"]:
           assert reaches(host, 443), host

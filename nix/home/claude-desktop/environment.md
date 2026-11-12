@@ -115,8 +115,15 @@ unless you ask otherwise); release it when you're done.
   The `addresses` of the grant say where the host user reaches it
   (`<IPv4>:8080` and `[<IPv6>]:8080`); tell them. Connections the host
   opened end with the grant.
-  DNS: the servers in `/etc/resolv.conf`, from the `nameservers` option of
-  the launcher; none listed means no DNS.
+  DNS: `/etc/resolv.conf` lists the `nameservers` option of the launcher,
+  or without it the servers that systemd-resolved (or NetworkManager) on
+  the host has for the uplink with the default route, kept current while
+  you run, so LAN names resolve as on the host. Servers and domains of a
+  VPN are left out, as are servers you can't reach (`127.0.0.53` on the
+  host). An empty file means no DNS: the host has neither source nor the
+  option, or none of its servers is reachable from here; the launcher logs
+  a warning in the journal namespace of the host side then (see Services
+  and logs).
 - No SSH agent and no `~/.ssh`.
 
 ## User namespaces

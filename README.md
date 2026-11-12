@@ -52,7 +52,7 @@ The NixOS module installs `netns-netkit` for group `users`, so the user has
 to be in it, and needs Linux 6.8 or later. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
 
 Other options: `extraPath` (directories ahead of the PATH packages),
-`nameservers` (the DNS servers of the sandbox), `environmentFile` (your own version of
+`nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager), `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
 (appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in

@@ -80,7 +80,8 @@ type config struct {
 	StoreRoots     string   `json:"storeRoots"`
 	StoreRootsLink string   `json:"storeRootsLink"`
 	NixpakLauncher string   `json:"nixpakLauncher"`
-	Ready          string   `json:"ready"` // The line the app prints on stdout when its first window is ready
+	Ready          string   `json:"ready"`       // The line the app prints on stdout when its first window is ready
+	Nameservers    []string `json:"nameservers"` // The sandbox's DNS servers, the host's (dns.go) when empty
 	Tools          struct {
 		Journalctl string `json:"journalctl"`
 		Nsenter    string `json:"nsenter"`

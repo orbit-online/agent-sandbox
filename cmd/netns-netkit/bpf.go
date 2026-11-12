@@ -213,6 +213,24 @@ func printAddr(dir string) error {
 	return nil
 }
 
+// printUplinks prints the uplink of each family from the gateways map, which the launcher picks DNS servers by and the
+// caller can't read itself
+func printUplinks() error {
+	m, err := ebpf.LoadPinnedMap(uplink.GatewaysMap, &ebpf.LoadPinOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("Open %s (is sandbox-uplink running?): %w", uplink.GatewaysMap, err)
+	}
+	defer m.Close()
+	var gws [2]uplink.Gateway
+	for i := range gws {
+		if err := m.Lookup(uint32(i), &gws[i]); err != nil {
+			return fmt.Errorf("Read %s: %w", uplink.GatewaysMap, err)
+		}
+	}
+	fmt.Println(gws[0].Ifindex, gws[1].Ifindex)
+	return nil
+}
+
 // revokeAll ends every port grant of the sandbox of dir and the flows recorded on them
 func revokeAll(dir string) error {
 	for _, name := range []string{"ports", "flows"} {

@@ -109,7 +109,7 @@ let
     };
 
   nodes.workstation =
-    { nodes, ... }:
+    { nodes, config, ... }:
     {
       imports = [
         (aliceModule {
@@ -118,8 +118,6 @@ let
           tray = true;
           # Missing until the launch subtest creates it
           binds."/srv/project" = { };
-          # Until the launcher follows the host's resolver
-          nameservers = [ nodes.router.networking.primaryIPAddress ];
           # Under /etc, which the FHS env doesn't take from nixpak's binds, and in the sandbox's home. Each references what
           # the sandbox lacks otherwise
           files =
@@ -214,6 +212,35 @@ let
         pkgs.bpftools
         pkgs.tcpdump
       ];
+      # The default launcher follows resolved's DNS (work has the nameservers option): the router on the uplink, beside a
+      # loopback server, and a VPN's link with a server and domain of its own, which the sandbox doesn't get
+      services.resolved = {
+        enable = true;
+        settings.Resolve = {
+          LLMNR = "no";
+          MulticastDNS = "no";
+        };
+      };
+      networking.dhcpcd.denyInterfaces = [ "corp0" ];
+      systemd.services.link-dns = {
+        wantedBy = [ "multi-user.target" ];
+        after = [ "systemd-resolved.service" ];
+        requires = [ "systemd-resolved.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        path = [
+          pkgs.iproute2
+          config.systemd.package
+        ];
+        script = ''
+          ip link add corp0 type dummy && ip addr add 10.97.0.2/24 dev corp0 && ip link set corp0 up
+          resolvectl dns corp0 10.97.0.53 && resolvectl domain corp0 corp.test
+          resolvectl dns eth1 ${nodes.router.networking.primaryIPAddress} 127.0.0.1
+          resolvectl domain eth1 lan.test '~routed.test'
+        '';
+      };
       # A host service for the sandbox to miss, on the LAN address, loopback and dummy0 (setup in the test script)
       systemd.services.listener = {
         wantedBy = [ "multi-user.target" ];
@@ -344,6 +371,7 @@ let
     workstation.wait_for_unit("home-manager-alice.service")
     workstation.wait_for_unit("user@1000.service")
     workstation.wait_for_unit("listener.service")
+    workstation.wait_for_unit("link-dns.service")
   '';
 
   test =
