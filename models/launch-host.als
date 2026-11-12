@@ -19,70 +19,106 @@ open sandbox
 
 // ---------------------------------------------------------------------
 // L8: lifetimes
+//
+// As of de94126: subid-broker and udhcpc are transient units in the
+// launcher's slice with BindsTo= the app's unit (helper.go:46-57,
+// hostUnits.start), no After=. subid-broker gets the launcher's pid (which
+// then execs into bwrap) and pidfd_opens it before it creates the socket.
 
 abstract sig Thing {}
 one sig
-  Shell,     // the launcher's bwrap (bwrap.go) before line 177's exec
-  BwrapHost, // the same pid as bwrap, its parent half on the host
-  SubidB,    // subid-broker, started at line 44
+  AppUnit,   // the app's unit, supervise (supervise.go): waits for nixpak's launcher (:119),
+             // then, when it failed, for the user to close the error window (splash.go:98-106)
+  Shell,     // the launcher's bwrap (bwrap.go runBwrap) before its exec at :178
+  BwrapHost, // the same process after the exec, bwrap's parent half on the host
+  SubidB,    // subid-broker's unit, started at bwrap.go:197
   Sandbox,   // the outer bwrap's child, with P and all in it
-  Udhcpc,    // in P (helper.go:135)
+  Udhcpc,    // the dhcp unit (helper.go:159), its udhcpc in P
   Reentry,   // in P2, under a host nsenter
   Broker,    // the permissions broker's unit
-  CallUnit         // a host command call's transient unit
+  CallUnit,  // a host command call's transient unit
+  Other      // any host process that takes the launcher's pid once it's free
   extends Thing {}
 var sig Alive in Thing {}
 
 abstract sig Mark {}
-one sig Armed, Exec, Found, Ended extends Mark {}
+one sig Spawned, Listening, Exec, Found, Ended extends Mark {}
 var sig Marks in Mark {}
+
+// The pid bwrap.go:197 passes (os.Getpid()): the process it names now
+one sig LPid { var names: lone Thing }
+// subid-broker's pidfd (subid-broker main.go:139): the process it names
+one sig Pidfd { var on: lone Thing }
 
 abstract sig Guard {}
 one sig
-  Pdeathsig,   // subid-broker dieWith: PR_SET_PDEATHSIG, fired when its parent exits
-  PidfdExit,   // run.go: run returns when the sandbox's pidfd turns readable
-  BindsTo,     // call units BindsTo= the daemon's unit (README.md, Principals 9)
-  ParentCheck, // subid-broker dieWith: getppid() after the prctl, against the pid bwrap.go:196 passes
-  StartLimit   // launcher supervise.go:178-181: the broker unit's StartLimitBurst=3 in 10 min
+  PidfdOpen,  // subid-broker serve: pidfd_open at :139 before ListenUnix at :144, so the launcher,
+              // which waits for the socket (bwrap.go:200-205), is still the process at that pid
+  PidfdWatch, // serve :155-158: the listener closes once the pidfd turns readable
+  BindsToApp, // helper.go:48: BindsTo= the app's unit, for the subid and dhcp units
+  PidfdExit,  // run.go: run returns when the sandbox's pidfd turns readable
+  BindsTo,    // call units BindsTo= the daemon's unit (README.md, Principals 9)
+  StartLimit  // launcher supervise.go:195-196: the broker unit's StartLimitBurst=3 in 10 min
   extends Guard {}
 
 pred live[t: Thing] { t in Alive }
 pred become[add, del: set Thing, m: set Mark] {
   Alive' = Alive - del + add and Marks' = Marks + m
+  LPid.names' = LPid.names - del and Pidfd.on' = Pidfd.on
 }
 
-// supervise.go:169-186 (prepare), ahead of nixpak's launcher at :74: the broker's unit starts first
+// supervise.go prepare, ahead of nixpak's launcher: the broker's unit starts first
 pred brokerStart { no Marks and not live[Broker] and become[Broker, none, none] }
-pred subidSpawn { live[Shell] and not live[SubidB] and no Marks & (Armed + Exec) and become[SubidB, none, none] }
-// serve's first step. Without ParentCheck a parent gone by now never
-// sends the signal
-pred subidArm[g: set Guard] {
-  live[SubidB] and Armed not in Marks
-  (ParentCheck in g and no (Shell + BwrapHost) & Alive) implies become[none, SubidB, Armed]
-  else become[none, none, Armed]
+// bwrap.go:197: systemd-run returns once the unit's process is forked.
+// Without PidfdOpen the socket would show before the pidfd is open
+pred subidSpawn[g: set Guard] {
+  live[Shell] and Spawned not in Marks
+  become[SubidB, none, Spawned + (PidfdOpen in g implies none else Listening)]
 }
-// bwrap.go:197-210: no socket within 5 s, exit 1. An armed subid-broker
-// gets its death signal
-pred shellAbort[g: set Guard] {
-  live[Shell] and Exec not in Marks
-  become[none, Shell + (Pdeathsig in g and Armed in Marks implies SubidB else none), Ended]
+// serve's first step: pidfd_open on whatever has the pid now; a free pid
+// fails and the broker exits 1. With PidfdOpen the socket follows
+pred subidOpen {
+  live[SubidB] and no Pidfd.on
+  some LPid.names & Alive implies {
+    Alive' = Alive and Marks' = Marks + Listening
+    LPid.names' = LPid.names and Pidfd.on' = LPid.names
+  } else become[none, SubidB, none]
 }
-// The socket shows only after the prctl (listen follows it), so the exec
-// follows the arming
-pred execBwrap { live[Shell] and Armed in Marks and Exec not in Marks and become[BwrapHost, Shell, Exec] }
+// The pidfd turns readable: the listener closes, the unit ends
+pred subidEnd[g: set Guard] {
+  PidfdWatch in g and live[SubidB] and some Pidfd.on - Alive
+  become[none, SubidB, none]
+}
+// bwrap.go:200-206: no socket within 5 s, the launcher exits 1 (the pid
+// is free once supervise reaps it)
+pred shellAbort { live[Shell] and Listening not in Marks and become[none, Shell, Ended] }
+// The exec keeps the pid, and the pidfd names the same process
+pred execBwrap {
+  live[Shell] and Listening in Marks
+  Alive' = Alive - Shell + BwrapHost and Marks' = Marks + Exec
+  LPid.names' = BwrapHost and Pidfd.on' = (Pidfd.on = Shell implies BwrapHost else Pidfd.on)
+}
+// The kernel hands the free pid to another host process
+pred reuse { no LPid.names and not live[Other] and Alive' = Alive + Other and Marks' = Marks
+  LPid.names' = Other and Pidfd.on' = Pidfd.on }
+pred otherExit { live[Other] and become[none, Other, none] }
 pred sandboxStart { live[BwrapHost] and Ended not in Marks and not live[Sandbox] and become[Sandbox, none, none] }
 pred udhcpcStart { live[Sandbox] and not live[Udhcpc] and become[Udhcpc, none, none] }
 pred reentryStart { live[Sandbox] and not live[Reentry] and become[Reentry, none, none] }
 // findSandbox: its pidfd
 pred brokerFinds { live[Broker + Sandbox] and Found not in Marks and become[none, none, Found] }
 pred callStart { live[Broker] and Found in Marks and not live[CallUnit] and become[CallUnit, none, none] }
-// P's init exits: the kernel kills P and P2, re-entries included
+// P's init exits: the kernel kills P and P2, udhcpc and re-entries included
 pred sandboxEnds { live[Sandbox] and become[none, Sandbox + Udhcpc + Reentry, Ended] }
-// bwrap's parent half exits with its child; the death signal takes
-// subid-broker with it
-pred bwrapExit[g: set Guard] {
-  live[BwrapHost] and not live[Sandbox] and Ended in Marks
-  become[none, BwrapHost + (Pdeathsig in g and Armed in Marks implies SubidB else none), none]
+// bwrap's parent half exits with its child
+pred bwrapExit { live[BwrapHost] and not live[Sandbox] and Ended in Marks and become[none, BwrapHost, none] }
+// supervise returns once nixpak's launcher is gone, after the error window
+// when it failed: the app's unit ends
+pred appEnds { live[AppUnit] and no (Shell + BwrapHost) & Alive and become[none, AppUnit, Ended] }
+// systemd stops what's bound to the app's unit once that is inactive
+pred bindsStop[g: set Guard] {
+  BindsToApp in g and not live[AppUnit] and some (SubidB + Udhcpc) & Alive
+  become[none, SubidB + Udhcpc, none]
 }
 // The broker's poll returns; systemd stops the units bound to it
 pred brokerExit[g: set Guard] {
@@ -96,54 +132,106 @@ pred brokerGivesUp[g: set Guard] {
   live[Broker] and Found not in Marks and Ended in Marks and StartLimit in g
   become[none, Broker, none]
 }
-pred stay { Alive' = Alive and Marks' = Marks }
+pred stay { Alive' = Alive and Marks' = Marks and LPid.names' = LPid.names and Pidfd.on' = Pidfd.on }
 
 pred lifetimes[g: set Guard] {
-  Alive = Shell and no Marks
-  always (brokerStart or subidSpawn or subidArm[g] or shellAbort[g] or execBwrap
-    or sandboxStart or udhcpcStart or reentryStart or brokerFinds or callStart
-    or sandboxEnds or bwrapExit[g] or brokerExit[g] or brokerGivesUp[g] or stay)
-  // Weak fairness for the host's own reactions
-  (eventually always (live[SubidB] and Armed not in Marks)) implies always eventually Armed in Marks
+  Alive = AppUnit + Shell and no Marks and LPid.names = Shell and no Pidfd.on
+  always (brokerStart or subidSpawn[g] or subidOpen or subidEnd[g] or shellAbort or execBwrap
+    or reuse or otherExit or sandboxStart or udhcpcStart or reentryStart or brokerFinds or callStart
+    or sandboxEnds or bwrapExit or appEnds or bindsStop[g] or brokerExit[g] or brokerGivesUp[g] or stay)
+  // Weak fairness for the host's own reactions. Not for appEnds (the
+  // user closes the error window, or doesn't) nor Other (lives as long as
+  // it likes)
+  (eventually always live[Shell]) implies always eventually not live[Shell]
+  (eventually always (live[SubidB] and no Pidfd.on)) implies always eventually not (live[SubidB] and no Pidfd.on)
+  (eventually always (PidfdWatch in g and live[SubidB] and some Pidfd.on - Alive)) implies always eventually not live[SubidB]
   (eventually always (live[BwrapHost] and not live[Sandbox] and Ended in Marks)) implies always eventually not live[BwrapHost]
+  (eventually always (BindsToApp in g and not live[AppUnit] and some (SubidB + Udhcpc) & Alive))
+    implies always eventually no (SubidB + Udhcpc) & Alive
   (eventually always (live[Broker] and Found in Marks and not live[Sandbox])) implies always eventually not live[Broker]
   StartLimit in g implies
     ((eventually always (live[Broker] and Found not in Marks and Ended in Marks)) implies always eventually not live[Broker])
+}
+// The user closes the error window, or the app exited cleanly: the app's
+// unit ends once nixpak's launcher has
+pred userCloses {
+  (eventually always (live[AppUnit] and no (Shell + BwrapHost) & Alive)) implies always eventually not live[AppUnit]
 }
 
 // L8: once the sandbox ended (or never came up), the broker and its call
 // units, subid-broker, udhcpc and the re-entries end too.
 pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + CallUnit + SubidB + Udhcpc + Reentry)) }
 
-// L8, also when the sandbox never came up. Holds.
-assert L8 { lifetimes[Guard] implies l8 }
-check L8 for 4 but 1..15 steps expect 0
+// L8, also when the sandbox never came up, given the app's unit ends.
+// Holds.
+assert L8 { (lifetimes[Guard] and userCloses) implies l8 }
+check L8 for 4 but 1..18 steps expect 0
 
-// L8, revert: without ParentCheck, the launcher's bwrap gives up on the socket
-// after 5 s and exits while subid-broker hasn't reached its prctl yet;
-// the death signal is set after the parent is gone and never fires, so
-// subid-broker listens on a socket no sandbox binds until logout.
-assert L8parentRevert { lifetimes[Guard - ParentCheck] implies l8 }
-check L8parentRevert for 4 but 1..15 steps expect 1
+// L8, known finding (harmless; since de94126, which replaced the death
+// signal and its getppid check): the launcher gives up on the socket
+// after 5 s and exits before subid-broker's pidfd_open, another host
+// process takes its pid, and the broker opens a pidfd on that one. It
+// serves until that process exits or the app's unit stops, which waits
+// for the user to close the error window. Its socket is in the
+// launchers' runtime dir, which no sandbox binds, so nothing reaches it,
+// unless the process that took the pid is another launcher's own
+// (bwrap.go:193 names the socket by pid alone): that one's broker can't
+// listen there, its launcher finds this broker's socket and its sandbox
+// uses it (the same binary and checks, none of them per launcher), until
+// this app's unit stops and takes the maps for nested namespaces with it.
+// The old leak (until logout) is gone: BindsTo= bounds it. A fix: the
+// launcher stops the subid unit (systemctl --user stop) before it gives
+// up, while its pid is still its own.
+assert L8window { lifetimes[Guard] implies l8 }
+check L8window for 4 but 1..18 steps expect 1
+
+// L8 without pid reuse, error window or not: the broker exits at once
+// when the pid is free. Holds, so the reuse is L8window's cause.
+assert L8noReuse { (lifetimes[Guard] and always not live[Other]) implies l8 }
+check L8noReuse for 4 but 1..18 steps expect 0
+
+// L8, revert: without BindsTo= the app's unit, the broker on a reused
+// pid outlives the app's unit.
+assert L8bindsRevert { (lifetimes[Guard - BindsToApp] and userCloses) implies l8 }
+check L8bindsRevert for 4 but 1..18 steps expect 1
 
 // L8, revert: without StartLimit the broker that never finds a sandbox
 // restarts forever.
-assert L8limitRevert { lifetimes[Guard - StartLimit] implies l8 }
-check L8limitRevert for 4 but 1..15 steps expect 1
+assert L8limitRevert { (lifetimes[Guard - StartLimit] and userCloses) implies l8 }
+check L8limitRevert for 4 but 1..18 steps expect 1
 
-// L8 for a sandbox that ran: everything ends with it.
-assert L8ran { (lifetimes[Guard] and always (Ended in Marks implies Found in Marks)) implies l8 }
-check L8ran for 4 but 1..15 steps expect 0
+// L8 for a sandbox that ran: everything ends with it, the app's unit or
+// not (its error window may stay up). Holds.
+pred ran { always (Ended in Marks implies Found in Marks) }
+assert L8ran { (lifetimes[Guard] and ran) implies l8 }
+check L8ran for 4 but 1..18 steps expect 0
 
-// L8, revert: without BindsTo a call unit outlives the broker.
-assert L8ranRevert { (lifetimes[Guard - BindsTo] and always (Ended in Marks implies Found in Marks)) implies l8 }
-check L8ranRevert for 4 but 1..15 steps expect 1
+// L8 ran, revert: without the pidfd's watch subid-broker stays until the
+// app's unit stops.
+assert L8watchRevert { (lifetimes[Guard - PidfdWatch] and ran) implies l8 }
+check L8watchRevert for 4 but 1..18 steps expect 1
+
+// L8 ran, revert: with the socket before the pidfd, the launcher execs
+// bwrap before the broker opened it; the sandbox runs and ends, the pid
+// goes to another process, and the broker watches that one.
+assert L8openRevert { (lifetimes[Guard - PidfdOpen] and ran) implies l8 }
+check L8openRevert for 4 but 1..18 steps expect 1
+
+// L8 ran, revert: without BindsTo a call unit outlives the broker.
+assert L8ranRevert { (lifetimes[Guard - BindsTo] and ran) implies l8 }
+check L8ranRevert for 4 but 1..18 steps expect 1
 
 // Vacuity: a sandbox with all of them runs and ends.
 run lifetimesRun {
-  lifetimes[Guard]
+  lifetimes[Guard] and userCloses
   eventually (live[Udhcpc + Reentry + CallUnit + SubidB]) and eventually Ended in Marks
-} for 4 but 1..15 steps expect 1
+} for 4 but 1..18 steps expect 1
+
+// Vacuity: the launcher gives up and the broker finds its pid free.
+run subidGoneRun {
+  lifetimes[Guard] and always not live[Other]
+  eventually (Ended in Marks and live[SubidB] and no Pidfd.on)
+} for 4 but 1..18 steps expect 1
 
 // ---------------------------------------------------------------------
 // L10: host files through the sandbox's home and store
