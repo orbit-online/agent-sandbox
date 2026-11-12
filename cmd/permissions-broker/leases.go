@@ -75,7 +75,12 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	}
 	b.grants[g.ID] = g
 	b.mu.Unlock()
-	go b.lease(g)
+	// The timer of the lease starts before the grant is handed out, so it runs from the time of the grant
+	var expiry <-chan time.Time
+	if !g.Expires.IsZero() {
+		expiry = b.clock.after(g.Expires.Sub(b.now()))
+	}
+	go b.lease(g, expiry)
 	if c.glob != "" {
 		go b.watchInstance(g)
 	}
@@ -84,13 +89,13 @@ func (b *broker) grant(c *capability, params json.RawMessage, summary, reason, l
 	return g, nil
 }
 
-// lease ends g when its time runs out. Lock leases end through lockEvent
-func (b *broker) lease(g *grant) {
-	if g.Expires.IsZero() {
+// lease ends g when expiry fires, none for a lease without an end. Lock leases end through lockEvent
+func (b *broker) lease(g *grant, expiry <-chan time.Time) {
+	if expiry == nil {
 		return
 	}
 	select {
-	case <-b.clock.after(g.Expires.Sub(b.now())):
+	case <-expiry:
 		g.end("its time ran out")
 	case <-g.ended:
 	}
