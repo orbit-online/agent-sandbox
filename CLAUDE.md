@@ -43,7 +43,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `cgrun.sh` (`cgrun` on the sandbox's PATH) runs a job in a `sandbox/cgrun-<pid>/`
   with a memory limit and a CPU weight (50 against `app/`'s 100: `sandbox/` gets the `cpu` controller where the unit
   has it, which systemd's `user@.service` delegates). Each launcher's slice has `CPUWeight=50`, between
-  `app.slice`'s 100 and `background.slice`'s 30 (`default.nix`). The broker and its host command calls are units in
+  `app.slice`'s 100 and `background.slice`'s 30 (`default.nix`), with `X-SwitchMethod=keep-old` and
+  `RefuseManualStop=true` so a switch never stops it and the app with it. The broker and its host command calls are units in
   the slice too. Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
@@ -592,8 +593,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   origins or none failing to evaluate, the assertion without `permissions.enable`, and `permissions-broker serve`
   loading the declaration while refusing a broken one. Not covered: the real osTicket API.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
-- `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`: the NixOS VM test
-  (`nix/checks/vm/`, needs KVM), in five parts that Nix runs in parallel;
+- `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`: the NixOS VM test
+  (`nix/checks/vm/`, needs KVM), in six parts that Nix runs in parallel;
   `vm` builds them all. Each boots the same two machines (built once) and
   runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
@@ -603,7 +604,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   its permissions broker, `live` the broker's state machine tests, `loop` the
   default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which
   CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
-  some, see `nix/patches/`). A router VM runs
+  some, see `nix/patches/`), `switch` switches to the workstation's specialisations while the app runs (the slice's
+  CPU weight changed, its unit file gone) and back, the app's unit untouched. A router VM runs
   dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself, which listens on 443. On the
   workstation VM, alice launches the sandbox with a stub app

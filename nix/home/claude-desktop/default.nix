@@ -145,9 +145,20 @@ in
     ++ lib.concatMap (l: l.build.assertions) launchers;
     home.packages = map (l: l.build.package) launchers;
     # Each launcher's slice weighted between app.slice and session.slice (100) and background.slice (30), so a busy
-    # sandbox leaves the desktop two thirds of the CPU
+    # sandbox leaves the desktop two thirds of the CPU. A switch must not stop the slice, which would take the app with
+    # it: sd-switch stops and starts a changed unit unless the new file says keep-old, and one whose file is new or gone
+    # unless the running unit refuses a manual stop. daemon-reload applies a changed CPUWeight to the running slice
     systemd.user.slices = lib.listToAttrs (
-      map (n: lib.nameValuePair (lib.removeSuffix ".slice" (sl.sliceOf n)) { Slice.CPUWeight = 50; }) sl.names
+      map (
+        n:
+        lib.nameValuePair (lib.removeSuffix ".slice" (sl.sliceOf n)) {
+          Unit = {
+            X-SwitchMethod = "keep-old";
+            RefuseManualStop = true;
+          };
+          Slice.CPUWeight = 50;
+        }
+      ) sl.names
     );
     # The sandbox's store right after memo's embedded ones (mkOrder 550, ahead of the default), by its store path, so
     # memo on the host answers as it does inside

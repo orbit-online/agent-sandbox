@@ -170,6 +170,12 @@ let
       # The test instrumentation's 2 panics the VM on any OOM, a cgroup's included, which cgrun's subtest makes
       boot.kernel.sysctl."vm.panic_on_oom" = 0;
       users.users.alice.linger = true;
+      # For the switch part: the default launcher's slice with another CPU weight, and without its unit file
+      specialisation = {
+        slice-changed.configuration.home-manager.users.alice.systemd.user.slices."claude\\x2ddesktop".Slice.CPUWeight =
+          lib.mkForce 70;
+        slice-gone.configuration.home-manager.users.alice.systemd.user.slices = lib.mkForce { };
+      };
       users.users.bob.isNormalUser = true;
       home-manager.useUserPackages = true;
       environment.systemPackages = [ pkgs.libcap ];
@@ -327,4 +333,5 @@ lib.genAttrs [
   "work"
   "live"
   "loop"
+  "switch"
 ] test
