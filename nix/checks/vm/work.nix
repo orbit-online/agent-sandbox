@@ -6,6 +6,9 @@
   workStateDir,
   mcpArgs,
   routerIP,
+  routerIP6,
+  workstationIP,
+  mdnsQuery,
   ...
 }:
 ''
@@ -39,6 +42,49 @@
       workstation.succeed(f"test -d {work_home}/.claude && test -s {work_home}/.config/Claude/claude_desktop_config.json")
       workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
       workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
+
+  with subtest("mDNS: queries of the default sandbox out, responses in; work, without mDNS, neither"):
+      app_ns = f"nsenter -t {bwrap_info()['child-pid']} -n ${mdnsQuery}"
+      work_ns = f"nsenter -t {bwrap_info('com.anthropic.Claude.work')['child-pid']} -n ${mdnsQuery}"
+      router.wait_for_unit("avahi-daemon.service")
+      router.succeed("systemd-run --unit=mdns-cap tcpdump -U -ni eth1 -w /tmp/mdns.pcap udp port 5353")
+      time.sleep(1)
+      # work listens throughout, and asks for itself
+      workstation.succeed(f"systemd-run --unit=work-mdns -p StandardOutput=file:/tmp/work-mdns {work_ns} 4 query work.local 8")
+      # The answers, by multicast to the querier on port 5353 in the sandbox
+      for fam, want in [("4", "${routerIP}"), ("6", "${routerIP6}")]:
+          out = workstation.succeed(f"{app_ns} {fam} query printer.local 3").split()
+          assert want in out, f"IPv{fam}: {out}"
+      # A one-shot query from another port leaves from port 5353 too
+      workstation.succeed(f"{app_ns} 4 query oneshot.local 0 eth0 0")
+      # A response and a probe of the sandbox stay in
+      workstation.succeed(f"{app_ns} 4 respond claim.local 0", f"{app_ns} 4 probe claim.local 0",
+                          f"{app_ns} 6 respond claim.local 0")
+      # A query from the LAN doesn't come in
+      workstation.succeed(f"systemd-run --unit=app-mdns -p StandardOutput=file:/tmp/app-mdns {app_ns} 4 listen x 4",
+                          "sleep 1")
+      router.succeed("${mdnsQuery} 4 query lan.local 0 eth1")
+      workstation.wait_until_fails("systemctl is-active app-mdns", timeout=10)
+      workstation.wait_until_fails("systemctl is-active work-mdns", timeout=15)
+      assert workstation.succeed("cat /tmp/app-mdns").strip() == "", workstation.succeed("cat /tmp/app-mdns")
+      assert workstation.succeed("cat /tmp/work-mdns").strip() == "", workstation.succeed("cat /tmp/work-mdns")
+      router.succeed("systemctl stop mdns-cap")
+      lan = router.succeed("tcpdump -nr /tmp/mdns.pcap 2>/dev/null")
+      print(lan)
+      ws_lines = [l for l in lan.splitlines() if "printer.local" in l and " > " in l and "?" in l]
+      # From the workstation address and port 5353, the unicast-response bit cleared
+      assert any("${workstationIP}.5353 > 224.0.0.251.5353" in l for l in ws_lines), ws_lines
+      assert any(re.search(r"fe80::\S+\.5353 > ff02::fb\.5353", l) for l in ws_lines), ws_lines
+      assert not any("(QU)" in l for l in ws_lines), ws_lines
+      assert any("${workstationIP}.5353 > 224.0.0.251.5353" in l and "oneshot.local" in l for l in lan.splitlines()), lan
+      assert "lan.local" in lan
+      # Nothing of the response and probe, of work, or from a sandbox address
+      for leak in ["claim.local", "work.local", " 169.254.10", " fd"]:
+          assert leak not in lan, leak
+      # Only the default primary takes responses
+      mdns = workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/mdns")
+      ifindex = workstation.succeed("cat /sys/class/net/sbx-rs-e3b0c442/ifindex").strip()
+      assert [int.from_bytes(bytes(int(x, 16) for x in e["key"]), "little") for e in json.loads(mdns)] == [int(ifindex)], mdns
 
   with subtest("Each launcher's notifications name an app with a .desktop file of that name"):
       # The portal names a notification's app by the caller's /.flatpak-info, and gnome-shell drops it unless

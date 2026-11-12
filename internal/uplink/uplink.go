@@ -26,7 +26,10 @@ const (
 	// (Gateway), pinned by sandbox-uplink beside UplinksMap: where the PEER program sends what the host routes through
 	// another device. Group sandbox-uplink, mode 0640
 	GatewaysMap = PinDir + "/gateways"
-	// The netkit primaries' names start with this, so dhcpcd and NetworkManager leave them alone
+	// The netkit primaries of the sandboxes that take mDNS responses, pinned by name beside SandboxesMap: ifindex
+	// (uint32) -> 1 (uint8). Group sandbox-uplink, mode 0660
+	MdnsMap = PinDir + "/mdns"
+	// The netkit primaries' names start with this, which the NixOS module keeps dhcpcd and NetworkManager off
 	PrimaryPrefix = "sbx-"
 	// The map in each SandboxDir that describes its sandbox (Sandbox), group-readable, so sandbox-uplink finds the
 	// sandboxes that are gone
@@ -43,10 +46,13 @@ func SandboxDir(uid int, name string) string {
 }
 
 // Gateway is a value of GatewaysMap (struct gateway in cmd/netns-netkit/netkit.bpf.c): the ifindex of the uplink, 0 for
-// none, and the gateway as Key has it, zero for a default route without one
+// none, the gateway as Key has it, zero for a default route without one, and the source and MAC mDNS queries leave the
+// uplink with: the first IPv4 address, the IPv6 link-local one, zero for none
 type Gateway struct {
-	Ifindex uint32
-	Addr    [16]byte
+	Ifindex   uint32
+	Addr, Src [16]byte
+	MAC       [6]byte
+	_         [2]byte
 }
 
 // Sandbox is the one value of SandboxMap (struct sandbox in cmd/netns-netkit/netkit.bpf.c): the addresses of the sandbox

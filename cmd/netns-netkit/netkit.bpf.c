@@ -5,7 +5,8 @@
 // The programs on the netkit pair of a sandbox (models/network.als), attached through the primary in the host netns:
 // `peer` runs when the sandbox sends, `primary` when the host sends to it. Both ends have policy drop, and neither
 // program ends on NETKIT_NEXT, which netkit counts as pass. netkit in L3 mode still carries a 14-byte Ethernet header
-// (zero MACs), so both parse past one.
+// (zero MACs), so both parse past one. With mdns set, peer copies the mDNS queries of the sandbox out of the uplink
+// with the default route, and primary passes the mDNS responses pre (cmd/sandbox-uplink/uplink.bpf.c) copies in.
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
@@ -19,6 +20,11 @@
 
 #define AF_INET 2
 #define AF_INET6 10
+#define MDNS_PORT 5353
+// The mark of the mDNS responses pre copies to the primaries (cmd/sandbox-uplink/uplink.bpf.c)
+#define MDNS_MARK 0x5a6d0002
+// The labels and questions peer walks in an mDNS query, all questions together: a query with more isn't copied out
+#define MDNS_STEPS 128
 
 // bpf_fib_lookup and bpf_redirect_neigh want a GPL-compatible program, which the kernel takes this for (license.h)
 char LICENSE[] SEC("license") = "Dual MIT/GPL";
@@ -43,6 +49,9 @@ struct {
 	__type(value, struct sandbox);
 } sandbox SEC(".maps");
 
+// Set at load by netns-netkit up --mdns
+volatile const __u8 mdns;
+
 // The einat uplinks, which sandbox-uplink keeps current and netns-netkit puts in place of this one
 // (internal/uplink.UplinksMap): the only devices a sandbox packet leaves through
 struct {
@@ -53,10 +62,12 @@ struct {
 } uplinks SEC(".maps");
 
 // Per family (0 IPv4, 1 IPv6) the einat uplink with the default route and its gateway, kept by sandbox-uplink like
-// uplinks (internal/uplink.GatewaysMap). Ifindex 0: none
+// uplinks (internal/uplink.GatewaysMap). Ifindex 0: none. src and mac are what mDNS queries leave the uplink with:
+// the first IPv4 address of the uplink or its IPv6 link-local one (zero: none), and the MAC
 struct gateway {
 	__u32 ifindex;
-	struct addr gw;
+	struct addr gw, src;
+	__u8 mac[6], pad[2];
 };
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -166,6 +177,102 @@ static __always_inline int multi(const struct pkt *p)
 	return p->dst.b[0] == 0xff;
 }
 
+// Whether p goes to the mDNS group, 224.0.0.251 or ff02::fb, port 5353
+static __always_inline int to_mdns(const struct pkt *p)
+{
+	if (p->proto != IPPROTO_UDP || !p->ports || p->dport != MDNS_PORT)
+		return 0;
+	if (p->family == AF_INET)
+		return p->dst.w[3] == bpf_htonl(0xe00000fb);
+	return p->dst.w[0] == bpf_htonl(0xff020000) && !p->dst.w[1] && !p->dst.w[2] && p->dst.w[3] == bpf_htonl(0xfb);
+}
+
+struct dnshdr {
+	__be16 id;
+	__u8 flags[2];
+	__be16 qd, an, ns, ar;
+};
+
+// Copies an mDNS query of the sandbox out of the einat uplink with the default route of its family, as the uplink
+// sends one: from the uplink address and port 5353, which einat leaves alone (an external source, a port outside its
+// range), so responders answer to the group (RFC 6762 section 6); from another port it is a legacy unicast query, whose
+// answer goes to the port alone. Not a response, nor a probe (an authority section, section 8.2): the sandbox claims
+// no name on the LAN. The questions lose the unicast-response bit (QU, section 5.4), so the answer comes by multicast,
+// which pre copies in. Packet data is read through helpers: a variable offset into it is pointer arithmetic the
+// verifier refuses without CAP_PERFMON. Rewrites the packet, which peer drops after
+static __always_inline void query_out(struct __sk_buff *skb, const struct pkt *p)
+{
+	__u32 fam = p->family == AF_INET6;
+	struct gateway *gw = bpf_map_lookup_elem(&gateways, &fam);
+	if (!gw || !gw->ifindex || !bpf_map_lookup_elem(&uplinks, &gw->ifindex))
+		return;
+	if (!gw->src.w[0] && !gw->src.w[1] && !gw->src.w[2] && !gw->src.w[3])
+		return;
+	// parse found the ports right after a fixed IP header
+	__u32 l4 = ETH_HLEN + (fam ? sizeof(struct ipv6hdr) : sizeof(struct iphdr));
+	__u32 csum = l4 + offsetof(struct udphdr, check), off = l4 + sizeof(struct udphdr);
+	struct dnshdr h;
+	if (bpf_skb_load_bytes(skb, off, &h, sizeof(h)))
+		return;
+	// QR 0 and opcode 0: a standard query
+	if (h.flags[0] & 0xf8 || h.ns || !h.qd)
+		return;
+	off += sizeof(h);
+	__u16 left = bpf_ntohs(h.qd);
+	for (int i = 0; i < MDNS_STEPS && left; i++) {
+		__u8 len;
+		if (bpf_skb_load_bytes(skb, off, &len, 1))
+			return;
+		if (len && len <= 63) {
+			off += len + 1;
+			continue;
+		}
+		// The end of the name: its root label, or a compression pointer of 2 bytes. Then QTYPE and QCLASS
+		if (len && (len & 0xc0) != 0xc0)
+			return;
+		off += len ? 2 : 1;
+		__be16 cls, qm;
+		if (bpf_skb_load_bytes(skb, off + 2, &cls, 2))
+			return;
+		qm = cls & bpf_htons(0x7fff);
+		if (qm != cls &&
+		    (bpf_l4_csum_replace(skb, csum, cls, qm, BPF_F_MARK_MANGLED_0 | 2) ||
+		     bpf_skb_store_bytes(skb, off + 2, &qm, 2, 0)))
+			return;
+		off += 4;
+		left--;
+	}
+	if (left)
+		return;
+	__be16 port = bpf_htons(MDNS_PORT), sport = bpf_htons(p->sport);
+	if (bpf_l4_csum_replace(skb, csum, sport, port, BPF_F_MARK_MANGLED_0 | 2) ||
+	    bpf_skb_store_bytes(skb, l4 + offsetof(struct udphdr, source), &port, 2, 0))
+		return;
+	struct ethhdr eth = {.h_proto = bpf_htons(fam ? ETH_P_IPV6 : ETH_P_IP)};
+	__builtin_memcpy(eth.h_source, gw->mac, ETH_ALEN);
+	if (fam) {
+		// 33:33 and the low 32 bits of ff02::fb
+		__u8 dst[ETH_ALEN] = {0x33, 0x33, 0, 0, 0, 0xfb};
+		__builtin_memcpy(eth.h_dest, dst, ETH_ALEN);
+		__s64 diff = bpf_csum_diff((__be32 *)p->src.w, 16, gw->src.w, 16, 0);
+		if (diff < 0 || bpf_l4_csum_replace(skb, csum, 0, diff, BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0) ||
+		    bpf_skb_store_bytes(skb, ETH_HLEN + offsetof(struct ipv6hdr, saddr), gw->src.b, 16, 0))
+			return;
+	} else {
+		// 01:00:5e and the low 23 bits of 224.0.0.251
+		__u8 dst[ETH_ALEN] = {0x01, 0x00, 0x5e, 0, 0, 0xfb};
+		__builtin_memcpy(eth.h_dest, dst, ETH_ALEN);
+		__be32 from = p->src.w[3], to = gw->src.w[3];
+		if (bpf_l3_csum_replace(skb, ETH_HLEN + offsetof(struct iphdr, check), from, to, 4) ||
+		    bpf_l4_csum_replace(skb, csum, from, to, BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | 4) ||
+		    bpf_skb_store_bytes(skb, ETH_HLEN + offsetof(struct iphdr, saddr), &to, 4, 0))
+			return;
+	}
+	if (bpf_skb_store_bytes(skb, 0, &eth, sizeof(eth), 0))
+		return;
+	bpf_clone_redirect(skb, gw->ifindex, 0);
+}
+
 // Sandbox to host: leaves only through an einat uplink, reaches the host only as a reply on a recorded flow
 SEC("tc")
 int peer(struct __sk_buff *skb)
@@ -173,8 +280,13 @@ int peer(struct __sk_buff *skb)
 	__u32 zero = 0;
 	struct sandbox *sb = bpf_map_lookup_elem(&sandbox, &zero);
 	struct pkt p = {};
-	if (!sb || !parse(skb, &p) || multi(&p))
+	if (!sb || !parse(skb, &p))
 		return NETKIT_DROP;
+	if (multi(&p)) {
+		if (mdns && to_mdns(&p))
+			query_out(skb, &p);
+		return NETKIT_DROP;
+	}
 	// No source but its own: einat binds what leaves to its source, and the flows are keyed without it
 	if (!own(sb, &p.src))
 		return NETKIT_DROP;
@@ -215,7 +327,7 @@ int peer(struct __sk_buff *skb)
 		return bpf_redirect_neigh(fib.ifindex, &nh, sizeof(nh), 0);
 	}
 	// The host routes it through another device: a full-tunnel VPN, a bridge, a mesh. Never into it: out through the
-	// einat uplink with the default route, to its gateway, as a macvlan on that uplink would send it
+	// einat uplink with the default route, to its gateway, as a host on the LAN of that uplink would send it
 	__u32 fam = p.family == AF_INET6;
 	struct gateway *gw = bpf_map_lookup_elem(&gateways, &fam);
 	if (!gw || !gw->ifindex || !bpf_map_lookup_elem(&uplinks, &gw->ifindex))
@@ -230,14 +342,22 @@ int peer(struct __sk_buff *skb)
 }
 
 // Host to sandbox: only what the host itself sends (a socket attached; forwarded packets have none) over TCP or UDP to
-// a granted port, recorded for the replies
+// a granted port, recorded for the replies. With mdns set, also the mDNS responses pre copied here
 SEC("tc")
 int primary(struct __sk_buff *skb)
 {
 	__u32 zero = 0;
 	struct sandbox *sb = bpf_map_lookup_elem(&sandbox, &zero);
 	struct pkt p = {};
-	if (!sb || !skb->sk || !parse(skb, &p) || !p.ports)
+	// The primary leaves both to this program (NETKIT_SCRUB_NONE, pair.go), for the mark; the sandbox gets neither
+	__u32 mark = skb->mark;
+	skb->mark = 0;
+	skb->priority = 0;
+	if (!sb || !parse(skb, &p) || !p.ports)
+		return NETKIT_DROP;
+	if (mark == MDNS_MARK)
+		return mdns && to_mdns(&p) && p.sport == MDNS_PORT ? NETKIT_PASS : NETKIT_DROP;
+	if (!skb->sk)
 		return NETKIT_DROP;
 	if (!own(sb, &p.dst))
 		return NETKIT_DROP;

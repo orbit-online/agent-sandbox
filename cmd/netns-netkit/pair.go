@@ -10,14 +10,15 @@ import (
 )
 
 // addPair creates the netkit pair of a sandbox: the primary in the host netns, the peer eth0 straight in the sandbox
-// netns. L3, and both ends drop while no program is attached (NETKIT_POLICY_BLACKHOLE is NETKIT_DROP in the kernel)
+// netns. L3, and both ends drop while no program is attached (NETKIT_POLICY_BLACKHOLE is NETKIT_DROP in the kernel).
+// The primary keeps skb->mark and priority for its program, which reads the mark of mDNS copies and clears both
 func addPair(primary string, netnsFd int) (netlink.Link, error) {
 	nk := &netlink.Netkit{
 		LinkAttrs:  netlink.LinkAttrs{Name: primary},
 		Mode:       netlink.NETKIT_MODE_L3,
 		Policy:     netlink.NETKIT_POLICY_BLACKHOLE,
 		PeerPolicy: netlink.NETKIT_POLICY_BLACKHOLE,
-		Scrub:      netlink.NETKIT_SCRUB_DEFAULT,
+		Scrub:      netlink.NETKIT_SCRUB_NONE,
 		PeerScrub:  netlink.NETKIT_SCRUB_DEFAULT,
 	}
 	nk.SetPeerAttrs(&netlink.LinkAttrs{Name: "eth0", Namespace: netlink.NsFd(netnsFd)})

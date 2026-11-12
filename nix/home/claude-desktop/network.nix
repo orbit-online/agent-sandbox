@@ -38,6 +38,7 @@ let
           netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
           nsenter = lib.getExe' pkgs.util-linux "nsenter";
           ip = lib.getExe' pkgs.iproute2 "ip";
+          inherit (config.network) mdns;
         }
         // lib.optionalAttrs (launcherName != null) { name = launcherName; }
       )
@@ -59,6 +60,18 @@ in
       Join the netns of the sandbox to the network (netkit pair, DNS, `port` grants of the permissions broker). Off,
       the sandbox keeps a netns of its own with `lo` alone, for local models say: it reaches servers of the host only
       through host sockets of the permissions broker.
+    '';
+  };
+
+  options.network.mdns = lib.mkOption {
+    type = lib.types.bool;
+    default = config.network.enable;
+    defaultText = lib.literalExpression "network.enable";
+    description = ''
+      mDNS (`.local` names) in the sandbox: queries go out of the uplink with the default route, from the address
+      of the host and port 5353, and the responses on the LAN come in, to a querier on port 5353 in the sandbox (avahi,
+      say; a legacy unicast query from another port gets no answer). Responses, probes and announcements of the sandbox stay in,
+      so the sandbox claims no names on the LAN.
     '';
   };
 

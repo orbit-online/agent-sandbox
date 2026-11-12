@@ -70,6 +70,9 @@ let
     ];
   } (builtins.readFile ../fake-portal.py);
   gdbus = lib.getExe' pkgs.glib "gdbus";
+  mdnsQuery = pkgs.writers.writePython3 "mdns-query" { flakeIgnore = [ "E501" ]; } (
+    builtins.readFile ./mdns-query.py
+  );
   # The router's addresses off the LAN, standing in for the internet
   internet4 = "203.0.113.1";
   internet6 = "2001:db8:ffff::1";
@@ -89,6 +92,16 @@ let
         script = "ip addr add ${internet4}/32 dev lo && ip addr add ${internet6}/128 dev lo";
       };
       environment.systemPackages = [ pkgs.tcpdump ];
+      # An mDNS responder on the LAN: printer.local, A and AAAA
+      services.avahi = {
+        enable = true;
+        hostName = "printer";
+        allowInterfaces = [ "eth1" ];
+        publish = {
+          enable = true;
+          addresses = true;
+        };
+      };
       services.dnsmasq = {
         enable = true;
         resolveLocalQueries = false;
@@ -133,6 +146,8 @@ let
           launchers.work = {
             package = stub;
             tray = true;
+            # The sandbox without mDNS beside the default one
+            network.mdns = false;
             nameservers = [ nodes.router.networking.primaryIPAddress ];
             permissions = {
               enable = true;
@@ -398,6 +413,7 @@ let
             sandboxHome
             launches
             workStateDir
+            mdnsQuery
             ;
           mcpArgs = nodes.workstation.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.work.mcpServers.permissions.args;
           routerIP = nodes.router.networking.primaryIPAddress;

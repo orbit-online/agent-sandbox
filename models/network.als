@@ -1,5 +1,5 @@
 /*
- * The sandbox network on netkit, over time (README.md, N1-N7). Citations
+ * The sandbox network on netkit, over time (README.md, N1-N9). Citations
  * are the code: the helper netns-netkit (cmd/netns-netkit: pair.go,
  * bpf.go, the programs in netkit.bpf.c), the uplink programs and
  * sandbox-uplink (cmd/sandbox-uplink: uplink.bpf.c, attach.go,
@@ -41,7 +41,18 @@
  * and broadcast destination, Remote everything off the host. One flow
  * map serves all launchers, keyed by the whole tuple, the sandbox source
  * included (a map per launcher is only narrower). IPv6 link-local
- * sources, mDNS, DNS and ICMP errors are the VM checks'.
+ * sources, DNS and ICMP errors are the VM checks'.
+ *
+ * mDNS (N8, N9): a launcher with network.mdns loads its programs with
+ * the constant mdns set (netns-netkit up --mdns, bpf.go attach), and
+ * registers its primary in the mdns map of sandbox-uplink. peer copies a
+ * query of the sandbox out of the gateway uplink from the uplink address
+ * and port 5353 (query_out), which einat leaves alone, then drops the
+ * packet; pre copies a response from the LAN to the egress of each
+ * registered primary, marked, and primary passes a marked mDNS response
+ * with mdns set. MdnsQuery, MdnsProbe and MdnsResponse are packets to the
+ * mDNS group by their DNS header; only root on the host sets the mark
+ * otherwise.
  */
 module network
 
@@ -74,12 +85,22 @@ sig Sandbox extends Node {
 abstract sig Addr {}
 sig SbxAddr extends Addr {}
 one sig Loopback, Ext, Mcast extends Addr {}
+// To the mDNS group: a query (QR 0, no authority section), a probe (QR 0
+// with one), a response or announcement (QR 1)
+one sig MdnsQuery, MdnsProbe, MdnsResponse extends Addr {}
 sig Remote extends Addr {}
 
 sig Port {}
 sig Flow { port: one Port }
 
 fact prefixes { all a: SbxAddr | one addr.a }
+
+fun mdns: set Addr { MdnsQuery + MdnsProbe + MdnsResponse }
+fun group: set Addr { Mcast + mdns }
+
+// Launchers with network.mdns, their programs loaded with the constant
+// mdns (netns-netkit main.go, bpf.go attach)
+sig Mdns in Sandbox {}
 
 // The host: the kernel default route and routes off the host, and the
 // einat uplink with the default route that sandbox-uplink publishes in
@@ -98,6 +119,10 @@ var sig Fwd, PeerOn, PrimOn in Sandbox {}
 var sig FwdOn in Device {}
 // Attached on an uplink: pre, post, einat; pre ahead of einat
 var sig PreOn, PostOn, EinatOn, Ahead in Uplink {}
+// Primaries in the mdns map: those netns-netkit up --mdns registered,
+// until down or sandbox-uplink (sandboxes.go collect) removes them; a
+// stale entry names whatever primary got its ifindex since
+var sig MdnsReg in Sandbox {}
 
 // Ghost: the packet of this step. Where it came from, its flow and
 // destination, where it ended up, the source einat bound it to on
@@ -129,14 +154,19 @@ one sig
   EgressSrcDrop, // code: egress (uplink.bpf.c), after einat on uplink egress, drops sandbox sources
   LocalOrigin,   // code: primary (netkit.bpf.c) requires skb->sk, so passes only packets the host itself sent
   Handoff,       // code: post (uplink.bpf.c) redirects only packets pre marked, drops the rest to a sandbox
-  RevokeClears   // code: revoke (netns-netkit bpf.go) deletes the recorded flows of the port
+  RevokeClears,  // code: revoke (netns-netkit bpf.go) deletes the recorded flows of the port
+  QueryOnly,     // code: query_out (netkit.bpf.c) copies out only QR 0, opcode 0 without an authority section
+  MdnsConst,     // code: peer and primary (netkit.bpf.c) handle mDNS only with the constant mdns, which
+                 // netns-netkit up --mdns sets (bpf.go attach)
+  ResponseOnly,  // code: pre (uplink.bpf.c, mdns_response) copies in only QR 1 from port 5353
+  RegOnly        // code: pre (uplink.bpf.c) copies only to the primaries of the mdns map
   extends Guard {}
 
 // Where the host netns routes a destination
 fun hop[d: Addr]: lone Node {
   d in Loopback + Ext => Host
   else d in SbxAddr => addr.d
-  else d = Mcast => K.dflt
+  else d in group => K.dflt
   else K.route[d]
 }
 
@@ -148,6 +178,7 @@ pred keepHost {
   Flushed' = Flushed and LocalNet' = LocalNet and Fwd' = Fwd and FwdOn' = FwdOn
   PeerOn' = PeerOn and PrimOn' = PrimOn
   PreOn' = PreOn and PostOn' = PostOn and EinatOn' = EinatOn and Ahead' = Ahead
+  MdnsReg' = MdnsReg
 }
 pred keepFlows { rec' = rec and started' = started and outBy' = outBy and nat' = nat }
 pred quiet {
@@ -198,7 +229,7 @@ pred egress[g: set Guard, s: Sandbox, dv: Device, a: Addr, f: Flow] {
 // primary forwards and the ruleset lets it
 pred stackFromSbx[g: set Guard, s: Sandbox, a, d: Addr, f: Flow] {
   d = Loopback implies { some LocalNet implies toHost else drop }
-  else d in Ext + Mcast implies toHost
+  else d in Ext + group implies toHost
   else (s in Fwd and some Flushed) implies {
     hop[d] in Device implies egress[g, s, hop[d], a, f]
     else hop[d] in Sandbox implies primaryIn[g, hop[d], f, s, none]
@@ -225,7 +256,11 @@ pred sbxSend[g: set Guard, s: Sandbox, a, d: Addr, f: Flow] {
   keepHost and granted' = granted
   Pkt.from' = s and Pkt.fl' = f and Pkt.dst' = d
   s not in PeerOn implies { PolicyDrop in g implies drop else stackFromSbx[g, s, a, d, f] }
-  else (MultiDrop in g and d = Mcast) implies drop
+  // query_out: a copy out of the gateway uplink from the uplink address; the
+  // packet itself then meets MultiDrop
+  else (d in mdns and (MdnsConst in g implies s in Mdns) and (QueryOnly in g implies d = MdnsQuery) and some K.gw)
+    implies land[K.gw, none, none, none -> none, none -> none, none -> none, none -> none -> none]
+  else (MultiDrop in g and d in group) implies drop
   else (SrcCheck in g and a != s.addr) implies drop
   else (FwdDisabled in g and s not in Fwd) implies verdictEnd[g, s, a, d, f]
   // NOT_FWDED: local delivery, 127.0.0.1 whatever route_localnet says
@@ -254,7 +289,13 @@ pred lanSend[g: set Guard, u: Uplink, d: Addr, f: Flow] {
   Pkt.from' = u and Pkt.fl' = f and Pkt.dst' = d
   let rev = { x: u | x in EinatOn and d = Ext and some x.nat[f] },
       d2 = rev.nat[f] + { x: d | no rev } {
-    (PreDrop in g and u in PreOn and (u in Ahead => d else d2) in SbxAddr) implies drop
+    // pre: copies of an mDNS response to the registered primaries, whose
+    // program (or policy) decides; the response itself goes to the host
+    (d in mdns and u in PreOn) implies land[
+      { x: Sandbox | (ResponseOnly in g implies d = MdnsResponse) and (RegOnly in g implies x in MdnsReg)
+        and (x in PrimOn implies (MdnsConst in g implies x in Mdns) else PolicyDrop not in g) },
+      none, none, none -> none, none -> none, none -> none, none -> none -> none]
+    else (PreDrop in g and u in PreOn and (u in Ahead => d else d2) in SbxAddr) implies drop
     else d2 in SbxAddr implies {
       (u in PostOn and (Handoff in g implies u in PreOn))
         implies land[addr.d2, none, rev, none -> none, none -> none, none -> none, none -> none -> none]
@@ -310,6 +351,7 @@ pred stutter { keepHost and keepFlows and granted' = granted and quiet }
 
 pred init {
   no rec + started + outBy and no nat
+  MdnsReg = Mdns
   no Pkt.from + Pkt.fl + Pkt.dst + Pkt.to + Pkt.natted + Pkt.via
 }
 
@@ -369,9 +411,10 @@ run N1premise {
 // Behind a full-tunnel VPN the lookup finds the tunnel, and peer sends
 // the packet out through the einat uplink with the default route instead
 // (the gateways map), never into the tunnel.
+// An mDNS query leaves as a copy from the uplink address (N8).
 pred egressOk {
-  all s: Sandbox | (Pkt.from = s and some Pkt.to & Device) implies
-    (Pkt.to & Device in Uplink and Pkt.natted = s.addr and Pkt.dst != Mcast)
+  all s: Sandbox | (Pkt.from = s and some Pkt.to & Device) implies (Pkt.to & Device in Uplink and
+    ((Pkt.natted = s.addr and Pkt.dst not in group) or (Pkt.dst = MdnsQuery and no Pkt.natted)))
 }
 assert N2egress { system[Guard] implies always egressOk }
 check N2egress for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 0
@@ -405,9 +448,11 @@ run N2vpnPremise {
 // reaches a sandbox only reverse-NATed by an einat binding, on a flow
 // that sandbox sent out itself (code: PreDrop; Handoff, so post alone
 // doesn't redirect; SrcCheck, so a binding names its sender;
-// LocalOrigin, so a forwarded packet isn't taken for the host).
+// LocalOrigin, so a forwarded packet isn't taken for the host), or as
+// an mDNS response copied to a sandbox with mDNS (N9).
 pred inboundOk {
-  all s: Sandbox | (Pkt.from in Device and s in Pkt.to) implies (some Pkt.via and Pkt.fl in s.outBy)
+  all s: Sandbox | (Pkt.from in Device and s in Pkt.to) implies
+    ((some Pkt.via and Pkt.fl in s.outBy) or (Pkt.dst = MdnsResponse and s in Mdns))
 }
 assert N3inbound { system[Guard] implies always inboundOk }
 check N3inbound for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 0
@@ -470,9 +515,11 @@ run N4premise {
 // to the host (LocalDrop). sandbox-uplink sets forwarding on the
 // primaries again (sandboxes.go), which only ends the outage.
 pred failClosed {
-  all s: Sandbox | (Pkt.from = s and s not in PeerOn & Fwd) implies no Pkt.to
-  all u: Uplink - EinatOn | (Pkt.from in Sandbox implies u not in Pkt.to) and (Pkt.from = u implies no Pkt.to & Sandbox)
-  all u: Uplink - Ahead | Pkt.from = u implies no Pkt.to & Sandbox
+  // query_out copies before the lookup, so an mDNS query still leaves
+  all s: Sandbox | (Pkt.from = s and (s not in PeerOn or (s not in Fwd and Pkt.dst != MdnsQuery))) implies no Pkt.to
+  all u: Uplink - EinatOn | Pkt.dst not in mdns implies
+    ((Pkt.from in Sandbox implies u not in Pkt.to) and (Pkt.from = u implies no Pkt.to & Sandbox))
+  all u: Uplink - Ahead | (Pkt.from = u and Pkt.dst not in mdns) implies no Pkt.to & Sandbox
   all s: Sandbox | (Pkt.from = s and Host in Pkt.to) implies Pkt.fl in s.rec
 }
 assert N5failClosed { system[Guard] implies always failClosed }
@@ -545,4 +592,53 @@ run N7premise {
   system[Guard]
   eventually some s: Sandbox | Pkt.from = s and Pkt.fl in s.started and Pkt.fl.port not in s.granted
     and Pkt.dst = Ext
+} for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+
+// N8. A sandbox sends nothing to the mDNS group out but queries, and only
+// with mDNS: no responses, announcements or probes, so it claims no name
+// on the LAN (code: QueryOnly; MdnsConst).
+pred mdnsOut {
+  all s: Sandbox | (Pkt.from = s and some Pkt.to & Device and Pkt.dst in mdns) implies
+    (Pkt.dst = MdnsQuery and s in Mdns)
+}
+assert M1mdnsOut { system[Guard] implies always mdnsOut }
+check M1mdnsOut for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 0
+
+// N8, reverts: without QueryOnly a response leaves; without MdnsConst a
+// sandbox without mDNS sends queries out.
+assert M1revertQuery { system[Guard - QueryOnly] implies always mdnsOut }
+check M1revertQuery for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+assert M1revertConst { system[Guard - MdnsConst] implies always mdnsOut }
+check M1revertConst for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+
+// N9. What reaches a sandbox from the mDNS group of the LAN is a
+// response, and only a sandbox with mDNS gets it, a stale mdns map entry
+// included (code: ResponseOnly; MdnsConst, which holds alone; RegOnly).
+pred mdnsIn {
+  all s: Sandbox | (Pkt.from in Device and s in Pkt.to and Pkt.dst in mdns) implies
+    (Pkt.dst = MdnsResponse and s in Mdns)
+}
+assert M2mdnsIn { system[Guard] implies always mdnsIn }
+check M2mdnsIn for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 0
+
+// N9, reverts: without ResponseOnly LAN queries come in; without
+// MdnsConst a stale entry of the mdns map copies into a sandbox without
+// mDNS; without RegOnly and MdnsConst every sandbox gets the copies;
+// without PolicyDrop a primary with its program detached passes them.
+assert M2revertResponse { system[Guard - ResponseOnly] implies always mdnsIn }
+check M2revertResponse for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+assert M2revertConst { system[Guard - MdnsConst] implies always mdnsIn }
+check M2revertConst for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+assert M2revertReg { system[Guard - RegOnly - MdnsConst] implies always mdnsIn }
+check M2revertReg for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+assert M2revertPolicy { system[Guard - PolicyDrop] implies always mdnsIn }
+check M2revertPolicy for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
+
+// N8, N9, premise: one sandbox with mDNS and one without; a query of the
+// first leaves and a response reaches it.
+run Mpremise {
+  system[Guard]
+  some Mdns and some Sandbox - Mdns
+  eventually some s: Sandbox | Pkt.from = s and Pkt.dst = MdnsQuery and some Pkt.to & Uplink
+  eventually some s: Sandbox | Pkt.from in Uplink and Pkt.dst = MdnsResponse and s in Pkt.to
 } for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1

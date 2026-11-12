@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,17 +19,18 @@ import (
 
 // sandboxes is what sandbox-uplink keeps for the netkit pairs of the sandboxes (cmd/netns-netkit): the uplinks map
 // their PEER programs redirect to and the gateways map they fall back to, forwarding on their primaries, and the
-// registrations and pins of those that are gone
+// registrations (mdns too) and pins of those that are gone
 type sandboxes struct {
 	dir      string
 	uplinks  *ebpf.Map
 	gateways *ebpf.Map
 	reg      *ebpf.Map
+	mdns     *ebpf.Map
 }
 
 // openSandboxes pins the uplinks and gateways maps in dir (netkit.bpf.c has their shapes), or takes over the ones
 // pinned there, readable by the group
-func openSandboxes(dir string, reg *ebpf.Map) (*sandboxes, error) {
+func openSandboxes(dir string, reg, mdns *ebpf.Map) (*sandboxes, error) {
 	ups, err := pinMap(dir, &ebpf.MapSpec{
 		Name: filepath.Base(uplink.UplinksMap), Type: ebpf.Hash, KeySize: 4, ValueSize: 1, MaxEntries: uplink.MaxUplinks,
 	})
@@ -36,17 +38,25 @@ func openSandboxes(dir string, reg *ebpf.Map) (*sandboxes, error) {
 		return nil, err
 	}
 	gws, err := pinMap(dir, &ebpf.MapSpec{
-		Name: filepath.Base(uplink.GatewaysMap), Type: ebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 2,
+		Name: filepath.Base(uplink.GatewaysMap), Type: ebpf.Array, KeySize: 4,
+		ValueSize: uint32(binary.Size(uplink.Gateway{})), MaxEntries: 2,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &sandboxes{dir, ups, gws, reg}, nil
+	return &sandboxes{dir, ups, gws, reg, mdns}, nil
 }
 
 func pinMap(dir string, spec *ebpf.MapSpec) (*ebpf.Map, error) {
 	spec.Pinning = ebpf.PinByName
 	m, err := ebpf.NewMapWithOptions(spec, ebpf.MapOptions{PinPath: dir})
+	// Pinned by a sandbox-uplink with another shape: replaced. Running sandboxes keep the old one until relaunched
+	if errors.Is(err, ebpf.ErrMapIncompatible) {
+		if err := os.Remove(filepath.Join(dir, spec.Name)); err != nil {
+			return nil, fmt.Errorf("Replace the %s map: %w", spec.Name, err)
+		}
+		m, err = ebpf.NewMapWithOptions(spec, ebpf.MapOptions{PinPath: dir})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Pin the %s map: %w", spec.Name, err)
 	}
@@ -106,8 +116,37 @@ func (s *sandboxes) publish(uplinks []string) error {
 		if err != nil {
 			return fmt.Errorf("List the default routes: %w", err)
 		}
-		if err := s.gateways.Put(uint32(i), gateway(routes, want)); err != nil {
+		g := gateway(routes, want)
+		if err := source(&g, family); err != nil {
 			return err
+		}
+		if err := s.gateways.Put(uint32(i), g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// source fills in the address and MAC of the uplink of g that mDNS queries leave from: the first IPv4 address, or the
+// IPv6 link-local one, which RFC 6762 answers on the link
+func source(g *uplink.Gateway, family int) error {
+	if g.Ifindex == 0 {
+		return nil
+	}
+	l, err := netlink.LinkByIndex(int(g.Ifindex))
+	if err != nil {
+		return fmt.Errorf("Find uplink %d: %w", g.Ifindex, err)
+	}
+	copy(g.MAC[:], l.Attrs().HardwareAddr)
+	addrs, err := netlink.AddrList(l, family)
+	if err != nil {
+		return fmt.Errorf("List the addresses of %s: %w", l.Attrs().Name, err)
+	}
+	for _, a := range addrs {
+		ip, ok := netip.AddrFromSlice(a.IP)
+		if ok && (family == netlink.FAMILY_V4 || ip.IsLinkLocalUnicast()) {
+			g.Src = uplink.Key(ip.Unmap())
+			break
 		}
 	}
 	return nil
@@ -165,9 +204,26 @@ func gone(ifindex uint32) bool {
 	return errors.As(err, &nf)
 }
 
-// collect removes the registrations whose primary is gone, and the pins of sandboxes that ended without netns-netkit
-// down (the launcher crashed)
+// collect removes the registrations whose primary is gone, mdns ones included, and the pins of sandboxes that ended
+// without netns-netkit down (the launcher crashed)
 func (s *sandboxes) collect() error {
+	var primary uint32
+	var on uint8
+	var listed []uint32
+	mit := s.mdns.Iterate()
+	for mit.Next(&primary, &on) {
+		listed = append(listed, primary)
+	}
+	if err := mit.Err(); err != nil {
+		return err
+	}
+	for _, p := range listed {
+		if gone(p) {
+			if err := s.mdns.Delete(p); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+				return err
+			}
+		}
+	}
 	var k [16]byte
 	var v uint32
 	stale := map[[16]byte]uint32{}

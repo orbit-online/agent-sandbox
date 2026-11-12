@@ -25,13 +25,18 @@ var (
 // The protocols a port is granted for, as the programs number them
 var protocols = map[string]uint8{"tcp": 6, "udp": 17}
 
-// attach loads the programs for the sandbox sb, attaches them through its primary and pins them and their maps in dir,
-// where they stay attached after this process ends. The uplinks and gateways maps are the ones sandbox-uplink keeps
-// current
-func attach(dir string, sb uplink.Sandbox) error {
+// attach loads the programs for the sandbox sb, with mDNS or without, attaches them through its primary and pins them
+// and their maps in dir, where they stay attached after this process ends. The uplinks and gateways maps are the ones
+// sandbox-uplink keeps current
+func attach(dir string, sb uplink.Sandbox, mdns bool) error {
 	spec, err := ebpf.LoadCollectionSpec(object)
 	if err != nil {
 		return fmt.Errorf("Read %s: %w", object, err)
+	}
+	if mdns {
+		if err := spec.Variables["mdns"].Set(uint8(1)); err != nil {
+			return fmt.Errorf("Set mdns: %w", err)
+		}
 	}
 	replace := map[string]*ebpf.Map{}
 	for name, path := range map[string]string{"uplinks": uplink.UplinksMap, "gateways": uplink.GatewaysMap} {
@@ -98,17 +103,35 @@ func registered(reg *ebpf.Map) (map[netip.Addr]bool, error) {
 	return m, nil
 }
 
-// register hands the addresses of sb to the uplink programs, which deliver the replies to them
-func register(reg *ebpf.Map, sb uplink.Sandbox) error {
+// register hands the addresses of sb to the uplink programs, which deliver the replies to them, and with mdns its
+// primary, which pre copies mDNS responses to
+func register(reg *ebpf.Map, sb uplink.Sandbox, mdns bool) error {
 	for _, k := range [][16]byte{sb.V4, sb.V6} {
 		if err := reg.Update(k, sb.Primary, ebpf.UpdateNoExist); err != nil {
 			return fmt.Errorf("Register %v: %w", netip.AddrFrom16(k).Unmap(), err)
 		}
 	}
+	if !mdns {
+		return nil
+	}
+	return withMdns(func(m *ebpf.Map) error { return m.Put(sb.Primary, uint8(1)) })
+}
+
+// withMdns runs f on the pinned map of the primaries with mDNS
+func withMdns(f func(*ebpf.Map) error) error {
+	m, err := ebpf.LoadPinnedMap(uplink.MdnsMap, nil)
+	if err != nil {
+		return fmt.Errorf("Open %s (is sandbox-uplink running?): %w", uplink.MdnsMap, err)
+	}
+	defer m.Close()
+	if err := f(m); err != nil {
+		return fmt.Errorf("Update %s: %w", uplink.MdnsMap, err)
+	}
 	return nil
 }
 
-// remove ends what dir describes: the registration of its addresses, where they still name its primary, and its pins,
+// remove ends what dir describes: the registration of its addresses, where they still name its primary, of its primary
+// for mDNS, and its pins,
 // which detaches the programs when the primary is still there (both ends then drop everything). Nothing there is
 // fine
 func remove(reg *ebpf.Map, dir string) error {
@@ -124,6 +147,15 @@ func remove(reg *ebpf.Map, dir string) error {
 	m.Close()
 	if err != nil {
 		return fmt.Errorf("Read %s: %w", dir, err)
+	}
+	err = withMdns(func(m *ebpf.Map) error {
+		if err := m.Delete(sb.Primary); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	for _, k := range [][16]byte{sb.V4, sb.V6} {
 		var v uint32

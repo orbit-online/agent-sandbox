@@ -109,21 +109,30 @@ unless you ask otherwise); release it when you're done.
   physical uplink with the default route, never into the VPN. Addresses:
   an IPv4 /32 from `169.254.100.0/22` and an IPv6 /128 from a ULA /48 of
   the machine, both stable per launcher, with default routes through
-  `eth0`. The host reaches a port of yours only while the user grants it:
-  listen on it (on `::` or `0.0.0.0`), then `request` the capability `port`
-  with `params` `{"protocol": "tcp", "port": 8080}` (or `udp`) and a reason.
+  `eth0`. The host reaches a port of yours only while the user grants it,
+  and the LAN never does: listen on it (on `::` or `0.0.0.0`), then
+  `request` the capability `port` with `params`
+  `{"protocol": "tcp", "port": 8080}` (or `udp`) and a reason.
   The `addresses` of the grant say where the host user reaches it
   (`<IPv4>:8080` and `[<IPv6>]:8080`); tell them. Connections the host
   opened end with the grant.
   DNS: `/etc/resolv.conf` lists the `nameservers` option of the launcher,
   or without it the servers that systemd-resolved (or NetworkManager) on
-  the host has for the uplink with the default route, kept current while
-  you run, so LAN names resolve as on the host. Servers and domains of a
-  VPN are left out, as are servers you can't reach (`127.0.0.53` on the
-  host). An empty file means no DNS: the host has neither source nor the
-  option, or none of its servers is reachable from here; the launcher logs
+  the host has for the uplink with the default route, and its global ones
+  you reach through that uplink, kept current while you run, so LAN names
+  resolve as on the host. Servers and domains of a VPN are left out, as
+  are servers you can't reach (`127.0.0.53` on the host). An empty file
+  means no DNS: the host has neither source nor the option, or none of its
+  servers is reachable from here; the launcher logs
   a warning in the journal namespace of the host side then (see Services
   and logs).
+  mDNS (`.local` names), unless the launcher has `network.mdns` off: your
+  queries to `224.0.0.251` or `ff02::fb` port 5353 leave from the host
+  address and port 5353, and the responses on the LAN come back to the
+  group here, so only a querier on port 5353 gets them (avahi, or a
+  socket on 5353 that joined the group; a one-shot query from another
+  port, as `dig -p 5353` sends, gets no answer). Your responses, probes
+  and announcements stay in: you can't publish a name on the LAN.
   A launcher with `network.enable` off (for local models) leaves you a
   network namespace with `lo` alone (`ip link` shows no `eth0`): no
   routes, an empty `/etc/resolv.conf` and no `port` capability. A model
@@ -203,9 +212,10 @@ The sandbox:
   each show an entry, and `systemd-cat --namespace=<the host side's> true`
   fails.
 - `/tmp` is a tmpfs, with Claude Code's temp dir bound on top.
-- The host's `127.0.0.1` is out of reach, the LAN and the internet aren't
-  (`scripts/nettest.sh` in a checkout of orbit-online/agent-sandbox tests
-  this).
+- The host (its `127.0.0.1` and LAN address) is out of reach, the LAN and
+  the internet aren't (`scripts/nettest.sh HOST:PORT...` in a checkout of
+  orbit-online/agent-sandbox, given services of the host, tests the host
+  and the internet). With `network.enable` off, `ip link` shows `lo` alone.
 
 ## Permissions self-check
 <!-- memo: activity=self-diagnostic environment=bwrap -->

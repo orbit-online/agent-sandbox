@@ -34,11 +34,15 @@ run loads the programs, reusing the registration map pinned in
 pre at the head of tcx ingress, post and egress at the tail of tcx ingress
 and egress, so pre runs ahead of einat and the others after it. It checks
 every half second and puts them back where einat or a device change moved
-them. Then it tends the netkit pairs of the sandboxes (netns-netkit): it
-keeps the ifindexes of the uplinks in the uplinks map pinned there, which
-their PEER programs redirect to, turns forwarding back on where a change of
+them, and joins the mDNS groups on each uplink, so responses reach pre.
+Then it tends the netkit pairs of the sandboxes (netns-netkit): it keeps
+the ifindexes of the uplinks in the uplinks map pinned there, which their
+PEER programs redirect to, and per family the uplink with the default route
+of the lowest metric in the gateways map (its gateway, and the address and
+MAC mDNS queries leave from), turns forwarding back on where a change of
 all.forwarding turned it off on a primary (sbx-*), and removes the
-registrations and pins of sandboxes whose primary is gone.
+registrations (mdns ones included) and pins of sandboxes whose primary is
+gone.
 `
 
 // Set by the package to the compiled uplink.bpf.c

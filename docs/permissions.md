@@ -406,10 +406,12 @@ config's responsibility, as with host commands.
 ### Ports
 
 The capability `port` lets the host reach one TCP or UDP port of the sandbox: `{"protocol": "tcp", "port": 8080}`,
-both required, the protocol `tcp` or `udp`, the port 1 to 65535. Every launcher with the broker has it; the sandbox's
-network (`netns-netkit --help`) drops everything the host sends it otherwise. The consent reads "Claude asks for TCP
-port 8080 of the sandbox, reachable from the host", and the window shows the protocol and port and lets the user
-change only the lease, as for a host command: the port is the one the sandbox listens on.
+both required, the protocol `tcp` or `udp`, the port 1 to 65535. Every launcher with the broker and `network.enable`
+has it (without a network the module leaves the helper out of the config, and a request is refused as `unknown`); the
+network of the sandbox (`netns-netkit --help`) drops everything the host sends it otherwise, and the LAN reaches no
+port. The consent reads "Claude asks for TCP port 8080 of the sandbox, reachable from the host", and the window shows
+the protocol and port and lets the user change only the lease, as for a host command: the port is the one the sandbox
+listens on.
 
 Making the grant live runs `netns-netkit grant [--name=<launcher>] tcp 8080` as the user, which switches the port on in
 the `ports` map of the sandbox, then `netns-netkit addr`, which prints the sandbox addresses. If either fails, nothing is
@@ -939,7 +941,8 @@ it's present or missing:
 - `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
 - `devices`: from `devices` and `kvm`, each bound if present;
 - `dbus`: the proxy's config, by name its policy and its call and broadcast rules;
-- `network`: its own network namespace joined to the host by a netkit pair, which the module always sets up;
+- `network`: its own network namespace joined to the host by a netkit pair, or with `network.enable` off with `lo`
+  alone;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
   `files`), `/tmp` with the scratchpad, and `/run/permissions`.

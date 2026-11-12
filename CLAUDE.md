@@ -83,18 +83,22 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`sbx-*`). `agent-sandbox.network.uplinks` lists the uplinks; by default they're found at each start.
 - `cmd/sandbox-uplink/`: the uplink programs and their loader (`sandbox-uplink --help`). `uplink.bpf.c` (dual
   MIT/GPL, built by the package with clang, its store path linked in as `main.object`): on the tcx ingress of each uplink
-  `pre` ahead of einat (drops destinations in the sandbox blocks, marks the rest with `skb->mark` 0x5a6d0001) and
+  `pre` ahead of einat (drops destinations in the sandbox blocks, marks the rest with `skb->mark` 0x5a6d0001; first
+  copies mDNS responses, QR set from and to port 5353, to the egress of each primary in the pinned `mdns` map, marked
+  0x5a6d0002, with `bpf_for_each_map_elem`) and
   `post` after it (a marked packet to a registered sandbox address goes to its netkit peer with
   `bpf_redirect_peer`; an unmarked or unregistered one to the sandbox blocks is dropped), and on tcx egress `egress`
   after einat (drops sandbox sources). `uplinks.go` finds the uplinks (physical NICs of type 1, Ethernet and Wi-Fi)
   and writes the einat config (NAT44 and NAT66 of the sandbox blocks alone, ports 61000-63999, fe80::/10 and fc00::/7
-  never external, hairpinning off), `attach.go` loads the programs, pins their links as `<program>-<uplink>` (bpffs refuses names with a dot; taking
+  never external, hairpinning off), `attach.go` loads the programs, pins their links as `<program>-<uplink>` (the dots of the uplink as colons: bpffs refuses names with a dot; taking
   over the links of an earlier run with the new program) and every half second puts them back at their end of the hook, which
   einat takes the head of whenever it attaches (restart, link up), and on a device that changed. The links stay
-  pinned when it stops, so the guards stay. `sandboxes.go`, after each round: the ifindexes of the uplinks in the pinned
-  `uplinks` map and per family the uplink with the default route of the lowest metric and its gateway in `gateways`
+  pinned when it stops, so the guards stay. `mdns.go`: the mDNS groups joined on each uplink it attaches to, so the NIC
+  (its multicast filter) and IGMP or MLD snooping switches let the responses in. `sandboxes.go`, after each round: the ifindexes of the uplinks in the pinned
+  `uplinks` map and per family the uplink with the default route of the lowest metric, its gateway, and the source
+  (the first IPv4 address, the IPv6 link-local one) and MAC of mDNS queries in `gateways`
   (both 0640), forwarding back on `sbx-*` netkit primaries where a change of `all.forwarding` reset it, and the
-  registrations and pin dirs of primaries that are gone (a launcher that crashed). `internal/uplink`: what it shares
+  registrations (in `mdns` too) and pin dirs of primaries that are gone (a launcher that crashed). `internal/uplink`: what it shares
   with the per-launcher helper (below).
 - `go.mod`, `cmd/`, `internal/`: one Go module for the Go helpers below,
   each in `cmd/<binary>`, with `internal/` for what they share (`proc`: the
@@ -154,12 +158,16 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants: `grant`, `revoke`, `revoke --all`
   for the cleanup of the broker, `addr`, the addresses of the running sandbox, which port grants report, and `uplinks`,
   the ifindexes in `gateways`, which the launcher picks DNS servers by and can't read itself). `netkit.bpf.c` (dual MIT/GPL,
-  built by the package with clang): `peer` (`BPF_NETKIT_PEER`: multicast and broadcast dropped, any source but the
+  built by the package with clang): `peer` (`BPF_NETKIT_PEER`: multicast and broadcast dropped (with the constant
+  `mdns`, which `up --mdns` sets, an mDNS query copied first by `query_out` out of the uplink in `gateways`: from its
+  address and MAC of that uplink in `gateways` and port 5353, the QU bits cleared over at most 128 labels and questions, none copied
+  past that, through `bpf_skb_load_bytes`), any source but the
   sandbox addresses dropped, `bpf_fib_lookup` with `tot_len` 0; local delivery only for a recorded flow, out with
   `bpf_redirect_neigh` through an einat uplink, and what the host routes through any other device (a full-tunnel VPN,
   a bridge) through the uplink in `gateways` to its gateway; everything else dropped, never `NETKIT_NEXT`) and
   `primary` (`BPF_NETKIT_PRIMARY`: only packets with `skb->sk`, sent by the host itself, over TCP or UDP to a granted
-  port, recorded in the LRU `flows` map). Without CAP_PERFMON the verifier refuses variable offsets into packets and
+  port, recorded in the LRU `flows` map, and with `mdns` the mDNS responses `pre` copied in, by their mark, which the
+  primary keeps for it (`NETKIT_SCRUB_NONE`, `pair.go`) and the program clears with the priority). Without CAP_PERFMON the verifier refuses variable offsets into packets and
   pointers picked between map values, so the programs read no IPv4 options and compare both sandbox addresses.
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
@@ -319,7 +327,12 @@ sandbox ends (`internal/uplink`):
 - The addresses come from the blocks the programs and einat know: `uplink.V4Block` (169.254.100.0/22) and
   `uplink.ULABlock(machine-id)`, one ULA /48 per machine (`fd`, then 40 bits of HMAC-SHA256 keyed by the machine ID
   over the app ID of the package). A destination in these blocks that isn't registered is dropped.
-- The name of the primary starts with `uplink.PrimaryPrefix` (`sbx-`), which dhcpcd and NetworkManager leave alone.
+- The name of the primary starts with `uplink.PrimaryPrefix` (`sbx-`), which `nix/nixos/network.nix` keeps dhcpcd and
+  NetworkManager off.
+- With `--mdns` (`network.mdns`, on by default with `network.enable`), the ifindex of the primary also goes in
+  `uplink.MdnsMap`, `/run/sandbox-uplink/mdns` (key the ifindex, value 1, 0660 like the registration map), and the
+  programs load with the constant `mdns`: pre copies mDNS responses to the primaries listed there, and only a
+  `primary` with `mdns` passes them.
 - netns-netkit pins the links and maps of each sandbox in `uplink.SandboxDir`, `/run/sandbox-uplink/<uid>[-<name>]`
   (owner the user, group `sandbox-uplink`, 0770): `peer` and `primary` (the links), `ports` (granted ports,
   `protocol << 16 | port`), `flows` (LRU) and `sandbox` (0640, `uplink.Sandbox`: the two keys and the ifindex of
@@ -716,8 +729,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   netkit pair forwarding through the host stack and bpftool registering its addresses. Both units without root and
   with exactly their capabilities, the einat config (eth0 and eth1, the blocks, the port range), the order `pre`, einat,
   `post` on ingress and einat, `egress` on egress, the map writable by a non-root member of the group with CAP_BPF
-  without capabilities and refused to another group with CAP_BPF, the `uplinks` and `gateways` maps (0640, eth0 and
-  eth1, per family the default route of the lowest metric and its gateway), a registration of a gone primary removed,
+  without capabilities and refused to another group with CAP_BPF, the `mdns` map 0660, the `uplinks` and `gateways`
+  maps (0640, eth0 and eth1, per family the default route of the lowest metric, its gateway, the source of mDNS
+  queries and the MAC; one of another value size, as an earlier sandbox-uplink pinned it, replaced), a registration of a gone primary removed,
   sandbox UDP over IPv4 and IPv6 SNATed to the workstation address
   on ports 61000-63999 and HTTP, replies arriving with forwarding to the sandbox blocks dropped in nftables (and not
   without `post`), LAN packets to the sandbox addresses dropped with einat running and stopped, also with `pre`
@@ -734,7 +748,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   network (and the launcher `offline`, without one), `store` its store dir swapped or without a record, `--shell`
   starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
   sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
-  its permissions broker, `live` the broker's state machine tests, `loop` the
+  its permissions broker and mDNS (work has `network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each
+  netns, with the QU bit set: the default sandbox resolving `printer.local` of avahi on the router, over IPv4 and IPv6,
+  the router seeing the queries from the workstation address and port 5353 without QU (a one-shot query from another
+  port too) and nothing of a response, a probe or a query of work, a query from the LAN not reaching the default sandbox, work hearing nothing, only the
+  default primary in the `mdns` map), `live` the broker's state machine tests, `loop` the
   default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which
   CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
   some, see `nix/patches/`), `switch` switches to the workstation's specialisations while the app runs (the slice's

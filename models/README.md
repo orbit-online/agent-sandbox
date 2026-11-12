@@ -8,7 +8,8 @@ check. Properties are numbered (S for structure, P for the broker's
 protocol, L for the launch path, D for the D-Bus proxy, N for the network on netkit) so model files, Go tests and commit
 messages can cite them.
 
-Sources, as of main 491eb09 (the broker's protocol as of acbceda):
+Sources, as of main 491eb09 (the broker's protocol as of acbceda, the
+network and the launch path as of 919484e):
 `docs/permissions.md`, the namespace diagram at the top of
 `nix/home/claude-desktop/default.nix`, the module's scripts, and the Go
 in `cmd/`. Where the docs and the code disagree, the
@@ -58,7 +59,9 @@ in the init namespaces unless noted.
 4. **Notification daemon** (Plasma's): draws the consent notification the
    broker posts over D-Bus (godbus) and signals the action. The sandbox
    talks to it too.
-5. **xdg-dbus-proxy**: nixpak's, in a plain bwrap; filters the session bus
+5. **dbus-proxy** (`cmd/dbus-proxy`): started by nixpak in place of
+   xdg-dbus-proxy, in a plain bwrap, its rules from the JSON config of
+   the module; filters the session bus
    for the sandbox, by call rules only (no `talk`, which reaches every
    object the name's owner exports): OpenURI, Settings and Notification
    on the portal (the app's notifications go through it: libnotify with
@@ -89,8 +92,10 @@ in the init namespaces unless noted.
    (the primary `sbx-<uid>-<hash>` in the host netns, the peer `eth0` in
    the sandbox netns, both ends with policy blackhole), attaches and
    pins the programs `peer` and `primary` and registers the sandbox
-   addresses; `down` unregisters and unpins; `grant` and `revoke` a port
-   for forwarding.
+   addresses (with `--mdns` its primary in the `mdns` map too); `down`
+   unregisters and unpins; `grant` and `revoke` a port for forwarding;
+   `addr` prints the sandbox addresses, `uplinks` the default-route
+   uplinks of the `gateways` map (for the DNS of the launcher).
 9. **Call units**: `perm[-<launcher>]_call-<id>`, one transient user
    unit per host command call (`systemd-run --pipe`), `BindsTo=` the
    daemon's unit, `RuntimeMaxSec=` the command's timeout; runs the
@@ -122,7 +127,8 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
     namespaces by `nsenter` from the host. Inside once joined, but their
     parent is a host process.
 
-Added with the journal (17) and the sandbox's systemd --user (18):
+Added with the journal (17) and the sandbox's systemd --user (18), and
+with the netkit network (19, 20):
 
 17. **journald@claude-desktop[-<name>] and @claude-desktop[-<name>]_sandbox**:
     two journald namespaces per launcher, host side, root
@@ -147,6 +153,19 @@ Added with the journal (17) and the sandbox's systemd --user (18):
     but jobs the app asks for would run in U1 with the owner's
     capabilities over U2, M2 and P2, which nothing the app starts holds
     today (B2).
+19. **sandbox-uplink**: the system service `sandbox-uplink.service`,
+    user and group `sandbox-uplink` with CAP_BPF and CAP_NET_ADMIN alone.
+    Keeps `pre`, `post` and `egress` attached around einat on every
+    uplink, pins the `uplinks` and `gateways` maps in its bpffs at
+    `/run/sandbox-uplink`, joins the mDNS groups on the uplinks, turns
+    forwarding on again on the primaries and removes the registrations and
+    pins of sandboxes whose primary is gone. Its programs parse every
+    packet of the uplinks; the service itself reads none.
+20. **einat**: einat-ebpf, unmodified, as `sandbox-einat.service`
+    (DynamicUser, CAP_BPF, CAP_NET_ADMIN and CAP_PERFMON); NAT44 and
+    NAT66 of the sandbox blocks on the uplinks, its config written by
+    `sandbox-uplink einat-config`. Its programs parse every packet on the
+    uplinks, from the LAN and from the sandboxes.
 
 ## Namespaces
 
@@ -176,8 +195,10 @@ joining needs CAP_SYS_ADMIN in init).
 | `control.sock` (`$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
 | host socket addresses (`/run/permissions/sockets/<capability>[/<instance>]`) | broker, from its start or the instance's appearance | M1, M2 and copies | none of the peer: a grant is the sandbox's. Spliced to the host socket only while a live grant of that capability and instance covers it, closed at once otherwise and when the grant ends; bytes only, no fds; 64 connections per address |
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
-| netns-netkit `up <pid>`, `down`, `grant`, `revoke` | netns-netkit | the host, callers in group `users` (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
-| `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
+| netns-netkit `up <pid>`, `down`, `addr`, `uplinks`, `grant`, `revoke` | netns-netkit | the host, callers in group `users` (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
+| `nixpak-bus` | dbus-proxy | M1, M2 | the proxy's fixed rules |
+| the netkit pair (`eth0`) | the programs `peer` and `primary` on its host end | N, and what the sandbox routes through `eth0` | N1-N9 (`network.als`): sources other than the sandbox addresses dropped, out only through an einat uplink, local delivery only on a flow the host opened to a granted port |
+| `/run/sandbox-uplink` (bpffs: the registration, `mdns`, `uplinks` and `gateways` maps, the pins of each sandbox) | sandbox-uplink (19) and netns-netkit | the host, group `sandbox-uplink` (the setgid of netns-netkit) alone; not bound | file modes on the pins (0660 the registration and `mdns`, 0640 `uplinks`, `gateways` and the `sandbox` map of each sandbox, 0600 the rest of the dir of a sandbox, owned by its user); netns-netkit acts only on the dirs of the caller uid |
 | notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox posts look-alikes through the portal, which keys them by app ID: it can't replace or close the broker's |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
 | grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory; in M1 the helpers open it with `RESOLVE_NO_SYMLINKS`, check it's the host's directory (device and inode) and a mount root, and act on single entries beneath it |
@@ -193,7 +214,7 @@ joining needs CAP_SYS_ADMIN in init).
 ## Trust boundaries
 
 - B1: host processes | everything in U1 and below. Crossed by the sockets
-  above, binds, D-Bus through the proxy, the netkit pair (N1-N7), and the host's own
+  above, binds, D-Bus through the proxy, the netkit pair (N1-N9), and the host's own
   `nsenter`s (the bwrap helper, the broker's helpers, re-entries).
 - B2: U1 | U2. U1 holds the capabilities over N, M1, P; nothing in U2 has
   any there. Crossed by the FHS env's start and the propagation of
@@ -497,8 +518,9 @@ them, and their revert checks are that design.
   it is N3.
 - N5. Failures only narrow: N1 to N4 and N6 hold under every change of
   the host setup, a ruleset flush or FORWARD drop policy included
-  (netfilter is on no path). A detached `peer` program or a primary
-  without forwarding (the lookup returns `FWD_DISABLED`) passes nothing,
+  (netfilter is on no path). A detached `peer` program passes nothing, a
+  primary without forwarding (the lookup returns `FWD_DISABLED`) nothing
+  but the copies of mDNS queries,
   an uplink without einat carries no sandbox packet and delivers none,
   an einat restart that puts einat ahead of pre lets no reply in until
   pre is ahead again, and an evicted flow gets no reply to the host.
@@ -506,6 +528,17 @@ them, and their revert checks are that design.
   reaches a sandbox only on a flow to a port granted to it.
 - N7. A revoked port carries nothing more: no sandbox reply on its flows
   reaches the host (as P4).
+- N8. A sandbox sends nothing to the mDNS group out but queries, and only
+  with `network.mdns`: `peer` copies a query out of the uplink of the
+  `gateways` map from the uplink address and port 5353, so no response,
+  announcement or probe claims a name on the LAN. N2 and N5 take these
+  copies as leaving from the uplink address.
+- N9. What reaches a sandbox from the mDNS group of the LAN is a response,
+  and only a sandbox with `network.mdns` gets it: pre copies responses to
+  the primaries of the `mdns` map, marked, and `primary` passes them only
+  when loaded with the constant `mdns`, which also covers a stale entry
+  of the map whose ifindex another primary got. N3 takes these copies as
+  the exception.
 
 Found by the model in the first design, each a counterexample there and
 each built now:
@@ -583,7 +616,7 @@ check: that's the user's own mount and ceiling configuration.
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
-| `network.als` | netkit | N1-N7: the network on netkit, each with a run for its premise and a revert check per guard enforcing it |
+| `network.als` | netkit | N1-N9: the network on netkit, each with a run for its premise and a revert check per guard enforcing it |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine

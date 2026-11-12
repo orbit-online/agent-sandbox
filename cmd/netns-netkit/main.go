@@ -22,7 +22,7 @@ import (
 const usage = `netns-netkit - Connect a user-owned network namespace to the network through a netkit pair
 
 Usage:
-  netns-netkit up [--name=<name>] <pid>
+  netns-netkit up [--name=<name>] [--mdns] <pid>
   netns-netkit down [--name=<name>]
   netns-netkit addr [--name=<name>]
   netns-netkit uplinks
@@ -38,7 +38,10 @@ the host reach the ports granted. <pid> must belong to the caller, and its
 network namespace must lie in a user namespace below the caller's whose
 topmost one below the caller's the caller owns: the caller then holds every
 capability over it by owning that user namespace, cap_net_admin included.
-What an earlier sandbox of <name> left goes first.
+What an earlier sandbox of <name> left goes first. With --mdns, the mDNS
+queries of the sandbox go out of the uplink with the default route, from the
+address of that uplink and port 5353, and the mDNS responses from the LAN
+come in.
 
 down ends what up set up for <name>, once the sandbox ended. addr prints the
 addresses of the running sandbox of <name>, as up did. uplinks prints the
@@ -50,6 +53,7 @@ connections made under it, or with --all every grant and connection.
 Options:
   --name=<name>  The name of the launcher, empty for the default launcher
   --all          Every port granted
+  --mdns         Copy mDNS queries out and responses in
 `
 
 // What a launcher name may be (the assertion of the module), so it makes a pin name
@@ -121,7 +125,7 @@ func run(opts docopt.Opts) error {
 	if err != nil {
 		return fmt.Errorf("Parse <pid>: %w", err)
 	}
-	return up(reg, uid, pid, name, primary, dir)
+	return up(reg, uid, pid, name, primary, dir, opts["--mdns"] == true)
 }
 
 // humanCaller refuses callers outside group users: the wrapper is setgid sandbox-uplink, which takes the group of the
@@ -143,7 +147,7 @@ func humanCaller() error {
 	return nil
 }
 
-func up(reg *ebpf.Map, uid, pid int, name, primary, dir string) (err error) {
+func up(reg *ebpf.Map, uid, pid int, name, primary, dir string, mdns bool) (err error) {
 	netnsFd, err := openNetns(pid, uid, "/proc/self/ns/user")
 	if err != nil {
 		return err
@@ -175,10 +179,10 @@ func up(reg *ebpf.Map, uid, pid int, name, primary, dir string) (err error) {
 		return err
 	}
 	sb := uplink.Sandbox{V4: uplink.Key(v4), V6: uplink.Key(v6), Primary: uint32(link.Attrs().Index)}
-	if err := attach(dir, sb); err != nil {
+	if err := attach(dir, sb, mdns); err != nil {
 		return err
 	}
-	if err := register(reg, sb); err != nil {
+	if err := register(reg, sb, mdns); err != nil {
 		return err
 	}
 	slog.Info("Up", "primary", primary, "ipv4", v4, "ipv6", v6)

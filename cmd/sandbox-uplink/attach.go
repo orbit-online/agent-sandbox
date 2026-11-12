@@ -38,6 +38,7 @@ type loader struct {
 	ifindex map[string]int
 	links   map[string]link.Link
 	sbx     *sandboxes
+	mdns    *mdnsGroups
 }
 
 // load loads the programs with the sandbox blocks, reusing the pinned registration map, which the per-launcher helper
@@ -66,14 +67,20 @@ func load(object, dir string, v4, v6 netip.Prefix) (*loader, error) {
 		return nil, fmt.Errorf("Load %s: %w", object, err)
 	}
 	// Pinned 0600
-	if err := os.Chmod(filepath.Join(dir, "sandboxes"), 0o660); err != nil {
-		return nil, fmt.Errorf("Open the registration map to its group: %w", err)
+	for _, m := range []string{"sandboxes", "mdns"} {
+		if err := os.Chmod(filepath.Join(dir, m), 0o660); err != nil {
+			return nil, fmt.Errorf("Open the %s map to its group: %w", m, err)
+		}
 	}
-	sbx, err := openSandboxes(dir, coll.Maps["sandboxes"])
+	sbx, err := openSandboxes(dir, coll.Maps["sandboxes"], coll.Maps["mdns"])
 	if err != nil {
 		return nil, err
 	}
-	return &loader{dir, coll.Programs, map[string]int{}, map[string]link.Link{}, sbx}, nil
+	groups, err := openMdnsGroups()
+	if err != nil {
+		return nil, err
+	}
+	return &loader{dir, coll.Programs, map[string]int{}, map[string]link.Link{}, sbx, groups}, nil
 }
 
 // pinName is where the link of a program on an uplink is pinned: <program>-<uplink>, its dots as colons, which no device
@@ -134,6 +141,7 @@ func (l *loader) sync(uplink string) error {
 			}
 		}
 		l.ifindex[uplink] = iface.Index
+		l.mdns.join(uplink, iface.Index)
 		slog.Info("Attached", "uplink", uplink, "ifindex", iface.Index)
 	}
 	for _, h := range hooks {

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Reachability check from inside the claude-desktop sandbox. Needs only python3 and /proc.
 # Usage: nettest.sh [HOST:PORT...]
-#   Each HOST:PORT must be unreachable: host-only services, the host's own IPs, VPN and container networks.
-#   127.0.0.1 stands for the host's loopback here, so pick a port something listens on outside the sandbox.
+#   Each HOST:PORT must be unreachable: services on the addresses of the host, VPN and container networks.
+#   127.0.0.1 is the loopback of the sandbox: with a port the host listens on there, it checks the sandbox doesn't share
+#   the netns of the host.
+# Must be open: the internet (api.anthropic.com and github.com on 443). Neither the LAN nor mDNS is tested.
 set -euo pipefail
 echo "netns: $(readlink /proc/self/ns/net)"
 echo "--- interfaces (v6)"

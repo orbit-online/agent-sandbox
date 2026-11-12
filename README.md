@@ -12,9 +12,11 @@ the paths you bind into it. It gets its own network namespace, joined to the
 host by a netkit pair whose eBPF programs let it out only through the
 physical uplinks (Ethernet and Wi-Fi, IPv4 and IPv6, NATed by
 [einat](https://github.com/EHfive/einat-ebpf)), so it reaches the internet
-but none of the services on the host, VPN routes, container bridges or other
-sandboxes, whatever the host firewall says. It has its own single-user Nix
-store, so `nix shell` and `nix build` work without the daemon of the host. The
+and the LAN but none of the services on the host, VPN routes, container
+bridges or other sandboxes, whatever the host firewall says. Nothing reaches
+it but replies, and the host on a port you grant it (Permissions). It has its
+own single-user Nix store, so `nix shell` and `nix build` work without the
+daemon of the host. The
 privileged parts are a small helper, `netns-netkit`, with `cap_net_admin`
 and `cap_bpf` to create the pair and attach its programs, and two system
 services: einat and `sandbox-uplink`, which keeps the programs around einat
@@ -53,7 +55,8 @@ to be in it, and needs Linux 6.8 or later. Then add `@/etc/claude/environment.md
 
 Other options: `extraPath` (directories ahead of the PATH packages),
 `nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager), `network.enable`
-(off: a netns with `lo` alone, for local models), `environmentFile` (your own version of
+(off: a netns with `lo` alone, for local models), `network.mdns` (`.local` names; on with the network),
+`environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
 (appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in
@@ -105,8 +108,9 @@ starts it first.
 
 With `permissions.enable`, a launcher runs a broker on the host that grants
 the sandbox more while it runs: a folder (`permissions.folders`), a host
-socket at a stable address (`permissions.sockets`) or declared commands run on
-the host (`permissions.commands`). Claude asks through the sandbox's
+socket at a stable address (`permissions.sockets`), declared commands run on
+the host (`permissions.commands`) or, with a network, a port of the sandbox
+for the host to reach (`port`, built in). Claude asks through the sandbox's
 `permissions` MCP server, you answer in a notification and pick how long the
 grant lasts, and the Permissions window (the launcher's "Permissions" action,
 or Options on the notification) shows what's waiting, what's granted and what

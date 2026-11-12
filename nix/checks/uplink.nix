@@ -181,18 +181,31 @@ pkgs.testers.runNixOSTest {
                       for e in json.loads(ws.succeed(f"bpftool -j map dump pinned {pins}/{m}"))]
           for m in ["uplinks", "gateways"]:
               assert ws.succeed(f"stat -c '%a %G' {pins}/{m}").split() == ["640", "sandbox-uplink"], m
+          assert ws.succeed(f"stat -c '%a %G' {pins}/mdns").split() == ["660", "sandbox-uplink"]
           ifindex = {d: int(ws.succeed(f"cat /sys/class/net/{d}/ifindex")) for d in ["eth0", "eth1"]}
           ups = sorted(int.from_bytes(e["key"], "little") for e in dump("uplinks"))
           assert ups == sorted(ifindex.values()), ups
           # Per family the uplink with the default route of the lowest metric (on eth0 IPv6 has one from QEMU's
-          # router advertisements), and its gateway
+          # router advertisements), its gateway, and the source and MAC of mDNS queries: its first IPv4 address, its
+          # IPv6 link-local one
           gws = {int.from_bytes(e["key"], "little"): e["value"] for e in dump("gateways")}
+          def packed(a):
+              a = ipaddress.ip_address(a)
+              return ipaddress.IPv6Address(f"::ffff:{a}").packed if a.version == 4 else a.packed
           for i, family in enumerate(["-4", "-6"]):
               routes = json.loads(ws.succeed(f"ip -j {family} route show default table main"))
               r = min(routes, key=lambda r: r.get("metric", 0))
-              gw = ipaddress.ip_address(r["gateway"])
-              packed = ipaddress.IPv6Address(f"::ffff:{gw}").packed if gw.version == 4 else gw.packed
-              assert gws[i] == struct.pack("=I", ifindex[r["dev"]]) + packed, (routes, gws)
+              link = json.loads(ws.succeed(f"ip -j {family} addr show dev {r['dev']}"))[0]
+              src = next(a["local"] for a in link["addr_info"] if family == "-4" or a["scope"] == "link")
+              mac = bytes.fromhex(ws.succeed(f"cat /sys/class/net/{r['dev']}/address").strip().replace(":", ""))
+              want = struct.pack("=I", ifindex[r["dev"]]) + packed(r["gateway"]) + packed(src) + mac + bytes(2)
+              assert gws[i] == want, (routes, gws)
+          # A gateways map of another shape, as an earlier sandbox-uplink pinned it, is replaced
+          ws.succeed("systemctl stop sandbox-uplink", f"rm {pins}/gateways",
+                     f"bpftool map create {pins}/gateways type array key 4 value 20 entries 2 name gateways",
+                     f"chown sandbox-uplink:sandbox-uplink {pins}/gateways",
+                     "systemctl start sandbox-uplink")
+          assert json.loads(ws.succeed(f"bpftool -j map show pinned {pins}/gateways"))["bytes_value"] == 44
           gone = hexbytes(ipaddress.IPv6Address("::ffff:169.254.103.1").packed)
           ws.succeed(f"bpftool map update pinned {pins}/sandboxes key hex {gone} value hex {hexbytes(struct.pack('=I', 99999))}")
           ws.wait_until_fails(f"bpftool map lookup pinned {pins}/sandboxes key hex {gone}", timeout=10)

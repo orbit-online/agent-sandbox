@@ -31,6 +31,7 @@ type netSetup struct {
 	Nsenter     string `json:"nsenter"`
 	IP          string `json:"ip"`
 	Name        string `json:"name,omitempty"` // The launcher's, which its addresses derive from; empty for the default one
+	Mdns        bool   `json:"mdns,omitempty"` // mDNS queries out and responses in (network.mdns)
 }
 
 // The host's units for the sandbox's daemons, in the launcher's slice and bound to the app's unit, so they stop with
@@ -160,6 +161,9 @@ func (n *netSetup) run(pid int) error {
 	args := []string{"up", strconv.Itoa(pid)}
 	if n.Name != "" {
 		args = append(args, "--name="+n.Name)
+	}
+	if n.Mdns {
+		args = append(args, "--mdns")
 	}
 	cmd := exec.Command(n.NetnsNetkit, args...)
 	cmd.Stderr = hostOut

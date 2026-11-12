@@ -4,12 +4,14 @@
 
 // The programs of the sandbox network on each einat uplink (models/network.als): on tcx ingress `pre` ahead of einat and
 // `post` after it, on tcx egress `egress` after it. einat ends its reverse SNAT with TCX_NEXT, so post sees the
-// rewritten destination.
+// rewritten destination. pre also copies the mDNS responses from the LAN to the sandboxes that take them.
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
+#include <linux/in.h>
 #include <linux/in6.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/udp.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
@@ -36,8 +38,21 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } sandboxes SEC(".maps");
 
+// The netkit primaries of the sandboxes with mDNS (internal/uplink.MdnsMap): ifindex to 1, written by the per-launcher
+// helper like sandboxes
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);
+	__type(value, __u8);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} mdns SEC(".maps");
+
 // The mark pre leaves for post. skb->mark comes in 0 at tcx ingress (nothing earlier sets it) and survives einat
 #define PASSED 0x5a6d0001
+// The mark of the mDNS responses pre copies to the primaries, whose program passes them (cmd/netns-netkit/netkit.bpf.c)
+#define MDNS_MARK 0x5a6d0002
+#define MDNS_PORT 5353
 
 // The source and destination of an Ethernet frame carrying IPv4 or IPv6, IPv4 mapped; 0 for anything else.
 // sandbox-uplink attaches to Ethernet-framed uplinks alone (ARPHRD_ETHER: Ethernet and Wi-Fi)
@@ -77,12 +92,61 @@ static __always_inline int in_sandboxes(const struct addr *a)
 	return 1;
 }
 
+// Whether skb is an mDNS response to the group, 224.0.0.251 or ff02::fb, from and to port 5353: QR set in the DNS
+// header after a fixed IP header
+static __always_inline int mdns_response(struct __sk_buff *skb)
+{
+	void *data = (void *)(long)skb->data, *end = (void *)(long)skb->data_end;
+	struct ethhdr *eth = data;
+	struct udphdr *udp;
+	if ((void *)(eth + 1) > end)
+		return 0;
+	if (eth->h_proto == bpf_htons(ETH_P_IP)) {
+		struct iphdr *ip = (void *)(eth + 1);
+		if ((void *)(ip + 1) > end || ip->ihl != 5 || ip->frag_off & bpf_htons(0x3fff) ||
+		    ip->protocol != IPPROTO_UDP || ip->daddr != bpf_htonl(0xe00000fb))
+			return 0;
+		udp = (void *)(ip + 1);
+	} else if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
+		struct ipv6hdr *ip6 = (void *)(eth + 1);
+		if ((void *)(ip6 + 1) > end || ip6->nexthdr != IPPROTO_UDP ||
+		    ip6->daddr.s6_addr32[0] != bpf_htonl(0xff020000) || ip6->daddr.s6_addr32[1] ||
+		    ip6->daddr.s6_addr32[2] || ip6->daddr.s6_addr32[3] != bpf_htonl(0xfb))
+			return 0;
+		udp = (void *)(ip6 + 1);
+	} else {
+		return 0;
+	}
+	// The UDP header and the DNS ID and flags
+	__u8 *dns = (void *)(udp + 1);
+	if ((void *)(dns + 3) > end)
+		return 0;
+	return udp->source == bpf_htons(MDNS_PORT) && udp->dest == bpf_htons(MDNS_PORT) && dns[2] & 0x80;
+}
+
+struct copy {
+	struct __sk_buff *skb;
+};
+
+// A copy of the response to the egress of a primary, where the PRIMARY program takes the mark
+static long copy_in(void *map, __u32 *primary, __u8 *on, struct copy *c)
+{
+	bpf_clone_redirect(c->skb, *primary, 0);
+	return 0;
+}
+
 // Uplink ingress, ahead of einat: nothing from outside is addressed to a sandbox before einat rewrote it (network.als
 // PreDrop, N3). What passes is marked for post (Handoff)
 SEC("tc")
 int pre(struct __sk_buff *skb)
 {
 	struct addr src, dst;
+	// The response goes on to the host stack too. Queries from the LAN aren't copied
+	if (mdns_response(skb)) {
+		struct copy c = {skb};
+		skb->mark = MDNS_MARK;
+		bpf_for_each_map_elem(&mdns, copy_in, &c, 0);
+	}
 	if (addrs(skb, &src, &dst) && in_sandboxes(&dst))
 		return TCX_DROP;
 	skb->mark = PASSED;
