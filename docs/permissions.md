@@ -536,6 +536,11 @@ replies through to calls it let through, and filters match rules. It refuses wha
 addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those are the static rules, the ones the
 Overview lists.
 
+Each message it refuses a client is logged as a warning (`msg=Refused`) with its type, destination, path, interface,
+member and the error the client got, never its body; a refused message that wants no reply is dropped and logged too.
+A kind of refusal is logged the first time and at its 10th, 100th and so on, with the count. The client picks what it
+sends, so past 1024 kinds the rest share one count (`kind=other`), and each field is cut at 256 bytes.
+
 Built as `cmd/dbus-proxy`, and nixpak's session-bus proxy since step 6: the module passes
 nixpak `pkgs // { xdg-dbus-proxy = <dbus-proxy>; }`, whose package links `bin/xdg-dbus-proxy` to `bin/dbus-proxy`, so
 only nixpak's wrapper changes. nixpak's argv works as it is: the bus address from `DBUS_SESSION_BUS_ADDRESS`, the

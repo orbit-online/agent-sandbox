@@ -140,10 +140,12 @@ func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 		return forwarded, nil
 	}
 	refuse := func(name string) (Action, error) {
-		if !generatesReply(m) {
-			return dropped, nil
+		a, err := dropped, error(nil)
+		if generatesReply(m) {
+			a, err = j.rewrite(m, errorReply(m.Serial(), name))
 		}
-		return j.rewrite(m, errorReply(m.Serial(), name))
+		a.Refused = name
+		return a, err
 	}
 	if _, ok := m.ReplySerial(); ok {
 		// xdg-dbus-proxy takes any message with a reply serial for a reply, so a call carrying the serial of a

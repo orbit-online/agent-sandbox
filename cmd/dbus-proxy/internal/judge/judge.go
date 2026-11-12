@@ -29,6 +29,7 @@ type Action struct {
 	Verdict Verdict
 	Message []byte
 	Calls   [][]byte
+	Refused string // The error a refused message from the client gets, also when it's dropped for wanting no reply
 }
 
 var (

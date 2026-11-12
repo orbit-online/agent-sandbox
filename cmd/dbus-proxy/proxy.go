@@ -16,11 +16,12 @@ import (
 
 // Listens for clients of one bus and applies one set of rules
 type Proxy struct {
-	bus    []*net.UnixAddr
-	rules  *rules.Rules
-	log    *slog.Logger
-	budget *wire.Budget
-	uid    int // The uid a client must have
+	bus      []*net.UnixAddr
+	rules    *rules.Rules
+	log      *slog.Logger
+	refusals *refusals
+	budget   *wire.Budget
+	uid      int // The uid a client must have
 
 	mu      sync.Mutex
 	clients int
@@ -34,7 +35,8 @@ func NewProxy(address string, r *rules.Rules) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Proxy{bus: addrs, rules: r, log: slog.Default(), budget: wire.NewBudget(),
+	log := slog.Default()
+	return &Proxy{bus: addrs, rules: r, log: log, refusals: newRefusals(log), budget: wire.NewBudget(),
 		uid: os.Getuid()}, nil
 }
 
