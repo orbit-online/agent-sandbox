@@ -59,14 +59,15 @@ if [[ $CHANNELS != '[]' ]]; then
   ((${#files[@]} == 1)) || { echo "patch-asar: ${#files[@]} files make the sessions' MCP clients, want 1" >&2; exit 1; }
   found=$(grep -oE "$hook" "${files[0]}" | wc -l)
   ((found == 1)) || { echo "patch-asar: $found places make the sessions' MCP clients, want 1" >&2; exit 1; }
-  # Where the app's tools get the session manager: its chunk and export
-  manager='\{claudeCodeSessionManager:[A-Za-z0-9_$]+\}=await Promise\.resolve\(\)\.then\(\(\(\)=>require\("\./([A-Za-z0-9_.-]+\.js)"\)\)\)\.then\(\(([A-Za-z0-9_$]+)=>\2\.([A-Za-z0-9_$]+)\)\)'
-  mapfile -t found < <(grep -rhoE --include='*.js' "$manager" app | sed -E "s#$manager#\1 \3#" | sort -u)
+  # Where the app's tools get the session manager: its chunk and the export holding it, which apps from 5.1231 don't
+  # have (the chunk exports the manager itself)
+  manager='\{claudeCodeSessionManager:[A-Za-z0-9_$]+\}=await Promise\.resolve\(\)\.then\(\(\(\)=>require\("\./([A-Za-z0-9_.-]+\.js)"\)\)\)(\.then\(\(([A-Za-z0-9_$]+)=>\3\.([A-Za-z0-9_$]+)\)\))?'
+  mapfile -t found < <(grep -rhoE --include='*.js' "$manager" app | sed -E "s#$manager#\1 \4#" | sort -u)
   ((${#found[@]} == 1)) || { echo "patch-asar: ${#found[@]} ways to the session manager, want 1" >&2; exit 1; }
   read -r chunk export <<<"${found[0]}"
   dir=$(dirname "${files[0]}")
   [[ -f $dir/$chunk ]] || { echo "patch-asar: the session manager's chunk isn't next to the MCP clients'" >&2; exit 1; }
-  sed -e "s|@servers@|$CHANNELS|" -e "s|@chunk@|$chunk|g" -e "s|@export@|$export|" "$CHANNELS_JS" \
+  sed -e "s|@servers@|$CHANNELS|" -e "s|@chunk@|$chunk|g" -e "s|@export@|${export:+.$export}|" "$CHANNELS_JS" \
     >"$dir/agent-sandbox-channels.js"
   sed -i -E "s#$hook#\1,require(\"./agent-sandbox-channels.js\")(\5,\2),\3#" "${files[0]}"
   grep -qF 'require("./agent-sandbox-channels.js")(' "${files[0]}" || exit 1

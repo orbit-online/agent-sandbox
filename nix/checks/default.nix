@@ -113,8 +113,8 @@ let
   dbusProxy = self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
   # patch-asar.sh on stub asars: the tray icon picker with and without its GNOME case, the app's notification backend
   # choice as 4.x has it (the app the checks build predates it) made false, and the sessions' MCP clients and the way
-  # to the session manager as 4.23118 has them, with channels.js hooked into the clients; the build refusing an app
-  # with two of either place
+  # to the session manager as 4.23118 and 5.1231 have them, with channels.js hooked into the clients; the build refusing
+  # an app with two of either place
   asarPatch =
     pkgs.runCommand "claude-desktop-asar-patch"
       {
@@ -131,6 +131,8 @@ let
         gnome='e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?'
         dark='e||a.nativeTheme.shouldUseDarkColors?'
         manager='let{claudeCodeSessionManager:s}=await Promise.resolve().then((()=>require("./index.chunk-m.js"))).then((e=>e.t))'
+        # From 5.1231 the chunk exports the manager itself
+        direct='let{claudeCodeSessionManager:s}=await Promise.resolve().then((()=>require("./index.chunk-m.js")))'
         app() {
           mkdir -p "$1/.vite/build"
           echo '{"main": "main.js"}' >"$1/package.json"
@@ -139,7 +141,7 @@ let
           echo "nJr=new class{constructor(){this.telemetryName=\"freedesktop\"}};async function i(){$2}" \
             >"$1/.vite/build/index.chunk-x.js"
           echo "async function c(e,t,b){$3}" >"$1/.vite/build/index.chunk-c.js"
-          echo 'exports.t={claudeCodeSessionManager:{}}' >"$1/.vite/build/index.chunk-m.js"
+          echo 'exports.t={claudeCodeSessionManager:{}};exports.claudeCodeSessionManager={}' >"$1/.vite/build/index.chunk-m.js"
           touch "$1/stub.node"
           asar pack "$1" "$1.asar" --unpack '*.node'
         }
@@ -172,10 +174,14 @@ let
           echo "patch-asar.sh took an app with two places making the sessions' MCP clients" >&2
           exit 1
         fi
-        app four "$pick" "$client;$manager" "$dark"
+        app four "$pick" "$client;$direct" "$dark"
         patch four '[]'
         grep -qaF 'e||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png"' four-patched.asar ||
           { echo "the tray icon picker of an app without a GNOME case changed" >&2; exit 1; }
+        patch four '["osticket"]'
+        asar extract four-patched.asar four-out
+        grep -qF 'require("./index.chunk-m.js").claudeCodeSessionManager' four-out/.vite/build/agent-sandbox-channels.js
+        node --check four-out/.vite/build/agent-sandbox-channels.js
         touch $out
       '';
   # A stand-in for agent-memos' Home Manager module, with the options this module reads

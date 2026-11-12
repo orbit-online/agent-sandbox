@@ -1,8 +1,9 @@
 // Delivers notifications/claude/channel ({content, meta: {session}}) from the local MCP servers in mcpChannels into the
 // Code session meta.session names, as a turn the way the app wakes a session for its CI monitor: an archived one is
 // unarchived first, and one the app no longer has or can't deliver to gets a new session in its folder. patch-asar.sh
-// copies this next to the app's session manager chunk (@chunk@, exported as @export@) and calls it on each client the
-// app's session-side MCP host (LocalMcpServerManager) makes. The chat's copy of a server never gets the handler
+// copies this next to the app's session manager chunk (@chunk@, through its export @export@ if it has one) and calls
+// it on each client the app's session-side MCP host (LocalMcpServerManager) makes. The chat's copy of a server never
+// gets the handler
 "use strict";
 const { randomUUID } = require("node:crypto");
 const { homedir } = require("node:os");
@@ -14,7 +15,7 @@ async function deliver(server, { content, meta } = {}) {
   if (typeof session !== "string" || !/^local_[0-9a-f-]{36}$/.test(session) || typeof content !== "string" ||
     content.length > 2000 || /[<>]/.test(content))
     return console.warn(`[agent-sandbox] ${server}: dropped a malformed channel notification`);
-  const sessions = require("./@chunk@").@export@.claudeCodeSessionManager;
+  const sessions = require("./@chunk@")@export@.claudeCodeSessionManager;
   const text = `<mcp-event server="${server}">\n${content}\n</mcp-event>`;
   const s = await sessions.getSession(session);
   if (s) {
