@@ -1094,14 +1094,17 @@ in
           done
           (( $(grep -cF '`/dev/kvm`' "$doc") == 1 )) || { echo "environment.md lists /dev/kvm twice" >&2; exit 1; }
           ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
-          grep -qE '^coreutils, .*, nix\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
+          grep -qE '^coreutils, .*, nix, systemd\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
 
           # nixpak's launcher starts our D-Bus proxy: the dbusProxy wrapper in its config runs the module's dbus-proxy,
           # and xdg-dbus-proxy isn't in the closure
           configs=$(grep -E -- '-nixpak-config\.json$' "$paths") || { echo "no nixpak launcher config" >&2; exit 1; }
           for c in $configs; do
             exe=$(jq -er '.dbusProxy.exe' "$c") || { echo "$c starts no D-Bus proxy" >&2; exit 1; }
-            grep -qF -- '${dbusProxy}/bin/xdg-dbus-proxy "$@"' "$exe" || { echo "$exe doesn't run ${dbusProxy}" >&2; exit 1; }
+            # In nixpak's bwrap, our wrapper, which logs the proxy into the host side's journal namespace
+            inner=$(grep -oE '/nix/store/[^ ]+-xdg-dbus-proxy/bin/xdg-dbus-proxy' "$exe") || { echo "$exe runs no proxy wrapper" >&2; exit 1; }
+            grep -qF -- '--identifier=dbus-proxy -- ${dbusProxy}/bin/dbus-proxy "$@"' "$inner" ||
+              { echo "$inner doesn't run ${dbusProxy} through systemd-cat" >&2; exit 1; }
           done
           ! grep -qxF -- "${pkgs.xdg-dbus-proxy}" "$paths" || { echo "xdg-dbus-proxy is in the closure" >&2; exit 1; }
           # nixpak's launcher is the one nixpak-launcher-reaper.patch made: its reaper has Start (a Go binary keeps its
