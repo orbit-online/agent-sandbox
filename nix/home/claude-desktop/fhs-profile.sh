@@ -8,3 +8,7 @@ for fhs_dir in /usr/bin /usr/sbin; do
   case :$PATH: in *:$fhs_dir:*) ;; *) PATH=$PATH:$fhs_dir ;; esac
 done
 unset fhs_prefix fhs_dir
+# The profile also points nixpkgs' cc and ld wrappers at /usr/include and /usr/lib of the FHS env, for a compiler built
+# into the env. A compiler on the module PATH brings a glibc of its own, and the ld wrapper turns each -L into a runpath
+# entry ahead of that glibc, so the binaries load the libc of the env and fail on GLIBC_PRIVATE symbols
+unset NIX_CFLAGS_COMPILE NIX_CFLAGS_LINK NIX_LDFLAGS
