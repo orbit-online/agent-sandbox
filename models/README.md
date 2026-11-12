@@ -5,7 +5,7 @@ and its permissions broker. This file is the inventory they start from:
 who runs where, what crosses the sandbox's boundary and how each crossing
 checks its peer, what the attacker can do, and the properties the models
 check. Properties are numbered (S for structure, P for the broker's
-protocol, L for the launch path, D for the D-Bus proxy) so model files, Go tests and commit
+protocol, L for the launch path, D for the D-Bus proxy, N for the network on netkit) so model files, Go tests and commit
 messages can cite them.
 
 Sources, as of main 491eb09 (the broker's protocol as of acbceda):
@@ -448,6 +448,80 @@ reply, asked or forged.
   (`docs/permissions.md`, D-Bus).
 - D4. No eavesdropping: no client gets a call addressed to another.
 
+### Network (`network.als`)
+
+The network on netkit that replaces the macvlan, modelled before it is
+built, so its claims cite the design (`design:`) and the kernel. A netkit
+pair per launcher in L3 mode, both ends with policy drop: a PEER program
+on the sandbox end (attached through the primary in the host netns), a
+PRIMARY program on the host end for port forwarding, einat-ebpf for NAT
+on the uplinks with a program of ours on tcx ingress ahead of it (pre)
+and one after it (post). The attacker is both sandboxes (any packet,
+any source), every LAN host, every peer behind another host device (a
+VPN, a container bridge), and the host setup, which changes at any step:
+the ruleset, forwarding sysctls, route_localnet, routes and the default
+route, the program view of the default-route device, attached programs,
+einat running. Each check a program makes is a guard with a revert
+check. Six guards are not in the design yet (gaps, below): the checks
+hold with them, and their revert checks are the design as written.
+
+- N1. No sandbox packet reaches local delivery on the host except on a
+  flow the host started to that sandbox under a grant.
+- N2. A sandbox packet leaves the host only through the device the PEER
+  program holds as the default route, only when that is an einat uplink,
+  SNATed from that sandbox address, and never to a multicast or
+  broadcast destination.
+- N3. A packet from outside the host (LAN, VPN, container bridge)
+  reaches a sandbox only reverse-NATed by an einat binding, on a flow
+  that sandbox sent out itself (einat is endpoint-independent: any LAN
+  host reaches a binding).
+- N4. No packet of one sandbox reaches another directly; through the LAN
+  it is N3.
+- N5. Failures only narrow: N1 to N4 and N6 hold under every change of
+  the host setup, a ruleset flush or FORWARD drop policy included
+  (netfilter is on no path). A detached PEER program or a primary
+  without forwarding (the lookup returns `FWD_DISABLED`) passes nothing,
+  an uplink without einat carries no sandbox packet and delivers none,
+  an einat restart that puts einat ahead of pre lets no reply in until
+  pre is ahead again, and an evicted flow gets no reply to the host.
+- N6. Port forwarding only for granted ports: a packet from the host
+  reaches a sandbox only on a flow to a port granted to it.
+- N7. A revoked port carries nothing more: no sandbox reply on its flows
+  reaches the host (as P4).
+
+Gaps, each a counterexample against the design as written:
+
+1. Source spoofing (N1, N2, N3): the PEER program doesn't check the
+   source. A sandbox sends with the other sandbox address; einat binds
+   it to that address and the LAN reply goes to the other sandbox, and a
+   shared flow map matches the other sandbox tuple. Fix: drop sources
+   other than the sandbox address.
+2. A VPN holding the default route (N2): the default-route device is
+   then the tunnel, and sandbox traffic goes into the VPN un-NATed. Fix:
+   redirect only to einat uplinks; the sandbox then has no network
+   behind a full-tunnel VPN (open).
+3. einat stopped or restarting (N2, N5): `bpf_redirect_neigh` still runs
+   the uplink egress hooks, but with einat detached the packet leaves
+   with its link-local or ULA source. Fix: a program after einat on
+   uplink egress that drops sandbox sources.
+4. Forwarded packets to a forwarded port (N3): a container on a host
+   bridge or a VPN peer addresses the sandbox prefix; with forwarding on
+   for its device and a permissive ruleset the host forwards it to the
+   primary, and the PRIMARY program takes it for the host. Fix: PRIMARY
+   passes only packets the host itself sent.
+5. pre detached while post stays (N3): a LAN host addresses the sandbox
+   prefix and post redirects it. Fix: pre marks what it passed and post
+   redirects only marked packets (mark or cb surviving einat: to check in
+   the VM).
+6. Revoke (N7, open): the design records flows on grant but doesn't say
+   whether a revoke clears them; without that, replies on a recorded flow
+   reach the host after the grant ended.
+
+Also from the model: einat attaches first when it starts, so after a
+restart it runs ahead of pre, and pre drops every reverse-NATed reply
+(it sees the sandbox prefix) until the loader puts pre ahead again. Fails
+closed (N5), but the loader has to follow einat restarts.
+
 ## Not modelled
 
 To confirm with Anders (plan Open 2):
@@ -485,6 +559,7 @@ check: that's the user's own mount and ceiling configuration.
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
+| `network.als` | netkit | N1-N7: the network on netkit (designed, not built), each with a run for its premise and a revert check per guard enforcing it |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine
