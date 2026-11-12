@@ -17,7 +17,7 @@ import (
 func TestSuperviseAbort(t *testing.T) {
 	w := newWorld(t)
 	msgs := notifySocket(t)
-	w.cfg.Splash = []string{w.script("splash", `while read -r l; do case $l in *'Starting the app'*) sleep 0.5; echo abort;; esac; done`)}
+	w.cfg.Splash = []string{w.script("splash", `while read -r l; do case $l in *'Starting the D-Bus proxy'*) sleep 0.5; echo abort;; esac; done`)}
 	w.cfg.NixpakLauncher = w.script("nixpak", `trap 'echo term >>`+w.log+`; exit 143' TERM; sleep 100 & wait`)
 	start := time.Now()
 	var exit exitError

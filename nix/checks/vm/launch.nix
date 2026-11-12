@@ -153,6 +153,17 @@
       # own messages, under the same name, on the host side
       assert "agent-sandbox: ready" in host_journal("claude-desktop_sandbox", "-t claude-desktop")
       assert "agent-sandbox: ready" not in host_journal("claude-desktop", "")
+      # The start's steps, which the splash follows: bwrap's helper's and the proxy's, on the host side, and supervise's
+      # durations to each, which the next start estimates from. Steps in the durations came through supervise's follow
+      launcher = host_journal("claude-desktop", "-t claude-desktop")
+      timeline = host_journal("claude-desktop", "-o short-precise -t claude-desktop -t dbus-proxy -g 'Step|Started|Listening'")
+      for step in ["sandbox", "network", "dhcp"]:
+          assert f"level=INFO msg=Step step={step}" in launcher, timeline
+      started = [l for l in launcher.splitlines() if l.startswith("level=INFO msg=Started ")]
+      assert started and all(f" {s}=" in started[-1] for s in ["prepared", "proxy", "sandbox", "network", "dhcp", "ready"]), timeline
+      assert "level=INFO msg=Listening " in host_journal("claude-desktop", "-t dbus-proxy"), "no Listening from the proxy"
+      sandbox_steps = [l for l in host_journal("claude-desktop_sandbox", "").splitlines() if "msg=Step" in l]
+      assert not sandbox_steps, f"steps in the sandbox's namespace: {sandbox_steps}"
       assert host_journal("claude-desktop_sandbox", "-t udhcpc").strip(), "nothing from udhcpc"
       assert not host_journal("claude-desktop", "-t udhcpc").strip(), "udhcpc on the host side"
       in_sandbox("logger -t probe-in hello-from-inside")

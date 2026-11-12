@@ -35,10 +35,11 @@ default launcher and `claude-desktop-<name>` for a named one
 (`ls /var/log/journal` shows which):
 
 - The sandbox's, the one `journalctl`, `logger` and `systemd-cat` use by
-  default: the app's output (Chromium's stderr), the launcher's warnings
-  about the start, udhcpc and the manager's units.
+  default: the app's output (Chromium's stderr), udhcpc and the
+  manager's units.
 - The host side's, which you read but can't write to:
-  `journalctl --namespace=<it>`. The launcher, the permissions broker,
+  `journalctl --namespace=<it>`. The launcher (its warnings about the
+  start among it), the permissions broker,
   subid-broker and the D-Bus proxy. When something on the session bus
   doesn't work, look for the proxy's refusals there
   (`-t dbus-proxy -p warning`, `msg=Refused` with the call's destination,

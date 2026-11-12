@@ -64,12 +64,15 @@ func qmlCheck() []string {
 		warnings = append(warnings, "Not aborting after the click")
 	}
 	st := newState()
-	for _, line := range []string{`{"dark":true}`, `{"text":"Copying","progress":0.5}`, `{"error":"No","log":"a\nb"}`} {
+	for _, line := range []string{`{"dark":true}`, `{"text":"Copying","progress":0.5}`, `{"error":"No","host":"dbus-proxy: Refused","log":"a\nb"}`} {
 		if err := st.apply([]byte(line)); err != nil {
 			warnings = append(warnings, err.Error())
 		}
 		publish(splash, st)
 		qt.QCoreApplication_ProcessEvents()
+	}
+	if h := find(root, "host"); h == nil || h.Property("text").ToString() != "dbus-proxy: Refused" {
+		warnings = append(warnings, "The launcher's warnings aren't shown")
 	}
 	// The same button closes the window once the start failed
 	if got := button.Property("text").ToString(); got != "Close" || !button.Property("enabled").ToBool() {
@@ -113,6 +116,9 @@ func TestApply(t *testing.T) {
 	}
 	if err := s.apply([]byte(`{"text":"Starting"}`)); err != nil || s.Progress != -1 || !s.Dark {
 		t.Errorf("A new step: %+v, %v", s, err)
+	}
+	if err := s.apply([]byte(`{"error":"No","host":"h","log":"l"}`)); err != nil || s.Host != "h" || s.Log != "l" {
+		t.Errorf("A failure: %+v, %v", s, err)
 	}
 	if err := s.apply([]byte(`{"activate":"t"}`)); err != nil || s.Token != "t" || s.Activations != 1 || s.Text != "Starting" {
 		t.Errorf("An activation: %+v, %v", s, err)

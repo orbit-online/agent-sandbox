@@ -10,7 +10,11 @@
  * subid-broker's units, through systemd-cat: internal/journal) log into
  * the same namespace, udhcpc too (helper.go, identifier udhcpc), and
  * supervise pumps nixpak's launcher's output there, the app's stderr among
- * it, as its own lines.
+ * it, as its own lines. In the fix bwrap's helper, in supervisor/ too,
+ * logs into the host side's namespace itself (main.go hostLog), and the
+ * splash reads both by namespace, ByNs: its markers and its labelled
+ * warnings from the host side's alone, the sandbox's only as the app's
+ * output (cmd/launcher startlog.go, progress.go marker).
  *
  * journald (systemd 260.5, src/journal) stamps the trusted fields of an
  * entry from the sender's credentials and from /proc/<pid> of the pid in

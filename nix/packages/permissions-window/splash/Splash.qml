@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 // splash, windowTitle, logo, logoDark, agentLogo and titleFont are context properties from main.go. While the sandbox starts: the
 // title, the main logo, the step and its progress, the agent's logo small at the right over the bar. When the start fails: why,
-// and the app's last output, until the user closes it. Light or dark as the desktop is
+// the launcher's warnings and the app's last output, until the user closes it. Light or dark as the desktop is
 ApplicationWindow {
     id: root
     readonly property bool failed: splash.error !== ""
@@ -31,7 +31,7 @@ ApplicationWindow {
     readonly property int clear: 32
 
     width: failed ? 640 : 460
-    height: failed ? 520 : 380
+    height: failed ? 600 : 380
     visible: true
     title: windowTitle
     color: bgColor
@@ -116,6 +116,37 @@ ApplicationWindow {
             Layout.fillWidth: true
             indeterminate: splash.progress < 0
             value: Math.max(splash.progress, 0)
+        }
+        // The launcher's warnings, from the host side's helpers, apart from the app's output: the sandbox wrote that, so
+        // nothing in it may pass for the launcher's
+        Label {
+            visible: root.failed && splash.host !== ""
+            text: "From the launcher"
+            color: root.mutedColor
+            Layout.bottomMargin: -12
+        }
+        ScrollView {
+            visible: root.failed && splash.host !== ""
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(hostLog.implicitHeight, 110)
+
+            TextArea {
+                id: hostLog
+                objectName: "host"
+                text: splash.host
+                readOnly: true
+                selectByMouse: true
+                wrapMode: Text.WrapAnywhere
+                font.family: "monospace"
+                color: root.fgColor
+                background: Rectangle { color: splash.dark ? "#2a2a2e" : "#ffffff" }
+            }
+        }
+        Label {
+            visible: root.failed && splash.log !== ""
+            text: "The app's output"
+            color: root.mutedColor
+            Layout.bottomMargin: -12
         }
         ScrollView {
             visible: root.failed && splash.log !== ""

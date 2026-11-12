@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"regexp"
@@ -80,6 +81,9 @@ func runHelper(specJSON string) error {
 	for fd := 3; fd <= 5; fd++ {
 		unix.CloseOnExec(fd)
 	}
+	if spec.Units != nil {
+		hostLog(spec.Units)
+	}
 	info, block := os.NewFile(3, "info"), os.NewFile(4, "block")
 	bwrapPid := os.Getppid()
 	data, err := io.ReadAll(info)
@@ -116,13 +120,17 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 		m    []int
 	}{{spec.NewUIDMap, spec.UIDMap}, {spec.NewGIDMap, spec.GIDMap}} {
 		cmd := exec.Command(m.tool, append([]string{strconv.Itoa(pid)}, mapArgs(m.m)...)...)
-		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+		cmd.Stdout, cmd.Stderr = hostOut, hostOut
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s: %w", m.tool, err)
 		}
 	}
 	if _, err := block.Write([]byte("\n")); err != nil {
 		return err
+	}
+	// The host's: the FHS env's bwrap inside runs this helper too
+	if spec.Units != nil {
+		slog.Info("Step", "step", stepSandbox)
 	}
 	if spec.Net != nil {
 		if err := spec.Net.run(pid, spec.Units); err != nil {
@@ -166,15 +174,26 @@ func (n *netSetup) run(pid int, u *hostUnits) error {
 			return err
 		}
 	}
+	slog.Info("Step", "step", stepNetwork)
 	// udhcpc in a mount namespace of its own, made from the host's (see dhcp-root.sh), in the sandbox's pid ns so it
 	// dies with it. It goes to the background once it has a lease or gives up, which ends the unit's start
-	return u.start("dhcp", u.Sandbox, "udhcpc", []string{"Type=forking"},
+	err := u.start("dhcp", u.Sandbox, "udhcpc", []string{"Type=forking"},
 		append(append([]string{n.Nsenter}, ns...), "-p", n.Unshare, "--mount", "--propagation", "private", n.DHCPRoot)...)
+	if err != nil {
+		return err
+	}
+	// The sandbox can change its addresses, but it isn't running yet
+	addr, err := exec.Command(n.Nsenter, append(ns, n.IP, "-4", "-o", "addr", "show", "dev", "eth0", "scope", "global")...).Output()
+	if err == nil && len(addr) == 0 {
+		slog.Warn("No address from DHCP yet: udhcpc goes on trying in the background")
+	}
+	slog.Info("Step", "step", stepDHCP)
+	return nil
 }
 
 func runCmd(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	cmd.Stdout, cmd.Stderr = hostOut, hostOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}

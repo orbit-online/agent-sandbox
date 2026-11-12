@@ -69,6 +69,8 @@ func run(opts docopt.Opts) error {
 		return err
 	}
 	defer l.Close()
+	// A launcher's splash takes this line as the proxy being up
+	slog.Info("Listening", "path", path)
 	go func() { served <- p.Serve(l) }()
 	if s, ok := opts["--fd"].(string); ok {
 		fd, err := strconv.Atoi(s)

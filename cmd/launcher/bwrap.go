@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/user"
@@ -98,6 +99,7 @@ func runBwrap(o bwrapOpts, args []string) error {
 		if o.units == nil {
 			return errors.New("Mode subid needs --units")
 		}
+		hostLog(o.units)
 		sock, err := startSubidBroker(o.units, o.subidBroker)
 		if err != nil {
 			return err
@@ -181,6 +183,8 @@ func execBwrap(bwrap string, spec helperSpec, forward *os.File, args []string) e
 	if err := unix.Dup2(int(blockR.Fd()), bwrapBlockFd); err != nil {
 		return err
 	}
+	// systemd-cat holds whatever fds this process passes bwrap: it ends before bwrap starts
+	endHostLog()
 	argv := append([]string{bwrap, "--unshare-user", "--info-fd", strconv.Itoa(bwrapInfoFd), "--userns-block-fd",
 		strconv.Itoa(bwrapBlockFd)}, args...)
 	return syscall.Exec(bwrap, argv, os.Environ())
@@ -344,11 +348,10 @@ func cgroupBind() (string, error) {
 	if flags == "" {
 		flags = "none"
 	}
-	fmt.Fprintf(os.Stderr, "claude-desktop: cgroup2 is mounted without nsdelegate (options: %s), so the sandbox's "+
-		"cgroup is bound read-only and it runs without its systemd --user. The sandbox can still write its own cgroups through "+
-		"a cgroup2 mount of its own, though nothing outside them. A cgroup2 mount in the host's cgroup namespace "+
-		"without the option clears it (cilium's at /run/cilium/cgroupv2 does). As root, 'mount -o "+
-		"remount,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting /sys/fs/cgroup' restores systemd's "+
-		"options; then start the app again\n", flags)
+	slog.Warn("cgroup2 is mounted without nsdelegate, so the sandbox's cgroup is bound read-only and it runs without its "+
+		"systemd --user. The sandbox can still write its own cgroups through a cgroup2 mount of its own, though nothing "+
+		"outside them. A cgroup2 mount in the host's cgroup namespace without the option clears it (cilium's at "+
+		"/run/cilium/cgroupv2 does). As root, 'mount -o remount,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting "+
+		"/sys/fs/cgroup' restores systemd's options; then start the app again", "options", flags)
 	return "--ro-bind", nil
 }

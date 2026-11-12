@@ -85,11 +85,17 @@ single-user Nix store, and an environment doc for the Claude running inside.
   supervise the caller's `XDG_ACTIVATION_TOKEN` in a file and SIGUSR1 to bring the splash to the front, or saying so
   without one, as from a terminal), `supervise.go` (the unit:
   the sandbox's state and store prepared, nixpak's launcher run with its output pumped to the journal and a tail
-  kept, the app's ready line ending the splash and sending READY=1, a failure shown with that tail, the splash's Abort
+  kept, the app's ready line ending the splash and sending READY=1, a failure shown with the host side's warnings and
+  the sandbox's last entries (or the tail without them), the splash's Abort
   stopping nixpak's launcher (SIGTERM, SIGKILL after 5 s) and the start, shown for at least a second), `store.go` (the
   closure copied into the sandbox's store through `confine.sh`, its progress from the export stream's bytes against
-  the NAR sizes), `theme.go` (the portal's colour scheme as the sandbox's GTK theme, live) and `splash.go` (the
-  splash's process and its JSON lines). The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
+  the NAR sizes), `theme.go` (the portal's colour scheme as the sandbox's GTK theme, live), `splash.go` (the
+  splash's process and its JSON lines), `progress.go` (the start's steps, from supervise and the markers the host
+  side's helpers log, `Step step=<name>` from bwrap's helper and the proxy's `Listening`, and the bar estimated from
+  the durations to each step that supervise logs as `Started` once the app is up, the medians of the last 5 launches)
+  and `startlog.go` (journalctl on the two namespaces: following the host side's from the start on, the history, a
+  failure's logs). On the host, `launcher bwrap` and its helper log into the host side's namespace themselves
+  (`hostLog`), not into nixpak's launcher's output, which supervise pumps into the sandbox's. The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
   `patch-asar.sh` adds: the first time one of its windows is visible once its page loaded or when it's shown (not
   `ready-to-show`, which skips a window shown at creation, as the app's main window is, and not gated on
   `isLoading()`, which a frame still loading keeps true), through stdout's write as it was at startup. `bwrap.go`, `helper.go` and `maps.go`: `launcher bwrap`, the bwrap
@@ -199,8 +205,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   Sandbox" title (in Lexend SemiBold, the brand's title font, from nixpkgs' `lexend`, which the wrapper passes as
   `--title-font`), the step and its progress with the agent's logo small at the right above the bar
   (`splash.agentLogo`, the app's icon), light or dark as the
-  desktop is (the controls' palette too), and when the start fails why and the app's last output until the user
-  closes it; JSON lines on stdin (`state.go`) drive it, `activate` with an xdg-activation token bringing the window to
+  desktop is (the controls' palette too), and when the start fails why, the launcher's warnings ("From the launcher")
+  and the app's last output, each in a box of its own, until the user closes it; JSON lines on stdin (`state.go`) drive it, `activate` with an xdg-activation token bringing the window to
   the front (Qt's `requestActivate` takes it from the environment). Its one button offers Abort after 10 seconds, which says
   "Aborting startup" at once and prints `abort` on its stdout for the launcher, and turns to Close once the start
   failed. SVG logos load through qtsvg; around them the clear space
@@ -645,7 +651,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   client on the host and ending with the app), the scratchpad bind (mode 0700) and
   `claude-desktop-scratchpad-prune`, the sandbox's `systemd --user` (running, in `user/` with the app at its pid in
   `app/`, its timers listed, its path unit running `claude-desktop-store-gc` on the marker; the script refused on the
-  host), the journal namespaces (the proxy's refusals as warnings on the host side and readable inside, supervise's
+  host), the journal namespaces (the proxy's refusals as warnings on the host side and readable inside, the start's
+  steps from bwrap's helper and the proxy and supervise's `Started` durations there, supervise's
   pump and udhcpc in the sandbox's, `logger` and `systemd-cat` inside, the host side's not writable from inside, the
   sandbox's entries stamped `sandbox/app`), the GTK theme following the color scheme (at
   launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), the macvlan's DHCP

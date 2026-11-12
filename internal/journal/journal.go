@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"sync"
 	"syscall"
 )
@@ -115,4 +116,33 @@ func Wrap(systemdCat, namespace, identifier string, argv ...string) []string {
 		return argv
 	}
 	return append([]string{systemdCat, "--namespace=" + namespace, "--identifier=" + identifier, "--"}, argv...)
+}
+
+// Cat starts systemd-cat, which logs the lines written to w into the journal namespace under identifier, with their
+// priority prefixes. Writes are whole lines, under a lock, so lines from several writers don't mix. end closes w and
+// waits for systemd-cat
+func Cat(systemdCat, namespace, identifier string) (w io.Writer, end func(), err error) {
+	cmd := exec.Command(systemdCat, "--namespace="+namespace, "--identifier="+identifier)
+	in, err := cmd.StdinPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("Start systemd-cat: %w", err)
+	}
+	return &lockedWriter{w: in}, func() {
+		in.Close()
+		cmd.Wait()
+	}, nil
+}
+
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(b)
 }

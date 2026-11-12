@@ -20,8 +20,9 @@ Usage:
                  [--title-font=<file>]
 
 Reads JSON lines on stdin, each setting what it names: dark (the desktop's
-colour scheme), text (the step, with progress from 0 to 1 when known), error
-and log (why the start failed and the app's last output); activate, an
+colour scheme), text (the step, with progress from 0 to 1 when known), error,
+host and log (why the start failed, the launcher's warnings and the app's
+last output, each shown apart); activate, an
 xdg-activation token, brings the window to the front. Closes when stdin
 does, unless it shows an error: then when the user closes it. After 10 seconds
 it offers Abort, which prints "abort" on stdout for the launcher.
@@ -127,6 +128,7 @@ func publish(m *qml.QQmlPropertyMap, s *state) {
 	m.Insert("text", qt.NewQVariant14(s.Text))
 	m.Insert("progress", qt.NewQVariant9(s.Progress))
 	m.Insert("error", qt.NewQVariant14(s.Error))
+	m.Insert("host", qt.NewQVariant14(s.Host))
 	m.Insert("log", qt.NewQVariant14(s.Log))
 	m.Insert("activations", qt.NewQVariant4(s.Activations))
 }

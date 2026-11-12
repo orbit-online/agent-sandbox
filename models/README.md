@@ -124,7 +124,7 @@ Added with the journal (17) and the sandbox's systemd --user (18):
 17. **journald@claude-desktop[-<name>] and @claude-desktop[-<name>]_sandbox**:
     two journald namespaces per launcher, host side, root
     (`systemd-journald@.service`). The host side's takes entries from the
-    host helpers through systemd-cat (supervise and the D-Bus proxy in
+    host helpers through systemd-cat (supervise, bwrap's helper and the D-Bus proxy in
     `supervisor/`, the broker's and subid-broker's units); the sandbox's
     from the sandbox, udhcpc's unit and supervise's pump of nixpak's
     output (the app's stderr among it). Stamps the trusted fields (`_PID`, `_UID`, `_SYSTEMD_CGROUP`,
@@ -312,7 +312,9 @@ process whose principal is in the Sandbox domain, at any time.
   sandbox process can hold a line until its pid serves a helper, and the
   pump stamps the app's lines as supervise's. `_SYSTEMD_USER_UNIT` and
   `_SYSTEMD_INVOCATION_ID` are the app's unit for `supervisor/` and
-  `sandbox/` alike.
+  `sandbox/` alike. The splash reads by namespace too: its steps and the
+  warnings it labels with their identifier come from the host side's,
+  what it shows of the sandbox's is the app's output (`startlog.go`).
 
 ### Protocol (`protocol.als`)
 

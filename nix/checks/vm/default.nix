@@ -276,10 +276,15 @@ let
     # whether it got its tray item's name. The launcher returns once it started the app's unit,
     # <launcher>-app.service
     def launch(launcher="claude-desktop", home="${sandboxHome}"):
-        workstation.succeed(
+        status, out = workstation.execute(
             "systemd-run --user -M alice@ --wait --pipe --quiet -E WAYLAND_DISPLAY=wayland-0"
-            f" -- /etc/profiles/per-user/alice/bin/{launcher}"
+            f" -- /etc/profiles/per-user/alice/bin/{launcher} 2>&1"
         )
+        if status != 0:
+            # Why, from both of its journal namespaces
+            logs = workstation.execute(f"journalctl --namespace={launcher} --no-pager -n 60; "
+                                       f"journalctl --namespace={launcher}_sandbox --no-pager -n 60")[1]
+            raise Exception(f"{launcher} didn't start: {out}\n{logs}")
         workstation.wait_until_succeeds(f"test -s {home}/stub-app.log", timeout=300)
         return workstation.succeed(f"cat {home}/stub-app.log").split()
 

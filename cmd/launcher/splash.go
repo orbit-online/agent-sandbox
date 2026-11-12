@@ -30,7 +30,8 @@ type splashState struct {
 	Text     string   `json:"text,omitempty"`
 	Progress *float64 `json:"progress,omitempty"` // 0 to 1; none for a step of unknown length
 	Error    string   `json:"error,omitempty"`    // Shown until the user closes the window
-	Log      string   `json:"log,omitempty"`      // The app's last output, beneath the error
+	Host     string   `json:"host,omitempty"`     // The host side's warnings and errors, beneath the error
+	Log      string   `json:"log,omitempty"`      // The app's last output, beneath those
 	Activate string   `json:"activate,omitempty"` // An xdg-activation token: the window to the front
 }
 
@@ -80,6 +81,13 @@ func (s *splash) step(text string, progress *float64) {
 	s.send(splashState{Text: text, Progress: progress})
 }
 
+// up says whether the window is there to show something
+func (s *splash) up() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enc != nil
+}
+
 func (s *splash) dark(dark bool) { s.send(splashState{Dark: &dark}) }
 
 // close ends the splash: its stdin closing tells it to quit
@@ -94,9 +102,9 @@ func (s *splash) close() {
 	s.cmd, s.enc = nil, nil
 }
 
-// fail shows msg and log and waits until the user closes the window
-func (s *splash) fail(msg, log string) {
-	s.send(splashState{Error: msg, Log: log})
+// fail shows msg, the host side's warnings and the app's output, and waits until the user closes the window
+func (s *splash) fail(msg, host, log string) {
+	s.send(splashState{Error: msg, Host: host, Log: log})
 	s.mu.Lock()
 	cmd := s.cmd
 	s.mu.Unlock()

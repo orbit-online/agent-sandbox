@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ type config struct {
 	NixpakLauncher string   `json:"nixpakLauncher"`
 	Ready          string   `json:"ready"` // The line the app prints on stdout when its first window is ready
 	Tools          struct {
+		Journalctl string `json:"journalctl"`
 		Nsenter    string `json:"nsenter"`
 		NixStore   string `json:"nixStore"`
 		Setpriv    string `json:"setpriv"`
@@ -107,8 +109,12 @@ func main() {
 	}
 	journal.Setup()
 	if opts["bwrap"] == true || opts["bwrap-helper"] == true {
-		if err := runTool(opts); err != nil {
-			fmt.Fprintf(os.Stderr, "claude-desktop: %v\n", err)
+		err := runTool(opts)
+		if err != nil {
+			slog.Error(err.Error())
+		}
+		endHostLog()
+		if err != nil {
 			os.Exit(1)
 		}
 		return
@@ -177,6 +183,33 @@ func runTool(opts docopt.Opts) error {
 	}
 	args, _ := opts["<arg>"].([]string)
 	return runBwrap(o, args)
+}
+
+// On the host, bwrap and its helper log to the host side's journal namespace once they know it (hostLog), not to the
+// stderr of nixpak's launcher, which supervise pumps into the sandbox's namespace with the app's output
+var (
+	hostOut    io.Writer = os.Stderr // Where the commands they run print
+	endHostLog           = func() {}
+)
+
+func hostLog(u *hostUnits) {
+	if u.SystemdCat == "" || u.Journal == "" {
+		return
+	}
+	w, end, err := journal.Cat(u.SystemdCat, u.Journal, u.Prefix)
+	if err != nil {
+		slog.Warn("Logging to stderr", "err", err)
+		return
+	}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(journal.Handler(w, true)))
+	hostOut = w
+	endHostLog = func() {
+		slog.SetDefault(prev)
+		hostOut = os.Stderr
+		end()
+		endHostLog = func() {}
+	}
 }
 
 // exitError ends the launcher with its status, having said why already

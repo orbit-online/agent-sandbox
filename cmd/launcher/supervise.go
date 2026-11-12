@@ -33,8 +33,37 @@ func supervise(cfg *config, vars, args []string) error {
 	signal.Notify(usr1, syscall.SIGUSR1)
 	defer signal.Stop(usr1)
 	var shown atomic.Pointer[splash]
+	began := time.Now()
 	sp := showSplash(cfg)
 	shown.Store(sp)
+	p := newProgress(sp, began, history(cfg))
+	onEntry := func(e entry) {
+		if m := marker(cfg, e); m != "" {
+			p.mark(m, e.at)
+		}
+	}
+	stopFollow := followHost(cfg, began, onEntry)
+	ticks := time.NewTicker(100 * time.Millisecond)
+	stopTicks := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticks.C:
+				p.tick()
+			case <-stopTicks:
+				return
+			}
+		}
+	}()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			ticks.Stop()
+			close(stopTicks)
+			stopFollow()
+		})
+	}
+	defer stop()
 	go func() {
 		for range usr1 {
 			activate(cfg, shown.Load())
@@ -50,11 +79,12 @@ func supervise(cfg *config, vars, args []string) error {
 		}
 	}
 	prepared := make(chan error, 1)
-	go func() { prepared <- prepare(cfg, sp) }()
+	go func() { prepared <- prepare(cfg, p) }()
 	select {
 	case err := <-prepared:
 		if err != nil {
-			return failStart(cfg, sp, err.Error(), "")
+			stop()
+			return failStart(cfg, sp, err.Error(), began, &tail{max: tailMax})
 		}
 	case <-sp.aborted:
 		// What prepare still runs ends with the unit; a store sync cut off goes on at the next start (store.go)
@@ -72,11 +102,11 @@ func supervise(cfg *config, vars, args []string) error {
 		}
 	}
 
-	sp.step("Starting the app", nil)
+	p.mark(stepPrepared, time.Now())
 	cmd := exec.Command(cfg.NixpakLauncher, append([]string{"--password-store=basic"}, args...)...)
 	// nixpak's sloth.env panics on unset variables, so it gets the sandbox's environment the wrapper filtered
 	cmd.Env = vars
-	tail := &tail{max: 64 << 10}
+	tail := &tail{max: tailMax}
 	ready := make(chan struct{})
 	var once sync.Once
 	stdout, err := cmd.StdoutPipe()
@@ -88,7 +118,8 @@ func supervise(cfg *config, vars, args []string) error {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
-		return failStart(cfg, sp, fmt.Sprintf("Start nixpak's launcher: %v", err), "")
+		stop()
+		return failStart(cfg, sp, fmt.Sprintf("Start nixpak's launcher: %v", err), began, tail)
 	}
 	out, endLog := appLog(cfg)
 	defer endLog()
@@ -113,9 +144,15 @@ func supervise(cfg *config, vars, args []string) error {
 	}()
 	select {
 	case <-ready:
+		p.mark(stepReady, time.Now())
 		sp.close()
 		daemon.SdNotify(false, daemon.SdNotifyReady)
+		// journald wakes a follower on a timer, so the last markers may not have reached it: they're in the files
+		stop()
+		readHost(cfg, began, onEntry)
+		p.started()
 	case <-exited:
+		stop()
 	case <-sp.aborted:
 		return abortStart(cfg, sp, cmd)
 	}
@@ -135,9 +172,13 @@ func supervise(cfg *config, vars, args []string) error {
 		slog.Error("The app ended", "status", exit)
 		failed := showSplash(cfg)
 		shown.Store(failed)
-		failed.fail(fmt.Sprintf("Claude ended with an error (%s).", exit), tail.String())
+		var host, app string
+		if failed.up() {
+			host, app = failureLogs(cfg, began, tail)
+		}
+		failed.fail(fmt.Sprintf("Claude ended with an error (%s).", exit), host, app)
 	default:
-		failStart(cfg, sp, fmt.Sprintf("The app didn't start (%s).", exit), tail.String())
+		failStart(cfg, sp, fmt.Sprintf("The app didn't start (%s).", exit), began, tail)
 	}
 	if code <= 0 {
 		code = 1
@@ -146,8 +187,7 @@ func supervise(cfg *config, vars, args []string) error {
 }
 
 // prepare readies the sandbox's state where a refusal reaches the caller, before nixpak's launcher runs
-func prepare(cfg *config, sp *splash) error {
-	sp.step("Preparing the sandbox", nil)
+func prepare(cfg *config, p *progress) error {
 	// The sandbox can write its home and plant links there, so the files it expects (resolv.conf, user-dirs.dirs, the
 	// app's config) are written confined, see confine.sh. The directories themselves are bind sources, on paths it
 	// can't write
@@ -165,8 +205,9 @@ func prepare(cfg *config, sp *splash) error {
 	if out, err := state.CombinedOutput(); err != nil {
 		return fmt.Errorf("Prepare the sandbox's home: %w: %s", err, out)
 	}
-	sp.step("Copying the sandbox's programs", nil)
-	if err := syncStore(cfg, func(f float64) { sp.step("Copying the sandbox's programs", &f) }); err != nil {
+	err := syncStore(cfg, p.copying)
+	p.copied()
+	if err != nil {
 		return err
 	}
 	// nixpak binds the closure from the host store, where a GC would empty it under the running sandbox once a rebuild
@@ -244,14 +285,20 @@ func abortStart(cfg *config, sp *splash, cmd *exec.Cmd) error {
 	return exitError(1)
 }
 
-// failStart leaves why the app didn't start for start, tells systemd, and shows it until the user closes the splash
-func failStart(cfg *config, sp *splash, msg, log string) error {
+// failStart leaves why the app didn't start for start, tells systemd, and shows it until the user closes the splash,
+// with the logs since began
+func failStart(cfg *config, sp *splash, msg string, began time.Time, pumped *tail) error {
 	fmt.Fprintf(os.Stderr, "%s: %s\n", progName(cfg), msg)
+	// Before systemd hears the start ended: a launch then finds the unit running only while the window shows it
+	var host, app string
+	if sp.up() {
+		host, app = failureLogs(cfg, began, pumped)
+	}
 	if err := os.WriteFile(resultFile(cfg), []byte(msg+"\n"), 0o600); err != nil {
 		slog.Error("Write the result file", "err", err)
 	}
 	daemon.SdNotify(false, daemon.SdNotifyReady)
-	sp.fail(msg, log)
+	sp.fail(msg, host, app)
 	return exitError(1)
 }
 
@@ -273,31 +320,12 @@ func appLog(cfg *config) (w io.Writer, end func()) {
 	if cfg.SandboxJournal == "" {
 		return os.Stderr, func() {}
 	}
-	cat := exec.Command(cfg.Tools.SystemdCat, "--namespace="+cfg.SandboxJournal, "--identifier="+progName(cfg))
-	in, err := cat.StdinPipe()
-	if err == nil {
-		err = cat.Start()
-	}
+	w, end, err := journal.Cat(cfg.Tools.SystemdCat, cfg.SandboxJournal, progName(cfg))
 	if err != nil {
 		slog.Warn("The app's output goes to the launcher's journal", "err", err)
 		return os.Stderr, func() {}
 	}
-	return &lockedWriter{w: in}, func() {
-		in.Close()
-		cat.Wait()
-	}
-}
-
-// Both pumps write whole lines to it, longer than a pipe takes in one write
-type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (l *lockedWriter) Write(b []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(b)
+	return w, end
 }
 
 // pump copies r to w line by line, keeping the lines in tail and handing each to line
@@ -315,6 +343,9 @@ func pump(r io.Reader, w io.Writer, tail *tail, line func(string)) {
 	// A line past the buffer: the rest still goes through, unsplit
 	io.Copy(w, r)
 }
+
+// What a failure shows of the app's output at most
+const tailMax = 64 << 10
 
 // tail keeps the last max bytes of lines
 type tail struct {
