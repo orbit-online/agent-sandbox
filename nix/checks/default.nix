@@ -111,9 +111,10 @@ let
     ) null sys.config.home-manager.users.alice.home.packages;
   sandboxed = sandboxedOf system;
   dbusProxy = self.packages.${pkgs.stdenv.hostPlatform.system}.dbus-proxy;
-  # patch-asar.sh on stub asars: the app's notification backend choice as 4.x has it (the app the checks build predates
-  # it) made false, and the sessions' MCP clients and the way to the session manager as 4.23118 has them, with
-  # channels.js hooked into the clients; the build refusing an app with two of either place
+  # patch-asar.sh on stub asars: the tray icon picker with and without its GNOME case, the app's notification backend
+  # choice as 4.x has it (the app the checks build predates it) made false, and the sessions' MCP clients and the way
+  # to the session manager as 4.23118 has them, with channels.js hooked into the clients; the build refusing an app
+  # with two of either place
   asarPatch =
     pkgs.runCommand "claude-desktop-asar-patch"
       {
@@ -126,12 +127,15 @@ let
       ''
         pick='(Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),P.info("NotificationService initialized"))'
         client='p=new t.vct({name:`local-agent-mode-''${e}`,version:"1.0.0"},{capabilities:C}),b&&p.setRequestHandler("roots/list",(async()=>({roots:[]})))'
+        # The tray icon picker before 5.1231, with its GNOME case, and from 5.1231, without
+        gnome='e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?'
+        dark='e||a.nativeTheme.shouldUseDarkColors?'
         manager='let{claudeCodeSessionManager:s}=await Promise.resolve().then((()=>require("./index.chunk-m.js"))).then((e=>e.t))'
         app() {
           mkdir -p "$1/.vite/build"
           echo '{"main": "main.js"}' >"$1/package.json"
           echo '"use strict";' >"$1/main.js"
-          echo 'function c(e){return e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"}' >>"$1/main.js"
+          echo "function c(e){return $4\"TrayIconLinux-Dark.png\":\"TrayIconLinux.png\"}" >>"$1/main.js"
           echo "nJr=new class{constructor(){this.telemetryName=\"freedesktop\"}};async function i(){$2}" \
             >"$1/.vite/build/index.chunk-x.js"
           echo "async function c(e,t,b){$3}" >"$1/.vite/build/index.chunk-c.js"
@@ -144,8 +148,9 @@ let
           ASAR=$PWD/$1.asar DESKTOP_NAME=x.desktop READY=ready CHANNELS=$2 CHANNELS_JS=${../home/claude-desktop/channels.js} \
             out=$PWD/$1-patched.asar bash -euo pipefail ${../home/claude-desktop/patch-asar.sh}
         }
-        app one "$pick" "$client;$manager"
+        app one "$pick" "$client;$manager" "$gnome"
         patch one '[]'
+        ! grep -qaF '"gnome"' one-patched.asar || { echo "the tray icon still picks white on GNOME" >&2; exit 1; }
         grep -qaF '(!1&&Mx(iJr,!0)&&await nJr.probe()&&(this.backend=nJr),' one-patched.asar ||
           { echo "the native notification backend can still be picked" >&2; exit 1; }
         ! grep -qaF agent-sandbox-channels one-patched.asar || { echo "channels.js hooked in without channels" >&2; exit 1; }
@@ -157,16 +162,20 @@ let
         grep -qF 'require("./index.chunk-m.js").t.claudeCodeSessionManager' one-out/.vite/build/agent-sandbox-channels.js
         node --check one-out/.vite/build/agent-sandbox-channels.js
         node --check one-out/.vite/build/index.chunk-c.js
-        app two "$pick;$pick" ""
+        app two "$pick;$pick" "" "$gnome"
         if patch two '[]'; then
           echo "patch-asar.sh took an app with two places picking the notification backend" >&2
           exit 1
         fi
-        app three "$pick" "$client;$client;$manager"
+        app three "$pick" "$client;$client;$manager" "$gnome"
         if patch three '["osticket"]'; then
           echo "patch-asar.sh took an app with two places making the sessions' MCP clients" >&2
           exit 1
         fi
+        app four "$pick" "$client;$manager" "$dark"
+        patch four '[]'
+        grep -qaF 'e||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png"' four-patched.asar ||
+          { echo "the tray icon picker of an app without a GNOME case changed" >&2; exit 1; }
         touch $out
       '';
   # A stand-in for agent-memos' Home Manager module, with the options this module reads
