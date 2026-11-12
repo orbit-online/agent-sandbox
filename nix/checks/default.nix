@@ -1270,7 +1270,7 @@ in
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []
-            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 5 and (has("broadcast") | not)
+            and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 5 and .broadcast == ["org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"]
               and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
             and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }

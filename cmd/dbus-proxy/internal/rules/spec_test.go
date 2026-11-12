@@ -58,7 +58,7 @@ func TestConfigAgainstSpec(t *testing.T) {
 			if got := AnyMatches(fs, Call, path, iface, member); got != want.Calls(name, path, iface, member) {
 				t.Fatalf("%s: a call to %s %s.%s passes: %v", name, path, iface, member, got)
 			}
-			if got := BroadcastPasses(fs); got != want.Broadcasts(name) {
+			if got := BroadcastPasses(fs, path, iface, member); got != want.Broadcasts(name, path, iface, member) {
 				t.Fatalf("%s: a broadcast %s %s.%s passes: %v", name, path, iface, member, got)
 			}
 		}

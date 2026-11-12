@@ -20,7 +20,7 @@ func (m *model) fromPeer(t *refClient, sender string, broadcast, call bool, seri
 	}
 	if broadcast {
 		_, fs := m.lookup(t, sender)
-		if !rules.BroadcastPasses(fs) {
+		if !rules.BroadcastPasses(fs, path, iface, member) {
 			return false
 		}
 	}

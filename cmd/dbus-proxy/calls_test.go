@@ -36,7 +36,8 @@ func TestCallRules(t *testing.T) {
 	}
 }
 
-// A broadcast rule lets the name's broadcasts reach a client that asked; without a rule, or with see, they don't
+// A broadcast rule lets the broadcasts it matches reach a client that asked, talk and own all of them; without a rule,
+// with see or with a call rule alone, none (xdg-dbus-proxy 0.1.9, CVE-2026-93676)
 func TestBroadcast(t *testing.T) {
 	bus := startBus(t)
 	svc := startService(t, bus)
@@ -48,9 +49,10 @@ func TestBroadcast(t *testing.T) {
 		{nil, "/org/test", false},
 		{[]string{policy(svcName, "see")}, "/org/test", false},
 		{[]string{ruled(svcName, "broadcast", "org.test.Iface.Sig@/org/test")}, "/org/test", true},
-		// xdg-dbus-proxy's quirk, kept: any rule gives the name TALK, and TALK passes all its broadcasts
-		{[]string{ruled(svcName, "broadcast", "org.test.Iface.Sig@/org/test")}, "/other", true},
+		{[]string{ruled(svcName, "broadcast", "org.test.Iface.Sig@/org/test")}, "/other", false},
+		{[]string{ruled(svcName, "call", "*")}, "/org/test", false},
 		{[]string{policy(svcName, "talk")}, "/other", true},
+		{[]string{policy(svcName, "own")}, "/other", true},
 	} {
 		c := connect(t, startProxy(t, bus, tc.args...))
 		got := signals(c, 300*time.Millisecond)

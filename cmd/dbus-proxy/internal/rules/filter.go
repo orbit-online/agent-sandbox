@@ -78,15 +78,8 @@ func AnyMatches(fs []*Filter, t Kind, path, iface, member string) bool {
 // MatchAll is the filter a unique name gets from its own policy p, xdg-dbus-proxy's match_all
 func MatchAll(p Policy) *Filter { return matchAll[p] }
 
-// Whether a broadcast from a sender with these filters reaches the client. xdg-dbus-proxy passes every broadcast of a
-// name with TALK, and any rule gives a name TALK, so a call or broadcast rule lets all the name's broadcasts
-// through: kept, as the module's rules rely on it. Its broadcast rules decide nothing then, as no filter below TALK
-// matches
-func BroadcastPasses(fs []*Filter) bool {
-	for _, f := range fs {
-		if f.policy >= Talk {
-			return true
-		}
-	}
-	return false
+// Whether a broadcast from a sender with these filters reaches the client: a policy filter of TALK or OWN, or a
+// broadcast rule that matches, as xdg-dbus-proxy 0.1.9 (CVE-2026-93676). A call rule's filter passes none
+func BroadcastPasses(fs []*Filter, path, iface, member string) bool {
+	return AnyMatches(fs, Broadcast, path, iface, member)
 }

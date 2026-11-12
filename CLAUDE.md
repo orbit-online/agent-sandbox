@@ -358,8 +358,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   what the bus would pass): a hidden name (not listed, no owner, a call unknown),
   `see` (visible, a call denied), `talk` (any call and its reply, by the
   owner's unique name too), `own`, call rules (method and path, an interface on a `/*`
-  subtree, `@/*`, `*`), broadcast rules (none without a rule or with `see`,
-  and xdg-dbus-proxy's quirk of passing all of a ruled name's broadcasts),
+  subtree, `@/*`, `*`), broadcast rules (none without a rule, with `see` or with a
+  call rule alone, only the ones a broadcast rule matches, all with `talk` or `own`),
   replies (let through to calls let through, refused unasked both ways, a call
   carrying a pending reply serial refused), NameOwnerChanged by policy,
   `BecomeMonitor` and eavesdropping match rules refused, file descriptors

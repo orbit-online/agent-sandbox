@@ -539,7 +539,8 @@ Overview lists.
 Built as `cmd/dbus-proxy`, and nixpak's session-bus proxy since step 6: the module passes
 nixpak `pkgs // { xdg-dbus-proxy = <dbus-proxy>; }`, whose package links `bin/xdg-dbus-proxy` to `bin/dbus-proxy`, so
 only nixpak's wrapper changes. nixpak's argv works as it is: the bus address from `DBUS_SESSION_BUS_ADDRESS`, the
-outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on it. Where it differs from xdg-dbus-proxy 0.1.7, read from its source:
+outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on it. Where it differs from xdg-dbus-proxy 0.1.9, the
+version the locked nixpkgs ships, read from its source:
 
 - It terminates SASL on both sides (EXTERNAL only, for the proxy's own uid) instead of passing the client's lines on,
   and forwards each message with the header fields it parsed and checked, re-encoded, and the body as it came. Bodies
@@ -547,15 +548,12 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   to calls it filters), so a message costs about its size.
 - A serial reused while its call awaits a reply ends the connection, a second Hello is refused, and a reply to a call
   to the bus counts only from the bus: otherwise one call's reply could be judged as another's (a GetNameOwner reply
-  read as Hello's raises the name's owner to TALK). A client's reply goes only to the caller waiting for it, and a
-  method call without a destination is refused.
+  read as Hello's raises the name's owner to TALK). A method call without a destination is refused.
 - A message is read only when the D-Bus specification takes its header (the destination and sender bus names, no
   reserved local path or interface, a signature without empty structs or dict keys of a container type, nul padding),
   and a body it looks into must hold valid values of its signature, or the call has no arguments as far as the proxy
   is concerned. A serial awaiting a reply ends the connection on any call, one expecting no reply too: the bus
   answers some of those. SASL lines are at most 16 KiB.
-- A reply is a reply by its type. xdg-dbus-proxy takes any message with a reply serial for one, so a method call
-  carrying the serial of a pending call to the client passes to any destination unchecked; the proxy refuses it.
 - `--filter` is required (nixpak and the launcher's bwrap always pass it): there is no mode that passes everything.
   Monitoring and eavesdropping are refused whatever the rules, and an `AddMatch` without an interface counts.
 - Names in the config are exact: xdg-dbus-proxy's `.*` wildcards are refused,
@@ -568,20 +566,18 @@ outside path, `dbus.args`, `--filter` and `--fd=3` first, and the ready byte on 
   client's share and a budget for the whole proxy (128 MiB, half the soft `RLIMIT_NOFILE`); a client that would go
   over is disconnected. Out of file descriptors, the proxy waits and accepts again.
 
-Kept from xdg-dbus-proxy: any rule gives its name TALK, and TALK passes all the name's broadcasts, so a call or
-broadcast rule lets every broadcast of the name through (the module's rules rely on it). In 0.1.7's
-`flatpak-proxy.c`, `filter_new_from_rule` makes every rule's filter TALK, and a broadcast passes at TALK before its
-broadcast rules are looked at; `filter_matches` matches nothing below TALK, so no broadcast rule ever decides. A
-broadcast rule only makes a name visible with its broadcasts, without calls; the module's portal rules need none, as
-their call rules pass the portal's `SettingChanged`. Filtering by the rule would break configs written for
-xdg-dbus-proxy, which the proxy's rules follow.
+Broadcasts pass as in xdg-dbus-proxy 0.1.9: all of a name whose own policy is talk or own, and otherwise only those a
+broadcast rule matches; a call rule passes none. Up to 0.1.7 any rule gave its name TALK, and TALK passed all of the
+name's broadcasts whatever the rule said. 0.1.8 fixed that (CVE-2026-93676). The proxy kept the old behaviour until
+2026-11-12, and the module's portal rules relied on it for Settings' `SettingChanged`, which they now name in a
+broadcast rule. 0.1.9 took up two checks the proxy had from the start (CVE-2026-94422): a reply is a reply by its
+type, not by carrying a reply serial, and a client's reply goes only to the caller waiting for it.
 
 #### Live rules and the system bus (not built: removed 2026-11-04 until a capability needs it)
 
 Built 2026-11-03 and removed the next day: nothing declared a D-Bus capability, all of the sandbox's D-Bus use is
 nixpak's static config, and the proxy, broker, module and models are smaller without the live layer. The design stays here for
-when one is needed. Live rule sets would differ from static ones in one more way: their call and broadcast rules pass
-only the broadcasts a broadcast rule matches, and their see, talk and own what those static policies pass.
+when one is needed.
 
 The system bus: a second instance, for a launcher with D-Bus capabilities on the system bus. the launcher's bwrap starts
 it as the transient user unit `claude-desktop[-<name>]-system-bus` before it execs nixpak's bwrap, and waits up to five
@@ -1013,6 +1009,11 @@ Decided with Anders, 2026-11-02 and 2026-11-03:
     design's `service`), `mount` (its `attach`), `dbus`; the options follow (`permissions.commands`,
     `permissions.sockets`).
 
+Decided with Anders, 2026-11-12:
+
+13. The proxy filters broadcasts by rule as xdg-dbus-proxy 0.1.9 does (D-Bus), rather than keeping 0.1.7's pass-all
+    that 0.1.8 fixed as CVE-2026-93676.
+
 ## Decisions made without the user
 
 Each can be revisited.
@@ -1109,8 +1110,8 @@ Each can be revisited.
 36. A live set's names are looked up on the client's reader before its next message, which waits for the answers,
     rather than at once from the control socket: the proxy's calls then never overtake a client's `Hello`, and an idle
     client costs nothing. Until then the client gets no broadcasts by an owner's unique name it hasn't learnt.
-37. Live sets' call and broadcast rules don't pass every broadcast of their name, as xdg-dbus-proxy's TALK does for the
-    static ones, which nixpak's configs rely on.
+37. Live sets pass broadcasts as the static rules do since 2026-11-12: by broadcast rule, or all of a name at talk or
+    own.
 38. The broker ends a bus's D-Bus grants when it finds its connection to the proxy broken, on its next use of it, rather
     than watching the connection: the proxies end only with the sandbox, which ends the daemon's grants anyway.
 39. What D-Bus capabilities may not hold (D-Bus) is a policy per bus of known escapes, like host sockets' refused

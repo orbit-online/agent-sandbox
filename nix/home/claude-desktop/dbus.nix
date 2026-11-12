@@ -73,7 +73,7 @@ in
             broadcast = mkOption {
               type = types.listOf types.str;
               default = [ ];
-              description = "Rules as `call`'s, which filter nothing: like any rule, one here passes all of the name's broadcasts and makes it visible, as xdg-dbus-proxy's `--broadcast` does. For a name the app only listens to.";
+              description = "Broadcasts the app may receive, each a rule as `call`'s. Any rule also makes the name visible, as xdg-dbus-proxy's `--broadcast` does.";
             };
           };
         }
@@ -81,8 +81,9 @@ in
       defaultText = lib.literalMD "the portal's OpenURI, Settings and Notification, and with `tray` the tray's registration and the tray item's name";
       description = ''
         What the app reaches on the session bus through the D-Bus proxy (`dbus-proxy --help`), by well-known name,
-        exact: a policy, call and broadcast rules, or both. Any rule also makes the name visible and passes all its
-        broadcasts, whatever the rule says. Talk reaches every object the name's owner exports, so prefer call rules.
+        exact: a policy, call and broadcast rules, or both. Any rule also makes the name visible. A call rule passes
+        no broadcasts: those need a broadcast rule, or talk or own. Talk reaches every object the name's owner exports,
+        so prefer call and broadcast rules.
       '';
     };
     build.dbusRules = mkOption {
@@ -100,8 +101,9 @@ in
     env.NOTIFY_FORCE_PORTAL = "1";
     # Calls only, never "talk": the proxy filters by name, and talk reaches every object the name's owner exports
     # (plasmashell: the clipboard, PlasmaShell.evaluateScript, quit). A call rule also lets the app see the name and
-    # get replies and the owner's signals (the proxy passes a name's broadcasts once it has any rule, Settings'
-    # SettingChanged included, and signals sent to the app, the portal's ActionInvoked, unfiltered). The proxy checks a call to the owner's unique name
+    # get replies and signals sent to the app (the portal's ActionInvoked) unfiltered; broadcasts pass only by a
+    # broadcast rule (Settings' SettingChanged). The tray needs none: Chromium's StatusIconLinuxDbus subscribes to no
+    # signal. The proxy checks a call to the owner's unique name
     # against the rules of every name it holds, so no other name may get talk where one of these owners holds it. No
     # org.freedesktop.Notifications: notifications go through the portal, which keys them by app ID, so the app
     # can't replace or close another's (the permissions broker's), nor reach plasmashell
@@ -118,6 +120,8 @@ in
             # its GTK fallback lags one switch behind
             "org.freedesktop.DBus.Properties.Get@/org/freedesktop/portal/desktop"
           ];
+          # Chromium follows the color scheme and accent color by it (ui/linux/portal_settings_linux.cc)
+          broadcast = [ "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop" ];
         };
       }
       (lib.mkIf config.tray {

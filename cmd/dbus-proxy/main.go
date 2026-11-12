@@ -27,8 +27,8 @@ Listens on <path> and connects each client to the bus at <address>, passing what
                      "IFACE.MEMBER", PATH an object path, ending in "/*" for its subtree too
   --filter           Required, as nixpak always passes it
 
-Names are exact; any rule gives its name talk's visibility and broadcasts. The client can't monitor the bus or
-eavesdrop, whatever the rules (docs/permissions.md, D-Bus).
+Names are exact; any rule makes its name visible. Broadcasts pass by broadcast rule, or all of a name with talk or
+own. The client can't monitor the bus or eavesdrop, whatever the rules (docs/permissions.md, D-Bus).
 `
 
 // Tells the launcher the proxy is ready, then waits for it to close its end

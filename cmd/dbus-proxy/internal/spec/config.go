@@ -77,9 +77,10 @@ type configRule struct {
 }
 
 type configName struct {
-	policy Level
-	calls  []configRule
-	ruled  bool // any call or broadcast rule
+	policy     Level
+	calls      []configRule
+	broadcasts []configRule
+	ruled      bool // any call or broadcast rule
 }
 
 // Config is a config the proxy takes
@@ -130,6 +131,8 @@ func ParseConfig(data []byte) (*Config, error) {
 					n.ruled = true
 					if f.key == "call" {
 						n.calls = append(n.calls, r)
+					} else {
+						n.broadcasts = append(n.broadcasts, r)
 					}
 				}
 			default:
@@ -222,10 +225,11 @@ func (c *Config) Calls(name, path, iface, member string) bool {
 	if n == nil {
 		return false
 	}
-	if n.policy >= Talk {
-		return true
-	}
-	for _, r := range n.calls {
+	return n.policy >= Talk || anyRule(n.calls, path, iface, member)
+}
+
+func anyRule(rs []configRule, path, iface, member string) bool {
+	for _, r := range rs {
 		pathOK := !(r.hasPath && path == "") && !r.subtree && (r.path == "" || path == r.path) ||
 			r.subtree && (path == r.path || strings.HasPrefix(path, r.path+"/"))
 		if pathOK && (r.iface == "" || r.iface == iface) && (r.member == "" || r.member == member) {
@@ -235,6 +239,13 @@ func (c *Config) Calls(name, path, iface, member string) bool {
 	return false
 }
 
-// Broadcasts is whether a name's broadcasts reach a client that asked: every one of a name at TALK or above, rules or
-// not (docs/permissions.md: any rule gives its name TALK, and TALK passes all its broadcasts)
-func (c *Config) Broadcasts(name string) bool { return c.Level(name) >= Talk }
+// Broadcasts is whether a broadcast of member of iface at path from a well-known name reaches a client that asked:
+// the name's own policy talk or own, or a broadcast rule that matches (docs/permissions.md, as xdg-dbus-proxy 0.1.9).
+// A call rule passes none
+func (c *Config) Broadcasts(name, path, iface, member string) bool {
+	if name == DriverName {
+		return true
+	}
+	n := c.names[name]
+	return n != nil && (n.policy >= Talk || anyRule(n.broadcasts, path, iface, member))
+}

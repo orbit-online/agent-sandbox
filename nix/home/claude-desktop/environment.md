@@ -79,7 +79,8 @@ unless you ask otherwise); release it when you're done.
 - Session D-Bus goes through a filtering proxy on the host (the module's
   `dbus-proxy`, started by nixpak in place of xdg-dbus-proxy), which lets through
   calls only: OpenURI, Settings and Notification on the portal, and with the
-  tray the StatusNotifierWatcher's registration. Notifications go through the
+  tray the StatusNotifierWatcher's registration. Of their broadcasts, only the
+  portal's `SettingChanged` gets in. Notifications go through the
   portal (`NOTIFY_FORCE_PORTAL=1` for libnotify, `notify-send`); the
   notification server itself (`org.freedesktop.Notifications`) and anything
   else the desktop's processes export are out of reach. Links open in the
