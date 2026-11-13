@@ -1,6 +1,7 @@
 # The host side of the sandbox network (nix/nixos/network.nix): einat and sandbox-uplink from the NixOS module on a
-# workstation whose LAN host is its default gateway. The test script stands in for the per-launcher helper: a netkit
-# pair whose primary forwards through the host stack (no PEER program), its addresses registered with bpftool
+# workstation whose LAN host is its default gateway, on one whose uplink NIC is enslaved to a bridge, and on one that
+# boots without a NIC. The test script stands in for the per-launcher helper: a netkit pair whose primary forwards
+# through the host stack (no `peer` program), its addresses registered with bpftool
 {
   pkgs,
   module,
@@ -21,6 +22,40 @@ let
     socat
     tcpdump
   ];
+  # Stand-ins for Cilium, cil_from_netdev and cil_to_netdev at the tail of tcx ingress and egress, ending the chain as
+  # it does, and for another program at the head
+  standIns =
+    pkgs.runCommand "stand-ins.bpf.o" { nativeBuildInputs = [ pkgs.llvmPackages.clang-unwrapped ]; }
+      ''
+        cat >s.c <<'EOF'
+        #include <linux/bpf.h>
+        #include <linux/pkt_cls.h>
+        #include <bpf/bpf_helpers.h>
+        SEC("tc") int cil_from_netdev(struct __sk_buff *skb) { return TC_ACT_OK; }
+        SEC("tc") int cil_to_netdev(struct __sk_buff *skb) { return TC_ACT_OK; }
+        SEC("tc") int head(struct __sk_buff *skb) { return TCX_NEXT; }
+        char LICENSE[] SEC("license") = "GPL";
+        EOF
+        clang -O2 -target bpf -I${lib.getDev pkgs.libbpf}/include -I${pkgs.linuxHeaders}/include -c s.c -o $out
+      '';
+  # Sends a UDP frame of 5000 bytes from src to dst on dev through AF_PACKET with a vnet header whose hdr_len is 0: past
+  # a page, the kernel puts nothing but the Ethernet header in the linear part (af_packet.c packet_snd, packet_alloc_skb)
+  nonlinear = pkgs.writeText "nonlinear.py" ''
+    import socket, struct, sys
+    dev, src, dst = sys.argv[1:]
+    udp = struct.pack("!4H", 5555, 9, 5008, 0) + bytes(5000)
+    if ":" in src:
+        fam, proto = socket.AF_INET6, 0x86dd
+        ip = struct.pack("!IHBB", 6 << 28, len(udp), 17, 64)
+    else:
+        fam, proto = socket.AF_INET, 0x0800
+        ip = struct.pack("!BBHHHBBH", 0x45, 0, 20 + len(udp), 0, 0, 64, 17, 0)
+    ip += socket.inet_pton(fam, src) + socket.inet_pton(fam, dst)
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+    s.setsockopt(263, 15, 1)  # SOL_PACKET, PACKET_VNET_HDR
+    s.bind((dev, 0))
+    s.send(bytes(10) + bytes(12) + struct.pack("!H", proto) + ip + udp)
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "uplink";
@@ -49,6 +84,44 @@ pkgs.testers.runNixOSTest {
       };
       environment.systemPackages = tools ++ [ pkgs.nftables ];
     };
+  # Its uplink NIC enslaved to br0, which holds the address
+  nodes.bridged =
+    { nodes, ... }:
+    {
+      imports = [ module ];
+      system.stateVersion = "26.05";
+      agent-sandbox.network.enable = true;
+      networking = {
+        bridges.br0.interfaces = [ "eth1" ];
+        interfaces.eth1.ipv4.addresses = lib.mkForce [ ];
+        interfaces.eth1.ipv6.addresses = lib.mkForce [ ];
+        interfaces.br0.ipv4.addresses = [
+          {
+            address = "192.168.1.200";
+            prefixLength = 24;
+          }
+        ];
+        defaultGateway = nodes.lan.networking.primaryIPAddress;
+        firewall.enable = false;
+      };
+      environment.systemPackages = tools;
+    };
+  # No NIC at boot: one comes later, named up0 by a .link file
+  nodes.late = {
+    imports = [ module ];
+    system.stateVersion = "26.05";
+    agent-sandbox.network.enable = true;
+    virtualisation.vlans = [ ];
+    # QEMU adds a NIC of its own without one
+    virtualisation.qemu.networkingOptions = lib.mkForce [ "-nic none" ];
+    environment.etc."systemd/network/10-up0.link".text = ''
+      [Match]
+      MACAddress=52:54:00:12:99:01
+      [Link]
+      Name=up0
+    '';
+    environment.systemPackages = tools;
+  };
 
   testScript =
     { nodes, ... }:
@@ -69,24 +142,25 @@ pkgs.testers.runNixOSTest {
           return f"ip netns exec sb {cmd}"
 
       # The programs on a tcx hook of dev, in order
-      def order(dev, direction):
-          j = json.loads(ws.succeed(f"bpftool -j net show dev {dev}"))
+      def order(dev, direction, node=ws):
+          j = json.loads(node.succeed(f"bpftool -j net show dev {dev}"))
           return [p["name"] for p in j[0]["tc"] if p["kind"] == f"tcx/{direction}"]
 
-      def in_order(dev):
-          return order(dev, "ingress") == ["pre", "ingress_rev_snat", "post"] and order(dev, "egress") == ["egress_snat", "egress"]
+      def in_order(dev, node=ws):
+          return order(dev, "ingress", node) == ["pre", "ingress_rev_snat", "post"] and order(dev, "egress", node) == ["egress_snat", "egress"]
 
-      def wait_in_order(dev):
+      def wait_in_order(dev, node=ws, check=in_order):
           try:
-              retry(lambda _: in_order(dev), timeout_seconds=30)
+              retry(lambda _: check(dev, node), timeout_seconds=30)
           except Exception:
-              print(ws.execute(f"bpftool net show dev {dev}; findmnt -T {pins}; ls -la {pins}; journalctl -o cat -u sandbox-uplink | tail")[1])
+              print(node.execute(f"bpftool net show dev {dev}; findmnt -T {pins}; ls -la {pins}; journalctl -o cat -u sandbox-uplink | tail")[1])
               raise
 
-      # tcpdump as a unit, read back after
-      def capture(node, filt, iface="eth1", unit="cap"):
-          node.succeed(f"systemd-run --unit={unit} tcpdump -U -ni {iface} -w /tmp/{unit}.pcap '{filt}'")
-          time.sleep(1)
+      # tcpdump as a unit (with props, -p arguments of systemd-run), from when it has its filter attached, read back after
+      def capture(node, filt, iface="eth1", unit="cap", props=""):
+          node.succeed(f"systemd-run --unit={unit} -p StandardError=truncate:/tmp/{unit}.err {props}"
+                       f" tcpdump -U -ni {iface} -w /tmp/{unit}.pcap '{filt}'")
+          node.wait_until_succeeds(f"grep -q 'listening on' /tmp/{unit}.err", timeout=30)
 
       def captured(node, unit="cap"):
           time.sleep(1)
@@ -100,7 +174,46 @@ pkgs.testers.runNixOSTest {
       def hexbytes(b):
           return " ".join(f"{x:02x}" for x in b)
 
+      # An address as the maps hold it: 16 bytes, IPv4 mapped
+      def packed(a):
+          a = ipaddress.ip_address(a)
+          return ipaddress.IPv6Address(f"::ffff:{a}").packed if a.version == 4 else a.packed
+
+      # A netkit pair standing in for the helper, sbx-t in the host netns and nkp in netns sb with the addresses,
+      # forwarding through the host stack (no `peer` program); the ifindex of sbx-t
+      def netkit_pair(node, *addrs):
+          node.succeed("ip netns add sb", "ip link add sbx-t type netkit mode l3 peer name nkp",
+                       "ip link set nkp netns sb", "ip link set sbx-t up", sb("ip link set lo up"))
+          for a in addrs:
+              f, bits, nodad = ("-6", 128, " nodad") if ":" in a else ("-4", 32, "")
+              node.succeed(f"ip {f} route add {a}/{bits} dev sbx-t", sb(f"ip {f} addr add {a}/{bits} dev nkp{nodad}"))
+          node.succeed(sb("ip link set nkp up"))
+          for a in addrs:
+              f, fam = ("-6", "ipv6") if ":" in a else ("-4", "ipv4")
+              node.succeed(sb(f"ip {f} route add default dev nkp"), f"sysctl -w net.{fam}.conf.all.forwarding=1")
+          return int(node.succeed("cat /sys/class/net/sbx-t/ifindex"))
+
       start_all()
+      for n in [bridged, late]:
+          n.wait_for_unit("multi-user.target")
+
+      with subtest("no NIC at boot: einat skips, a NIC that comes brings it up, the same NIC again doesn't restart it"):
+          late.wait_until_succeeds("journalctl -b -u sandbox-einat | grep -q exec-condition")
+          assert late.succeed("systemctl show -P ActiveState sandbox-einat").strip() == "inactive"
+          late.send_monitor_command("netdev_add user,id=hot")
+          late.send_monitor_command("device_add virtio-net-pci,netdev=hot,id=hotnic,mac=52:54:00:12:99:01")
+          late.wait_until_succeeds("grep -q 'if_name = \"up0\"' /run/sandbox-einat/einat.toml", timeout=30)
+          late.succeed("ip link set up0 up")
+          wait_in_order("up0", late)
+          pid = late.succeed("systemctl show -P MainPID sandbox-einat").strip()
+          runs = lambda: late.succeed("journalctl -o cat -u sandbox-einat-reload | grep -c '^Finished' || true").strip()
+          late.wait_until_fails("systemctl -q is-active sandbox-einat-reload")
+          before = int(runs())
+          assert before >= 1, "udev didn't run the reload"
+          late.succeed("udevadm trigger --action=add --settle /sys/class/net/up0")
+          late.wait_until_succeeds(f"[ $(journalctl -o cat -u sandbox-einat-reload | grep -c '^Finished') -gt {before} ]", timeout=30)
+          assert late.succeed("systemctl show -P MainPID sandbox-einat").strip() == pid, "einat restarted for an unchanged config"
+
       lan.wait_for_unit("multi-user.target")
       ws.wait_for_unit("multi-user.target")
       for u in ["web", "echo4", "echo6"]:
@@ -139,23 +252,7 @@ pkgs.testers.runNixOSTest {
               wait_in_order(dev)
           print(ws.succeed("bpftool net show", "ls -l /run/sandbox-uplink"))
 
-      ws.succeed(
-          "ip netns add sb",
-          "ip link add sbx-t type netkit mode l3 peer name nkp",
-          "ip link set nkp netns sb",
-          "ip link set sbx-t up",
-          f"ip route add {sb4}/32 dev sbx-t",
-          f"ip -6 route add {sb6}/128 dev sbx-t",
-          sb("ip link set lo up"),
-          sb(f"ip addr add {sb4}/32 dev nkp"),
-          sb(f"ip -6 addr add {sb6}/128 dev nkp nodad"),
-          sb("ip link set nkp up"),
-          sb("ip route add default dev nkp"),
-          sb("ip -6 route add default dev nkp"),
-          # Out through the host stack: step in for the PEER program
-          "sysctl -w net.ipv4.conf.all.forwarding=1 net.ipv6.conf.all.forwarding=1",
-      )
-      primary = int(ws.succeed("cat /sys/class/net/sbx-t/ifindex"))
+      primary = netkit_pair(ws, sb4, sb6)
       group = ws.succeed("getent group sandbox-uplink | cut -d: -f3").strip()
 
       with subtest("the registration map: group sandbox-uplink writes it, nobody else"):
@@ -167,15 +264,16 @@ pkgs.testers.runNixOSTest {
               assert ws.succeed(f"stat -c '%a' /run/sandbox-uplink/{p}").strip() == "600"
           value = hexbytes(struct.pack("=I", primary))
           for addr in [sb4, sb6]:
-              key = hexbytes(ipaddress.ip_address(addr).packed if ":" in addr else ipaddress.IPv6Address(f"::ffff:{addr}").packed)
+              key = hexbytes(packed(addr))
               update = f"bpftool map update pinned {pins}/sandboxes key hex {key} value hex {value}"
-              # Another group with CAP_BPF is refused; the group alone opens it: unprivileged_bpf_disabled stops only
-              # creating objects, the mode of the pin decides who opens one
-              ws.fail(as_helper(100, update))
+              # The group alone opens it, and another group with the same (no) capabilities is refused:
+              # unprivileged_bpf_disabled stops only creating objects, the modes of the directory and the pin decide who
+              # opens one
+              ws.fail(as_helper(100, update, caps="-all"))
               ws.succeed(as_helper(group, update, caps="-all"))
           print(ws.succeed(f"bpftool map dump pinned {pins}/sandboxes"))
 
-      with subtest("the uplinks and gateways maps for the PEER programs, and registrations of gone primaries removed"):
+      with subtest("the uplinks and gateways maps for the `peer` programs, and registrations of gone primaries removed"):
           def dump(m):
               return [{f: bytes(int(x, 16) for x in e[f]) for f in ["key", "value"]}
                       for e in json.loads(ws.succeed(f"bpftool -j map dump pinned {pins}/{m}"))]
@@ -189,9 +287,6 @@ pkgs.testers.runNixOSTest {
           # router advertisements), its gateway, and the source and MAC of mDNS queries: its first IPv4 address, its
           # IPv6 link-local one
           gws = {int.from_bytes(e["key"], "little"): e["value"] for e in dump("gateways")}
-          def packed(a):
-              a = ipaddress.ip_address(a)
-              return ipaddress.IPv6Address(f"::ffff:{a}").packed if a.version == 4 else a.packed
           for i, family in enumerate(["-4", "-6"]):
               routes = json.loads(ws.succeed(f"ip -j {family} route show default table main"))
               r = min(routes, key=lambda r: r.get("metric", 0))
@@ -206,10 +301,28 @@ pkgs.testers.runNixOSTest {
                      f"chown sandbox-uplink:sandbox-uplink {pins}/gateways",
                      "systemctl start sandbox-uplink")
           assert json.loads(ws.succeed(f"bpftool -j map show pinned {pins}/gateways"))["bytes_value"] == 44
-          gone = hexbytes(ipaddress.IPv6Address("::ffff:169.254.103.1").packed)
+          # An uplink whose egress fails to attach (a map pinned where its link goes) isn't published
+          def published(want):
+              for _ in range(20):
+                  ups = sorted(int.from_bytes(e["key"], "little") for e in dump("uplinks"))
+                  if ups == sorted(ifindex[d] for d in want):
+                      return
+                  time.sleep(0.5)
+              raise Exception(f"uplinks {ups}, want {want}")
+          ws.succeed("systemctl stop sandbox-uplink", f"rm {pins}/egress-eth0",
+                     f"bpftool map pin pinned {pins}/mdns {pins}/egress-eth0", "systemctl start sandbox-uplink")
+          published(["eth1"])
+          ws.succeed(f"rm {pins}/egress-eth0")
+          published(["eth0", "eth1"])
+          wait_in_order("eth0")
+          gone = hexbytes(packed("169.254.103.1"))
           ws.succeed(f"bpftool map update pinned {pins}/sandboxes key hex {gone} value hex {hexbytes(struct.pack('=I', 99999))}")
           ws.wait_until_fails(f"bpftool map lookup pinned {pins}/sandboxes key hex {gone}", timeout=10)
-          ws.succeed(f"bpftool map lookup pinned {pins}/sandboxes key hex {hexbytes(ipaddress.ip_address(sb6).packed)}")
+          ws.succeed(f"bpftool map lookup pinned {pins}/sandboxes key hex {hexbytes(packed(sb6))}")
+          # An mdns entry whose ifindex isn't a primary (any more) is removed
+          eth0 = hexbytes(struct.pack("=I", ifindex["eth0"]))
+          ws.succeed(f"bpftool map update pinned {pins}/mdns key hex {eth0} value hex 01")
+          ws.wait_until_fails(f"bpftool map lookup pinned {pins}/mdns key hex {eth0}", timeout=10)
 
       with subtest("sandbox egress over IPv4 and IPv6, SNATed by einat to the uplink address, in the port range"):
           for dst, ext in [(lan4, ws4), (f"[{lan6}]", ws6)]:
@@ -241,9 +354,26 @@ pkgs.testers.runNixOSTest {
       inject = (f"python3 -c \"from scapy.all import *; sendp([Ether(dst='{mac}')/IP(dst='{sb4}')/UDP(dport=9999)/b'x', "
                 f"Ether(dst='{mac}')/IPv6(dst='{sb6}')/UDP(dport=9999)/b'x'], iface='eth1')\"")
 
+      with subtest("the LAN can't send from a sandbox address: pre drops it before the host stack"):
+          ws.succeed("nft add table inet spoof",
+                     "nft 'add chain inet spoof pre { type filter hook prerouting priority -400; }'",
+                     f"nft add rule inet spoof pre iifname eth1 ip saddr {sb4} counter",
+                     f"nft add rule inet spoof pre iifname eth1 ip6 saddr {sb6} counter")
+          spoof = (f"python3 -c \"from scapy.all import *; sendp([Ether(dst='{mac}')/IP(src='{sb4}', dst='{ws4}')/ICMP(), "
+                   f"Ether(dst='{mac}')/IPv6(src='{sb6}', dst='{ws6}')/ICMPv6EchoRequest()], iface='eth1')\"")
+          def spoofed():
+              lan.succeed(spoof)
+              time.sleep(1)
+              return re.findall(r"packets (\d+)", ws.succeed("nft list chain inet spoof pre"))
+          assert spoofed() == ["0", "0"], ws.succeed("nft list chain inet spoof pre")
+          # Control: without pre, the host stack gets them
+          ws.succeed("systemctl stop sandbox-uplink", f"rm {pins}/pre-eth1")
+          assert spoofed() == ["1", "1"], ws.succeed("nft list chain inet spoof pre")
+          ws.succeed("systemctl start sandbox-uplink", "nft delete table inet spoof")
+          wait_in_order("eth1")
+
       def lan_reaches_sandbox():
-          ws.succeed("systemd-run --unit=sbcap -p NetworkNamespacePath=/run/netns/sb tcpdump -U -ni nkp -w /tmp/sbcap.pcap 'udp port 9999'")
-          time.sleep(1)
+          capture(ws, "udp port 9999", iface="nkp", unit="sbcap", props="-p NetworkNamespacePath=/run/netns/sb")
           lan.succeed(inject)
           out = captured(ws, "sbcap")
           print("in the sandbox:", out)
@@ -270,6 +400,17 @@ pkgs.testers.runNixOSTest {
           capture(lan, "src net 169.254.100.0/22 or src net " + str(block6))
           ws.fail(sb(f"ping -c1 -W1 {lan4}"), sb(f"ping -6 -c1 -W1 {lan6}"))
           assert captured(lan).strip() == "", "a sandbox source left"
+          # Nor with the IP header outside the linear part: egress pulls it in. The same frame from the workstation
+          # address leaves (the MTU raised for the frame)
+          ws.succeed("ip link set eth1 mtu 9000")
+          capture(ws, "udp port 9", unit="nl")
+          # A drop at tcx egress fails the send (ENOBUFS)
+          for src, dst in [(sb4, lan4), (sb6, lan6), (ws4, lan4)]:
+              ws.execute(f"${pkgs.python3}/bin/python3 ${nonlinear} eth1 {src} {dst}")
+          out = captured(ws, "nl")
+          print("non-linear frames out:", out)
+          assert f"{ws4}.5555 >" in out and sb4 not in out and sb6 not in out, out
+          ws.succeed("ip link set eth1 mtu 1500")
           # Control: without it, they leave un-NATed
           ws.succeed(f"rm {pins}/egress-eth1")
           capture(lan, "src net 169.254.100.0/22 or src net " + str(block6))
@@ -288,12 +429,21 @@ pkgs.testers.runNixOSTest {
           # einat attaches again, at the head
           retry(lambda _: "ingress_rev_snat" in order("eth1", "ingress"), timeout_seconds=30)
 
+      # The program IDs on the tcx hooks of dev, by name
+      def prog_ids(dev):
+          return {p["name"]: p["prog_id"] for p in json.loads(ws.succeed(f"bpftool -j net show dev {dev}"))[0]["tc"]}
+
       with subtest("einat restarted or attaching again on link up: sandbox-uplink puts pre ahead again"):
           ws.succeed("systemctl restart sandbox-einat")
           wait_in_order("eth1")
           ws.succeed(sb(f"curl -sf -m5 http://{lan4}/ -o /dev/null"))
+          before = prog_ids("eth1")
           flap()
           wait_in_order("eth1")
+          # Moved make-before-break: the other instance of pre attached at the head before the old link went
+          after = prog_ids("eth1")
+          print("program IDs before and after the link flap:", before, after)
+          assert after["pre"] != before["pre"], (before, after)
           ws.wait_until_succeeds(sb(f"curl -sf -m3 http://{lan4}/ -o /dev/null"))
           print(ws.succeed("journalctl -u sandbox-uplink -o cat | grep Reordered"))
           # Control: without sandbox-uplink, einat stays ahead of pre, which drops the replies (failing closed)
@@ -315,5 +465,58 @@ pkgs.testers.runNixOSTest {
           wait_in_order("eth2")
           assert ws.succeed("systemctl show -P MainPID sandbox-einat").strip() != before
           ws.succeed(sb(f"curl -sf -m5 http://{lan4}/ -o /dev/null"))
+
+      # pre first; post after einat and egress after it, with programs of others after them, Cilium at the tail
+      def around_einat(dev, node=ws):
+          i, e = order(dev, "ingress", node), order(dev, "egress", node)
+          try:
+              return (i[0] == "pre" and i.index("ingress_rev_snat") < i.index("post") < i.index("cil_from_netdev") == len(i) - 1
+                      and e.index("egress_snat") < e.index("egress") < e.index("cil_to_netdev") == len(e) - 1)
+          except ValueError:
+              return False
+
+      def sandbox_out(node, ext):
+          out = node.succeed(sb("sh -c 'echo x | socat -T3 - UDP4:" + lan4 + ":7'")).split()
+          assert out[0] == ext and 61000 <= int(out[1]) <= 63999, out
+          node.succeed(sb(f"curl -sf -m5 http://{lan4}/ -o /dev/null"))
+
+      with subtest("Cilium at the tail and another program at the head, both there before einat and sandbox-uplink start"):
+          # The hooks emptied, then head at the head and Cilium after it (bpftool appends)
+          ws.succeed("systemctl stop sandbox-einat", f"rm {pins}/pre-eth1 {pins}/post-eth1 {pins}/egress-eth1",
+                     "bpftool prog loadall ${standIns} /sys/fs/bpf/stand")
+          for hook, tail in [("tcx_ingress", "cil_from_netdev"), ("tcx_egress", "cil_to_netdev")]:
+              ws.succeed(f"bpftool net attach {hook} pinned /sys/fs/bpf/stand/head dev eth1",
+                         f"bpftool net attach {hook} pinned /sys/fs/bpf/stand/{tail} dev eth1")
+          assert order("eth1", "ingress") == ["head", "cil_from_netdev"], order("eth1", "ingress")
+          ws.succeed("systemctl start sandbox-einat")
+          wait_in_order("eth1", check=around_einat)
+          print(order("eth1", "ingress"), order("eth1", "egress"))
+          sandbox_out(ws, ws4)
+          # einat attaching again (link up) and restarting: still in place
+          flap()
+          wait_in_order("eth1", check=around_einat)
+          ws.succeed("systemctl restart sandbox-einat")
+          wait_in_order("eth1", check=around_einat)
+          print(order("eth1", "ingress"), order("eth1", "egress"))
+          sandbox_out(ws, ws4)
+          # einat stopped: egress, ahead of Cilium, still drops sandbox sources
+          ws.succeed("systemctl stop sandbox-einat")
+          # The workstation pinging in the same capture, the positive control
+          capture(lan, f"src net 169.254.100.0/22 or (icmp and src host {ws4})")
+          ws.fail(sb(f"ping -c1 -W1 {lan4}"))
+          ws.succeed(f"ping -c1 -W1 {lan4}")
+          out = captured(lan)
+          assert f"{ws4} >" in out, "the ping of the workstation didn't arrive"
+          assert " IP 169.254." not in out, "a sandbox source left"
+          ws.succeed("systemctl start sandbox-einat")
+
+      with subtest("an uplink NIC enslaved to a bridge: the bridge is the uplink, and the sandbox leaves through it"):
+          bridged.wait_for_unit("sandbox-uplink.service")
+          conf = bridged.succeed("cat /run/sandbox-einat/einat.toml")
+          assert re.findall(r'if_name = "(.*)"', conf) == ["br0", "eth0"], conf
+          wait_in_order("br0", bridged)
+          primary = netkit_pair(bridged, sb4)
+          bridged.succeed(f"bpftool map update pinned {pins}/sandboxes key hex {hexbytes(packed(sb4))} value hex {hexbytes(struct.pack('=I', primary))}")
+          sandbox_out(bridged, "192.168.1.200")
     '';
 }

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -15,8 +15,15 @@ import (
 var ifName = regexp.MustCompile(`^[A-Za-z0-9_.@-]{1,15}$`)
 
 // uplinks returns names when given, or else the physical NICs under sysNet (/sys/class/net) that carry Ethernet
-// frames (type 1, ARPHRD_ETHER: Ethernet and Wi-Fi), whose header the programs parse. Sorted
+// frames (type 1, ARPHRD_ETHER: Ethernet and Wi-Fi), whose header the programs parse, each as the master it is
+// enslaved to (a bridge or bond, which carries its traffic), past those with a name ifName refuses. Sorted. None is no
+// error: einat idles until udev restarts it for a NIC
 func uplinks(sysNet string, names []string) ([]string, error) {
+	for _, n := range names {
+		if !ifName.MatchString(n) {
+			return nil, fmt.Errorf("Uplink name %q: not an interface name", n)
+		}
+	}
 	if len(names) == 0 {
 		entries, err := os.ReadDir(sysNet)
 		if err != nil {
@@ -30,16 +37,23 @@ func uplinks(sysNet string, names []string) ([]string, error) {
 			if err != nil || strings.TrimSpace(string(typ)) != "1" {
 				continue
 			}
-			names = append(names, e.Name())
-		}
-	}
-	for _, n := range names {
-		if !ifName.MatchString(n) {
-			return nil, fmt.Errorf("Uplink name %q: not an interface name", n)
+			name := e.Name()
+			for range 8 {
+				master, err := os.Readlink(filepath.Join(sysNet, name, "master"))
+				if err != nil {
+					break
+				}
+				name = filepath.Base(master)
+			}
+			if !ifName.MatchString(name) {
+				slog.Warn("Skipped a NIC whose name the einat config can't hold", "name", name)
+				continue
+			}
+			names = append(names, name)
 		}
 	}
 	if len(names) == 0 {
-		return nil, errors.New("No uplinks: no physical Ethernet or Wi-Fi device")
+		slog.Warn("No uplinks: no physical Ethernet or Wi-Fi device")
 	}
 	names = slices.Clone(names)
 	slices.Sort(names)

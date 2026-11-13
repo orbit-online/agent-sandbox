@@ -72,7 +72,8 @@ in
       example = [ "enp3s0" ];
       description = ''
         The devices the sandboxes reach the network through, NATed by einat. By default every physical NIC carrying
-        Ethernet frames (Ethernet and Wi-Fi), found when einat starts.
+        Ethernet frames (Ethernet and Wi-Fi), or the bridge or bond it is enslaved to, found when einat starts and
+        again when a NIC appears.
       '';
     };
   };
@@ -80,7 +81,7 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        # The PRIMARY and PEER programs of netkit and bpf_redirect_peer into netkit came in 6.7, the uid and gid options
+        # The primary and peer programs of netkit and bpf_redirect_peer into netkit came in 6.7, the uid and gid options
         # of bpffs (the mount at pinDir) in 6.8; 6.7 ignores them and sandbox-uplink couldn't pin
         assertion = lib.versionAtLeast config.boot.kernelPackages.kernel.version "6.8";
         message = "agent-sandbox: the sandbox network needs Linux 6.8 or later, this machine has ${config.boot.kernelPackages.kernel.version}.";
@@ -111,7 +112,8 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       serviceConfig = hardening // {
-        ExecStartPre = "${uplink} einat-config ${uplinkArgs} %t/sandbox-einat/einat.toml";
+        # Skips without an uplink, which einat refuses
+        ExecCondition = "${uplink} einat-config ${uplinkArgs} %t/sandbox-einat/einat.toml";
         ExecStart = "${lib.getExe' packages.einat "einat"} -c %t/sandbox-einat/einat.toml";
         Restart = "on-failure";
         DynamicUser = true;
@@ -135,6 +137,8 @@ in
         Restart = "on-failure";
         User = "sandbox-uplink";
         Group = "sandbox-uplink";
+        # Its IP sockets only join the mDNS groups; the kernel sends the reports
+        IPAddressDeny = "any";
         # And forwarding on the netkit primaries, which ProtectKernelTunables would keep read-only
         ReadWritePaths = [
           pinDir
@@ -144,22 +148,47 @@ in
       };
     };
 
-    # A new physical NIC is a new uplink (with uplinks set, one of those back): a new einat config, and NAT state
-    # lost
+    # A new physical NIC can be a new uplink (with uplinks set, one of those back): einat again when its config
+    # changes, which loses its NAT state, or when it isn't running (failed or stopped)
+    systemd.services.sandbox-einat-reload = {
+      description = "Restart einat when its uplinks changed";
+      path = [
+        pkgs.diffutils
+        config.systemd.package
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        PrivateTmp = true;
+      };
+      script = ''
+        new=$(mktemp)
+        if ${uplink} einat-config ${uplinkArgs} "$new"; then
+          cmp -s "$new" /run/sandbox-einat/einat.toml && systemctl -q is-active sandbox-einat.service && exit 0
+        elif ! systemctl -q is-active sandbox-einat.service; then
+          exit 0
+        fi
+        systemctl --no-block restart sandbox-einat.service
+      '';
+    };
     services.udev.extraRules =
       let
         match =
           if cfg.uplinks == null then
             ''TEST=="device"''
           else
-            ''KERNEL=="${lib.concatStringsSep "|" cfg.uplinks}"'';
+            # The final name, after .link files renamed it
+            ''NAME=="${lib.concatStringsSep "|" cfg.uplinks}"'';
       in
       ''
-        ACTION=="add", SUBSYSTEM=="net", ${match}, RUN+="${lib.getExe' config.systemd.package "systemctl"} --no-block try-restart sandbox-einat.service"
+        ACTION=="add", SUBSYSTEM=="net", ${match}, RUN+="${lib.getExe' config.systemd.package "systemctl"} --no-block restart sandbox-einat-reload.service"
       '';
 
     # dhcpcd gives a new netkit primary an IPv4LL address otherwise
     networking.dhcpcd.denyInterfaces = [ primaries ];
     networking.networkmanager.unmanaged = [ "interface-name:${primaries}" ];
+    systemd.network.networks."10-sandbox-primaries" = lib.mkIf config.systemd.network.enable {
+      matchConfig.Name = primaries;
+      linkConfig.Unmanaged = true;
+    };
   };
 }

@@ -377,9 +377,9 @@ let
       in
       {
         expr = {
-          einat = lib.hasInfix "--uplink=eth1" c.systemd.services.sandbox-einat.serviceConfig.ExecStartPre;
+          einat = lib.hasInfix "--uplink=eth1" c.systemd.services.sandbox-einat.serviceConfig.ExecCondition;
           uplink = lib.hasInfix "--uplink=eth1" c.systemd.services.sandbox-uplink.serviceConfig.ExecStart;
-          udev = lib.hasInfix ''KERNEL=="eth1"'' c.services.udev.extraRules;
+          udev = lib.hasInfix ''NAME=="eth1"'' c.services.udev.extraRules;
         };
         expected = {
           einat = true;
@@ -387,6 +387,29 @@ let
           udev = true;
         };
       };
+    # systemd-networkd leaves the netkit primaries alone
+    testNetworkd = {
+      expr = {
+        networkd =
+          let
+            n =
+              (system.extendModules { modules = [ { systemd.network.enable = true; } ]; })
+              .config.systemd.network.networks."10-sandbox-primaries";
+          in
+          {
+            inherit (n.matchConfig) Name;
+            inherit (n.linkConfig) Unmanaged;
+          };
+        off = system.config.systemd.network.networks ? "10-sandbox-primaries";
+      };
+      expected = {
+        networkd = {
+          Name = "sbx-*";
+          Unmanaged = true;
+        };
+        off = false;
+      };
+    };
     testKernelAssertion = {
       expr = map (a: a.message) (
         lib.filter (a: !a.assertion)
@@ -436,6 +459,30 @@ let
         failedAssertions (nixos (enabled // { sandbox.pasta.package = lib.mkOverride 10 pkgs.passt; }))
       );
       expected = 1;
+    };
+    testNameserversAssertion = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            enabled
+            // {
+              nameservers = [
+                "192.168.1.1"
+                "fd00::53"
+              ];
+              launchers.work.nameservers = [
+                "9.9.9.9"
+                "256.1.1.1"
+                "10.0.0.1\nsearch evil"
+                "fd00::/64"
+              ];
+            }
+          )
+        )
+      );
+      expected = [
+        ''agent-sandbox.claude-desktop: launchers.work.nameservers must be IP addresses: "9.9.9.9", "256.1.1.1", "10.0.0.1\nsearch evil", "fd00::/64"''
+      ];
     };
     # A launcher with network.enable off: its netns without a netkit pair (no --net for the bwrap of nixpak) and no DNS
     # followed (the launcher config), the default launcher with both, the assertions holding

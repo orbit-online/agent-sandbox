@@ -197,7 +197,7 @@ joining needs CAP_SYS_ADMIN in init).
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
 | netns-netkit `up <pid>`, `down`, `addr`, `uplinks`, `grant`, `revoke` | netns-netkit | the host, callers in group `users` (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
 | `nixpak-bus` | dbus-proxy | M1, M2 | the proxy's fixed rules |
-| the netkit pair (`eth0`) | the programs `peer` and `primary` on its host end | N, and what the sandbox routes through `eth0` | N1-N9 (`network.als`): sources other than the sandbox addresses dropped, out only through an einat uplink, local delivery only on a flow the host opened to a granted port |
+| the netkit pair (`eth0`) | the programs `peer` and `primary` on its host end | N, and what the sandbox routes through `eth0` | N1-N14 (`network.als`): sources other than the sandbox addresses dropped, out only through an einat uplink, local delivery only on a flow the host opened to a granted port |
 | `/run/sandbox-uplink` (bpffs: the registration, `mdns`, `uplinks` and `gateways` maps, the pins of each sandbox) | sandbox-uplink (19) and netns-netkit | the host, group `sandbox-uplink` (the setgid of netns-netkit) alone; not bound | file modes on the pins (0660 the registration and `mdns`, 0640 `uplinks`, `gateways` and the `sandbox` map of each sandbox, 0600 the rest of the dir of a sandbox, owned by its user); netns-netkit acts only on the dirs of the caller uid |
 | notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox posts look-alikes through the portal, which keys them by app ID: it can't replace or close the broker's |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
@@ -214,7 +214,7 @@ joining needs CAP_SYS_ADMIN in init).
 ## Trust boundaries
 
 - B1: host processes | everything in U1 and below. Crossed by the sockets
-  above, binds, D-Bus through the proxy, the netkit pair (N1-N9), and the host's own
+  above, binds, D-Bus through the proxy, the netkit pair (N1-N14), and the host's own
   `nsenter`s (the bwrap helper, the broker's helpers, re-entries).
 - B2: U1 | U2. U1 holds the capabilities over N, M1, P; nothing in U2 has
   any there. Crossed by the FHS env's start and the propagation of
@@ -270,6 +270,20 @@ It can't: write the grant directory, reach `control.sock` or the
 `.flatpak` instance dirs (not bound), change the proxy's rules, see host
 processes (pid namespaces), or use setuid or file capabilities
 (no_new_privs).
+
+An assumption the models leave to a VM test: the sandbox processes hold no
+CAP_NET_RAW or CAP_NET_ADMIN in the user namespace that owns the sandbox
+netns (bwrap drops them), and a nested user namespace they create, with
+every capability in it, owns no netns that `eth0` is in. So they open no
+AF_PACKET socket on `eth0`, which could send what the `peer` program
+parses differently from the host stack (`PACKET_VNET_HDR` checksum
+offsets), and can't change the netkit device. `network.als` takes every
+packet on `eth0` as the attacker's (move 12) but parsed as the programs
+parse it. The test: `nix/checks/vm/launch.nix`, subtest "the sandbox
+holds no CAP_NET_RAW or CAP_NET_ADMIN over its netns" (a packet socket
+refused with and without `unshare --user --map-root-user`, `ip link set
+eth0 down` refused, the socket bound as root of the host as the
+control).
 
 ## Properties
 
@@ -504,12 +518,18 @@ guards were missing from the first design (below): the checks hold with
 them, and their revert checks are that design.
 
 - N1. No sandbox packet reaches local delivery on the host except on a
-  flow the host started to that sandbox under a grant.
-- N2. A sandbox packet leaves the host only through an einat uplink (the
-  `uplinks` map), SNATed from that sandbox address, and never to a
-  multicast or broadcast destination. Behind a full-tunnel VPN `peer`
-  sends what the lookup routes into the tunnel out through the einat
-  uplink with the default route (the `gateways` map) instead.
+  flow the host started to that sandbox under a grant. `primary` records
+  a flow only on a TCP SYN without ACK or a datagram of a connected UDP
+  socket, so a listener of the owner answering a sandbox address that a
+  bridge without rp_filter carried in starts none.
+- N2. A sandbox packet leaves the host only through the einat uplink
+  with the default route (the `gateways` map; the `uplinks` map, which
+  sandbox-uplink fills only with uplinks that have pre, post and egress
+  attached, tells the other uplinks, whose subnets `peer` drops, as the
+  macvlan did), SNATed from that sandbox address, and
+  never to a multicast or broadcast destination. Behind a full-tunnel VPN
+  `peer` sends what the lookup routes into the tunnel out through the
+  einat uplink with the default route (the `gateways` map) instead.
 - N3. A packet from outside the host (LAN, VPN, container bridge)
   reaches a sandbox only reverse-NATed by an einat binding, on a flow
   that sandbox sent out itself (einat is endpoint-independent: any LAN
@@ -523,31 +543,64 @@ them, and their revert checks are that design.
   but the copies of mDNS queries,
   an uplink without einat carries no sandbox packet and delivers none,
   an einat restart that puts einat ahead of pre lets no reply in until
-  pre is ahead again, and an evicted flow gets no reply to the host.
+  pre is ahead again, sandbox-uplink moving post and egress back after
+  einat leaves no published uplink without them (it attaches a second
+  instance before it detaches the old link), and an evicted flow gets no
+  reply to the host.
 - N6. Port forwarding only for granted ports: a packet from the host
   reaches a sandbox only on a flow to a port granted to it.
 - N7. A revoked port carries nothing more: no sandbox reply on its flows
-  reaches the host (as P4).
+  reaches the host (as P4). `revoke` deletes its flows, and `peer` passes
+  a reply only while the port is in the `ports` map.
 - N8. A sandbox sends nothing to the mDNS group out but queries, and only
   with `network.mdns`: `peer` copies a query out of the uplink of the
   `gateways` map from the uplink address and port 5353, so no response,
-  announcement or probe claims a name on the LAN. N2 and N5 take these
-  copies as leaving from the uplink address.
+  announcement or probe claims a name on the LAN. A query may carry
+  known-answer and additional records (RFC 6762 allows both); known
+  answers only suppress answers (section 7.1). N2 and N5 take these
+  copies as leaving from the uplink address. At most 10 a second leave per
+  sandbox, after a burst of 20 (`MDNS_RATE`, `MDNS_BURST`; not modelled).
 - N9. What reaches a sandbox from the mDNS group of the LAN is a response,
   and only a sandbox with `network.mdns` gets it: pre copies responses to
   the primaries of the `mdns` map, marked, and `primary` passes them only
   when loaded with the constant `mdns`, which also covers a stale entry
-  of the map whose ifindex another primary got. N3 takes these copies as
+  of the map whose ifindex another primary got (sandbox-uplink removes an
+  entry whose ifindex names no primary). N3 takes these copies as
   the exception.
+- N10. A VLAN tag reaches no sandbox, and nothing of a sandbox goes
+  anywhere with one: `peer` and `primary` drop `skb->vlan_present`
+  (netkit offloads the tag of a VLAN device on `eth0` to the skb), `post`
+  drops it to a sandbox, and pre copies no mDNS response carrying one.
+- N11. Flows of granted ports end: no sandbox reply reaches the host on a
+  flow idle past its timeout (TCP an hour, UDP and a TCP flow the host
+  sent a FIN on 2 minutes; only a packet of the host renews it, so the
+  sandbox can't keep a flow alive by sending on it; the FIN mark stays
+  until a SYN of the host starts the flow again), or one the host reset
+  (`primary` deletes the flow of a TCP RST of the host) and hasn't sent on
+  since. `peer` passes no TCP SYN without ACK on a flow: the sandbox opens
+  no connection to the host, and a UDP reply only to a host socket
+  connected to its address and port, so a socket bound to the port after
+  the one of the flow closed gets nothing (not modelled).
+- N12. Only processes of the owner of a sandbox reach its granted ports:
+  `primary` compares `bpf_get_socket_uid` with the uid `up` stores in the
+  `sandbox` map.
+- N13. A LAN packet from a sandbox address reaches nothing while pre is
+  attached, the host stack included: pre drops sandbox sources as well as
+  destinations.
+- N14. No sandbox packet reaches a link-local destination off the host
+  (`169.254.0.0/16`, `fe80::/10`) or a known cloud metadata address
+  (the ULAs of AWS, GCP and OCI, the CGNAT one of Alibaba), so a cloud metadata service doesn't
+  answer it with the credentials of the host: einat would NAT it to the
+  host address.
 
 Found by the model in the first design, each a counterexample there and
 each built now:
 
-1. Source spoofing (N1, N2, N3): without a source check a sandbox sends
+1. Source spoofing (N2, N3): without a source check a sandbox sends
    with the address of the other sandbox; einat binds it to that address
-   and the LAN reply goes to the other sandbox, and a shared flow map
-   matches the tuple of the other sandbox. `peer` drops sources other
-   than the sandbox address.
+   and the LAN reply goes to the other sandbox. `peer` drops sources other
+   than the sandbox address. (The flow maps are per sandbox and keyed
+   without its address, so spoofing reaches no flow of another.)
 2. A VPN holding a route (N2): redirecting to the default-route device
    sends sandbox traffic into the tunnel un-NATed. `peer` redirects only
    to an ifindex in the `uplinks` map, the einat uplinks sandbox-uplink
@@ -564,20 +617,39 @@ each built now:
    `primary` requires `skb->sk`, so it passes only packets the host
    itself sent.
 5. pre detached while post stays (N3): a LAN host addresses the sandbox
-   prefix and post redirects it. pre marks what it passed (`skb->mark`,
-   which survives einat) and post redirects only marked packets.
+   prefix and post redirects it. pre marks what it passed (two words of
+   `skb->cb`, which survive einat, so the mark of the host stays as it
+   came) and post redirects only marked packets.
 6. Revoke (N7): with flows recorded on grant and left at revoke, replies
    on a recorded flow reach the host after the grant ended. `revoke`
    (`bpf.go`) deletes the recorded flows of the port.
 
 The first design also redirected only to the default-route device. The
-code doesn't, and N2 holds with the `uplinks` map alone.
+code redirected to every einat uplink for a while, and the `uplinks` map
+alone kept N2 as it read then; the subnets of a second NIC (storage, a
+BMC) were in reach NATed, so N2 now names the gateway uplink
+(`GatewayOnly`).
 
 Also from the model: einat attaches first when it starts, so after a
 restart it runs ahead of pre, and pre drops every reverse-NATed reply
 (it sees the sandbox prefix) until the loader puts pre ahead again. Fails
 closed (N5); sandbox-uplink follows einat, checking the order every half
 second (`cmd/sandbox-uplink/attach.go`, `sync`).
+
+Known limits, not modelled:
+
+1. einat filters endpoint-independently (N3): once a sandbox sent out
+   from a port, any LAN or internet host reaches that binding, as with
+   any endpoint-independent NAT.
+2. The neighbour limit (`NEIGH_RATE`, `NEIGH_BURST` in `netkit.bpf.c`)
+   covers next hops on the subnet of the gateway uplink. What the host
+   routes through another device (a VPN) goes out through that uplink
+   to its gateway; with no gateway there (a default route on the link),
+   `peer` redirects with no next hop, so the destination is its own
+   next hop and each one a neighbour entry, outside the limit.
+3. The registration map holds 1024 entries, two a sandbox: 512
+   sandboxes, 32 users at the per-uid limit of 16. An `up` past that
+   fails to register.
 
 ## Not modelled
 
@@ -616,7 +688,7 @@ check: that's the user's own mount and ceiling configuration.
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
-| `network.als` | netkit | N1-N9: the network on netkit, each with a run for its premise and a revert check per guard enforcing it |
+| `network.als` | netkit | N1-N14: the network on netkit, each with a run for its premise and a revert check per guard enforcing it |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine

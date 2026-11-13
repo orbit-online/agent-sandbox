@@ -40,6 +40,8 @@ func TestUplinks(t *testing.T) {
 		"docker0": {"1", false},
 		"sbx-1":   {"1", false},
 		"wg0":     {"65534", false},
+		// A name the einat config can't hold: skipped, the others still taken
+		`en"p4`: {"1", true},
 	})
 	got, err := uplinks(sys, nil)
 	if err != nil {
@@ -52,13 +54,40 @@ func TestUplinks(t *testing.T) {
 	if got, _ := uplinks(sys, []string{"wg0", "eth1", "eth1"}); !slices.Equal(got, []string{"eth1", "wg0"}) {
 		t.Errorf("named uplinks = %v", got)
 	}
-	if _, err := uplinks(fakeSysNet(t, nil), nil); err == nil {
-		t.Error("No physical NIC taken")
+	// None: no error, einat idles
+	if got, err := uplinks(fakeSysNet(t, nil), nil); err != nil || len(got) != 0 {
+		t.Errorf("no physical NIC: %v, %v", got, err)
 	}
 	for _, bad := range []string{`eth"0`, "a b", "", "0123456789abcdef", "x\n"} {
 		if _, err := uplinks(sys, []string{bad}); err == nil {
 			t.Errorf("Uplink %q taken", bad)
 		}
+	}
+}
+
+// A NIC enslaved to a bridge (or a bond in a bridge) is the bridge, its master
+func TestUplinksMaster(t *testing.T) {
+	sys := fakeSysNet(t, map[string]struct {
+		typ      string
+		physical bool
+	}{
+		"enp3s0": {"1", true},
+		"enp4s0": {"1", true},
+		"enp5s0": {"1", true},
+		"br0":    {"1", false},
+		"bond0":  {"1", false},
+	})
+	for nic, master := range map[string]string{"enp3s0": "br0", "enp4s0": "bond0", "bond0": "br0"} {
+		if err := os.Symlink("../"+master, filepath.Join(sys, nic, "master")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := uplinks(sys, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"br0", "enp5s0"}; !slices.Equal(got, want) {
+		t.Errorf("uplinks = %v, want %v", got, want)
 	}
 }
 

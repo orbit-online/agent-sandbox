@@ -45,12 +45,18 @@
 
   with subtest("mDNS: queries of the default sandbox out, responses in; work, without mDNS, neither"):
       app_ns = f"nsenter -t {bwrap_info()['child-pid']} -n ${mdnsQuery}"
-      work_ns = f"nsenter -t {bwrap_info('com.anthropic.Claude.work')['child-pid']} -n ${mdnsQuery}"
+      work_net = f"nsenter -t {bwrap_info('com.anthropic.Claude.work')['child-pid']} -n"
+      work_ns = f"{work_net} ${mdnsQuery}"
       router.wait_for_unit("avahi-daemon.service")
-      router.succeed("systemd-run --unit=mdns-cap tcpdump -U -ni eth1 -w /tmp/mdns.pcap udp port 5353")
-      time.sleep(1)
-      # work listens throughout, and asks for itself
-      workstation.succeed(f"systemd-run --unit=work-mdns -p StandardOutput=file:/tmp/work-mdns {work_ns} 4 query work.local 8")
+      router.succeed("systemd-run --unit=mdns-cap -p StandardError=truncate:/tmp/mdns-cap.err"
+                     " tcpdump -U -ni eth1 -w /tmp/mdns.pcap udp port 5353")
+      # From when tcpdump has its filter attached
+      router.wait_until_succeeds("grep -q 'listening on' /tmp/mdns-cap.err", timeout=30)
+      # work listens throughout, over IPv4 and IPv6, and asks for itself
+      workstation.succeed(f"systemd-run --unit=work-mdns -p StandardOutput=file:/tmp/work-mdns {work_ns} 4 query work.local 8",
+                          f"systemd-run --unit=work-mdns6 -p StandardOutput=file:/tmp/work-mdns6 {work_ns} 6 query work6.local 8")
+      # Both bound before anything is sent to them
+      workstation.wait_until_succeeds(f"{work_net} ss -H -4 -lun 'sport = :5353' | grep -q . && {work_net} ss -H -6 -lun 'sport = :5353' | grep -q .", timeout=10)
       # The answers, by multicast to the querier on port 5353 in the sandbox
       for fam, want in [("4", "${routerIP}"), ("6", "${routerIP6}")]:
           out = workstation.succeed(f"{app_ns} {fam} query printer.local 3").split()
@@ -60,14 +66,19 @@
       # A response and a probe of the sandbox stay in
       workstation.succeed(f"{app_ns} 4 respond claim.local 0", f"{app_ns} 4 probe claim.local 0",
                           f"{app_ns} 6 respond claim.local 0")
+      # A GSO datagram of a query and a response segment stays in whole, and so does a query with bytes past its IP
+      # length; the same query without them leaves
+      workstation.succeed(f"{app_ns} 4 gso gso-segmented-query.local 0", f"{app_ns} 4 rawtrail trailing.local 0",
+                          f"{app_ns} 4 raw rawquery.local 0")
       # A query from the LAN doesn't come in
       workstation.succeed(f"systemd-run --unit=app-mdns -p StandardOutput=file:/tmp/app-mdns {app_ns} 4 listen x 4",
                           "sleep 1")
       router.succeed("${mdnsQuery} 4 query lan.local 0 eth1")
       workstation.wait_until_fails("systemctl is-active app-mdns", timeout=10)
       workstation.wait_until_fails("systemctl is-active work-mdns", timeout=15)
-      assert workstation.succeed("cat /tmp/app-mdns").strip() == "", workstation.succeed("cat /tmp/app-mdns")
-      assert workstation.succeed("cat /tmp/work-mdns").strip() == "", workstation.succeed("cat /tmp/work-mdns")
+      workstation.wait_until_fails("systemctl is-active work-mdns6", timeout=15)
+      for out in ["app-mdns", "work-mdns", "work-mdns6"]:
+          assert workstation.succeed(f"cat /tmp/{out}").strip() == "", workstation.succeed(f"cat /tmp/{out}")
       router.succeed("systemctl stop mdns-cap")
       lan = router.succeed("tcpdump -nr /tmp/mdns.pcap 2>/dev/null")
       print(lan)
@@ -77,14 +88,30 @@
       assert any(re.search(r"fe80::\S+\.5353 > ff02::fb\.5353", l) for l in ws_lines), ws_lines
       assert not any("(QU)" in l for l in ws_lines), ws_lines
       assert any("${workstationIP}.5353 > 224.0.0.251.5353" in l and "oneshot.local" in l for l in lan.splitlines()), lan
-      assert "lan.local" in lan
-      # Nothing of the response and probe, of work, or from a sandbox address
-      for leak in ["claim.local", "work.local", " 169.254.10", " fd"]:
+      assert "lan.local" in lan and "rawquery.local" in lan, lan
+      # Nothing of the response and probe, of the GSO datagram or the query with trailing bytes, of work, or from a
+      # sandbox address
+      for leak in ["claim.local", "gso-segmented", "smuggled.local", "trailing.local", "work.local", "work6.local", " 169.254.10",
+                   " fd"]:
           assert leak not in lan, leak
       # Only the default primary takes responses
       mdns = workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/mdns")
       ifindex = workstation.succeed("cat /sys/class/net/sbx-rs-e3b0c442/ifindex").strip()
       assert [int.from_bytes(bytes(int(x, 16) for x in e["key"]), "little") for e in json.loads(mdns)] == [int(ifindex)], mdns
+
+  with subtest("mDNS: queries out at MDNS_RATE (10) a second after a burst of MDNS_BURST (20)"):
+      router.succeed("systemd-run --unit=mdns-burst -p StandardError=truncate:/tmp/mdns-burst.err"
+                     " tcpdump -U -ni eth1 -w /tmp/burst.pcap udp port 5353")
+      router.wait_until_succeeds("grep -q 'listening on' /tmp/mdns-burst.err", timeout=30)
+      burst = ("import socket, struct; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+               "for i in range(100): s.sendto(struct.pack('!6H', 0, 0, 1, 0, 0, 0) + bytes([len(n := f'burst{i}'.encode())]) + n"
+               " + b'\\x05local\\x00' + struct.pack('!2H', 1, 1), ('224.0.0.251', 5353))")
+      workstation.succeed(f"nsenter -t {bwrap_info()['child-pid']} -n ${pkgs.python3}/bin/python3 -c {shlex.quote(burst)}")
+      time.sleep(1)
+      router.succeed("systemctl stop mdns-burst")
+      sent = len(re.findall(r"burst\d+\.local", router.succeed("tcpdump -nr /tmp/burst.pcap 2>/dev/null")))
+      print(f"{sent} of 100 queries left")
+      assert 15 <= sent <= 30, sent
 
   with subtest("Each launcher's notifications name an app with a .desktop file of that name"):
       # The portal names a notification's app by the caller's /.flatpak-info, and gnome-shell drops it unless
@@ -328,7 +355,8 @@
       for p in (8001, 8081):
           in_work(f"sh -c 'setsid python3 -m http.server {p} --bind :: >/dev/null 2>&1 </dev/null &'")
           workstation.wait_until_succeeds(work_cmd(tcp_connect("::1", p)), timeout=30)
-      curl = lambda a, p: f"curl -gsf -m5 -o /dev/null http://{a}:{p}/"
+      # As alice: the ports of her sandbox take her processes alone
+      curl = lambda a, p: f"runuser -u alice -- curl -gsf -m5 -o /dev/null http://{a}:{p}/"
       workstation.succeed(curl(work4, 8081), curl(f"[{work6}]", 8081))
       workstation.fail(curl(work4, 8001), curl(f"[{work6}]", 8001))
       granted("port", "port", {"port": 8001, "protocol": "tcp"}, f"[{work6}]:8001")
@@ -343,12 +371,33 @@
           control({"op": "revoke", "grant": ports[p]["id"]})
           workstation.fail(curl(work4, p), curl(f"[{work6}]", p))
       assert not flows(), f"flows left: {flows()}"
+      # A UDP port the same way: a datagram of a connected socket of alice echoed once granted, over IPv4 and IPv6, and
+      # not once revoked
+      echo = ("import socket; s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM); s.bind(('::', 5301));"
+              " [s.sendto(d, a) for d, a in iter(lambda: s.recvfrom(64), None)]")
+      in_work(f"sh -c {shlex.quote(f'setsid python3 -c {shlex.quote(echo)} >/dev/null 2>&1 </dev/null &')}")
+      ping = shlex.quote("import socket, sys; c = socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,"
+                         " socket.SOCK_DGRAM); c.settimeout(3); c.connect((sys.argv[1], 5301)); c.send(b'ping');"
+                         " assert c.recv(9) == b'ping'")
+      udp = lambda a: f"runuser -u alice -- ${pkgs.python3.interpreter} -c {ping} {a}"
+      workstation.wait_until_succeeds(work_cmd(f"python3 -c {ping} ::1"), timeout=30)
+      workstation.fail(udp(work4), udp(work6))
+      granted("udp", "port", {"port": 5301, "protocol": "udp"}, f"{work4}:5301")
+      workstation.succeed(udp(work4), udp(work6))
+      udp_grant = next(g for g in control({"op": "state"})["grants"] if g["params"] == {"port": 5301, "protocol": "udp"})
+      control({"op": "revoke", "grant": udp_grant["id"]})
+      workstation.fail(udp(work4), udp(work6))
       # Granted again, for the crash below to end
       granted("port2", "port", {"port": 8001, "protocol": "tcp"}, f"[{work6}]:8001")
       workstation.succeed(curl(work4, 8001))
 
       # A crash ends the daemon's grants: ExecStopPost detaches the folder, revokes the ports, and its connections
-      # close with it. Started again, it has its standing grants alone, the revoked ones too, under new ids
+      # close with it. Started again, it has its standing grants alone, the revoked ones too, under new ids. The
+      # new daemon revokes the ports as it starts as well: the line of ExecStopPost in the journal of the unit (those
+      # of the daemon go to the journal namespace of the launcher) says it did first
+      revoked = ("journalctl _SYSTEMD_USER_UNIT=claude-desktop-work-permissions.service -o cat"
+                 " | grep -c 'Revoked the ports' || true")
+      revoked_before = int(workstation.succeed(revoked))
       folder = grants[0].split()[4]
       hold("crashed")
       stop_post = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-work-permissions")
@@ -357,6 +406,7 @@
       workstation.wait_until_succeeds(f"test -s {work_home}/crashed.exit", timeout=30)
       workstation.wait_until_succeeds(work_cmd(f"sh -c '! grep -q \" {folder} \" /proc/self/mountinfo'"), timeout=30)
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
+      workstation.wait_until_succeeds(f"[ $({revoked}) -eq {revoked_before + 1} ]", timeout=10)
       state = control({"op": "state"}, tries=30)
       again = {g["capability"]: g["id"] for g in state["grants"] if g["lease"] == "standing"}
       assert sorted(again) == ["echo", "port", "test"] and len(state["grants"]) == 3, f"grants after a restart: {state}"

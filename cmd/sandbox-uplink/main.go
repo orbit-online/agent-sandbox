@@ -23,26 +23,24 @@ Usage:
   sandbox-uplink run [--uplink=<name>...]
 
 The uplinks are the devices named with --uplink, or else every physical NIC
-carrying Ethernet frames (Ethernet and Wi-Fi). The sandboxes have addresses
-in 169.254.100.0/22 and in a ULA /48 derived from the machine ID.
+carrying Ethernet frames (Ethernet and Wi-Fi), as the bridge or bond it is
+enslaved to when it is. The sandboxes have addresses in 169.254.100.0/22 and
+in a ULA /48 derived from the machine ID.
 
 einat-config writes the einat config for the uplinks to <file>: NAT44 and NAT66
-of the sandbox blocks on ports 61000-63999.
+of the sandbox blocks on ports 61000-63999. Without uplinks, which einat refuses,
+it writes nothing and exits 1, so as ExecCondition= the einat unit skips.
+Errors exit 255, which fails it.
 
 run loads the programs, reusing the registration map pinned in
 /run/sandbox-uplink, and keeps them attached on every uplink, pinned there:
-pre at the head of tcx ingress, post and egress at the tail of tcx ingress
-and egress, so pre runs ahead of einat and the others after it. It checks
-every half second and puts them back where einat or a device change moved
-them, and joins the mDNS groups on each uplink, so responses reach pre.
-Then it tends the netkit pairs of the sandboxes (netns-netkit): it keeps
-the ifindexes of the uplinks in the uplinks map pinned there, which their
-PEER programs redirect to, and per family the uplink with the default route
-of the lowest metric in the gateways map (its gateway, and the address and
-MAC mDNS queries leave from), turns forwarding back on where a change of
-all.forwarding turned it off on a primary (sbx-*), and removes the
-registrations (mdns ones included) and pins of sandboxes whose primary is
-gone.
+pre at the head of tcx ingress, post and egress right after the einat link
+of tcx ingress and egress, so pre runs ahead of einat and the others after it
+and ahead of programs attached at the tail (Cilium). It checks every half
+second and puts them back where einat or a device change moved them, and
+joins the mDNS groups on each uplink, so responses reach pre. It publishes
+to the sandboxes (netns-netkit) the uplinks with all three programs attached,
+and removes what sandboxes that are gone left.
 `
 
 // Set by the package to the compiled uplink.bpf.c
@@ -60,7 +58,7 @@ func main() {
 	names, _ := opts["--uplink"].([]string)
 	if err := run(opts, names); err != nil {
 		slog.Error(err.Error())
-		os.Exit(1)
+		os.Exit(255)
 	}
 }
 
@@ -69,15 +67,15 @@ func run(opts docopt.Opts, names []string) error {
 	if err != nil {
 		return err
 	}
-	machineID, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		return fmt.Errorf("Read machine ID: %w", err)
-	}
-	v6, err := uplink.ULABlock(string(machineID))
+	v6, err := uplink.ULABlock()
 	if err != nil {
 		return err
 	}
 	if ok, _ := opts.Bool("einat-config"); ok {
+		if len(ups) == 0 {
+			slog.Info("No uplinks, no einat config")
+			os.Exit(1)
+		}
 		file, _ := opts.String("<file>")
 		if err := os.WriteFile(file, []byte(einatConfig(ups, uplink.V4Block, v6)), 0o644); err != nil {
 			return fmt.Errorf("Write the einat config: %w", err)

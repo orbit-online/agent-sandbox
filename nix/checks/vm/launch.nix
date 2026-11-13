@@ -15,7 +15,8 @@
   ...
 }:
 ''
-  host_only = ["${workstationIP}:80", "127.0.0.1:80", "10.99.0.1:80"]
+  # The host's loopback is the route_localnet case below: from the sandbox, 127.0.0.1 is its own lo
+  host_only = ["${workstationIP}:80", "10.99.0.1:80"]
   with subtest("host-only targets answer on the host"):
       workstation.succeed("ip link add dummy0 type dummy && ip addr add 10.99.0.1/24 dev dummy0 && ip link set dummy0 up")
       for t in host_only:
@@ -342,7 +343,7 @@
       assert out == [app_pidns, app_mntns], f"--shell in {out}, app in {[app_pidns, app_mntns]}"
       workstation.succeed("systemctl --user -M alice@ stop nest")
 
-  import ipaddress, time
+  import ipaddress, struct, time
   sandbox_pid = bwrap_info()["child-pid"]
   ns = f"nsenter -t {sandbox_pid} -n"
   primary = "sbx-rs-e3b0c442"
@@ -357,15 +358,30 @@
   def reaches(host, port, run=sandbox_cmd):
       return workstation.execute(run(tcp_connect(host, port)))[0] == 0
 
-  # Starts capturing on dev (in the netns netns enters) what filt matches; the returned function stops and returns the
-  # count
-  def capture(dev, filt, netns=""):
-      workstation.succeed(f"systemd-run --collect --unit=cap-{dev} {netns} /run/current-system/sw/bin/tcpdump -U -ni {dev} -w /tmp/{dev}.pcap {shlex.quote(filt)}")
-      time.sleep(1)
-      def stop():
-          workstation.succeed(f"systemctl stop cap-{dev}")
-          return int(workstation.succeed(f"tcpdump -r /tmp/{dev}.pcap 2>/dev/null | wc -l").strip())
-      return stop
+  # Captures on dev (in the netns netns enters) what filt matches, from when tcpdump has its filter attached. count()
+  # returns how many packets it got so far, of those what read matches; calling it stops the capture first. Both wait a
+  # second for what is still on its way
+  class capture:
+      def __init__(self, dev, filt, netns=""):
+          self.unit = f"cap-{dev}"
+          workstation.succeed(f"systemd-run --collect --unit={self.unit} -p StandardError=truncate:/tmp/{self.unit}.err"
+                              f" {netns} /run/current-system/sw/bin/tcpdump --immediate-mode -U -ni {dev}"
+                              f" -w /tmp/{self.unit}.pcap {shlex.quote(filt)}")
+          workstation.wait_until_succeeds(f"grep -q 'listening on' /tmp/{self.unit}.err", timeout=30)
+          self.running = True
+
+      def count(self, read=""):
+          if self.running:
+              time.sleep(1)
+          read = f" {shlex.quote(read)}" if read else ""
+          return int(workstation.succeed(f"tcpdump -nr /tmp/{self.unit}.pcap{read} 2>/dev/null | wc -l").strip())
+
+      def __call__(self, read=""):
+          if self.running:
+              time.sleep(1)
+              workstation.succeed(f"systemctl stop {self.unit}")
+              self.running = False
+          return self.count(read)
 
   with subtest("the netkit pair: eth0 with the sandbox's addresses and routes, its programs and maps pinned, registered"):
       workstation.succeed(sandbox_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"))
@@ -448,7 +464,19 @@
           f"{ns} ip route add 127.0.0.1/32 dev eth0 src {sb4}",
       )
       workstation.fail(f"{ns} curl -sf -m3 http://127.0.0.1:80/")
-      assert stop_local() == 0, "the sandbox reached the host stack"
+      # The positive control: a reply on a flow of a granted port, the one thing peer passes into the host stack
+      srv = ("import socket; s = socket.create_server(('::', 8090), family=socket.AF_INET6, dualstack_ipv6=True);"
+             " c = s.accept()[0]; c.recv(1024); c.sendall(b'HTTP/1.0 200 OK\\r\\n\\r\\n'); c.close()")
+      in_sandbox(f"sh -c {shlex.quote(f'setsid python3 -c {shlex.quote(srv)} >/dev/null 2>&1 </dev/null &')}")
+      workstation.wait_until_succeeds(f"{ns} ss -Hltn 'sport = :8090' | grep -q .", timeout=30)
+      status, out = as_user("alice", f"{netkit} grant tcp 8090")
+      assert status == 0, out
+      status, out = as_user("alice", f"curl -sf -m3 -o /dev/null http://{sb4}:8090/")
+      assert status == 0, out
+      status, out = as_user("alice", f"{netkit} revoke tcp 8090")
+      assert status == 0, out
+      assert stop_local("src port 8090") > 0, "no reply of the sandbox on the primary"
+      assert stop_local("not src port 8090") == 0, "the sandbox reached the host stack"
       workstation.succeed(
           f"{ns} ip route del 127.0.0.1/32 dev eth0",
           # lo coming up puts its local routes back
@@ -460,13 +488,62 @@
 
   with subtest("a source other than the sandbox's own goes nowhere"):
       workstation.succeed(f"{ns} ip addr add 169.254.103.250/32 dev eth0", f"{ns} ip addr add fd00::bad/128 dev eth0 nodad")
+      # Echo requests: einat maps a leaked spoofed source to the address of the host like a legitimate one, so only the
+      # count tells them apart
+      stop = capture("eth1", "icmp[icmptype] == icmp-echo or (icmp6 and ip6[40] == 128)")
       workstation.succeed(f"{ns} ping -c1 -W2 -I {sb4} ${internet4}", f"{ns} ping -c1 -W2 -I {sb6} ${internet6}")
-      stop = capture("eth1", "icmp or (icmp6 and ip6[40] == 128)")
+      legit = stop.count()
+      assert stop.count("icmp") > 0 and stop.count("icmp6") > 0, "the sandbox pings didn't leave"
       workstation.fail(f"{ns} ping -c1 -W2 -I 169.254.103.250 ${internet4}")
       workstation.fail(f"{ns} ping -c1 -W2 -I fd00::bad ${internet6}")
-      workstation.fail(f"{ns} ping -c1 -W2 -I 169.254.103.250 ${workstationIP}")
-      assert stop() == 0, "a spoofed packet left"
+      workstation.fail(f"{ns} ping -c1 -W2 -I 169.254.103.250 ${routerIP}")
+      workstation.fail(f"{ns} ping -c1 -W2 -I fd00::bad ${routerIP6}")
+      assert stop() == legit, "a spoofed packet left"
       workstation.succeed(f"{ns} ip addr del 169.254.103.250/32 dev eth0", f"{ns} ip addr del fd00::bad/128 dev eth0")
+
+  with subtest("the sandbox holds no CAP_NET_RAW or CAP_NET_ADMIN over its netns: no AF_PACKET socket, eth0 left alone"):
+      # The assumption past the eBPF checks (models/README.md): a packet socket on eth0 could send what the programs
+      # parse differently from the host stack (PACKET_VNET_HDR checksum offsets). A nested user namespace has every
+      # capability, but over no netns of its own: eth0 is in the one of the sandbox
+      packet = "python3 -c " + shlex.quote("import socket; s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW); s.bind(('eth0', 0)); print('bound')")
+      # The positive control: root of the host in the sandbox netns
+      assert workstation.succeed(f"{ns} ${pkgs.python3}/bin/{packet}").strip() == "bound"
+      for cmd in [packet, f"unshare --user --map-root-user {packet}", f"unshare --user --map-auto --map-root-user {packet}",
+                  "ip link set eth0 down", "unshare --user --map-root-user ip link set eth0 down"]:
+          status, out = workstation.execute(sandbox_cmd(cmd) + " 2>&1")
+          assert status != 0 and ("Operation not permitted" in out or "PermissionError" in out), f"{cmd}: {status} {out}"
+      assert ",UP," in in_sandbox("ip -o link show eth0")
+
+  with subtest("a VLAN device on eth0 gets nothing out"):
+      # As root in the sandbox netns, as the sandbox holds no CAP_NET_ADMIN over it. netkit offloads the tag to the skb.
+      # A MAC of its own (eth0 has none, which a VLAN device can't come up with) and no ARP, which peer drops
+      workstation.succeed(f"{ns} ip link add link eth0 name eth0.5 address 02:00:00:00:00:05 type vlan id 5",
+                          f"{ns} ip link set eth0.5 arp off up",
+                          f"{ns} ip route add ${internet4}/32 dev eth0.5 src {sb4}")
+      # icmp first: vlan shifts the offsets of what follows it
+      stop = capture("eth1", "icmp or vlan")
+      tagged = capture("eth0", "vlan", ns)
+      workstation.fail(f"{ns} ping -c1 -W2 ${internet4}")
+      assert tagged() > 0, "no tagged frame on eth0"
+      assert stop.count() == 0, "a tagged packet left"
+      workstation.succeed(f"{ns} ip link del eth0.5", f"{ns} ping -c1 -W2 ${internet4}")
+      assert stop() > 0, "the ping without the VLAN device didn't leave"
+
+  with subtest("cloud metadata services on the LAN are out of reach: link-local, and the ULAs and CGNAT address of clouds"):
+      metadata = ["169.254.169.254", "100.100.100.200", "fd00:ec2::254", "fd20:ce::254"]
+      routes = [f"{h}/32 via ${routerIP}" if "." in h else f"{h}/128 via ${routerIP6}" for h in metadata]
+      workstation.succeed(*[f"ip route add {r}" for r in routes],
+                          *[f"curl -sf -m3 -o /dev/null 'http://{h if ':' not in h else '[' + h + ']'}:443/'" for h in metadata])
+      # The internet stand-in in the same capture, the positive control
+      stop = capture("eth1", " or ".join(f"host {h}" for h in metadata + ["${internet4}", "${internet6}"]))
+      for host in ["${internet4}", "${internet6}"]:
+          assert reaches(host, 443), host
+      for host in metadata:
+          assert not reaches(host, 443), host
+      assert stop.count("host ${internet4}") > 0 and stop.count("host ${internet6}") > 0, "the sandbox didn't reach the internet"
+      for host in metadata:
+          assert stop(f"host {host}") == 0, f"the sandbox reached {host}"
+      workstation.succeed(*[f"ip route del {r}" for r in routes])
 
   with subtest("a full-tunnel VPN: the sandbox leaves through the uplink, nothing of it into the VPN's device"):
       workstation.succeed("ip link add vpn0 type dummy && ip link set vpn0 up")
@@ -497,28 +574,227 @@
           workstation.succeed(*undo[shape])
       workstation.succeed("ip link del vpn0")
 
-  with subtest("port forwarding: a granted port from the host alone, its flows gone with the grant"):
+  with subtest("another NIC, an einat uplink without the default route: its subnets out of reach, though the host reaches them"):
+      # eth0, QEMU's user network: 10.0.2.0/24 on-link, its router at 10.0.2.2 (no global IPv6 address there)
+      other = ["10.0.2.2"]
+      for a in other:
+          assert "dev eth0" in workstation.succeed(f"ip route get {a}"), a
+          workstation.execute(f"ping -c1 -W2 {a}")
+          assert "lladdr" in workstation.succeed(f"ip neigh show {a} dev eth0"), f"the host doesn't reach {a}"
+      stop = capture("eth0", "tcp port 80")
+      for a in other:
+          assert not reaches(a, 80), a
+          # The positive control: a SYN of the host itself, from a port einat doesn't map to (61000-63999)
+          workstation.execute(f"curl -s -m3 --local-port 40080 -o /dev/null http://{a}:80/")
+      assert stop("port 40080") > 0, "the SYN of the host didn't leave eth0"
+      assert stop("not port 40080") == 0, "the sandbox reached the subnet of eth0"
+
+  with subtest("on-link addresses without a neighbour entry: a burst to random ones leaves the host neighbour table bounded"):
+      a6 = json.loads(workstation.succeed("ip -j -6 addr show dev eth1 scope global"))[0]["addr_info"][0]
+      net = ipaddress.ip_interface(f"{a6['local']}/{a6['prefixlen']}").network
+      neighbours = lambda: len(workstation.succeed("ip -6 neigh show dev eth1").splitlines())
+      before = neighbours()
+      burst = ("import os, socket, ipaddress; n = ipaddress.ip_network('{net}'); s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)\n"
+               "for _ in range(1000): s.sendto(b'x', (str(n[int.from_bytes(os.urandom(8), 'big')]), 9))")
+      in_sandbox(f"python3 -c {shlex.quote(burst.format(net=net))}")
+      after = neighbours()
+      print(f"neighbours on eth1: {before}, after 1000 random addresses {after}")
+      # NEIGH_BURST (64) and NEIGH_RATE (16 a second) while it sends
+      assert before < after <= before + 100, (before, after)
+      workstation.succeed("ping -c1 -W2 ${routerIP}", "ping -6 -c1 -W2 ${routerIP6}")
+      assert reaches("${internet6}", 443) and reaches("${routerIP6}", 443)
+
+  with subtest("IPv6 in the sandbox only while the host has an IPv6 default route: without, a dual-stack name over IPv4 at once"):
+      # Taking eth0 down drops the default route of its router advertisements, which dhcpcd would put back
+      workstation.succeed("ip link set eth0 down", "ip -6 route del default via ${routerIP6} dev eth1")
+      assert workstation.succeed("ip -6 route show default").strip() == ""
+      workstation.wait_until_succeeds(f"out=$({sandbox_cmd('ip -6 route show default')}) && test -z \"$out\"", timeout=10)
+      assert "default dev eth0" in in_sandbox("ip -4 route show default")
+      timed = ("import socket, sys, time; t = time.monotonic()\n"
+               "try: socket.create_connection((sys.argv[1], 443), 10).close(); r = 'connected'\n"
+               "except OSError as e: r = type(e).__name__\n"
+               "print(r, time.monotonic() - t)")
+      run = lambda host: in_sandbox(f"python3 -c {shlex.quote(timed)} {host}").split()
+      # IPv6 fails at once (no route), and dual.test (A and AAAA) connects over IPv4 without waiting for it
+      result, took = run("${internet6}")
+      assert result != "connected" and float(took) < 2, (result, took)
+      result, took = run("dual.test")
+      assert result == "connected" and float(took) < 2, (result, took)
+      workstation.succeed("ip -6 route add default via ${routerIP6} dev eth1 metric 1", "ip link set eth0 up")
+      workstation.wait_until_succeeds(sandbox_cmd("ip -6 route show default") + " | grep -q 'default dev eth0'", timeout=10)
+      assert reaches("${internet6}", 443)
+
+  with subtest("port forwarding: a granted port from the processes of alice on the host alone, its flows gone with the grant"):
       in_sandbox("sh -c 'setsid python3 -m http.server 8080 --bind :: >/dev/null 2>&1 </dev/null &'")
       workstation.wait_until_succeeds(sandbox_cmd(tcp_connect("::1", 8080)), timeout=30)
-      workstation.fail(f"curl -sf -m3 http://{sb4}:8080/")
+      curl = lambda user, a: as_user(user, f"curl -gsf -m3 -o /dev/null http://{a}:8080/")[0] == 0
+      assert not curl("alice", sb4)
       status, out = as_user("alice", f"{netkit} grant tcp 8080")
       assert status == 0, out
-      workstation.succeed(f"curl -sf -m5 -o /dev/null http://{sb4}:8080/", f"curl -sf -m5 -o /dev/null 'http://[{sb6}]:8080/'")
+      assert curl("alice", sb4) and curl("alice", f"[{sb6}]")
       flows = lambda: json.loads(workstation.succeed(f"bpftool -j map dump pinned {pins}/flows"))
       assert flows(), "no flow recorded"
-      # Forwarded by the host from a container: no socket on it, so the PRIMARY program drops it, granted port or not
+      # Another user on the host, root too, doesn't reach it
+      for user in ["bob", "root"]:
+          assert not curl(user, sb4) and not curl(user, f"[{sb6}]"), user
+      # Forwarded by the host from a container: no socket on it, so the `primary` program drops it, granted port or not
       workstation.succeed("sysctl -w net.ipv4.conf.br0.forwarding=1")
       stop = capture("eth0", "host 10.98.0.2", ns)
+      routed = capture(primary, "src host 10.98.0.2 and tcp[tcpflags] & tcp-syn != 0")
       workstation.fail(f"ip netns exec ctr curl -sf -m3 http://{sb4}:8080/")
+      assert routed() > 0, "the forwarded SYN didn't reach the primary"
       assert stop() == 0, "a forwarded packet reached the sandbox"
       workstation.succeed("sysctl -w net.ipv4.conf.br0.forwarding=0")
       # Another user's grant reaches only their own sandbox, which bob has none of
       status, out = as_bob(f"{netkit} grant tcp 8080")
       assert status != 0 and "does the sandbox run?" in out, out
+
+  with subtest("port forwarding: a SYN of the sandbox on a flow gets nowhere with its TCP flags outside the linear part"):
+      # A connection of alice held open, so its flow stays
+      hold = ("import socket, time; c = socket.create_connection(('{a}', 8080), 3); print(*c.getsockname(), flush=True);"
+              " time.sleep(120)")
+      workstation.succeed(f"systemd-run --unit=hold-8080 -p User=alice -p StandardOutput=file:/tmp/hold-8080 "
+                          f"${pkgs.python3}/bin/python3 -c {shlex.quote(hold.format(a=sb4))}")
+      workstation.wait_until_succeeds("test -s /tmp/hold-8080", timeout=10)
+      host, host_port = workstation.succeed("cat /tmp/hold-8080").split()
+      # From the sandbox address and port 8080 to it, as root in the sandbox netns over AF_PACKET with a vnet header:
+      # a SYN past a page whose hdr_len puts the ports in the linear part and the flags not (af_packet.c packet_snd),
+      # then the positive control, a linear ACK
+      frames = ("import socket, struct, sys\n"
+                "src, dst, sport, dport = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])\n"
+                "def frame(flags, payload, linear):\n"
+                "    tcp = struct.pack('!HHIIBBHHH', sport, dport, 1, 1, 5 << 4, flags, 65535, 0, 0) + payload\n"
+                "    ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(tcp), 0, 0x4000, 64, 6, 0, socket.inet_aton(src), socket.inet_aton(dst))\n"
+                "    return struct.pack('=BBHHHH', 0, 0, linear, 0, 0, 0) + bytes(12) + b'\\x08\\x00' + ip + tcp\n"
+                "s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)\n"
+                "s.setsockopt(263, 15, 1)  # SOL_PACKET, PACKET_VNET_HDR\n"
+                "s.bind(('eth0', 0x0800))\n"
+                "for f in [frame(0x02, bytes(5000), 14 + 20 + 8), frame(0x10, bytes(), 0)]:\n"
+                "    try: s.send(f)\n"
+                "    except OSError as e: print(e)  # ENOBUFS: peer dropped it\n")
+      mtu = workstation.succeed(f"{ns} cat /sys/class/net/eth0/mtu").strip()
+      workstation.succeed(f"{ns} ip link set eth0 mtu 9000")
+      passed = capture(primary, f"src host {sb4} and tcp src port 8080 and dst host {host} and tcp dst port {host_port}")
+      workstation.succeed(f"{ns} ${pkgs.python3}/bin/python3 -c {shlex.quote(frames)} {sb4} {host} 8080 {host_port}")
+      assert passed("tcp[tcpflags] & tcp-ack != 0") > 0, "the ACK of the control didn't reach the host"
+      assert passed.count("tcp[tcpflags] & tcp-syn != 0") == 0, "a SYN of the sandbox reached the host"
+      workstation.succeed(f"{ns} ip link set eth0 mtu {mtu}", "systemctl stop hold-8080")
+
+  with subtest("port forwarding: a RST of the host ends its flow, a FIN marks it for the short timeout, the revoke all of them"):
+      def flow(port):
+          for e in flows():
+              k, v = (bytes(int(x, 16) for x in e[f]) for f in ["key", "value"])
+              if int.from_bytes(k[18:20], "little") == port:
+                  return v
+      close = ("import socket, struct; c = socket.create_connection(('{a}', 8080), 3); print(c.getsockname()[1]);"
+               " {linger}c.close()")
+      linger = "c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0)); "
+      py = "${pkgs.python3}/bin/python3"
+      rst, fin = (int(as_user("alice", f"{py} -c {shlex.quote(close.format(a=sb4, linger=l))}")[1]) for l in [linger, ""])
+      time.sleep(1)
+      assert flow(rst) is None, f"the flow outlived the RST: {flows()}"
+      assert flow(fin) is not None and flow(fin)[8] == 1, f"the FIN didn't mark the flow: {flows()}"
       status, out = as_user("alice", f"{netkit} revoke tcp 8080")
       assert status == 0, out
       assert not flows(), f"flows left: {flows()}"
-      workstation.fail(f"curl -sf -m3 http://{sb4}:8080/")
+      assert not curl("alice", sb4)
+
+  with subtest("port forwarding: a UDP flow idle for 2 minutes carries no reply, only packets of the host renew it, and a port no longer granted none"):
+      # Replies at once, 4 and 12 seconds later
+      echo = ("import socket, threading; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('0.0.0.0', 5300));"
+              " [(s.sendto(b'now', a), threading.Timer(4, s.sendto, (b's1', a)).start(), threading.Timer(12, s.sendto, (b's2', a)).start())"
+              " for d, a in iter(lambda: s.recvfrom(64), None)]")
+      in_sandbox(f"sh -c {shlex.quote(f'setsid python3 -c {shlex.quote(echo)} >/dev/null 2>&1 </dev/null &')}")
+      status, out = as_user("alice", f"{netkit} grant udp 5300")
+      assert status == 0, out
+      # A connected socket: only its datagrams start a flow
+      ask = ("import socket; c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); c.settimeout(15); c.bind(('0.0.0.0', {port}));"
+             f" c.connect(('{sb4}', 5300)); c.send(b'x')\n"
+             "while True:\n"
+             " try: print(c.recv(9).decode(), flush=True)\n"
+             " except TimeoutError: print('timeout'); break")
+      def ask_unit(port):
+          workstation.succeed(f"systemd-run --unit=udp-{port} -p User=alice -p StandardOutput=file:/tmp/udp-{port} "
+                              f"{py} -c {shlex.quote(ask.format(port=port))}")
+          workstation.wait_until_succeeds(f"grep -qx now /tmp/udp-{port}", timeout=10)
+      def answers(port):
+          workstation.wait_until_fails(f"systemctl is-active udp-{port}", timeout=40)
+          return workstation.succeed(f"cat /tmp/udp-{port}").split()
+      def last_seen(port, ago):
+          flow_key = next(e["key"] for e in flows() if bytes(int(x, 16) for x in e["key"])[18:20] == port.to_bytes(2, "little"))
+          now = int(workstation.succeed(f"{py} -c 'import time; print(time.clock_gettime_ns(time.CLOCK_BOOTTIME))'"))
+          assert now > 130 * 10**9, now
+          value = " ".join(f"{x:02x}" for x in (now - ago * 10**9).to_bytes(8, "little") + bytes(8))
+          workstation.succeed(f"bpftool map update pinned {pins}/flows key hex {' '.join(k[2:] for k in flow_key)} value hex {value}")
+      ask_unit(40001)
+      assert answers(40001) == ["now", "s1", "s2", "timeout"], answers(40001)
+      # Last seen 121 seconds ago (CLOCK_BOOTTIME, as bpf_ktime_get_boot_ns), once the first reply passed
+      ask_unit(40002)
+      last_seen(40002, 121)
+      assert answers(40002) == ["now", "timeout"], answers(40002)
+      # 114 seconds ago: s1 passes at 118, and doesn't renew the flow, so s2 at 126 doesn't
+      ask_unit(40003)
+      last_seen(40003, 114)
+      assert answers(40003) == ["now", "s1", "timeout"], answers(40003)
+      # The port gone from the ports map, the flow left: no reply
+      ask_unit(40004)
+      port_key = " ".join(f"{x:02x}" for x in struct.pack("=I", 17 << 16 | 5300))
+      workstation.succeed(f"bpftool map delete pinned {pins}/ports key hex {port_key}")
+      assert answers(40004) == ["now", "timeout"], answers(40004)
+      status, out = as_user("alice", f"{netkit} revoke udp 5300")
+      assert status == 0, out
+
+  with subtest("port forwarding: a UDP flow outliving its socket: a socket of bob bound to its port after gets nothing"):
+      status, out = as_user("alice", f"{netkit} grant udp 5300")
+      assert status == 0, out
+      # What the sandbox sends, and what of it reaches the host
+      sent = capture("eth0", "udp src port 5300", ns)
+      passed = capture(primary, "udp src port 5300")
+      # alice gets the first reply and closes; the sandbox sends again 4 and 12 seconds later
+      once = ("import socket; c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); c.settimeout(5); c.bind(('0.0.0.0', 40005));"
+              f" c.connect(('{sb4}', 5300)); c.send(b'x'); print(c.recv(9).decode())")
+      status, out = as_user("alice", f"{py} -c {shlex.quote(once)}")
+      assert status == 0 and out.strip() == "now", out
+      listen = ("import socket; u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.settimeout(15); u.bind(('0.0.0.0', 40005))\n"
+                "while True:\n"
+                " try: print(u.recv(9).decode(), flush=True)\n"
+                " except TimeoutError: print('timeout'); break")
+      workstation.succeed(f"systemd-run --unit=udp-bob -p User=bob -p StandardOutput=file:/tmp/udp-bob {py} -c {shlex.quote(listen)}")
+      workstation.wait_until_fails("systemctl is-active udp-bob", timeout=40)
+      assert sent() == 3, "the sandbox didn't send its three replies"
+      assert passed() == 1, "a reply after the socket of alice closed reached the host"
+      assert workstation.succeed("cat /tmp/udp-bob").split() == ["timeout"], workstation.succeed("cat /tmp/udp-bob")
+      status, out = as_user("alice", f"{netkit} revoke udp 5300")
+      assert status == 0, out
+
+  with subtest("port forwarding: a sandbox address spoofed from a bridge (rp_filter off) gets no answer of alice in"):
+      # A UDP listener and a TCP one of alice on the host, answering whoever sends
+      listen = ("import socket, threading; u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.bind(('0.0.0.0', 5301));"
+                " t = socket.create_server(('0.0.0.0', 8081)); threading.Thread(target=lambda: [t.accept() for _ in iter(int, 1)], daemon=True).start();"
+                " [u.sendto(b'answer', a) for d, a in iter(lambda: u.recvfrom(64), None)]")
+      workstation.succeed(f"systemd-run --unit=alice-listen -p User=alice {py} -c {shlex.quote(listen)}")
+      for p in ["udp 5300", "tcp 8080"]:
+          status, out = as_user("alice", f"{netkit} grant {p}")
+          assert status == 0, out
+      rp = workstation.succeed("sysctl -n net.ipv4.conf.all.rp_filter net.ipv4.conf.br0.rp_filter").split()
+      workstation.succeed("sysctl -w net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.br0.rp_filter=0",
+                          f"ip netns exec ctr ip addr add {sb4}/32 dev vb1")
+      workstation.wait_until_succeeds("ss -Hlun 'sport = :5301' | grep -q . && ss -Hltn 'sport = :8081' | grep -q .", timeout=30)
+      answered = "udp src port 5301 or tcp src port 8081"
+      stop = capture("eth0", answered, ns)
+      routed = capture(primary, answered)
+      spoof = ("import socket; u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.bind(('{a}', 5300)); u.sendto(b'x', ('10.98.0.1', 5301));"
+               " t = socket.socket(); t.bind(('{a}', 8080)); t.settimeout(3)\n"
+               "try: t.connect(('10.98.0.1', 8081))\nexcept OSError: pass")
+      workstation.succeed(f"ip netns exec ctr {py} -c {shlex.quote(spoof.format(a=sb4))}")
+      assert routed("udp") > 0 and routed("tcp") > 0, "the answers didn't reach the primary"
+      assert stop() == 0, "an answer to a spoofed sandbox address reached the sandbox"
+      assert not [e for e in flows() if bytes(int(x, 16) for x in e["key"])[18:20] in [(5301).to_bytes(2, "little"), (8081).to_bytes(2, "little")]], flows()
+      workstation.succeed(f"ip netns exec ctr ip addr del {sb4}/32 dev vb1", "systemctl stop alice-listen",
+                          f"sysctl -w net.ipv4.conf.all.rp_filter={rp[0]} net.ipv4.conf.br0.rp_filter={rp[1]}")
+      for p in ["udp 5300", "tcp 8080"]:
+          status, out = as_user("alice", f"{netkit} revoke {p}")
+          assert status == 0, out
 
   with subtest("forwarding on the primary comes back after a change of all.forwarding reset it"):
       workstation.succeed("sysctl -w net.ipv4.conf.all.forwarding=1 net.ipv6.conf.all.forwarding=1",
@@ -589,6 +865,15 @@
       # It holds the sandbox's netns
       workstation.succeed("systemctl stop bob-in-alice-ns")
       # bob's own: a pair, which sandbox-uplink removes, its pins and registration with it, once the netns is gone
+      # With 16 sandboxes of bob already, 15 registered (their dirs) and a primary an up killed before it pinned
+      # (bob is rt in base 36), it refuses another. sandbox-uplink deletes that primary after a grace of 30 seconds
+      workstation.succeed("for i in $(seq 15); do mkdir /run/sandbox-uplink/1001-n$i; done",
+                          "ip link add sbx-rt-0rphan00 type netkit")
+      status, out = as_bob(f"{netkit} up {bob_ns}")
+      assert status != 0 and "runs 16 sandboxes already" in out, out
+      workstation.succeed("rmdir /run/sandbox-uplink/1001-n*")
+      workstation.wait_until_fails("ip link show sbx-rt-0rphan00", timeout=60)
+      assert "Deleting a primary without pins" in workstation.succeed("journalctl -u sandbox-uplink --no-pager -o cat")
       status, out = as_bob(f"{netkit} up {bob_ns}")
       assert status == 0, out
       workstation.succeed(f"nsenter -t {bob_ns} -n ip -d link show eth0 | grep -q netkit", "test -d /run/sandbox-uplink/1001")

@@ -81,7 +81,9 @@ let
     { nodes, ... }:
     {
       networking.firewall.enable = false;
-      # The internet stand-in's addresses, which the test framework's networking leaves off lo
+      # The internet stand-in's addresses, which the test framework's networking leaves off lo, and those of cloud
+      # metadata services (169.254.169.254, 100.100.100.200 of Alibaba, fd00:ec2::254 of AWS, fd20:ce::254 of GCP),
+      # which https answers on too
       systemd.services.internet = {
         wantedBy = [ "multi-user.target" ];
         serviceConfig = {
@@ -89,7 +91,7 @@ let
           RemainAfterExit = true;
         };
         path = [ pkgs.iproute2 ];
-        script = "ip addr add ${internet4}/32 dev lo && ip addr add ${internet6}/128 dev lo";
+        script = "ip addr add ${internet4}/32 dev lo && ip addr add ${internet6}/128 dev lo && ip addr add 169.254.169.254/32 dev lo && ip addr add 100.100.100.200/32 dev lo && ip addr add fd00:ec2::254/128 dev lo && ip addr add fd20:ce::254/128 dev lo";
       };
       environment.systemPackages = [ pkgs.tcpdump ];
       # An mDNS responder on the LAN: printer.local, A and AAAA
@@ -108,10 +110,16 @@ let
         settings = {
           interface = "eth1";
           no-resolv = true;
-          address = map (d: "/${d}/${nodes.router.networking.primaryIPAddress}") [
-            "api.anthropic.com"
-            "github.com"
-          ];
+          # dual.test with an address of each family, those of the internet stand-in
+          address =
+            map (d: "/${d}/${nodes.router.networking.primaryIPAddress}") [
+              "api.anthropic.com"
+              "github.com"
+            ]
+            ++ [
+              "/dual.test/${internet4}"
+              "/dual.test/${internet6}"
+            ];
         };
       };
       systemd.services.https = {

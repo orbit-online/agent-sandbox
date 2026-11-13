@@ -11,6 +11,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/orbit-online/agent-sandbox/internal/uplink"
+	"golang.org/x/sys/unix"
 )
 
 // Set by the package to the compiled netkit.bpf.c
@@ -22,8 +23,8 @@ var (
 	pinnedMaps  = []string{uplink.SandboxMap, "ports", "flows"}
 )
 
-// The protocols a port is granted for, as the programs number them
-var protocols = map[string]uint8{"tcp": 6, "udp": 17}
+// The protocols a port is granted for
+var protocols = map[string]uint8{"tcp": unix.IPPROTO_TCP, "udp": unix.IPPROTO_UDP}
 
 // attach loads the programs for the sandbox sb, with mDNS or without, attaches them through its primary and pins them
 // and their maps in dir, where they stay attached after this process ends. The uplinks and gateways maps are the ones
@@ -33,6 +34,8 @@ func attach(dir string, sb uplink.Sandbox, mdns bool) error {
 	if err != nil {
 		return fmt.Errorf("Read %s: %w", object, err)
 	}
+	// The size of the pinned map that replaces it
+	spec.Maps["uplinks"].MaxEntries = uplink.MaxUplinks
 	if mdns {
 		if err := spec.Variables["mdns"].Set(uint8(1)); err != nil {
 			return fmt.Errorf("Set mdns: %w", err)
@@ -131,20 +134,13 @@ func withMdns(f func(*ebpf.Map) error) error {
 }
 
 // remove ends what dir describes: the registration of its addresses, where they still name its primary, of its primary
-// for mDNS, and its pins,
-// which detaches the programs when the primary is still there (both ends then drop everything). Nothing there is
-// fine
+// for mDNS, and its pins, which detaches the programs when the primary is still there (both ends then drop
+// everything). Nothing there is fine
 func remove(reg *ebpf.Map, dir string) error {
-	m, err := ebpf.LoadPinnedMap(filepath.Join(dir, uplink.SandboxMap), nil)
+	sb, err := uplink.ReadSandbox(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return removePins(dir)
 	}
-	if err != nil {
-		return fmt.Errorf("Open %s: %w", dir, err)
-	}
-	var sb uplink.Sandbox
-	err = m.Lookup(uint32(0), &sb)
-	m.Close()
 	if err != nil {
 		return fmt.Errorf("Read %s: %w", dir, err)
 	}
@@ -192,10 +188,10 @@ func grant(dir, proto string, port uint16, on bool) error {
 	if err := ports.Delete(key); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 		return fmt.Errorf("Revoke %s port %d: %w", proto, port, err)
 	}
-	return clearFlows(dir, protocols[proto], port)
+	return clearFlows(dir, func(f flow, _ [16]byte) bool { return f.Proto == protocols[proto] && f.Port == port })
 }
 
-// The key of the flows map (struct flow)
+// The key of the flows map (struct flow); its value, struct seen, is 16 bytes
 type flow struct {
 	Host           [16]byte
 	Port, HostPort uint16
@@ -203,43 +199,24 @@ type flow struct {
 	_              [3]uint8
 }
 
-// clearFlows deletes the flows recorded on port over proto, after the grant is gone, so none comes back
-func clearFlows(dir string, proto uint8, port uint16) error {
+// clearFlows deletes the flows on which drop says yes, after the grant is gone, so none comes back
+func clearFlows(dir string, drop func(flow, [16]byte) bool) error {
 	flows, err := ebpf.LoadPinnedMap(filepath.Join(dir, "flows"), nil)
 	if err != nil {
 		return fmt.Errorf("Open the flows of %s: %w", dir, err)
 	}
 	defer flows.Close()
-	var stale []flow
-	var f flow
-	var v uint8
-	it := flows.Iterate()
-	for it.Next(&f, &v) {
-		if f.Proto == proto && f.Port == port {
-			stale = append(stale, f)
-		}
-	}
-	if err := it.Err(); err != nil {
-		return fmt.Errorf("Read the flows of %s: %w", dir, err)
-	}
-	for _, f := range stale {
-		if err := flows.Delete(f); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-			return fmt.Errorf("Delete a flow of %s: %w", dir, err)
-		}
+	if err := uplink.DeleteIf(flows, drop); err != nil {
+		return fmt.Errorf("Delete the flows of %s: %w", dir, err)
 	}
 	return nil
 }
 
 // printAddr prints the addresses of the sandbox of dir, as up did
 func printAddr(dir string) error {
-	m, err := ebpf.LoadPinnedMap(filepath.Join(dir, uplink.SandboxMap), &ebpf.LoadPinOptions{ReadOnly: true})
+	sb, err := uplink.ReadSandbox(dir)
 	if err != nil {
-		return fmt.Errorf("Open %s (does the sandbox run?): %w", dir, err)
-	}
-	defer m.Close()
-	var sb uplink.Sandbox
-	if err := m.Lookup(uint32(0), &sb); err != nil {
-		return fmt.Errorf("Read %s: %w", dir, err)
+		return fmt.Errorf("Read %s (does the sandbox run?): %w", dir, err)
 	}
 	fmt.Println(netip.AddrFrom16(sb.V4).Unmap(), netip.AddrFrom16(sb.V6))
 	return nil
@@ -263,37 +240,16 @@ func printUplinks() error {
 	return nil
 }
 
-// revokeAll ends every port grant of the sandbox of dir and the flows recorded on them
+// revokeAll ends every port grant of the sandbox of dir and the flows recorded on them: the ports first, so no flow is
+// recorded again meanwhile
 func revokeAll(dir string) error {
-	for _, name := range []string{"ports", "flows"} {
-		m, err := ebpf.LoadPinnedMap(filepath.Join(dir, name), nil)
-		if err != nil {
-			return fmt.Errorf("Open the %s of %s (does the sandbox run?): %w", name, dir, err)
-		}
-		err = clearMap(m)
-		m.Close()
-		if err != nil {
-			return fmt.Errorf("Clear the %s of %s: %w", name, dir, err)
-		}
+	ports, err := ebpf.LoadPinnedMap(filepath.Join(dir, "ports"), nil)
+	if err != nil {
+		return fmt.Errorf("Open the ports of %s (does the sandbox run?): %w", dir, err)
 	}
-	return nil
-}
-
-// clearMap deletes every key of m, the ports before the flows, so none is recorded again meanwhile
-func clearMap(m *ebpf.Map) error {
-	var keys [][]byte
-	k, v := make([]byte, m.KeySize()), make([]byte, m.ValueSize())
-	it := m.Iterate()
-	for it.Next(&k, &v) {
-		keys = append(keys, append([]byte(nil), k...))
+	defer ports.Close()
+	if err := uplink.DeleteIf(ports, func(uint32, uint8) bool { return true }); err != nil {
+		return fmt.Errorf("Clear the ports of %s: %w", dir, err)
 	}
-	if err := it.Err(); err != nil {
-		return err
-	}
-	for _, k := range keys {
-		if err := m.Delete(k); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-			return err
-		}
-	}
-	return nil
+	return clearFlows(dir, func(flow, [16]byte) bool { return true })
 }

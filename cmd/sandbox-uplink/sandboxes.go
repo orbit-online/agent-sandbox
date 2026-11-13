@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/orbit-online/agent-sandbox/internal/uplink"
@@ -18,7 +21,7 @@ import (
 )
 
 // sandboxes is what sandbox-uplink keeps for the netkit pairs of the sandboxes (cmd/netns-netkit): the uplinks map
-// their PEER programs redirect to and the gateways map they fall back to, forwarding on their primaries, and the
+// their `peer` programs redirect to and the gateways map they fall back to, forwarding on their primaries, and the
 // registrations (mdns too) and pins of those that are gone
 type sandboxes struct {
 	dir      string
@@ -26,7 +29,13 @@ type sandboxes struct {
 	gateways *ebpf.Map
 	reg      *ebpf.Map
 	mdns     *ebpf.Map
+	// Since when each primary without a pinned sandbox has been seen without one
+	orphans map[uint32]time.Time
 }
+
+// How long a primary may go without a pinned sandbox before collect deletes it: far longer than an up takes from
+// creating the pair to pinning, so only one whose up was killed (or stopped by its user) in between
+const orphanGrace = 30 * time.Second
 
 // openSandboxes pins the uplinks and gateways maps in dir (netkit.bpf.c has their shapes), or takes over the ones
 // pinned there, readable by the group
@@ -44,7 +53,7 @@ func openSandboxes(dir string, reg, mdns *ebpf.Map) (*sandboxes, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sandboxes{dir, ups, gws, reg, mdns}, nil
+	return &sandboxes{dir, ups, gws, reg, mdns, map[uint32]time.Time{}}, nil
 }
 
 func pinMap(dir string, spec *ebpf.MapSpec) (*ebpf.Map, error) {
@@ -88,22 +97,8 @@ func (s *sandboxes) publish(uplinks []string) error {
 			want[uint32(iface.Index)] = true
 		}
 	}
-	var k uint32
-	var v uint8
-	var stale []uint32
-	it := s.uplinks.Iterate()
-	for it.Next(&k, &v) {
-		if !want[k] {
-			stale = append(stale, k)
-		}
-	}
-	if err := it.Err(); err != nil {
+	if err := uplink.DeleteIf(s.uplinks, func(k uint32, _ uint8) bool { return !want[k] }); err != nil {
 		return err
-	}
-	for _, k := range stale {
-		if err := s.uplinks.Delete(k); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-			return err
-		}
 	}
 	for k := range want {
 		if err := s.uplinks.Put(k, uint8(1)); err != nil {
@@ -145,7 +140,7 @@ func source(g *uplink.Gateway, family int) error {
 	for _, a := range addrs {
 		ip, ok := netip.AddrFromSlice(a.IP)
 		if ok && (family == netlink.FAMILY_V4 || ip.IsLinkLocalUnicast()) {
-			g.Src = uplink.Key(ip.Unmap())
+			g.Src = ip.Unmap().As16()
 			break
 		}
 	}
@@ -165,36 +160,39 @@ func gateway(routes []netlink.Route, uplinks map[uint32]bool) uplink.Gateway {
 	}
 	g := uplink.Gateway{Ifindex: uint32(best.LinkIndex)}
 	if gw, ok := netip.AddrFromSlice(best.Gw); ok {
-		g.Addr = uplink.Key(gw.Unmap())
+		g.Addr = gw.Unmap().As16()
 	}
 	return g
 }
 
 // forward puts forwarding back on the primaries where it's off: setting all.forwarding resets it on every device, and
-// bpf_fib_lookup in their PEER programs refuses without it (FWD_DISABLED, failing closed meanwhile)
+// bpf_fib_lookup in their `peer` programs refuses without it (FWD_DISABLED, failing closed meanwhile)
 func (s *sandboxes) forward() error {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return fmt.Errorf("List the devices: %w", err)
 	}
 	for _, l := range links {
-		name := l.Attrs().Name
-		if l.Type() != "netkit" || !strings.HasPrefix(name, uplink.PrimaryPrefix) {
+		if !isPrimary(l) {
 			continue
 		}
-		for _, f := range []string{"ipv4", "ipv6"} {
-			path := "/proc/sys/net/" + f + "/conf/" + name + "/forwarding"
-			b, err := os.ReadFile(path)
-			if err != nil || strings.TrimSpace(string(b)) != "0" {
-				continue // Gone meanwhile, or on
-			}
-			if err := os.WriteFile(path, []byte("1"), 0); err != nil {
-				return fmt.Errorf("Turn %s forwarding on for %s: %w", f, name, err)
-			}
-			slog.Info("Forwarding back on", "primary", name, "family", f)
+		on, err := uplink.Forward(l.Attrs().Name)
+		// Gone meanwhile
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if len(on) > 0 {
+			slog.Info("Forwarding back on", "primary", l.Attrs().Name, "families", on)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func isPrimary(l netlink.Link) bool {
+	return l.Type() == "netkit" && strings.HasPrefix(l.Attrs().Name, uplink.PrimaryPrefix)
 }
 
 // gone says whether the device of ifindex is gone. Asked after reading what names it: ifindexes aren't reused soon
@@ -204,68 +202,109 @@ func gone(ifindex uint32) bool {
 	return errors.As(err, &nf)
 }
 
-// collect removes the registrations whose primary is gone, mdns ones included, and the pins of sandboxes that ended
-// without netns-netkit down (the launcher crashed)
+// notPrimary says whether the device of ifindex is gone or isn't a primary: another device got the ifindex
+func notPrimary(ifindex uint32) bool {
+	l, err := netlink.LinkByIndex(int(ifindex))
+	if err != nil {
+		var nf netlink.LinkNotFoundError
+		return errors.As(err, &nf)
+	}
+	return !isPrimary(l)
+}
+
+// collect removes the registrations whose primary is gone, the mdns ones whose ifindex names no primary, the pins
+// of sandboxes that ended without netns-netkit down (the launcher crashed), and primaries that went without pins for
+// orphanGrace (their up killed in between), which hold routes to their addresses
 func (s *sandboxes) collect() error {
-	var primary uint32
-	var on uint8
-	var listed []uint32
-	mit := s.mdns.Iterate()
-	for mit.Next(&primary, &on) {
-		listed = append(listed, primary)
-	}
-	if err := mit.Err(); err != nil {
+	if err := uplink.DeleteIf(s.mdns, func(p uint32, _ uint8) bool { return notPrimary(p) }); err != nil {
 		return err
 	}
-	for _, p := range listed {
-		if gone(p) {
-			if err := s.mdns.Delete(p); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
+	err := uplink.DeleteIf(s.reg, func(k [16]byte, v uint32) bool {
+		if !gone(v) {
+			return false
 		}
-	}
-	var k [16]byte
-	var v uint32
-	stale := map[[16]byte]uint32{}
-	it := s.reg.Iterate()
-	for it.Next(&k, &v) {
-		stale[k] = v
-	}
-	if err := it.Err(); err != nil {
+		slog.Info("Unregister", "addr", netip.AddrFrom16(k).Unmap(), "ifindex", v)
+		return true
+	})
+	if err != nil {
 		return err
-	}
-	for k, v := range stale {
-		if gone(v) {
-			if err := s.reg.Delete(k); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-			slog.Info("Unregistered", "addr", netip.AddrFrom16(k).Unmap(), "ifindex", v)
-		}
 	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return err
 	}
+	pinned := map[uint32]bool{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		dir := filepath.Join(s.dir, e.Name())
-		// Missing while netns-netkit pins it, which it does once the primary is there
-		m, err := ebpf.LoadPinnedMap(filepath.Join(dir, uplink.SandboxMap), &ebpf.LoadPinOptions{ReadOnly: true})
+		if p, err := primaryOf(dir); err == nil {
+			pinned[p] = true
+		}
+		removed, err := removeGone(dir, primaryOf, gone)
 		if err != nil {
-			continue
-		}
-		var sb uplink.Sandbox
-		err = m.Lookup(uint32(0), &sb)
-		m.Close()
-		if err != nil || !gone(sb.Primary) {
-			continue
-		}
-		if err := os.RemoveAll(dir); err != nil {
 			return err
 		}
-		slog.Info("Removed the pins of a sandbox that is gone", "dir", dir)
+		if removed {
+			slog.Info("Removed the pins of a sandbox that is gone", "dir", dir)
+		}
+	}
+	links, err := netlink.LinkList()
+	if err != nil {
+		return fmt.Errorf("List the devices: %w", err)
+	}
+	primaries := map[uint32]netlink.Link{}
+	for _, l := range links {
+		if isPrimary(l) {
+			primaries[uint32(l.Attrs().Index)] = l
+		}
+	}
+	for _, p := range orphaned(s.orphans, slices.Collect(maps.Keys(primaries)), pinned, time.Now()) {
+		slog.Info("Deleting a primary without pins", "primary", primaries[p].Attrs().Name)
+		if err := netlink.LinkDel(primaries[p]); err != nil && !errors.Is(err, unix.ENODEV) {
+			return fmt.Errorf("Delete %s: %w", primaries[p].Attrs().Name, err)
+		}
 	}
 	return nil
+}
+
+// orphaned returns the primaries that pinned names none of for longer than orphanGrace, keeping in since when each was
+// first seen so
+func orphaned(since map[uint32]time.Time, primaries []uint32, pinned map[uint32]bool, now time.Time) []uint32 {
+	var old []uint32
+	seen := map[uint32]bool{}
+	for _, p := range primaries {
+		if pinned[p] {
+			continue
+		}
+		seen[p] = true
+		if t, ok := since[p]; !ok {
+			since[p] = now
+		} else if now.Sub(t) > orphanGrace {
+			old = append(old, p)
+		}
+	}
+	maps.DeleteFunc(since, func(p uint32, _ time.Time) bool { return !seen[p] })
+	return old
+}
+
+// primaryOf reads the primary of the sandbox of dir. Missing while netns-netkit pins it, which it does once the
+// primary is there
+func primaryOf(dir string) (uint32, error) {
+	sb, err := uplink.ReadSandbox(dir)
+	return sb.Primary, err
+}
+
+// removeGone removes dir when the primary it names is gone, and still names it when read again right before: an up of
+// the same launcher may have put a new sandbox there meanwhile, whose pins hold its programs on
+func removeGone(dir string, primaryOf func(string) (uint32, error), gone func(uint32) bool) (bool, error) {
+	p, err := primaryOf(dir)
+	if err != nil || !gone(p) {
+		return false, nil
+	}
+	if again, err := primaryOf(dir); err != nil || again != p {
+		return false, nil
+	}
+	return true, os.RemoveAll(dir)
 }

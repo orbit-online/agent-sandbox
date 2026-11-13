@@ -1,9 +1,26 @@
 package main
 
 import (
+	"net"
 	"net/netip"
+	"slices"
 	"testing"
+
+	"github.com/vishvananda/netlink"
 )
+
+// Addresses with a host route are taken: the routes of a primary an up left without pins
+func TestHostRoutes(t *testing.T) {
+	route := func(cidr string) netlink.Route {
+		_, n, _ := net.ParseCIDR(cidr)
+		return netlink.Route{Dst: n}
+	}
+	routes := []netlink.Route{route("169.254.102.205/32"), route("fd12::5/128"), route("10.0.0.0/24"), route("::/0"), {}}
+	want := []netip.Addr{netip.MustParseAddr("169.254.102.205"), netip.MustParseAddr("fd12::5")}
+	if got := hostRoutes(routes); !slices.Equal(got, want) {
+		t.Errorf("hostRoutes = %v, want %v", got, want)
+	}
+}
 
 func TestPick(t *testing.T) {
 	block := netip.MustParsePrefix("169.254.100.0/22")

@@ -166,8 +166,9 @@ in
           Standing grants: the broker grants them at every start, without asking, still within the capability's
           instances (one its capability doesn't take stops the broker). Revoked or released, one stays ended until the
           broker starts again. Host command calls under it run without asking, told their `maxValidity`. A `port`
-          grant (`protocol` `tcp` or `udp`, `port`) lets the host reach that port of the sandbox. No folders: what
-          should always be there is a bind (`binds`).
+          grant (`protocol` `tcp` or `udp`, `port`) lets the host reach that port of the sandbox (over UDP only from a
+          connected socket: an unconnected `sendto` gets no reply). No folders: what should always be there is a bind
+          (`binds`).
         '';
       };
       folders = mkOption {
