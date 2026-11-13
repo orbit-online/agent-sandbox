@@ -13,7 +13,7 @@ buildGoModule {
     ];
   };
   subPackages = [ "cmd/netns-macvlan" ];
-  vendorHash = "sha256-gj1oKb5bucv88+9hYfjmsRWeGO17mUDvwEARU+c5nl0=";
+  vendorHash = "sha256-TTC3gETdoWGwhDrjb97qkl+b8vx77E3bIBfz0YyI9D0=";
   env.CGO_ENABLED = 0;
   meta = {
     description = "Give a user-owned network namespace its own macvlan on the LAN";

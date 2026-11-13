@@ -450,8 +450,10 @@ reply, asked or forged.
 
 ### Network (`network.als`)
 
-The network on netkit that replaces the macvlan, modelled before it is
-built, so its claims cite the design (`design:`) and the kernel. A netkit
+The network on netkit that replaces the macvlan, modelled before it was
+built, so its claims cite the design (`design:`) until the code exists,
+the code where it does (`code:`, the uplink programs in
+`cmd/sandbox-uplink/uplink.bpf.c`), and the kernel. A netkit
 pair per launcher in L3 mode, both ends with policy drop: a PEER program
 on the sandbox end (attached through the primary in the host netns), a
 PRIMARY program on the host end for port forwarding, einat-ebpf for NAT
@@ -462,8 +464,9 @@ VPN, a container bridge), and the host setup, which changes at any step:
 the ruleset, forwarding sysctls, route_localnet, routes and the default
 route, the program view of the default-route device, attached programs,
 einat running. Each check a program makes is a guard with a revert
-check. Six guards are not in the design yet (gaps, below): the checks
-hold with them, and their revert checks are the design as written.
+check. Six guards were not in the design (gaps, below): the checks
+hold with them, and their revert checks are the design as written. Two
+are built (3 and 5), the rest decided for the helper, one open (6).
 
 - N1. No sandbox packet reaches local delivery on the host except on a
   flow the host started to that sandbox under a grant.
@@ -503,16 +506,16 @@ Gaps, each a counterexample against the design as written:
 3. einat stopped or restarting (N2, N5): `bpf_redirect_neigh` still runs
    the uplink egress hooks, but with einat detached the packet leaves
    with its link-local or ULA source. Fix: a program after einat on
-   uplink egress that drops sandbox sources.
+   uplink egress that drops sandbox sources (`egress`).
 4. Forwarded packets to a forwarded port (N3): a container on a host
    bridge or a VPN peer addresses the sandbox prefix; with forwarding on
    for its device and a permissive ruleset the host forwards it to the
    primary, and the PRIMARY program takes it for the host. Fix: PRIMARY
    passes only packets the host itself sent.
 5. pre detached while post stays (N3): a LAN host addresses the sandbox
-   prefix and post redirects it. Fix: pre marks what it passed and post
-   redirects only marked packets (mark or cb surviving einat: to check in
-   the VM).
+   prefix and post redirects it. Fix: pre marks what it passed
+   (`skb->mark`, which survives einat) and post redirects only marked
+   packets.
 6. Revoke (N7, open): the design records flows on grant but doesn't say
    whether a revoke clears them; without that, replies on a recorded flow
    reach the host after the grant ended.
@@ -520,7 +523,8 @@ Gaps, each a counterexample against the design as written:
 Also from the model: einat attaches first when it starts, so after a
 restart it runs ahead of pre, and pre drops every reverse-NATed reply
 (it sees the sandbox prefix) until the loader puts pre ahead again. Fails
-closed (N5), but the loader has to follow einat restarts.
+closed (N5); sandbox-uplink follows einat, checking the order every half
+second (`cmd/sandbox-uplink/attach.go`, `sync`).
 
 ## Not modelled
 
@@ -559,7 +563,7 @@ check: that's the user's own mount and ceiling configuration.
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
-| `network.als` | netkit | N1-N7: the network on netkit (designed, not built), each with a run for its premise and a revert check per guard enforcing it |
+| `network.als` | netkit | N1-N7: the network on netkit (the uplink programs built), each with a run for its premise and a revert check per guard enforcing it |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine

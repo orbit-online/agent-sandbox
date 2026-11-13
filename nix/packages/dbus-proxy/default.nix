@@ -19,7 +19,7 @@ buildGoModule {
   };
   # The binary and its own internal/ packages, whose tests run too
   subPackages = [ "cmd/dbus-proxy/..." ];
-  vendorHash = "sha256-WzKEXB0gc22cyl9MoTCOa84Ziz5PwX2K7Gm9fXRu+SI=";
+  vendorHash = "sha256-WM5VL2GBdB/NSxOyvh4qOouOu0q6VC17LlQeMo54Fek=";
   # A static binary; the tests run with the race detector, which needs cgo
   env.CGO_ENABLED = 0;
   preCheck = ''

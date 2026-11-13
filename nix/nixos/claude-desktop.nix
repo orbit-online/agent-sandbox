@@ -48,7 +48,10 @@ let
     u.autoSubUidGidRange || (u.subUidRanges != [ ] && u.subGidRanges != [ ]);
 in
 {
+  imports = [ (import ./network.nix { inherit self; }) ];
+
   config = lib.mkIf (users != [ ]) {
+    agent-sandbox.network.enable = true;
     # Gives a claude-desktop sandbox its own LAN interface, see netns-macvlan --help. Human users only: whoever can run it
     # can give their own namespaces a LAN interface outside the host firewall
     security.wrappers.netns-macvlan = {

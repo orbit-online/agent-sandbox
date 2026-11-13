@@ -41,6 +41,6 @@ jobs:
       # What earlier runs built themselves, cache.nixos.org has the rest
       - uses: ./.github/actions/nix-cache-restore
       # Their package builds run the Go tests
-      - run: nix build -L .#checks.x86_64-linux.{netns-macvlan,subid-broker,dbus-proxy,permissions-broker,permissions-window,request-send}
+      - run: nix build -L .#checks.x86_64-linux.{netns-macvlan,sandbox-uplink,subid-broker,dbus-proxy,permissions-broker,permissions-window,request-send}
       - uses: ./.github/actions/nix-cache-save
         if: ${{ !cancelled() }}

@@ -1,8 +1,9 @@
 /*
- * The sandbox network on netkit, over time (README.md, N1-N7). Designed,
- * not built: it replaces the macvlan, so the citations are `design:`
- * until the code exists, and kernel behaviour cites the kernel
- * (v6.18).
+ * The sandbox network on netkit, over time (README.md, N1-N7). Partly
+ * built: it replaces the macvlan, so the citations are `design:` until
+ * the code exists, the code where it does (`code:`, the uplink programs
+ * in cmd/sandbox-uplink/uplink.bpf.c), and kernel behaviour cites the
+ * kernel (v6.18).
  *
  * Each launcher gets a netkit pair in L3 mode, both ends with policy
  * NETKIT_DROP: the primary in the host netns, the peer (eth0) in the
@@ -118,12 +119,12 @@ one sig
   DfltOnly,      // design: PEER redirects only to the default-route device
   FwdDisabled,   // kernel: the lookup returns FWD_DISABLED without forwarding on the primary (filter.c:6092)
   GrantCheck,    // design: PRIMARY passes and records only flows to a granted port
-  PreDrop,       // design: pre drops uplink packets addressed to a sandbox prefix
+  PreDrop,       // code: pre (uplink.bpf.c) drops uplink packets addressed to a sandbox block
   SrcCheck,      // gap: PEER drops sources other than the sandbox address
   UplinkOnly,    // gap: PEER redirects only to an einat uplink
-  EgressSrcDrop, // gap: a program after einat on uplink egress drops sandbox sources
+  EgressSrcDrop, // code: egress (uplink.bpf.c), after einat on uplink egress, drops sandbox sources
   LocalOrigin,   // gap: PRIMARY passes only packets the host itself sent
-  Handoff,       // gap: post redirects only packets pre passed (a mark)
+  Handoff,       // code: post (uplink.bpf.c) redirects only packets pre marked, drops the rest to a sandbox
   RevokeClears   // gap, open: a revoke removes the flows of the port from the map
   extends Guard {}
 
@@ -351,9 +352,9 @@ run N1premise {
 // N2. A sandbox packet leaves the host only through the device the
 // PEER program holds as the default route, only when that is an einat
 // uplink, SNATed from that sandbox address, and never to a multicast or
-// broadcast destination (design: DfltOnly, MultiDrop; gaps: UplinkOnly,
-// EgressSrcDrop, SrcCheck; EndsOnVerdict keeps the rest out of the host
-// stack, which would forward it with a flushed ruleset).
+// broadcast destination (design: DfltOnly, MultiDrop; code:
+// EgressSrcDrop; gaps: UplinkOnly, SrcCheck; EndsOnVerdict keeps the rest
+// out of the host stack, which would forward it with a flushed ruleset).
 pred egressOk {
   all s: Sandbox | (Pkt.from = s and some Pkt.to & Device) implies
     (Pkt.to & Device in K.view & Uplink and Pkt.natted = s.addr and Pkt.dst != Mcast)
@@ -387,9 +388,9 @@ run N2premise {
 
 // N3. A packet from outside the host (LAN, VPN, container bridge)
 // reaches a sandbox only reverse-NATed by an einat binding, on a flow
-// that sandbox sent out itself (design: PreDrop; gaps: SrcCheck, so a
-// binding names its sender; LocalOrigin, so a forwarded packet isn't
-// taken for the host; Handoff, so post alone doesn't redirect).
+// that sandbox sent out itself (code: PreDrop; Handoff, so post alone
+// doesn't redirect; gaps: SrcCheck, so a binding names its sender;
+// LocalOrigin, so a forwarded packet isn't taken for the host).
 pred inboundOk {
   all s: Sandbox | (Pkt.from in Device and s in Pkt.to) implies (some Pkt.via and Pkt.fl in s.outBy)
 }
@@ -452,7 +453,8 @@ run N4premise {
 // packet and delivers nothing to a sandbox (EgressSrcDrop, PreDrop);
 // after an einat restart puts einat ahead of pre, nothing from that
 // uplink reaches a sandbox until pre is ahead again (PreDrop: pre sees
-// the rewritten destination); a flow the LRU map evicted gets no reply
+// the rewritten destination; sandbox-uplink puts it ahead again,
+// cmd/sandbox-uplink/attach.go sync); a flow the LRU map evicted gets no reply
 // to the host (LocalDrop).
 pred failClosed {
   all s: Sandbox | (Pkt.from = s and s not in PeerOn & Fwd) implies no Pkt.to

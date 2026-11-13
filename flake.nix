@@ -14,6 +14,11 @@
     };
     # Its own nixpkgs-unstable: it's only built and tested against that, and breaks on a stable release
     llm-agents.url = "github:numtide/llm-agents.nix";
+    # NAT for the sandbox network (nix/packages/einat)
+    einat = {
+      url = "github:EHfive/einat-ebpf";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -48,6 +53,8 @@
         permissions-window = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-window { };
         request-send = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/request-send { };
         launcher = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/launcher { };
+        sandbox-uplink = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/sandbox-uplink { };
+        einat = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/einat { input = inputs.einat; };
       });
       checks = forAllSystems (system: (checksFor system).checks);
       # nix-unit's, run by checks.claude-desktop-eval

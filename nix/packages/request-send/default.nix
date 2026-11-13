@@ -19,7 +19,7 @@ buildGoModule {
     ];
   };
   subPackages = [ "cmd/request-send" ];
-  vendorHash = "sha256-8+g6DgGTdgRTSTxbHz0AwdOt9UB3QtUTENlL1ZKBm0M=";
+  vendorHash = "sha256-tqIS/tLBIRH2lP6eDk0roGiAoaeKrM9AdcBgehBc9tg=";
   env.CGO_ENABLED = 0;
   meta = {
     description = "Send HTTP requests for a sandboxed Claude with your users CA certificate and its TPM key";

@@ -20,7 +20,7 @@ buildGoModule {
     ];
   };
   subPackages = [ "cmd/subid-broker" ];
-  vendorHash = "sha256-mzzwfsVPFJgTBn30CHWEMKt4+eNnAxr7sxuW65oDRYI=";
+  vendorHash = "sha256-95VnlPu2HIg1F200CrZq28bwmJmmuFGNxGTeKdhr4wc=";
   env.CGO_ENABLED = 0;
   nativeBuildInputs = [ makeBinaryWrapper ];
   # The shims, which the sandbox puts where shadow's would be. The wrapper passes argv[0] on, which picks the mode

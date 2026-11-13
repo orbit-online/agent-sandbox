@@ -23,7 +23,7 @@ buildGoModule {
   };
   # The binary and its own internal/ packages
   subPackages = [ "cmd/permissions-broker/..." ];
-  vendorHash = "sha256-UtnnjiQ4za9ENwIM0ZR9yzSGwdq1B3sYdWWKNKbuXmM=";
+  vendorHash = "sha256-BOb5+TmMcI6mkdbLEglsHOzzjpfzvoL27TIuGNwI63Y=";
   env.CGO_ENABLED = 0;
   nativeBuildInputs = [ makeBinaryWrapper ];
   # nsenter from the util-linux it's tested against (internal/mounts/helpers.go relies on its --keep-caps behaviour);

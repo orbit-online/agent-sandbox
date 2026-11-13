@@ -70,6 +70,31 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `netns-macvlan` wrapper (`cap_net_admin`, group `users`) when any Home
   Manager user enables the Home Manager module, and asserts they're in
   `users` and have a subuid and subgid range.
+- `nix/nixos/network.nix`: the host side of the sandbox network on netkit, which `claude-desktop.nix` imports and
+  enables (the internal `agent-sandbox.network.enable`) when a user enables the sandbox. It asserts Linux 6.8 or later
+  (netkit programs need 6.7, bpffs' `uid` and `gid` options 6.8), runs einat-ebpf (`nix/packages/einat`, the `einat`
+  input built with NAT66) as `sandbox-einat.service` (DynamicUser, CAP_BPF, CAP_NET_ADMIN and CAP_PERFMON alone, its
+  config written at start by `sandbox-uplink einat-config`), and `sandbox-uplink.service` (user and group
+  `sandbox-uplink`, CAP_BPF and CAP_NET_ADMIN, `PartOf` einat, `Type=notify`), mounts a bpffs of its own at
+  `/run/sandbox-uplink` (`sandbox-uplink:sandbox-uplink`, 1770: bpffs makes its root sticky; `/sys/fs/bpf` belongs to
+  root alone), lets sandbox-uplink write `/proc/sys/net/ipv{4,6}/conf` past `ProtectKernelTunables`, restarts einat from
+  udev when a physical NIC (or a listed uplink) appears, and keeps dhcpcd and NetworkManager off the netkit primaries
+  (`sbx-*`). `agent-sandbox.network.uplinks` lists the uplinks; by default they're found at each start.
+- `cmd/sandbox-uplink/`: the uplink programs and their loader (`sandbox-uplink --help`). `uplink.bpf.c` (dual
+  MIT/GPL, built by the package with clang, its store path linked in as `main.object`): on the tcx ingress of each uplink
+  `pre` ahead of einat (drops destinations in the sandbox blocks, marks the rest with `skb->mark` 0x5a6d0001) and
+  `post` after it (a marked packet to a registered sandbox address goes to its netkit peer with
+  `bpf_redirect_peer`; an unmarked or unregistered one to the sandbox blocks is dropped), and on tcx egress `egress`
+  after einat (drops sandbox sources). `uplinks.go` finds the uplinks (physical NICs of type 1, Ethernet and Wi-Fi)
+  and writes the einat config (NAT44 and NAT66 of the sandbox blocks alone, ports 61000-63999, fe80::/10 and fc00::/7
+  never external, hairpinning off), `attach.go` loads the programs, pins their links as `<program>-<uplink>` (bpffs refuses names with a dot; taking
+  over the links of an earlier run with the new program) and every half second puts them back at their end of the hook, which
+  einat takes the head of whenever it attaches (restart, link up), and on a device that changed. The links stay
+  pinned when it stops, so the guards stay. `sandboxes.go`, after each round: the ifindexes of the uplinks in the pinned
+  `uplinks` map and per family the uplink with the default route of the lowest metric and its gateway in `gateways`
+  (both 0640), forwarding back on `sbx-*` netkit primaries where a change of `all.forwarding` reset it, and the
+  registrations and pin dirs of primaries that are gone (a launcher that crashed). `internal/uplink`: what it shares
+  with the per-launcher helper (below).
 - `go.mod`, `cmd/`, `internal/`: one Go module for the Go helpers below,
   each in `cmd/<binary>`, with `internal/` for what they share (`proc`: the
   pid behind a pidfd and whether it still runs). Their packages in
@@ -242,11 +267,30 @@ single-user Nix store, and an environment doc for the Claude running inside.
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
 `packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
-`packages.<system>.request-send`, `packages.<system>.launcher`, and for CI
+`packages.<system>.request-send`, `packages.<system>.launcher`, `packages.<system>.sandbox-uplink`,
+`packages.<system>.einat`, and for CI
 `legacyPackages.<system>.vm-loop-full` (see Testing).
 Consumers import both modules and enable
 the Home Manager one per user. The modules carry a `key`, so importing them
 twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
+
+### Registering a sandbox with the uplink programs
+
+The per-launcher helper registers each sandbox address so `post` delivers its replies, and removes it when the
+sandbox ends (`internal/uplink`):
+
+- The map: `/run/sandbox-uplink/sandboxes` (`uplink.SandboxesMap`), a `BPF_MAP_TYPE_HASH` of at most 1024 entries,
+  owner and group `sandbox-uplink`, mode 0660, in a directory of mode 1770; no world access. Opening it takes the group
+  alone (the wrapper of the helper made setgid `sandbox-uplink`): `kernel.unprivileged_bpf_disabled` stops creating BPF
+  objects without CAP_BPF, not opening a pinned one, which the mode of the pin decides (`vm-uplink` checks both ways).
+- Key: 16 bytes, the address in network byte order, IPv4 mapped into `::ffff:0:0/96` (`uplink.Key`). One entry per
+  address: the IPv4 /32 of the sandbox and its IPv6 /128 (the PEER program drops every other source, so no other address
+  of a sandbox gets an einat binding).
+- Value: the ifindex of the netkit primary, a `uint32` in host byte order.
+- The addresses come from the blocks the programs and einat know: `uplink.V4Block` (169.254.100.0/22) and
+  `uplink.ULABlock(machine-id)`, one ULA /48 per machine (`fd`, then 40 bits of HMAC-SHA256 keyed by the machine ID
+  over the app ID of the package). A destination in these blocks that isn't registered is dropped.
+- The name of the primary starts with `uplink.PrimaryPrefix` (`sbx-`), which dhcpcd and NetworkManager leave alone.
 
 ## Rules
 
@@ -299,7 +343,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox's store in memo's config on the host, the
   files, package and `environmentFile` a launcher with `memo.enable` gets
   (and the default launcher doesn't), the NixOS wrapper appears only when a user
-  enables the module, for group users, the users-group, subid and
+  enables the module, for group users, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
+  `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
@@ -609,6 +654,25 @@ modules and a user alice (the `home-manager` input exists only for it).
   write one's GET and POST with a multiline body, the default step finding step-kms-plugin, origins that aren't https
   origins or none failing to evaluate, the assertion without `permissions.enable`, and `permissions-broker serve`
   loading the declaration while refusing a broken one. Not covered: the real osTicket API.
+- `sandbox-uplink`: the package build runs its Go tests (`uplinks_test.go`: the uplinks found in a fake
+  `/sys/class/net`, physical type-1 devices only, named ones replacing the search, names the einat TOML can't take
+  refused; the einat config word for word; `sandboxes_test.go`: the gateway, the default route of the lowest metric
+  through an uplink, none through a VPN alone) and those of `internal/uplink` (the ULA /48 against HMAC in Python, machine IDs
+  refused, the key layout).
+- `vm-uplink` (`nix/checks/uplink.nix`, needs KVM, part of `vm`): a workstation with
+  `sandbox-einat` and `sandbox-uplink` from the NixOS module and a LAN host as its gateway; the test script stands in for the helper with a
+  netkit pair forwarding through the host stack and bpftool registering its addresses. Both units without root and
+  with exactly their capabilities, the einat config (eth0 and eth1, the blocks, the port range), the order `pre`, einat,
+  `post` on ingress and einat, `egress` on egress, the map writable by a non-root member of the group with CAP_BPF
+  without capabilities and refused to another group with CAP_BPF, the `uplinks` and `gateways` maps (0640, eth0 and
+  eth1, per family the default route of the lowest metric and its gateway), a registration of a gone primary removed,
+  sandbox UDP over IPv4 and IPv6 SNATed to the workstation address
+  on ports 61000-63999 and HTTP, replies arriving with forwarding to the sandbox blocks dropped in nftables (and not
+  without `post`), LAN packets to the sandbox addresses dropped with einat running and stopped, also with `pre`
+  removed (`post` refusing what `pre` didn't mark) and arriving with neither, sandbox sources kept off the LAN with
+  einat stopped (and leaving without `egress`), the order back after an einat restart and after a link flap (and
+  replies failing while einat is ahead of `pre` with sandbox-uplink stopped), and a hot-plugged NIC getting an einat
+  config and the programs.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`: the NixOS VM test
   (`nix/checks/vm/`, needs KVM), in six parts that Nix runs in parallel;

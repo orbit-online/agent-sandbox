@@ -348,6 +348,48 @@ let
       expr = (nixos { }).config.security.wrappers ? netns-macvlan;
       expected = false;
     };
+    # The host side of the sandbox network comes with the sandbox, and only then
+    testNetwork = {
+      expr = {
+        on = system.config.systemd.services ? sandbox-einat && system.config.systemd.services ? sandbox-uplink;
+        off = (nixos { }).config.systemd.services ? sandbox-einat;
+        inherit (system.config.networking.dhcpcd) denyInterfaces;
+        inherit (system.config.networking.networkmanager) unmanaged;
+      };
+      expected = {
+        on = true;
+        off = false;
+        denyInterfaces = [ "sbx-*" ];
+        unmanaged = [ "interface-name:sbx-*" ];
+      };
+    };
+    # Named uplinks reach both units and the udev rule
+    testUplinks =
+      let
+        c = (system.extendModules { modules = [ { agent-sandbox.network.uplinks = [ "eth1" ]; } ]; }).config;
+      in
+      {
+        expr = {
+          einat = lib.hasInfix "--uplink=eth1" c.systemd.services.sandbox-einat.serviceConfig.ExecStartPre;
+          uplink = lib.hasInfix "--uplink=eth1" c.systemd.services.sandbox-uplink.serviceConfig.ExecStart;
+          udev = lib.hasInfix ''KERNEL=="eth1"'' c.services.udev.extraRules;
+        };
+        expected = {
+          einat = true;
+          uplink = true;
+          udev = true;
+        };
+      };
+    testKernelAssertion = {
+      expr = map (a: a.message) (
+        lib.filter (a: !a.assertion)
+          (system.extendModules { modules = [ { boot.kernelPackages = pkgs.linuxPackages_6_6; } ]; })
+          .config.assertions
+      );
+      expected = [
+        "agent-sandbox: the sandbox network needs Linux 6.8 or later, this machine has ${pkgs.linuxPackages_6_6.kernel.version}."
+      ];
+    };
     testGraphicsAssertion = {
       expr = map (a: a.message) (
         failedAssertions (
@@ -999,8 +1041,15 @@ let
     inherit pkgs aliceModule dbusProxy;
     broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   };
-  vmChecks = lib.mapAttrs' (part: lib.nameValuePair "vm-${part}") vmParts // {
-    vm = pkgs.linkFarm "vm-tests" vmParts;
+  # The host side of the sandbox network, on machines of its own
+  vmAll = vmParts // {
+    uplink = import ./uplink.nix {
+      inherit pkgs;
+      module = self.nixosModules.claude-desktop;
+    };
+  };
+  vmChecks = lib.mapAttrs' (part: lib.nameValuePair "vm-${part}") vmAll // {
+    vm = pkgs.linkFarm "vm-tests" vmAll;
   };
   # vm-loop at 100 launches, for CI: the flake check's 20 keep a local run short
   vmLoopFull =
@@ -1017,6 +1066,7 @@ in
   checks = vmChecks // {
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
       netns-macvlan
+      sandbox-uplink
       subid-broker
       dbus-proxy
       permissions-broker
