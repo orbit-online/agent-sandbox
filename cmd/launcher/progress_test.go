@@ -151,3 +151,43 @@ func TestLateMarker(t *testing.T) {
 		t.Errorf("%v at %s", p.at, steps[p.cur].name)
 	}
 }
+
+// The copy gets a segment of its own that only grows, from where the bar was to where the rest of the start goes on
+func TestCopySegment(t *testing.T) {
+	hist := []map[string]time.Duration{secs(stepPrepared, 1.0, stepReady, 4.0)}
+	p := newProgress(&splash{}, time.Now(), hist)
+	p.shown = 0.2
+	p.copying(0)
+	if p.copyFrom != 0.2 || p.shown != 0.2 {
+		t.Errorf("At the start of the copy: from %v, shown %v", p.copyFrom, p.shown)
+	}
+	// The rest of the start takes 0.8 of 4s: halfway through a copy of 0.4s, 0.2s of 3.6s are done, at its end 0.4s
+	p.pause = time.Now().Add(-200 * time.Millisecond)
+	if g := p.copyShare(0.5, p.pause.Add(200*time.Millisecond)); g < 0.0555 || g > 0.0556 {
+		t.Errorf("Halfway through a 0.4s copy: %v", g)
+	}
+	if g := p.copyShare(1, p.pause.Add(400*time.Millisecond)); g < 0.111 || g > 0.112 {
+		t.Errorf("At the end of a 0.4s copy: %v", g)
+	}
+	last := p.shown
+	for _, f := range []float64{0.1, 0.5, 0.9, 0.99} {
+		p.copying(f)
+		if p.shown < last || p.shown >= 1 {
+			t.Errorf("At %v: %v after %v", f, p.shown, last)
+		}
+		last = p.shown
+	}
+	p.copied()
+	if p.copyTo < last || p.copyTo > 0.2+0.8*0.2 {
+		t.Errorf("Copy ended at %v, the bar at %v", p.copyTo, last)
+	}
+	if p.shown < p.copyTo || p.shown > p.copyTo+0.01 {
+		t.Errorf("Back to the steps at %v, the copy ended at %v", p.shown, p.copyTo)
+	}
+	// Without history the copy shows its own progress
+	p = newProgress(&splash{}, time.Now(), nil)
+	p.copying(0.5)
+	if p.shown != 0.5 {
+		t.Errorf("Without history: %v", p.shown)
+	}
+}

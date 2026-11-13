@@ -48,7 +48,7 @@ func marker(cfg *config, e entry) string {
 
 // progress shows the start's steps on the splash, and its progress estimated from earlier launches: each step at its
 // median share of their time, the bar creeping towards the next step, never past it. The store's copy, which only a
-// rebuild brings, shows its own progress and counts for neither
+// rebuild brings, counts for neither: it gets a segment of its own, see copying
 type progress struct {
 	sp *splash
 
@@ -62,6 +62,8 @@ type progress struct {
 	// From earlier launches: the median duration to each step, and the share of the whole start that makes
 	median map[string]time.Duration
 	share  map[string]float64
+	// The bar when the copy started, and where its segment ended, which the rest of the start is scaled into
+	copyFrom, copyTo float64
 }
 
 func newProgress(sp *splash, began time.Time, hist []map[string]time.Duration) *progress {
@@ -121,14 +123,34 @@ func (p *progress) mark(name string, at time.Time) {
 	}
 }
 
-// copying shows the store's copy at f, its time not counted
+// copying shows the copy of the store at f, its time not counted. A copy runs from a few paths to the whole closure, so
+// no history tells how long it takes: the rest of the bar goes by its time so far over that time extrapolated from f
+// plus the rest of the start, which only grows and ends where the rest of the start takes over
 func (p *progress) copying(f float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := time.Now()
 	if p.pause.IsZero() {
-		p.pause = time.Now()
+		p.pause = now
+		p.copyFrom = p.shown
 	}
-	p.sp.step("Copying the sandbox's programs", &f)
+	g := f
+	if p.share != nil {
+		g = p.copyFrom + (1-p.copyFrom)*p.copyShare(f, now)
+	}
+	p.shown = max(p.shown, g)
+	p.sp.step("Copying the sandbox's programs", &p.shown)
+}
+
+// copyShare is the share of the copy in what the start had left when the copy began, with f of it done. Under mu
+func (p *progress) copyShare(f float64, now time.Time) float64 {
+	c := float64(now.Sub(p.pause))
+	rest := (1 - p.copyFrom) * float64(p.median[stepReady])
+	if c*f == 0 {
+		return 0
+	}
+	// c / (c/f + rest), c/f being the whole copy
+	return c * f / (c + rest*f)
 }
 
 // copied ends a copy, if any: the step's text again
@@ -138,7 +160,11 @@ func (p *progress) copied() {
 	if p.pause.IsZero() {
 		return
 	}
-	p.paused += time.Since(p.pause)
+	now := time.Now()
+	if p.share != nil {
+		p.copyTo = p.copyFrom + (1-p.copyFrom)*p.copyShare(1, now)
+	}
+	p.paused += now.Sub(p.pause)
 	p.pause = time.Time{}
 	p.send(true)
 }
@@ -159,6 +185,10 @@ func (p *progress) send(text bool) {
 		st.Text = steps[p.cur].text
 	}
 	if f, ok := p.estimate(p.elapsed(time.Now())); ok {
+		if p.copyTo > 0 {
+			// After a copy: the rest of the start in what the copy left
+			f = p.copyTo + max(f-p.copyFrom, 0)/(1-p.copyFrom)*(1-p.copyTo)
+		}
 		p.shown = max(p.shown, f)
 		st.Progress = &p.shown
 	} else if !text {
