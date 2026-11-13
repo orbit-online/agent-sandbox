@@ -10,11 +10,14 @@ agent-sandbox runs Claude Desktop (with its Code tab) in a bubblewrap sandbox
 on NixOS, built with [nixpak](https://github.com/nixpak/nixpak). It sees only
 the paths you bind into it. It gets its own network namespace, joined to the
 host by a netkit pair whose eBPF programs let it out only through the
-physical uplinks (Ethernet and Wi-Fi, IPv4 and IPv6, NATed by
+physical uplink with the default route (Ethernet or Wi-Fi, IPv4 and IPv6, NATed by
 [einat](https://github.com/EHfive/einat-ebpf)), so it reaches the internet
-and the LAN but none of the services on the host, VPN routes, container
-bridges or other sandboxes, whatever the host firewall says. Nothing reaches
-it but replies, and the host on a port you grant it (Permissions). It has its
+and the LAN of that uplink but none of the services on the host, the subnets of
+its other NICs, VPN routes, container bridges, link-local addresses (a cloud
+metadata service) or other sandboxes, whatever the host firewall says. The LAN sees it at the address of the host
+(einat NATs it there), so a LAN service that trusts the host address trusts
+the sandbox too. Nothing reaches it but replies, and your own processes on the host
+on a port you grant it (Permissions). It has its
 own single-user Nix store, so `nix shell` and `nix build` work without the
 daemon of the host. The
 privileged parts are a small helper, `netns-netkit`, with `cap_net_admin`
@@ -52,6 +55,15 @@ Import both modules and enable the Home Manager one per user:
 
 The NixOS module installs `netns-netkit` for group `users`, so the user has
 to be in it, and needs Linux 6.8 or later. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
+
+The sandboxes leave through the uplink with the default route, one of those einat NATs them on. By default those
+are the physical NICs (Ethernet and Wi-Fi), a NIC enslaved to a bridge or
+bond counting as that bridge or bond, found again when a NIC appears. To pick
+them yourself:
+
+```nix
+agent-sandbox.network.uplinks = [ "enp3s0" "wlan0" ];
+```
 
 Other options: `extraPath` (directories ahead of the PATH packages),
 `nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager), `network.enable`

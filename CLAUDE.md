@@ -75,30 +75,53 @@ single-user Nix store, and an environment doc for the Claude running inside.
   enables (the internal `agent-sandbox.network.enable`) when a user enables the sandbox. It asserts Linux 6.8 or later
   (netkit programs need 6.7, bpffs' `uid` and `gid` options 6.8), runs einat-ebpf (`nix/packages/einat`, the `einat`
   input built with NAT66) as `sandbox-einat.service` (DynamicUser, CAP_BPF, CAP_NET_ADMIN and CAP_PERFMON alone, its
-  config written at start by `sandbox-uplink einat-config`), and `sandbox-uplink.service` (user and group
+  config written at start by `sandbox-uplink einat-config` as `ExecCondition=`, so the unit skips without an uplink,
+  which einat refuses), and `sandbox-uplink.service` (user and group
   `sandbox-uplink`, CAP_BPF and CAP_NET_ADMIN, `PartOf` einat, `Type=notify`), mounts a bpffs of its own at
   `/run/sandbox-uplink` (`sandbox-uplink:sandbox-uplink`, 1770: bpffs makes its root sticky; `/sys/fs/bpf` belongs to
-  root alone), lets sandbox-uplink write `/proc/sys/net/ipv{4,6}/conf` past `ProtectKernelTunables`, restarts einat from
-  udev when a physical NIC (or a listed uplink) appears, and keeps dhcpcd and NetworkManager off the netkit primaries
-  (`sbx-*`). `agent-sandbox.network.uplinks` lists the uplinks; by default they're found at each start.
+  root alone), lets sandbox-uplink write `/proc/sys/net/ipv{4,6}/conf` past `ProtectKernelTunables`, and keeps dhcpcd,
+  NetworkManager and systemd-networkd (when enabled) off the netkit primaries (`sbx-*`). When a physical NIC (or a
+  listed uplink, by its final `NAME`) appears, udev restarts `sandbox-einat-reload.service`, a oneshot that restarts
+  einat when the config it would get differs or einat isn't running (failed, skipped, or stopped). `agent-sandbox.network.uplinks` lists the uplinks; by default they're
+  found at each start: the physical NICs, each as the bridge or bond it is enslaved to. A NixOS switch that changes
+  the store paths of einat or sandbox-uplink restarts them, which drops the NAT state: running sandboxes lose their
+  open connections, new ones work. LAN hosts with addresses in 169.254.100.0/22 lose contact with the host, as `pre`
+  drops sources there. Cilium coexists: its `cil_from_netdev` and `cil_to_netdev` attach with tcx at the tail and end
+  the chain (`TC_ACT_OK`), so `post` and `egress` sit right after einat, ahead of it (`attach.go`), and the primaries
+  get no IPv6 link-local address (`pair.go`), so its device auto-detection skips them. Cilium may rewrite the source
+  port einat chose when it collides with its own NAT (its range 32768-65535 holds the range of einat), which is rare.
 - `cmd/sandbox-uplink/`: the uplink programs and their loader (`sandbox-uplink --help`). `uplink.bpf.c` (dual
   MIT/GPL, built by the package with clang, its store path linked in as `main.object`): on the tcx ingress of each uplink
-  `pre` ahead of einat (drops destinations in the sandbox blocks, marks the rest with `skb->mark` 0x5a6d0001; first
-  copies mDNS responses, QR set from and to port 5353, to the egress of each primary in the pinned `mdns` map, marked
-  0x5a6d0002, with `bpf_for_each_map_elem`) and
-  `post` after it (a marked packet to a registered sandbox address goes to its netkit peer with
-  `bpf_redirect_peer`; an unmarked or unregistered one to the sandbox blocks is dropped), and on tcx egress `egress`
-  after einat (drops sandbox sources). `uplinks.go` finds the uplinks (physical NICs of type 1, Ethernet and Wi-Fi)
+  `pre` ahead of einat (drops sources and destinations in the sandbox blocks; copies mDNS responses without a VLAN
+  tag, QR set from and to port 5353, to the egress of each primary in the pinned `mdns` map, `skb->mark` 0x5a6d0002
+  for the copies and back to what it was after, with `bpf_for_each_map_elem`; marks what passes in `skb->cb[0..1]`,
+  which einat leaves alone) and
+  `post` right after einat (a marked packet to a registered sandbox address goes to its netkit peer with
+  `bpf_redirect_peer`; an unmarked, VLAN-tagged or unregistered one to the sandbox blocks is dropped), and on tcx egress `egress`
+  right after einat (drops sandbox sources). All three pull the IP header into the linear part first
+  (`bpf_skb_pull_data`) and drop a frame shorter than it. `uplinks.go` finds the uplinks (physical NICs of type 1, Ethernet and
+  Wi-Fi, as their master when enslaved to a bridge or bond; none is no error)
   and writes the einat config (NAT44 and NAT66 of the sandbox blocks alone, ports 61000-63999, fe80::/10 and fc00::/7
-  never external, hairpinning off), `attach.go` loads the programs, pins their links as `<program>-<uplink>` (the dots of the uplink as colons: bpffs refuses names with a dot; taking
-  over the links of an earlier run with the new program) and every half second puts them back at their end of the hook, which
-  einat takes the head of whenever it attaches (restart, link up), and on a device that changed. The links stay
+  never external, hairpinning off), `attach.go` loads the programs twice (tcx refuses one twice on a hook, and a move attaches the other instance before it detaches the old link), pins their links as `<program>-<uplink>` (the dots of the uplink as colons: bpffs refuses names with a dot; taking
+  over the links of an earlier run with the new program) and every half second puts them back in place: `pre` at the head,
+  which einat takes whenever it attaches (restart, link up), `post` and `egress` right after the einat program,
+  tolerating programs of others after them, and on a device that changed. Reading the name of a program takes
+  CAP_SYS_ADMIN, so einat is the program that came to the head of the hook when it attached (`einatProg`), and at
+  start the last program of another ahead of `post` or `egress`, or with those not attached yet the first one: a
+  program of another at the head then is taken for einat until einat attaches again. einat attaching revises that
+  guess, since it sits where it attached: right after `pre` once that is back at the head, and at the head of tcx
+  egress. Without it a first round that found Cilium alone (at the tail, before einat starts: aim-office, where
+  Cilium attaches at boot) kept `post` and `egress` behind Cilium, which ends the chain, so replies reached the NIC
+  and never the sandbox. `vm-uplink` attaches its stand-ins with one at the head, so the unit tests of `einatProg`
+  cover the hook that holds Cilium alone. While einat is away `post` and
+  `egress` stay put. The links stay
   pinned when it stops, so the guards stay. `mdns.go`: the mDNS groups joined on each uplink it attaches to, so the NIC
   (its multicast filter) and IGMP or MLD snooping switches let the responses in. `sandboxes.go`, after each round: the ifindexes of the uplinks in the pinned
   `uplinks` map and per family the uplink with the default route of the lowest metric, its gateway, and the source
   (the first IPv4 address, the IPv6 link-local one) and MAC of mDNS queries in `gateways`
   (both 0640), forwarding back on `sbx-*` netkit primaries where a change of `all.forwarding` reset it, and the
-  registrations (in `mdns` too) and pin dirs of primaries that are gone (a launcher that crashed). `internal/uplink`: what it shares
+  registrations (in `mdns` too) and pin dirs of primaries that are gone (a launcher that crashed), and primaries without
+  pins for 30 seconds (an `up` killed in between). `internal/uplink`: what it shares
   with the per-launcher helper (below).
 - `go.mod`, `cmd/`, `internal/`: one Go module for the Go helpers below,
   each in `cmd/<binary>`, with `internal/` for what they share (`proc`: the
@@ -126,12 +149,24 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `dns.go` (the resolv.conf of the sandbox: the `nameservers` option, or else `Manager.DNSEx` and `Domains` of resolved,
   or `DnsManager.Configuration` of NetworkManager without resolved, read on the system bus without activating either, with
   the default-route uplinks from `netns-netkit uplinks`; written in place through `resolv` of the state script, before
-  nixpak's launcher runs and again a second after each PropertiesChanged of either, their owners changing or a route
-  event, when the content changed; a warning in the namespace of the host side when empty; with `network.enable` off
-  an empty file, nothing followed and no warning), `resolvconf.go` (what
+  nixpak's launcher runs, once more a second after it subscribed and again a second after each PropertiesChanged of
+  either, their owners changing or a route event, when the content changed (of resolved only `Manager.DNSEx` emits
+  `PropertiesChanged`: `Domains` and `DefaultRoute` of a link are `EmitsChangedSignal("false")`, so a change to those
+  alone waits for the next change of the servers, route event or launch); a read that fails other than with the
+  service absent keeps the file and is tried again after 5 s, the system bus and the route subscription are subscribed
+  to again when they close; a warning in the namespace of the host side when empty; with `network.enable` off
+  an empty file, nothing followed and no warning; on the same changes the default routes of the running sandbox,
+  `sandboxRoutes` of `helper.go`), `resolvconf.go` (what
   the sandbox gets: servers on port 53 of those uplinks, global ones the host routes through them or that are public,
   never `vpn` entries of NetworkManager, loopback, link-local, multicast or host-local addresses, deduplicated, and
-  the search domains of the same links, routing-only ones out)
+  the search domains of the same links, routing-only ones and any that isn't LDH labels of at most 253 characters
+  out. Split DNS goes too, servers and search domains: a scope of resolved that serves its routing domains alone,
+  which resolv.conf has no way to say, so the sandbox would send every query there. That is a link whose
+  `DefaultRoute` is false (`linkDefaultRoute` of `dns.go` reads it per link of a server, `GetLink` then the property;
+  a link gone meanwhile counts as one), an entry of NetworkManager with a routing domain other than `~.`, and, ours
+  rather than how resolved routes queries, the global scope with such a routing domain: CoreDNS of k3s on `10.44.0.10`
+  for `~k3s.internal` (ops-cluster of secoya/nixos-workstation) sits on a load-balancer address Cilium holds in eBPF on
+  the host, which no sandbox reaches, and the route lookup can't tell because the kernel has no route for it)
   and `startlog.go` (journalctl on the two namespaces: following the host side's from the start on, the history, a
   failure's logs). On the host, `launcher bwrap` and its helper log into the host side's namespace themselves
   (`hostLog`), not into nixpak's launcher's output, which supervise pumps into the sandbox's. The app prints the ready line (`lib.nix`'s `readyLine`) from a hook
@@ -142,7 +177,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   it starts itself as `bwrap-helper` with bwrap's info and block pipes, then execs into bwrap; the helper writes the
   maps once bwrap made the namespace (killing bwrap and its child when they fail), lays out the cgroups and on the host
   sets up the network (`--net`: `netns-netkit up`, then its addresses, `lo` and `eth0` up and the default routes in N,
-  through `nsenter --keep-caps` and `ip -batch`) before it passes bwrap's info on to nixpak, whose pasta slot is a
+  through `nsenter --keep-caps` and `ip -batch`: `sandboxRoutes`, a default route of each family that
+  `netns-netkit uplinks` names an uplink for, the other removed, as the netns of the sandbox is the user's and
+  netns-netkit has no CAP_SYS_ADMIN to enter it) before it passes bwrap's info on to nixpak, whose pasta slot is a
   no-op that only keeps the netns. The unit of the app runs `netns-netkit down` as `ExecStopPost=` (`enter.go`),
   however it ends. With `network.enable` off (`network.nix`) neither: no `--net`, so the netns keeps the `lo` bwrap
   brings up, and `network` false in the launcher config.
@@ -158,15 +195,30 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants: `grant`, `revoke`, `revoke --all`
   for the cleanup of the broker, `addr`, the addresses of the running sandbox, which port grants report, and `uplinks`,
   the ifindexes in `gateways`, which the launcher picks DNS servers by and can't read itself). `netkit.bpf.c` (dual MIT/GPL,
-  built by the package with clang): `peer` (`BPF_NETKIT_PEER`: multicast and broadcast dropped (with the constant
+  built by the package with clang, with its mDNS code in `mdns.bpf.h` and what it shares with `uplink.bpf.c` in
+  `internal/uplink/uplink.bpf.h`): `peer` (`BPF_NETKIT_PEER`: VLAN-tagged packets dropped, multicast and broadcast
+  dropped (with the constant
   `mdns`, which `up --mdns` sets, an mDNS query copied first by `query_out` out of the uplink in `gateways`: from its
   address and MAC of that uplink in `gateways` and port 5353, the QU bits cleared over at most 128 labels and questions, none copied
-  past that, through `bpf_skb_load_bytes`), any source but the
-  sandbox addresses dropped, `bpf_fib_lookup` with `tot_len` 0; local delivery only for a recorded flow, out with
-  `bpf_redirect_neigh` through an einat uplink, and what the host routes through any other device (a full-tunnel VPN,
-  a bridge) through the uplink in `gateways` to its gateway; everything else dropped, never `NETKIT_NEXT`) and
-  `primary` (`BPF_NETKIT_PRIMARY`: only packets with `skb->sk`, sent by the host itself, over TCP or UDP to a granted
-  port, recorded in the LRU `flows` map, and with `mdns` the mDNS responses `pre` copied in, by their mark, which the
+  past that, through `bpf_skb_load_bytes`; no GSO packet, nor one with bytes past its IP length; `MDNS_RATE` (10 a
+  second) after `MDNS_BURST` (20), a GCRA in the unpinned `limits` map), any source but the
+  sandbox addresses dropped, link-local destinations and the ULA and CGNAT metadata addresses of AWS, GCP, OCI and Alibaba dropped,
+  `bpf_fib_lookup` with `tot_len` 0; local delivery only
+  for a recorded flow that `primary` renewed within `IDLE_TCP` (an hour) or `IDLE_SHORT` (2 minutes, UDP and after a
+  FIN of the host) while its port is still in `ports`, never a TCP SYN without ACK (TCP whose header isn't whole in
+  the linear part has no ports, so it reaches no flow), and UDP only to a host socket
+  connected to the sandbox address and port (`bpf_sk_lookup_udp`); out with `bpf_redirect_neigh` through the einat
+  uplink in `gateways` alone (another einat uplink, the subnet of a second NIC, dropped), a next hop without a
+  neighbour entry (`BPF_FIB_LKUP_RET_NO_NEIGH`) other than the gateway at `NEIGH_RATE` (16 a second) after
+  `NEIGH_BURST` (64), and what the host routes through any other device (a full-tunnel VPN, a bridge) through the
+  uplink in `gateways` to its gateway (with no gateway there, a default route on the link, to the destination as its
+  own next hop, outside the neighbour limit: a known limit); everything else dropped, never `NETKIT_NEXT`) and
+  `primary` (`BPF_NETKIT_PRIMARY`: no VLAN tag, only packets of a socket of the owner of the sandbox
+  (`bpf_get_socket_uid`, the uid in the `sandbox` map), sent by the host itself, over TCP or UDP to a granted
+  port; a flow starts only with a TCP SYN without ACK or a datagram of a connected UDP socket (`bpf_sk_fullsock`,
+  `BPF_TCP_ESTABLISHED`), recorded in the LRU `flows` map, and anything else of the host passes only on a recorded
+  flow, renewing its time in place (the FIN mark sticks until the next SYN; a TCP RST deletes the flow), and with
+  `mdns` the mDNS responses `pre` copied in, by their mark, which the
   primary keeps for it (`NETKIT_SCRUB_NONE`, `pair.go`) and the program clears with the priority). Without CAP_PERFMON the verifier refuses variable offsets into packets and
   pointers picked between map values, so the programs read no IPv4 options and compare both sandbox addresses.
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
@@ -316,16 +368,17 @@ twice (nixos-workstation directly and through nixos-andsens' `apps`) is fine.
 The per-launcher helper registers each sandbox address so `post` delivers its replies, and removes it when the
 sandbox ends (`internal/uplink`):
 
-- The map: `/run/sandbox-uplink/sandboxes` (`uplink.SandboxesMap`), a `BPF_MAP_TYPE_HASH` of at most 1024 entries,
+- The map: `/run/sandbox-uplink/sandboxes` (`uplink.SandboxesMap`), a `BPF_MAP_TYPE_HASH` of at most 1024 entries
+  (two a sandbox: 512 sandboxes, 32 users at the limit of 16 each),
   owner and group `sandbox-uplink`, mode 0660, in a directory of mode 1770; no world access. Opening it takes the group
   alone (the wrapper of the helper made setgid `sandbox-uplink`): `kernel.unprivileged_bpf_disabled` stops creating BPF
   objects without CAP_BPF, not opening a pinned one, which the mode of the pin decides (`vm-uplink` checks both ways).
-- Key: 16 bytes, the address in network byte order, IPv4 mapped into `::ffff:0:0/96` (`uplink.Key`). One entry per
-  address: the IPv4 /32 of the sandbox and its IPv6 /128 (the PEER program drops every other source, so no other address
+- Key: 16 bytes, the address in network byte order, IPv4 mapped into `::ffff:0:0/96` (`netip.Addr.As16`). One entry per
+  address: the IPv4 /32 of the sandbox and its IPv6 /128 (the `peer` program drops every other source, so no other address
   of a sandbox gets an einat binding).
 - Value: the ifindex of the netkit primary, a `uint32` in host byte order.
 - The addresses come from the blocks the programs and einat know: `uplink.V4Block` (169.254.100.0/22) and
-  `uplink.ULABlock(machine-id)`, one ULA /48 per machine (`fd`, then 40 bits of HMAC-SHA256 keyed by the machine ID
+  `uplink.ULABlock()`, one ULA /48 per machine (`fd`, then 40 bits of HMAC-SHA256 keyed by the machine ID
   over the app ID of the package). A destination in these blocks that isn't registered is dropped.
 - The name of the primary starts with `uplink.PrimaryPrefix` (`sbx-`), which `nix/nixos/network.nix` keeps dhcpcd and
   NetworkManager off.
@@ -335,9 +388,19 @@ sandbox ends (`internal/uplink`):
   `primary` with `mdns` passes them.
 - netns-netkit pins the links and maps of each sandbox in `uplink.SandboxDir`, `/run/sandbox-uplink/<uid>[-<name>]`
   (owner the user, group `sandbox-uplink`, 0770): `peer` and `primary` (the links), `ports` (granted ports,
-  `protocol << 16 | port`), `flows` (LRU) and `sandbox` (0640, `uplink.Sandbox`: the two keys and the ifindex of
-  the primary), which `down` and sandbox-uplink remove it by. The PEER programs read `uplink.UplinksMap` and
+  `protocol << 16 | port`), `flows` (LRU, the time of the last packet of the host and whether the host sent a FIN) and `sandbox`
+  (0640, `uplink.Sandbox`: the two keys, the ifindex of the primary and the uid of the owner), which `down` and
+  sandbox-uplink remove it by (sandbox-uplink reads it again right before). `up` refuses a uid with
+  `uplink.MaxSandboxesPerUID` (16) sandboxes, such dirs and its `sbx-<uid in base 36>-*` primaries without one,
+  counted and registered under an flock on `/run/sandbox-uplink/lock-<uid>` (a dir of the user, made on first use: bpffs holds no files), so two at once can't both pass and a stopped `up` holds back only its own user. The `peer` programs read `uplink.UplinksMap` and
   `uplink.GatewaysMap` (`uplink.Gateway`), whose shapes `netkit.bpf.c` repeats.
+- sandbox-uplink, after every round of attaching, keeps the ifindexes of the uplinks with `pre`, `post` and `egress`
+  attached in the `uplinks` map, which the `peer` programs redirect to, and per family the one with the default route
+  of the lowest metric in the `gateways` map (its gateway, and the address and MAC mDNS queries leave from); turns
+  forwarding back on where a change of `all.forwarding` turned it off on a primary; and removes the registrations
+  whose primary is gone, the `mdns` entries whose ifindex names no primary, the pins of sandboxes whose primary
+  is gone, and primaries that no pins named for `orphanGrace` (30 seconds, an `up` killed between creating the pair
+  and pinning; its routes would squat addresses, which `up` takes as taken meanwhile) (`sandboxes.go`).
 
 ## Rules
 
@@ -346,6 +409,10 @@ sandbox ends (`internal/uplink`):
   settings, such as extra binds, go in the consumer's config.
 - The sandbox always gets its own netns, with a netkit pair unless `network.enable` is off (`lo` alone). There is no
   option to share the host's; the module asserts it.
+- The eBPF checks on the pair assume the sandbox holds no CAP_NET_RAW or CAP_NET_ADMIN over its netns (bwrap drops
+  them; a nested user namespace owns no netns `eth0` is in): no AF_PACKET socket on `eth0`, whose `PACKET_VNET_HDR`
+  checksum offsets the programs don't check, and no change to the netkit device. `vm-launch` tests it ("the sandbox
+  holds no CAP_NET_RAW or CAP_NET_ADMIN over its netns"); keep it so, and don't handle checksum offload in BPF instead.
 - Gates and per-user opt-in live in the consumers.
 - `environment.md` is what Claude inside the sandbox knows about it, and
   stays generic: consumers replace it with `environmentFile`. A section only
@@ -393,7 +460,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   enables the module, setgid `sandbox-uplink`, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
   `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
   graphics assertions fire, the netns assertion fires when `sandbox`
-  overrides `bubblewrap.network` or `pasta`, a launcher with `network.enable` off (no `--net` for its bwrap, `network`
+  overrides `bubblewrap.network` or `pasta`, the `nameservers` assertion on what isn't an IPv4 or IPv6 address (an
+  octet past 255, a newline, a prefix length), a launcher with `network.enable` off (no `--net` for its bwrap, `network`
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
   `extraPath` at the front of PATH, the launchers' packages, the launcher
   name assertions (its characters, and its length at and past the cap, the
@@ -456,9 +524,10 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `netns_test.go`,
   `openNetns` against a child in its own user and network namespace, and the user namespace chain: a netns two user
   namespaces down accepted, refused as seen from a sibling user namespace and for one the user namespace of the caller
-  owns; `addr_test.go`, the addresses against Python over the same inputs, past taken ones, wrapping, never the first
+  owns; `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
   or last of the block, a full block refused, and the names of primaries; `main_test.go`, launcher names and ports
-  refused.
+  refused, the sandbox dirs and primaries of a uid counted, the lock of a uid exclusive, and neither the lock of another
+  uid nor one on `/run/sandbox-uplink` itself holding it up.
 - `subid-broker`: the package build runs its Go tests (`main_test.go`):
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
@@ -693,8 +762,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   supervise, or failing without a token, and an inactive unit started; the DNS selection (`resolvconf_test.go`: the shapes of
   resolved and NetworkManager, servers on the uplink kept, those of a VPN, by link or by the `vpn` of NetworkManager,
   dropped with their domains, loopback, link-local and host addresses, other ports and a global private server routed elsewhere
-  dropped, a public one kept, duplicates once, the priority order of NetworkManager, routing-only domains out; the option
-  winning, no source giving an empty file, none without a network, the option set or not, a write only on a change); SIGUSR1 handing the token to the splash of a
+  dropped, a public one kept, duplicates once, the priority order of NetworkManager, split DNS out with its search
+  domains (the global CoreDNS of k3s for `~k3s.internal`, a link that is no default route, an entry of NetworkManager
+  with a routing domain) while `~.` alone leaves a scope whole, routing-only domains and ones that
+  aren't LDH names (a newline, a space, an underscore, a label of 64, 254 characters) out, 63-character labels kept; the option
+  winning, no source giving an empty file, none without a network, the option set or not, a write only on a change;
+  `dns_test.go`, against a fake resolved on a `dbus-daemon` of the test's as the system bus: a failed read keeping the
+  file, a change before `follow` subscribed read after it, the bus ending and coming back followed again, a server on a
+  link that is no default route left out and one on a link `GetLink` doesn't know kept); SIGUSR1 handing the token to the splash of a
   failed start and of the app ended (`activate_test.go`); the store sync deleting nix/
   without a record, copying only what the store lacks with its progress short of 1, leaving a recorded store alone,
   refusing a store dir that is a link and deleting nix/ for a swapped one; the id maps (`maps_test.go`: the subuid
@@ -721,9 +796,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   loading the declaration while refusing a broken one. Not covered: the real osTicket API.
 - `sandbox-uplink`: the package build runs its Go tests (`uplinks_test.go`: the uplinks found in a fake
   `/sys/class/net`, physical type-1 devices only, named ones replacing the search, names the einat TOML can't take
-  refused; the einat config word for word; `sandboxes_test.go`: the gateway, the default route of the lowest metric
-  through an uplink, none through a VPN alone) and those of `internal/uplink` (the ULA /48 against HMAC in Python, machine IDs
-  refused, the key layout).
+  refused when named and skipped when found; the einat config word for word; `sandboxes_test.go`: the gateway, the
+  default route of the lowest metric through an uplink, none through a VPN alone, a sandbox dir removed only while it
+  still names the gone primary, a primary without pins deleted only past the grace) and those of `internal/uplink` (the ULA /48 against HMAC in Python, machine IDs
+  refused).
 - `vm-uplink` (`nix/checks/uplink.nix`, needs KVM, part of `vm`): a workstation with
   `sandbox-einat` and `sandbox-uplink` from the NixOS module and a LAN host as its gateway; the test script stands in for the helper with a
   netkit pair forwarding through the host stack and bpftool registering its addresses. Both units without root and
@@ -731,14 +807,24 @@ modules and a user alice (the `home-manager` input exists only for it).
   `post` on ingress and einat, `egress` on egress, the map writable by a non-root member of the group with CAP_BPF
   without capabilities and refused to another group with CAP_BPF, the `mdns` map 0660, the `uplinks` and `gateways`
   maps (0640, eth0 and eth1, per family the default route of the lowest metric, its gateway, the source of mDNS
-  queries and the MAC; one of another value size, as an earlier sandbox-uplink pinned it, replaced), a registration of a gone primary removed,
+  queries and the MAC; one of another value size, as an earlier sandbox-uplink pinned it, replaced; an uplink whose `egress` fails to attach
+  left out until it attaches), a registration of a gone primary removed and an `mdns` entry of a device that isn't a primary,
   sandbox UDP over IPv4 and IPv6 SNATed to the workstation address
   on ports 61000-63999 and HTTP, replies arriving with forwarding to the sandbox blocks dropped in nftables (and not
-  without `post`), LAN packets to the sandbox addresses dropped with einat running and stopped, also with `pre`
+  without `post`), LAN packets from the sandbox addresses dropped ahead of the host stack (and not without `pre`), LAN
+  packets to the sandbox addresses dropped with einat running and stopped, also with `pre`
   removed (`post` refusing what `pre` didn't mark) and arriving with neither, sandbox sources kept off the LAN with
-  einat stopped (and leaving without `egress`), the order back after an einat restart and after a link flap (and
-  replies failing while einat is ahead of `pre` with sandbox-uplink stopped), and a hot-plugged NIC getting an einat
-  config and the programs.
+  einat stopped (and leaving without `egress`), also as frames from AF_PACKET with a vnet header whose IP header
+  isn't linear (a workstation-sourced one leaving), the order back after an einat restart and after a link flap (pre
+  moved as its other instance, and
+  replies failing while einat is ahead of `pre` with sandbox-uplink stopped), a hot-plugged NIC getting an einat
+  config and the programs, and with stand-ins for Cilium at the tail of both hooks returning `TC_ACT_OK` and another
+  program at the head, both attached before einat and sandbox-uplink start: `pre` first, `post` and `egress` after
+  einat and ahead of Cilium, also after a link flap and an einat restart, sandbox traffic NATed with replies, and
+  sandbox sources kept off the LAN with einat stopped. A second machine, `bridged`, has its uplink NIC in `br0`: the
+  einat config and the programs on `br0`, and the sandbox leaving from the bridge address. A third, `late`, boots
+  without a NIC: einat skips, a hot-plugged NIC (renamed `up0` by a `.link` file) restarts it with that uplink
+  and the programs on it, and another add event of the same NIC leaves einat running.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`: the NixOS VM test
   (`nix/checks/vm/`, needs KVM), in six parts that Nix runs in parallel;
@@ -751,14 +837,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   its permissions broker and mDNS (work has `network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each
   netns, with the QU bit set: the default sandbox resolving `printer.local` of avahi on the router, over IPv4 and IPv6,
   the router seeing the queries from the workstation address and port 5353 without QU (a one-shot query from another
-  port too) and nothing of a response, a probe or a query of work, a query from the LAN not reaching the default sandbox, work hearing nothing, only the
-  default primary in the `mdns` map), `live` the broker's state machine tests, `loop` the
+  port too, and one sent from AF_PACKET) and nothing of a response, a probe, a GSO datagram of a query and a response
+  (`UDP_SEGMENT`), a query with bytes past its IP length or a query of work, a query from the LAN not reaching the default sandbox, work hearing nothing over IPv4 or IPv6, only the
+  default primary in the `mdns` map, of 100 queries sent at once 15 to 30 leaving), `live` the broker's state machine tests, `loop` the
   default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which
   CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
   some, see `nix/patches/`), `switch` switches to the workstation's specialisations while the app runs (the slice's
   CPU weight changed, its unit file gone) and back, the app's unit untouched. A router VM runs
   dnsmasq for DNS and stands in for the internet: its DNS points
-  api.anthropic.com and github.com at itself, which listens on 443, and it holds an address of each family off the LAN,
+  api.anthropic.com and github.com at itself and `dual.test` at its internet addresses of both families, which listens
+  on 443, and it holds an address of each family off the LAN,
   behind the default routes of the workstation (the IPv6 one ahead of the one QEMU advertises on eth0); the
   `nameservers` of work name it, and the workstation runs resolved with it as the server of eth1 (beside `127.0.0.1`)
   and a dummy `corp0` with a server and domain of a VPN, which the default launcher follows. On the
@@ -799,12 +887,28 @@ modules and a user alice (the `home-manager` input exists only for it).
   their modes, the registration, alice kept from the pins), the sandbox reaching the router and the internet stand-in
   over IPv4 and IPv6 and none of the LAN address of the host, a dummy interface, a host bridge or a container behind
   it (nothing of it on the bridge), nor `127.0.0.1` of the host with `127.0.0.1` routed out of the sandbox and
-  `route_localnet` on both sides, a spoofed source (IPv4, IPv6) going nowhere, a full-tunnel VPN (a dummy device as
+  `route_localnet` on both sides, a spoofed source (IPv4, IPv6) going nowhere, no AF_PACKET socket on `eth0` and no
+  `ip link set eth0 down` from the sandbox, with or without a nested user namespace (the socket bound by root of the
+  host as the control), a VLAN device on `eth0` (made as root
+  in the netns) getting nothing out, `169.254.169.254`, `fd00:ec2::254`, `fd20:ce::254` and `100.100.100.200` on the router (cloud metadata services)
+  reached by the host and not the sandbox while the internet stand-in is, a full-tunnel VPN (a dummy device as
   wg-quick and NetworkManager set them up: a table of its own with the default of main suppressed, and the two halves
   of the address space) taking the traffic of the host while the sandbox leaves through the uplink and nothing of it
-  reaches the VPN device, port forwarding (a port not granted refused, granted to the host over IPv4 and IPv6 with its
-  flows recorded, the same port refused to a container the host forwards for, bob refused a grant without a sandbox,
-  revoked with its flows gone), and forwarding on the primary back after a toggle of `all.forwarding`, the launcher
+  reaches the VPN device, the subnets of eth0 (QEMU's user network, an einat uplink without the default route) reached by
+  the host and not the sandbox, a burst to 1000 random addresses of the /64 of eth1 adding at most 100 neighbour
+  entries with the host still reaching the router, the host without an IPv6 default route (eth0 down, the one of eth1
+  deleted): the sandbox without `::/0` within seconds, its IPv4 default kept, IPv6 failing at once and `dual.test`
+  connecting over IPv4 within 2 seconds, then the route back on the host and in the sandbox, port forwarding (a port
+  not granted refused, granted to alice over IPv4 and IPv6 with its
+  flows recorded and refused to bob and root, the same port refused to a container the host forwards for, bob refused
+  a grant without a sandbox, a SYN of the sandbox on a flow of alice with its TCP flags past the linear part (AF_PACKET
+  with a vnet header, as root in the netns) not reaching the host while a linear ACK does, a flow gone after a RST of the host and marked after its FIN, revoked with its flows gone;
+  a UDP flow of a connected socket whose last packet the test sets 121 seconds back passing no reply, one left alone
+  passing it, one set 114 seconds back passing a reply 4 seconds later and not the one 12 seconds later (replies
+  renew nothing), one whose port the test deletes from `ports` passing none, a socket of bob bound to the port of a
+  flow after the socket of alice closed getting none; and with `rp_filter` off a UDP datagram
+  and a TCP SYN from a sandbox address out of the container bridge to listeners of alice getting no answer into the
+  sandbox and recording no flow), and forwarding on the primary back after a toggle of `all.forwarding`, the launcher
   `work` running next to the default
   sandbox (its own namespaces and addresses, neither sandbox reaching a listener of the other nor the host an ungranted
   port, its own tray item at another
@@ -819,8 +923,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   reached at `/run/permissions/sockets/echo` (the test binary's `live-connect` as the client), a held connection
   closed by the revoke, one without a grant closed at once; grants through the MCP
   server that the test answers on `control.sock`: a port refused to the host until granted, then reached at the
-  IPv4 and IPv6 addresses of the grant, refused again once revoked with the standing one, the flows gone, and not back
-  after a crash of the daemon; the host socket again, a folder
+  IPv4 and IPv6 addresses of the grant, refused again once revoked with the standing one, the flows gone, a UDP port
+  echoing datagrams of a connected socket of alice over both once granted and not once revoked, and not back after a crash of the daemon,
+  whose `ExecStopPost=` logs revoking the ports to the journal of the unit; the host socket again, a folder
   mounted read-only, nodev and nosuid where the app runs and one with a mount
   beneath it refused; a SIGKILL of the daemon closing its connections and ending its
   folder grant, the standing grants alone back under new ids after its restart, the overview in its state, no
@@ -848,7 +953,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   users (the capabilities of the wrapper, setgid `sandbox-uplink`), and
   `netns-netkit up` refusing a second user, bob, alice's namespaces, each of
   its checks on its own, and alice a netns of hers below a user namespace
-  root made and mapped her uid into, a netns of bob taken and its pins and registration removed by sandbox-uplink
+  root made and mapped her uid into, a netns of bob refused while 15 sandbox dirs of his and a primary without pins are there, that primary deleted by
+  sandbox-uplink past its grace, then taken and its
+  pins and registration removed by sandbox-uplink
   once it is gone; the pins, primary and registration of the sandbox gone with the unit of the app (sandbox-uplink
   stopped, so `ExecStopPost=` of the unit did it); then the launcher `offline` with `network.enable` off: inside `lo`
   alone and up, no IPv4 route nor default route, the router and the internet stand-in unreachable, an empty resolv.conf;
@@ -906,5 +1013,5 @@ Beyond the checks:
 - In a consumer: build its config with `--override-input agent-sandbox
   path:<this checkout>`.
 - Inside a running sandbox, `scripts/nettest.sh HOST:PORT...` checks that
-  the given host-only services are unreachable and the internet is
-  reachable.
+  the given host-only services and 169.254.169.254 (a cloud metadata
+  service) are unreachable and the internet is reachable.

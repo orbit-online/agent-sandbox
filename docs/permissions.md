@@ -409,9 +409,10 @@ The capability `port` lets the host reach one TCP or UDP port of the sandbox: `{
 both required, the protocol `tcp` or `udp`, the port 1 to 65535. Every launcher with the broker and `network.enable`
 has it (without a network the module leaves the helper out of the config, and a request is refused as `unknown`); the
 network of the sandbox (`netns-netkit --help`) drops everything the host sends it otherwise, and the LAN reaches no
-port. The consent reads "Claude asks for TCP port 8080 of the sandbox, reachable from the host", and the window shows
-the protocol and port and lets the user change only the lease, as for a host command: the port is the one the sandbox
-listens on.
+port. Over UDP the sandbox answers only a host client with a connected socket: a datagram from an unconnected
+`sendto` starts no flow, so the reply is dropped. The consent reads "Claude asks for TCP port 8080 of the sandbox,
+reachable from the host", and the window shows the protocol and port and lets the user change only the lease, as for
+a host command: the port is the one the sandbox listens on.
 
 Making the grant live runs `netns-netkit grant [--name=<launcher>] tcp 8080` as the user, which switches the port on in
 the `ports` map of the sandbox, then `netns-netkit addr`, which prints the sandbox addresses. If either fails, nothing is

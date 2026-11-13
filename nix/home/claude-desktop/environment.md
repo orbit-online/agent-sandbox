@@ -101,27 +101,52 @@ unless you ask otherwise); release it when you're done.
   host browser via OpenURI. There is no system bus. Processes running as a
   subuid can't connect to the session bus.
 - Own network namespace, joined to the host by a netkit pair (`eth0`
-  here). Its programs let packets out only through the physical uplinks of
-  the host (Ethernet and Wi-Fi), NATed there, and only replies back in: the
-  addresses of the host (its `127.0.0.1` and LAN address included),
+  here). Its programs let packets out only through the uplink with the
+  host default route (by default an Ethernet or Wi-Fi NIC), NATed there;
+  the subnets of other NICs are out of reach. Only replies come back in:
+  the addresses of the host (its `127.0.0.1` and LAN address included),
   host-only networks (VPN mesh, container bridges, auth proxies) and other
-  sandboxes are out of reach. Behind a full-tunnel VPN you still leave through the
-  physical uplink with the default route, never into the VPN. Addresses:
+  sandboxes are out of reach, and so are link-local addresses
+  (`169.254.0.0/16`, `fe80::/10`) and cloud metadata services
+  (link-local, and the known ULA and CGNAT addresses of AWS, GCP, OCI
+  and Alibaba). The LAN sees you at the address of the
+  host, so a LAN service that trusts the host trusts you too. Behind a full-tunnel VPN you still leave through the
+  physical uplink with the default route, never into the VPN. Packets
+  the programs drop vanish without an ICMP error or a TCP reset, so a
+  blocked connection times out. Per sandbox, packets to new LAN
+  neighbours (an address without a neighbour entry on the host) pass at
+  16 a second after a burst of 64. Addresses:
   an IPv4 /32 from `169.254.100.0/22` and an IPv6 /128 from a ULA /48 of
-  the machine, both stable per launcher, with default routes through
-  `eth0`. The host reaches a port of yours only while the user grants it,
-  and the LAN never does: listen on it (on `::` or `0.0.0.0`), then
+  the machine, usually stable per launcher (the next free one when the
+  host or another sandbox holds it), with a default route through
+  `eth0` for each family only while the host has an uplink with a default
+  route of that family: without IPv6 there, `ip -6 route` shows no
+  default and IPv6 connections fail at once. The host reaches a port of yours only while the user grants it,
+  and only from processes of that user (not root or other users); the LAN
+  never does: listen on it (on `::` or `0.0.0.0`), then
   `request` the capability `port` with `params`
   `{"protocol": "tcp", "port": 8080}` (or `udp`) and a reason.
   The `addresses` of the grant say where the host user reaches it
-  (`<IPv4>:8080` and `[<IPv6>]:8080`); tell them. Connections the host
-  opened end with the grant.
+  (`<IPv4>:8080` and `[<IPv6>]:8080`); tell them. Over UDP you answer
+  only host clients with a connected socket (`connect`, as most clients
+  do): a datagram from an unconnected `sendto` never reaches you.
+  Connections the host opened end with the grant, with a TCP reset of
+  the host, and when idle: TCP after an hour, UDP and a TCP connection the host closed after 2
+  minutes, until the host sends again.
   DNS: `/etc/resolv.conf` lists the `nameservers` option of the launcher,
   or without it the servers that systemd-resolved (or NetworkManager) on
   the host has for the uplink with the default route, and its global ones
   you reach through that uplink, kept current while you run, so LAN names
   resolve as on the host. Servers and domains of a VPN are left out, as
-  are servers you can't reach (`127.0.0.53` on the host). An empty file
+  are servers you can't reach (`127.0.0.53` on the host) and split DNS:
+  a resolver the host keeps for its own domains (a link that is no
+  default route of resolved, or a routing domain such as `~k3s.internal`
+  of a local Kubernetes), which sits where no sandbox reaches it and
+  which `resolv.conf` has no way to ask only for those names. So names
+  under such a domain don't resolve here, as they didn't under the
+  macvlan before. A server
+  resolved talks to over DNS-over-TLS is a plain port 53 server here: your
+  queries to it aren't encrypted. An empty file
   means no DNS: the host has neither source nor the option, or none of its
   servers is reachable from here; the launcher logs
   a warning in the journal namespace of the host side then (see Services
@@ -132,13 +157,20 @@ unless you ask otherwise); release it when you're done.
   group here, so only a querier on port 5353 gets them (avahi, or a
   socket on 5353 that joined the group; a one-shot query from another
   port, as `dig -p 5353` sends, gets no answer). Your responses, probes
-  and announcements stay in: you can't publish a name on the LAN.
+  and announcements stay in: you can't publish a name on the LAN. So does
+  a query sent with `UDP_SEGMENT` or with bytes past its IP length. A
+  query may carry known answers and additional records; known answers
+  only keep responders from repeating them. Queries leave at 10 a second
+  after a burst of 20, and over IPv6 only while the host has an IPv6
+  default route.
   A launcher with `network.enable` off (for local models) leaves you a
   network namespace with `lo` alone (`ip link` shows no `eth0`): no
   routes, an empty `/etc/resolv.conf` and no `port` capability. A model
   server on the host is then reachable only through a host socket of the
   permissions broker that the user configured, a Unix socket at
-  `/run/permissions/sockets/<name>`.
+  `/run/permissions/sockets/<name>` (`sockets/<name>/<instance>` for one
+  with instances). A connection gets through only under a grant of it;
+  without one it is closed at once.
 - No SSH agent and no `~/.ssh`.
 
 ## User namespaces
@@ -213,9 +245,11 @@ The sandbox:
   fails.
 - `/tmp` is a tmpfs, with Claude Code's temp dir bound on top.
 - The host (its `127.0.0.1` and LAN address) is out of reach, the LAN and
-  the internet aren't (`scripts/nettest.sh HOST:PORT...` in a checkout of
-  orbit-online/agent-sandbox, given services of the host, tests the host
-  and the internet). With `network.enable` off, `ip link` shows `lo` alone.
+  the internet aren't: with a checkout of orbit-online/agent-sandbox
+  bound, run its `scripts/nettest.sh`, with HOST:PORT pairs only when the
+  user names services of the host. `/etc/resolv.conf` lists a server
+  unless the launcher has no DNS (see DNS under What you can see). With `network.enable`
+  off, `/sys/class/net` holds `lo` alone.
 
 ## Permissions self-check
 <!-- memo: activity=self-diagnostic environment=bwrap -->
