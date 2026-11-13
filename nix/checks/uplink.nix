@@ -422,16 +422,16 @@ pkgs.testers.runNixOSTest {
           wait_in_order("eth1")
           ws.succeed(sb(f"curl -sf -m5 http://{lan4}/ -o /dev/null"))
 
+      # The program IDs on the tcx hooks of dev, by name
+      def prog_ids(dev):
+          return {p["name"]: p["prog_id"] for p in json.loads(ws.succeed(f"bpftool -j net show dev {dev}"))[0]["tc"]}
+
       def flap():
           # Its IPv6 address kept, the routes put back
           ws.succeed("sysctl -w net.ipv6.conf.eth1.keep_addr_on_down=1", "ip link set eth1 down", "ip link set eth1 up")
           ws.wait_until_succeeds(f"ip route replace default via {lan4} dev eth1 && ip -6 route replace default via {lan6} dev eth1", timeout=30)
           # einat attaches again, at the head
           retry(lambda _: "ingress_rev_snat" in order("eth1", "ingress"), timeout_seconds=30)
-
-      # The program IDs on the tcx hooks of dev, by name
-      def prog_ids(dev):
-          return {p["name"]: p["prog_id"] for p in json.loads(ws.succeed(f"bpftool -j net show dev {dev}"))[0]["tc"]}
 
       with subtest("einat restarted or attaching again on link up: sandbox-uplink puts pre ahead again"):
           ws.succeed("systemctl restart sandbox-einat")
@@ -440,7 +440,11 @@ pkgs.testers.runNixOSTest {
           before = prog_ids("eth1")
           flap()
           wait_in_order("eth1")
-          # Moved make-before-break: the other instance of pre attached at the head before the old link went
+          # Moved make-before-break: the other instance of pre attached at the head before the old link went. einat
+          # attaches its link again on link up, keeping its program, so wait for pre to be the new one rather than
+          # read the IDs as soon as einat is back on the hook (CI, 2026-11-13: it hadn't taken the head yet)
+          pre_before = before["pre"]
+          retry(lambda _: prog_ids("eth1").get("pre") not in (None, pre_before), timeout_seconds=60)
           after = prog_ids("eth1")
           print("program IDs before and after the link flap:", before, after)
           assert after["pre"] != before["pre"], (before, after)
