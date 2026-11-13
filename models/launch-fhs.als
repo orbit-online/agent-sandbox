@@ -3,8 +3,8 @@
  * the FHS env's script in U1 asks the broker to `share`, its bwrap
  * (the launcher's bwrap, mode parent) copies M1 into M2 and waits for U2's
  * maps, app-pid.sh sets ns_last_pid with CAP_CHECKPOINT_RESTORE and starts
- * the app. It starts where launch.als's outer stage ends, with udhcpc
- * running as the attacker; the signatures, frames and l1 are launch.als's.
+ * the app. It starts where launch.als's outer stage ends; the signatures,
+ * frames and l1 are launch.als's.
  */
 // SLOW: about 4 minutes for the file with SAT4J, mostly the checks that hold.
 module launch_fhs
@@ -12,7 +12,7 @@ module launch_fhs
 open sandbox
 open launch
 
-// HIDE: File Mount MountFlag Socket PeerCheck IpcNS UtsNS CgroupNS Guard Move
+// HIDE: File Mount MountFlag Socket PeerCheck IpcNS UtsNS CgroupNS Guard
 
 // ---------------------------------------------------------------------
 // Events, fhs stage
@@ -23,16 +23,7 @@ pred fhsShare {
   ShareTried not in On
   On' = On + ShareTried or On' = On + ShareTried + M1Shared + BrokerShared
   only[none, none] and tags[none, none, none, none]
-  keepMaps and keepWaits and Eth0In' = Eth0In
-}
-
-// The same request from udhcpc at any time, if it ran in M1:
-// shareFrom only checks the client's mount namespace. It runs in MU
-pred lateShare {
-  some principal.UdhcpcP & mnt.M1
-  On' = On + M1Shared + BrokerShared
-  only[none, none] and tags[none, none, none, none]
-  keepMaps and keepWaits and Eth0In' = Eth0In
+  keepMaps and keepWaits
 }
 
 // bwrap.go:177 in mode parent: the FHS env's bwrap child in U2, M2
@@ -47,7 +38,7 @@ pred fhsCopy[g: set Guard] {
     Blocked' = Blocked + d and Held' = Held
   }
   On' = On + M2Copied + (M1Shared in On implies M2Slave else none)
-  keepMaps and Eth0In' = Eth0In
+  keepMaps
 }
 
 // The FHS env's init runs app-pid.sh, with CAP_CHECKPOINT_RESTORE raised
@@ -58,7 +49,7 @@ pred appPidStart {
     born[a, BwrapInitP, d, d.userns, d.mnt, d.net, d.pidns, HostUser, CheckpointRestore]
     only[a, none] and tags[none, none, none, a]
   }
-  keepMaps and keepWaits and On' = On and Eth0In' = Eth0In
+  keepMaps and keepWaits and On' = On
 }
 
 // app-pid.sh:8-12. When the write succeeds, setpriv clears the ambient
@@ -80,7 +71,7 @@ pred appStart[g: set Guard] {
     only[n, none]
   }
   tags[none, none, none, none]
-  keepMaps and keepWaits and Eth0In' = Eth0In
+  keepMaps and keepWaits
 }
 
 // The app and the sessions start shells, servers, anything: caps carry
@@ -91,31 +82,28 @@ pred sessionFork {
     only[n, none]
   }
   tags[none, none, none, none]
-  keepMaps and keepWaits and On' = On and Eth0In' = Eth0In
+  keepMaps and keepWaits and On' = On
 }
 
 // started by bwrap's init
 pred fhsInit {
   U1.mapped = HostUser + SubIds and no U2.mapped
-  On = RootFinal + NetDone and Eth0In = N
+  On = RootFinal + NetDone
   no Blocked + Held + FhsChild + AppPidS
-  some disj l, c, u, f: Process {
-    Process = l + c + u + f
+  some disj l, c, f: Process {
+    Process = l + c + f
     hostProcess[l]
     c.principal = BwrapInitP and c.ppid = l and no c.caps
-    u.principal = UdhcpcP and u.ppid = c and u.caps = NetAdmin + NetRaw
     f.principal = BwrapInitP and f.ppid = c and no f.caps
-    all p: c + u + f | p.uid = HostUser and p.userns = U1 and p.net = N and p.pidns = P
-    (c + f).mnt = M1 and u.mnt = MU
+    all p: c + f | p.uid = HostUser and p.userns = U1 and p.mnt = M1 and p.net = N and p.pidns = P
     Root = c and Fhs = f
   }
 }
 
-pred fhs[g: set Guard, m: set Move] {
+pred fhs[g: set Guard] {
   fhsInit
-  always (fhsShare or (LateShare in m and lateShare) or fhsCopy[g] or writeMap
-    or mapFail[g] or unblock[g] or appPidStart or appStart[g] or sessionFork
-    or udhcpcFork or skip)
+  always (fhsShare or fhsCopy[g] or writeMap or mapFail[g] or unblock[g]
+    or appPidStart or appStart[g] or sessionFork or skip)
 }
 
 
@@ -123,57 +111,49 @@ pred fhs[g: set Guard, m: set Move] {
 // Properties
 
 // L1, fhs stage: U2's maps through the shims and subid-broker.
-assert L1fhs { fhs[Guard, Move] implies l1 }
+assert L1fhs { fhs[Guard] implies l1 }
 check L1fhs for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L1, fhs stage, revert: the same without KillOnMapFail.
-assert L1fhsRevert { fhs[Guard - KillOnMapFail, Move] implies l1 }
+assert L1fhsRevert { fhs[Guard - KillOnMapFail] implies l1 }
 check L1fhsRevert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // Vacuity: the fhs stage reaches the app with the grant directory shared
 // into M2.
 run fhsRuns {
-  fhs[Guard, none]
+  fhs[Guard]
   eventually (some principal.AppP and M2Slave in On)
 } for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L4: the app and everything it starts hold no capability in U2, whether
 // or not app-pid.sh's write to ns_last_pid succeeds. Holds.
 pred l4 { always all p: principal.(AppP + SessionP) | no p.caps }
-assert L4 { fhs[Guard, Move] implies l4 }
+assert L4 { fhs[Guard] implies l4 }
 check L4 for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L4, revert: without DropCapsOnFail, as before the fix, a failed write
 // left the ambient CAP_CHECKPOINT_RESTORE bwrap raised (default.nix:
 // --cap-add) with the app and all it starts.
-assert L4failRevert { fhs[Guard - DropCapsOnFail, Move] implies l4 }
+assert L4failRevert { fhs[Guard - DropCapsOnFail] implies l4 }
 check L4failRevert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L4 when the write succeeds: setpriv drops the capability before the fork.
-assert L4writeOk { (fhs[Guard, Move] and always LastPidFail not in On) implies l4 }
+assert L4writeOk { (fhs[Guard] and always LastPidFail not in On) implies l4 }
 check L4writeOk for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L4, revert: without DropCapsBeforeFork the app keeps it either way.
-assert L4revert { (fhs[Guard - DropCapsBeforeFork, Move] and always LastPidFail not in On) implies l4 }
+assert L4revert { (fhs[Guard - DropCapsBeforeFork] and always LastPidFail not in On) implies l4 }
 check L4revert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L9: once the broker takes attach requests (b.shared), M2's
-// /run/permissions receives what it mounts in M1.
-//
-// Holds with udhcpc's late `share` among the moves: when the FHS env's
-// own `share` failed (the launch goes on, bwrap.go:120-122), shareFrom
-// takes one only from a client in M1, and udhcpc runs in MU (L3). It was
-// a known finding while udhcpc ran in M1: the broker then granted attach
-// into M1, where nothing but bwrap's init and udhcpc saw it.
+// /run/permissions receives what it mounts in M1. Only the FHS env's
+// script sends `share` from M1; when it failed (the launch goes on,
+// bwrap.go:120-122), nothing else there sends one.
 pred l9 { always ((BrokerShared + M2Copied) in On implies M2Slave in On) }
-assert L9 { fhs[Guard, Move] implies l9 }
+assert L9 { fhs[Guard] implies l9 }
 check L9 for 7 but 9 OwnedNS, 1..9 steps expect 0
-
-// L9 when only the FHS env's script sends `share`.
-assert L9noLateShare { fhs[Guard, none] implies l9 }
-check L9noLateShare for 7 but 9 OwnedNS, 1..9 steps expect 0
 
 // L9, revert: without ShareBeforeCopy the script's own `share` can come
 // after the copy.
-assert L9revert { fhs[Guard - ShareBeforeCopy, none] implies l9 }
+assert L9revert { fhs[Guard - ShareBeforeCopy] implies l9 }
 check L9revert for 7 but 9 OwnedNS, 1..9 steps expect 1

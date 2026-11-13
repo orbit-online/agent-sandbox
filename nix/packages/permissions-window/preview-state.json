@@ -195,7 +195,7 @@
         ]
       }
     },
-    "network": "its own namespace, a macvlan on the LAN",
+    "network": "its own namespace, a netkit pair out through the uplinks",
     "implicit": [
       "Sockets: Wayland, PipeWire"
     ],

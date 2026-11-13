@@ -54,7 +54,7 @@ pred spawn[p: Process] {
 //   only turns away peers gone early;
 // - subid-broker's client and target: openUserns reads, then signals the
 //   pidfd (subid-broker/main.go:292-313);
-// - netns-macvlan: pidfd, reads, signal (netns-macvlan/main.go:79-105).
+// - netns-netkit: pidfd, reads, signal (netns-netkit/netns.go openNetns).
 // What a check reads is modelled as the user namespace for all of them
 // (share reads the mount namespace: the same race).
 
@@ -74,9 +74,9 @@ abstract sig Chk {
   // the pidfd's process's user namespace at the read
   var actual: lone UserNS
 }
-one sig CtlChk, ShareChk, SubidChk, MacvlanChk extends Chk {}
+one sig CtlChk, ShareChk, SubidChk, NetkitChk extends Chk {}
 fact orders {
-  (CtlChk + ShareChk + SubidChk + MacvlanChk).order = ReadThenAlive
+  (CtlChk + ShareChk + SubidChk + NetkitChk).order = ReadThenAlive
 }
 
 fact chkInit { all c: Chk | c.stage = Idle and no c.peer + c.gone + c.npid + c.peerNs + c.seen + c.actual }
@@ -198,11 +198,11 @@ fact start { hostPlaced and reach and sbPinned }
 
 pred guarded7 { G7.on = Guard7 }
 
-// S13 for subid-broker and netns-macvlan: what they read is about the
+// S13 for subid-broker and netns-netkit: what they read is about the
 // pidfd's process. Holds. Revert: with their order swapped to alive then
 // read, counterexample found (as for the broker below).
 assert S13readThenAlive {
-  always all c: SubidChk + MacvlanChk | c.stage = Done implies c.seen = c.actual
+  always all c: SubidChk + NetkitChk | c.stage = Done implies c.seen = c.actual
 }
 check S13readThenAlive for 3 but 5 UserNS, 11 OwnedNS, 3 Pid, 8 StorePath, 0 LaterExec, 1..7 steps expect 0
 

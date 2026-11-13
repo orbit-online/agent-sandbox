@@ -15,7 +15,6 @@ const (
 	stepProxy    = "proxy"
 	stepSandbox  = "sandbox"
 	stepNetwork  = "network"
-	stepDHCP     = "dhcp"
 	stepReady    = "ready"
 )
 
@@ -25,8 +24,7 @@ var steps = []struct{ name, text string }{
 	{stepPrepared, "Starting the D-Bus proxy"},
 	{stepProxy, "Creating the sandbox"},
 	{stepSandbox, "Connecting the sandbox to the network"},
-	{stepNetwork, "Waiting for a network address"},
-	{stepDHCP, "Starting Claude"},
+	{stepNetwork, "Starting Claude"},
 	{stepReady, ""},
 }
 

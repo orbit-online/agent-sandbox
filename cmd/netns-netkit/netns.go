@@ -1,86 +1,16 @@
 package main
 
 import (
-	"crypto/sha256"
 	"fmt"
-	"log/slog"
-	"net"
-	"os"
+	"runtime"
 	"strconv"
 	"unsafe"
 
-	"github.com/docopt/docopt-go"
-	"github.com/orbit-online/agent-sandbox/internal/journal"
-	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
-const usage = `netns-macvlan - Give a user-owned network namespace its own macvlan on the LAN
-
-Usage:
-  netns-macvlan <pid> [<name>]
-
-Creates eth0 in the network namespace of <pid>: a macvlan in private mode on
-the device carrying the default route, with a MAC derived from the machine ID,
-the caller's uid and <name>, which tells one sandbox of the caller from
-another. <pid> must belong to the caller, and its network namespace must lie
-in a user namespace below the caller's whose topmost one below the caller's
-the caller owns: the caller then holds every capability over it by owning
-that user namespace, cap_net_admin included.
-`
-
-func main() {
-	journal.Setup()
-	opts, err := docopt.ParseDoc(usage)
-	if err != nil {
-		slog.Error("Parse arguments", "err", err)
-		os.Exit(2)
-	}
-	pid, err := opts.Int("<pid>")
-	if err != nil {
-		slog.Error("Parse <pid>", "err", err)
-		os.Exit(2)
-	}
-	name, _ := opts.String("<name>")
-	if err := run(pid, name); err != nil {
-		slog.Error(err.Error())
-		os.Exit(1)
-	}
-}
-
-func run(pid int, name string) error {
-	uid := unix.Getuid()
-	netnsFd, err := openNetns(pid, uid, "/proc/self/ns/user")
-	if err != nil {
-		return err
-	}
-	defer unix.Close(netnsFd)
-	parent, err := defaultRouteLink()
-	if err != nil {
-		return err
-	}
-	machineID, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		return fmt.Errorf("Read machine ID: %w", err)
-	}
-	mac := stableMAC(machineID, uid, name)
-	link := &netlink.Macvlan{
-		LinkAttrs: netlink.LinkAttrs{
-			Name:         "eth0",
-			ParentIndex:  parent,
-			HardwareAddr: mac,
-			Namespace:    netlink.NsFd(netnsFd),
-		},
-		Mode: netlink.MACVLAN_MODE_PRIVATE,
-	}
-	if err := netlink.LinkAdd(link); err != nil {
-		return fmt.Errorf("Create macvlan: %w", err)
-	}
-	return nil
-}
-
 // Opens the network namespace of pid after checking that the caller, of uid in user namespace ownUserns (a path),
-// may hand it a LAN interface
+// may give it a netkit pair
 func openNetns(pid, uid int, ownUserns string) (int, error) {
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
@@ -94,7 +24,7 @@ func openNetns(pid, uid int, ownUserns string) (int, error) {
 	if int(st.Uid) != uid {
 		return -1, fmt.Errorf("Process %d belongs to uid %d, not %d", pid, st.Uid, uid)
 	}
-	netnsFd, err := unix.Open("/proc/"+strconv.Itoa(pid)+"/ns/net", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	netnsFd, err := openAsCaller("/proc/" + strconv.Itoa(pid) + "/ns/net")
 	if err != nil {
 		return -1, fmt.Errorf("Open network namespace of %d: %w", pid, err)
 	}
@@ -128,6 +58,19 @@ func openNetns(pid, uid int, ownUserns string) (int, error) {
 	}
 	ok = true
 	return netnsFd, nil
+}
+
+// openAsCaller opens path with the caller's own gid as the filesystem gid: the wrapper is setgid sandbox-uplink, and
+// the kernel's ptrace check on /proc/<pid>/ns/* compares that gid with the target's. fsgid is per thread
+func openAsCaller(path string) (int, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	prev, err := unix.SetfsgidRetGid(unix.Getgid())
+	if err != nil {
+		return -1, err
+	}
+	defer unix.Setfsgid(prev)
+	return unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 }
 
 // Checks that the user namespace usernsFd lies below ownUserns, and that the one right below ownUserns on the way
@@ -175,45 +118,4 @@ func ownedBelow(usernsFd int, ownUserns string, uid int) error {
 func same(fd int, st unix.Stat_t) bool {
 	var fst unix.Stat_t
 	return unix.Fstat(fd, &fst) == nil && fst.Dev == st.Dev && fst.Ino == st.Ino
-}
-
-// Index of the device carrying the main table's default route with the lowest metric, IPv4 first
-func defaultRouteLink() (int, error) {
-	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
-		routes, err := netlink.RouteListFiltered(family, &netlink.Route{Table: unix.RT_TABLE_MAIN}, netlink.RT_FILTER_TABLE|netlink.RT_FILTER_DST)
-		if err != nil {
-			return -1, fmt.Errorf("List default routes: %w", err)
-		}
-		if link := lowestMetric(routes); link != -1 {
-			return link, nil
-		}
-	}
-	return -1, fmt.Errorf("No default route")
-}
-
-// Device index of the route with the lowest metric, skipping routes without a device; -1 if none
-func lowestMetric(routes []netlink.Route) int {
-	best := -1
-	for i, r := range routes {
-		if r.LinkIndex > 0 && (best == -1 || r.Priority < routes[best].Priority) {
-			best = i
-		}
-	}
-	if best == -1 {
-		return -1
-	}
-	return routes[best].LinkIndex
-}
-
-// Locally administered unicast MAC, stable per machine, uid and name so DHCP keeps handing out the same lease. The
-// empty name hashes as before names existed, which keeps the default launcher's lease
-func stableMAC(machineID []byte, uid int, name string) net.HardwareAddr {
-	in := fmt.Appendf(nil, "netns-macvlan\x00%s\x00%d", machineID, uid)
-	if name != "" {
-		in = fmt.Appendf(in, "\x00%s", name)
-	}
-	sum := sha256.Sum256(in)
-	mac := net.HardwareAddr(sum[:6])
-	mac[0] = mac[0]&^0x01 | 0x02
-	return mac
 }

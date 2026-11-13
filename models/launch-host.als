@@ -20,10 +20,14 @@ open sandbox
 // ---------------------------------------------------------------------
 // L8: lifetimes
 //
-// As of de94126: subid-broker and udhcpc are transient units in the
-// launcher's slice with BindsTo= the app's unit (helper.go:46-57,
-// hostUnits.start), no After=. subid-broker gets the launcher's pid (which
-// then execs into bwrap) and pidfd_opens it before it creates the socket.
+// As of de94126: subid-broker is a transient unit in the launcher's slice
+// with BindsTo= the app's unit (helper.go:46-57, hostUnits.start), no
+// After=. It gets the launcher's pid (which then execs into bwrap) and
+// pidfd_opens it before it creates the socket. The netkit pair goes with
+// N (the kernel deletes both ends with either, netkit.c netkit_del_link);
+// what netns-netkit up leaves on the host, the pinned programs and maps
+// and the addresses it registered (bpf.go), stays until netns-netkit down
+// or the sweep of sandbox-uplink removes it.
 
 abstract sig Thing {}
 one sig
@@ -33,7 +37,7 @@ one sig
   BwrapHost, // the same process after the exec, bwrap's parent half on the host
   SubidB,    // subid-broker's unit, started at bwrap.go:197
   Sandbox,   // the outer bwrap's child, with P and all in it
-  Udhcpc,    // the dhcp unit (helper.go:159), its udhcpc in P
+  Pins,      // pins and registration of netns-netkit up (bpf.go), on the host
   Reentry,   // in P2, under a host nsenter
   Broker,    // the permissions broker's unit
   CallUnit,  // a host command call's transient unit
@@ -55,12 +59,14 @@ one sig
   PidfdOpen,  // subid-broker serve: pidfd_open at :139 before ListenUnix at :144, so the launcher,
               // which waits for the socket (bwrap.go:200-205), is still the process at that pid
   PidfdWatch, // serve :155-158: the listener closes once the pidfd turns readable
-  BindsToApp, // helper.go:48: BindsTo= the app's unit, for the subid and dhcp units
+  BindsToApp, // helper.go:48: BindsTo= the app's unit, for the subid unit
   PidfdExit,  // run.go: run returns when the sandbox's pidfd turns readable
   BindsTo,    // call units BindsTo= the daemon's unit (README.md, Principals 9)
   StartLimit, // launcher supervise.go:195-196: the broker unit's StartLimitBurst=3 in 10 min
-  StopOnAbort // bwrap.go startSubidBroker: giving up, the launcher stops the subid unit (systemctl waits for it)
+  StopOnAbort, // bwrap.go startSubidBroker: giving up, the launcher stops the subid unit (systemctl waits for it)
               // before it exits, while the pid is still its own
+  DownOnEnd,  // enter.go startUnit: the app's unit runs netns-netkit down as ExecStopPost=, however it ends
+  SweepGone   // sandbox-uplink sandboxes.go: removes the registration and pin dir of a primary that is gone
   extends Guard {}
 
 pred live[t: Thing] { t in Alive }
@@ -108,13 +114,21 @@ pred reuse { no LPid.names and not live[Other] and Alive' = Alive + Other and Ma
   LPid.names' = Other and Pidfd.on' = Pidfd.on }
 pred otherExit { live[Other] and become[none, Other, none] }
 pred sandboxStart { live[BwrapHost] and Ended not in Marks and not live[Sandbox] and become[Sandbox, none, none] }
-pred udhcpcStart { live[Sandbox] and not live[Udhcpc] and become[Udhcpc, none, none] }
+// netns-netkit up from the bwrap helper (helper.go netSetup.run)
+pred pinsUp { live[Sandbox] and not live[Pins] and become[Pins, none, none] }
 pred reentryStart { live[Sandbox] and not live[Reentry] and become[Reentry, none, none] }
 // findSandbox: its pidfd
 pred brokerFinds { live[Broker + Sandbox] and Found not in Marks and become[none, none, Found] }
 pred callStart { live[Broker] and Found in Marks and not live[CallUnit] and become[CallUnit, none, none] }
-// P's init exits: the kernel kills P and P2, udhcpc and re-entries included
-pred sandboxEnds { live[Sandbox] and become[none, Sandbox + Udhcpc + Reentry, Ended] }
+// P's init exits: the kernel kills P and P2, re-entries included, and N
+// with the netkit pair
+pred sandboxEnds { live[Sandbox] and become[none, Sandbox + Reentry, Ended] }
+// the app's unit runs netns-netkit down as it stops (ExecStopPost=), or
+// sandbox-uplink finds the primary gone
+pred pinsDown[g: set Guard] {
+  live[Pins] and not live[Sandbox] and ((DownOnEnd in g and live[AppUnit]) or SweepGone in g)
+  become[none, Pins, none]
+}
 // bwrap's parent half exits with its child
 pred bwrapExit { live[BwrapHost] and not live[Sandbox] and Ended in Marks and become[none, BwrapHost, none] }
 // supervise returns once nixpak's launcher is gone, after the error window
@@ -122,8 +136,8 @@ pred bwrapExit { live[BwrapHost] and not live[Sandbox] and Ended in Marks and be
 pred appEnds { live[AppUnit] and no (Shell + BwrapHost) & Alive and become[none, AppUnit, Ended] }
 // systemd stops what's bound to the app's unit once that is inactive
 pred bindsStop[g: set Guard] {
-  BindsToApp in g and not live[AppUnit] and some (SubidB + Udhcpc) & Alive
-  become[none, SubidB + Udhcpc, none]
+  BindsToApp in g and not live[AppUnit] and live[SubidB]
+  become[none, SubidB, none]
 }
 // The broker's poll returns; systemd stops the units bound to it
 pred brokerExit[g: set Guard] {
@@ -142,8 +156,9 @@ pred stay { Alive' = Alive and Marks' = Marks and LPid.names' = LPid.names and P
 pred lifetimes[g: set Guard] {
   Alive = AppUnit + Shell and no Marks and LPid.names = Shell and no Pidfd.on
   always (brokerStart or subidSpawn[g] or subidOpen or subidEnd[g] or shellAbort[g] or execBwrap
-    or reuse or otherExit or sandboxStart or udhcpcStart or reentryStart or brokerFinds or callStart
-    or sandboxEnds or bwrapExit or appEnds or bindsStop[g] or brokerExit[g] or brokerGivesUp[g] or stay)
+    or reuse or otherExit or sandboxStart or pinsUp or reentryStart or brokerFinds or callStart
+    or sandboxEnds or pinsDown[g] or bwrapExit or appEnds or bindsStop[g] or brokerExit[g] or brokerGivesUp[g]
+    or stay)
   // Weak fairness for the host's own reactions. Not for appEnds (the
   // user closes the error window, or doesn't) nor Other (lives as long as
   // it likes)
@@ -151,8 +166,11 @@ pred lifetimes[g: set Guard] {
   (eventually always (live[SubidB] and no Pidfd.on)) implies always eventually not (live[SubidB] and no Pidfd.on)
   (eventually always (PidfdWatch in g and live[SubidB] and some Pidfd.on - Alive)) implies always eventually not live[SubidB]
   (eventually always (live[BwrapHost] and not live[Sandbox] and Ended in Marks)) implies always eventually not live[BwrapHost]
-  (eventually always (BindsToApp in g and not live[AppUnit] and some (SubidB + Udhcpc) & Alive))
-    implies always eventually no (SubidB + Udhcpc) & Alive
+  (eventually always (BindsToApp in g and not live[AppUnit] and live[SubidB]))
+    implies always eventually not live[SubidB]
+  (eventually always (DownOnEnd in g and live[Pins + AppUnit] and not live[Sandbox]))
+    implies always eventually not live[Pins]
+  (eventually always (SweepGone in g and live[Pins] and not live[Sandbox])) implies always eventually not live[Pins]
   (eventually always (live[Broker] and Found in Marks and not live[Sandbox])) implies always eventually not live[Broker]
   StartLimit in g implies
     ((eventually always (live[Broker] and Found not in Marks and Ended in Marks)) implies always eventually not live[Broker])
@@ -164,8 +182,8 @@ pred userCloses {
 }
 
 // L8: once the sandbox ended (or never came up), the broker and its call
-// units, subid-broker, udhcpc and the re-entries end too.
-pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + CallUnit + SubidB + Udhcpc + Reentry)) }
+// units, subid-broker, the re-entries and the pins of netns-netkit end too.
+pred l8 { always (Ended in Marks implies eventually no Alive & (Broker + CallUnit + SubidB + Pins + Reentry)) }
 
 // L8, also when the sandbox never came up, given the app's unit ends.
 // Holds.
@@ -226,10 +244,16 @@ check L8openRevert for 4 but 1..18 steps expect 1
 assert L8ranRevert { (lifetimes[Guard - BindsTo] and ran) implies l8 }
 check L8ranRevert for 4 but 1..18 steps expect 1
 
+// L8 ran, revert, dropping both since each holds alone: without
+// down from the app's unit and the sweep of sandbox-uplink the pins outlive the
+// sandbox.
+assert L8pinsRevert { (lifetimes[Guard - DownOnEnd - SweepGone] and ran) implies l8 }
+check L8pinsRevert for 4 but 1..18 steps expect 1
+
 // Vacuity: a sandbox with all of them runs and ends.
 run lifetimesRun {
   lifetimes[Guard] and userCloses
-  eventually (live[Udhcpc + Reentry + CallUnit + SubidB]) and eventually Ended in Marks
+  eventually (live[Pins + Reentry + CallUnit + SubidB]) and eventually Ended in Marks
 } for 4 but 1..18 steps expect 1
 
 // Vacuity: the launcher gives up and, without the stop, the broker finds

@@ -58,7 +58,7 @@ Options:
   --permissions-broker=<exe>  The permissions broker, which shares
                               /run/permissions in mode parent
   --net=<json>         The network setup, for mode subid (helper.go, netSetup)
-  --units=<json>       The host units for subid-broker and udhcpc, for mode subid
+  --units=<json>       The host unit for subid-broker, for mode subid
                        (helper.go, hostUnits)
 `
 
@@ -90,7 +90,7 @@ type config struct {
 		SystemdRun string `json:"systemdRun"`
 		SystemdCat string `json:"systemdCat"`
 		Unshare    string `json:"unshare"`
-		WrapperDir string `json:"wrapperDir"` // newuidmap and newgidmap, for unshare
+		WrapperDir string `json:"wrapperDir"` // newuidmap and newgidmap, for unshare, and netns-netkit
 	} `json:"tools"`
 	Permissions *struct {
 		Config string   `json:"config"`

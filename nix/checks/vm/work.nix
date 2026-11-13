@@ -24,11 +24,17 @@
 
       # Its re-entry finds its own sandbox by its app ID
       assert in_work("readlink /proc/self/ns/net").strip() == work_netns
-      # Both on the LAN, the MAC salted with the launcher's name
-      workstation.wait_until_succeeds(work_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"), timeout=60)
-      assert "inet 192.168.1." in in_work("ip -4 -o addr show dev eth0")
-      macs = {f("ip -br link show eth0").split()[2] for f in [in_sandbox, in_work]}
-      assert len(macs) == 2, macs
+      # Its own netkit pair and addresses, from the launcher's name; neither sandbox reaches the other, nor the host
+      # an ungranted port of either
+      workstation.succeed(work_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"))
+      addrs = {f("ip -o addr show dev eth0 scope global").split()[3].split("/")[0] for f in [in_sandbox, in_work]}
+      assert len(addrs) == 2, addrs
+      work4 = in_work("ip -4 -o addr show dev eth0").split()[3].split("/")[0]
+      in_work("sh -c 'setsid python3 -m http.server 8000 >/dev/null 2>&1 </dev/null &'")
+      probe = tcp_connect(work4, 8000)
+      workstation.wait_until_succeeds(work_cmd(probe), timeout=30)
+      workstation.fail(sandbox_cmd(probe))
+      workstation.fail(f"curl -sf -m3 http://{work4}:8000/")
       # Its own state dir, with ~/.claude and the app's config in its home
       workstation.succeed(f"test -d {work_home}/.claude && test -s {work_home}/.config/Claude/claude_desktop_config.json")
       workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")

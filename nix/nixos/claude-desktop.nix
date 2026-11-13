@@ -52,14 +52,17 @@ in
 
   config = lib.mkIf (users != [ ]) {
     agent-sandbox.network.enable = true;
-    # Gives a claude-desktop sandbox its own LAN interface, see netns-macvlan --help. Human users only: whoever can run it
-    # can give their own namespaces a LAN interface outside the host firewall
-    security.wrappers.netns-macvlan = {
-      source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.netns-macvlan;
-      capabilities = "cap_net_admin+ep";
+    # Connects a claude-desktop sandbox to the network through a netkit pair, see netns-netkit --help: cap_net_admin and
+    # cap_bpf for the pair and its programs, setgid sandbox-uplink for the maps pinned in the bpffs of network.nix.
+    # The wrapper module keeps setgid to wrappers without capabilities, so it goes in permissions. Setgid takes the
+    # group of the file, so the helper itself refuses callers outside group users: whoever runs it gives their own
+    # namespaces a network outside the host firewall
+    security.wrappers.netns-netkit = {
+      source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.netns-netkit;
+      capabilities = "cap_net_admin,cap_bpf+ep";
       owner = "root";
-      group = "users";
-      permissions = "u+rx,g+x";
+      group = "sandbox-uplink";
+      permissions = "u+rx,g+xs,o+x";
     };
     # Two journald namespaces per launcher (systemd-journald@.service), whose files the launcher binds into the sandbox,
     # so their directories have to be there before journald first starts
@@ -68,7 +71,7 @@ in
     assertions = lib.concatMap (name: [
       {
         assertion = inUsersGroup name;
-        message = "agent-sandbox.claude-desktop: ${name} enables the sandbox but isn't in group users, which netns-macvlan is limited to. Add users to users.users.${name}.extraGroups.";
+        message = "agent-sandbox.claude-desktop: ${name} enables the sandbox but isn't in group users, which netns-netkit is limited to. Add users to users.users.${name}.extraGroups.";
       }
       {
         assertion = hasSubIds name;

@@ -81,7 +81,7 @@ func TestShareTooLate(t *testing.T) {
 }
 
 // The host's processes in the sandbox's user namespace are no copy of M1: net-setup's ip on the host's mounts, and
-// udhcpc in a mount namespace of its own made from them
+// a helper in a mount namespace of its own made from them, as the clone helper is
 func TestShareHostHelpers(t *testing.T) {
 	b, _ := testBroker(t)
 	standIn(t, b)

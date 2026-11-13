@@ -8,7 +8,7 @@
 #     ROOTS already, else "stale" and the paths the store lacks
 #   store-import ROOTS [none]: imports a nix-store --export stream from stdin (none: nothing to import) and roots ROOTS
 #   theme SCHEME: the GTK theme for the portal's color-scheme (1 = dark)
-: "${STATE_DIR:?}" "${SANDBOX_HOME:?}" "${RESOLV_CONF:?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
+: "${STATE_DIR:?}" "${SANDBOX_HOME:?}" "${RESOLV_CONF:?}" "${NAMESERVERS?}" "${DOT_CLAUDE:?}" "${CONFIG:?}" "${MCP_SERVERS:?}" "${TRAY:?}"
 : "${SCHEMA_DIR:?}"
 
 # Stdin to file $1, replacing whatever is there
@@ -24,8 +24,10 @@ root=$STATE_DIR/nix/var/nix/gcroots/claude-desktop
 case ${1:?} in
 home)
   mkdir -p "$SANDBOX_HOME/.config" "$DOT_CLAUDE" "${CONFIG%/*}"
-  # Target of the sandbox's /etc/resolv.conf, which the DHCP client writes in place
+  # Target of the sandbox's /etc/resolv.conf, written in place: Nix binds the file into fixed-output builds, a rename
+  # would leave them on the old inode
   [[ -f $RESOLV_CONF && ! -L $RESOLV_CONF ]] || { rm -f "$RESOLV_CONF" && : >"$RESOLV_CONF"; }
+  for ns in $NAMESERVERS; do echo "nameserver $ns"; done >"$RESOLV_CONF"
   # Without user-dirs.dirs, Chromium saves downloads to $HOME
   # shellcheck disable=SC2016
   echo 'XDG_DOWNLOAD_DIR="$HOME/Downloads"' | replace "$SANDBOX_HOME/.config/user-dirs.dirs"

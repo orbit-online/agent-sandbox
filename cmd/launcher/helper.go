@@ -23,16 +23,14 @@ import (
 // pipe on fd 4 and, on the host, nixpak's info fd on 5. Unblocked without maps, bwrap's child would run as the
 // overflow uid: when anything fails, it takes bwrap and the child down instead
 
-// What the host sets up in the sandbox's netns, in nixpak's place of pasta (its slot is a no-op): the macvlan
-// (netns-macvlan --help), its link up and the DHCP client in a mount namespace of its own (dhcp-root.sh), all before
-// nixpak's launcher hears the sandbox is there and lets the app start
+// What the host sets up in the sandbox's netns, in nixpak's place of pasta (its slot is a no-op): the netkit pair
+// (netns-netkit --help) and, as the owner of the sandbox's user namespace, its addresses and routes, all before nixpak's
+// launcher hears the sandbox is there and lets the app start
 type netSetup struct {
-	NetnsMacvlan string `json:"netnsMacvlan"`
-	DHCPRoot     string `json:"dhcpRoot"`
-	Nsenter      string `json:"nsenter"`
-	Unshare      string `json:"unshare"`
-	IP           string `json:"ip"`
-	Name         string `json:"name,omitempty"` // The launcher's, which salts the macvlan's MAC; empty for the default one
+	NetnsNetkit string `json:"netnsNetkit"`
+	Nsenter     string `json:"nsenter"`
+	IP          string `json:"ip"`
+	Name        string `json:"name,omitempty"` // The launcher's, which its addresses derive from; empty for the default one
 }
 
 // The host's units for the sandbox's daemons, in the launcher's slice and bound to the app's unit, so they stop with
@@ -45,7 +43,7 @@ type hostUnits struct {
 	Slice      string `json:"slice"`
 	SystemdCat string `json:"systemdCat"`
 	Journal    string `json:"journal"`        // The host side's journal namespace, subid-broker's
-	Sandbox    string `json:"sandboxJournal"` // The sandbox's, udhcpc's: it runs in the sandbox's namespaces
+	Sandbox    string `json:"sandboxJournal"` // The sandbox's
 }
 
 // Stops the unit <prefix>-<name>, whatever it's doing
@@ -76,8 +74,7 @@ func runHelper(specJSON string) error {
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		return err
 	}
-	// Not for what the helper runs: udhcpc stays in the background, and holding nixpak's info fd it would keep nixpak's
-	// launcher waiting for the info's end until it renews its lease
+	// Not for what the helper runs: holding nixpak's info fd, it would keep nixpak's launcher waiting for the info's end
 	for fd := 3; fd <= 5; fd++ {
 		unix.CloseOnExec(fd)
 	}
@@ -133,7 +130,7 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 		slog.Info("Step", "step", stepSandbox)
 	}
 	if spec.Net != nil {
-		if err := spec.Net.run(pid, spec.Units); err != nil {
+		if err := spec.Net.run(pid); err != nil {
 			return err
 		}
 	}
@@ -147,7 +144,7 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 	return nil
 }
 
-func (n *netSetup) run(pid int, u *hostUnits) error {
+func (n *netSetup) run(pid int) error {
 	// bwrap's parent reports the pid while the child is still building the mount tree; nixpak binds /.flatpak-info
 	// last, so once it shows up the sandbox's root is final
 	marker := fmt.Sprintf("/proc/%d/root/.flatpak-info", pid)
@@ -160,42 +157,38 @@ func (n *netSetup) run(pid int, u *hostUnits) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	args := []string{strconv.Itoa(pid)}
+	args := []string{"up", strconv.Itoa(pid)}
 	if n.Name != "" {
-		args = append(args, n.Name)
+		args = append(args, "--name="+n.Name)
 	}
-	if err := runCmd(n.NetnsMacvlan, args...); err != nil {
-		return err
+	cmd := exec.Command(n.NetnsNetkit, args...)
+	cmd.Stderr = hostOut
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("%s: %w", n.NetnsNetkit, err)
+	}
+	addrs := strings.Fields(string(out))
+	if len(addrs) != 2 {
+		return fmt.Errorf("%s: addresses %q", n.NetnsNetkit, out)
 	}
 	// The sandbox's userns owns its netns. --keep-caps: exec would otherwise drop the caps setns granted
-	ns := []string{"-t", strconv.Itoa(pid), "-U", "-n", "--preserve-credentials", "--keep-caps"}
-	for _, link := range []string{"lo", "eth0"} {
-		if err := runCmd(n.Nsenter, append(ns, n.IP, "link", "set", link, "up")...); err != nil {
-			return err
-		}
+	ip := exec.Command(n.Nsenter, "-t", strconv.Itoa(pid), "-U", "-n", "--preserve-credentials", "--keep-caps", n.IP, "-batch", "-")
+	ip.Stdin = strings.NewReader(ipBatch(addrs[0], addrs[1]))
+	ip.Stdout, ip.Stderr = hostOut, hostOut
+	if err := ip.Run(); err != nil {
+		return fmt.Errorf("Address the sandbox: %w", err)
 	}
 	slog.Info("Step", "step", stepNetwork)
-	// udhcpc in a mount namespace of its own, made from the host's (see dhcp-root.sh), in the sandbox's pid ns so it
-	// dies with it. It goes to the background once it has a lease or gives up, which ends the unit's start
-	err := u.start("dhcp", u.Sandbox, "udhcpc", []string{"Type=forking"},
-		append(append([]string{n.Nsenter}, ns...), "-p", n.Unshare, "--mount", "--propagation", "private", n.DHCPRoot)...)
-	if err != nil {
-		return err
-	}
-	// The sandbox can change its addresses, but it isn't running yet
-	addr, err := exec.Command(n.Nsenter, append(ns, n.IP, "-4", "-o", "addr", "show", "dev", "eth0", "scope", "global")...).Output()
-	if err == nil && len(addr) == 0 {
-		slog.Warn("No address from DHCP yet: udhcpc goes on trying in the background")
-	}
-	slog.Info("Step", "step", stepDHCP)
 	return nil
 }
 
-func runCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout, cmd.Stderr = hostOut, hostOut
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	return nil
+// ipBatch is what eth0 in the sandbox gets: its addresses, up, and the default routes through it. No neighbours: netkit
+// in L3 mode has no ARP
+func ipBatch(v4, v6 string) string {
+	return "link set lo up\n" +
+		"addr add " + v4 + "/32 dev eth0\n" +
+		"addr add " + v6 + "/128 dev eth0 nodad\n" +
+		"link set eth0 up\n" +
+		"route add default dev eth0\n" +
+		"route add ::/0 dev eth0\n"
 }

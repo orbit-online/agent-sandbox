@@ -26,7 +26,7 @@
  * capability, parameters, arguments and lease, releases any grant,
  * connects to every host socket address as often as it likes and hangs
  * up, renames directories under a ceiling root (`env` changes what a
- * parameter resolves to), sends `share` from M1 (udhcpc), and posts
+ * parameter resolves to), sends `share` from M1, and posts
  * notifications. It can't reach control.sock
  * (S6), so window answers come from host principals.
  */
@@ -55,6 +55,6 @@ run callsAndConnections {
 
 run restart {
   some l: Launcher | eventually (crash[l] and some Mounted & gl.l and after (stopPost[l] and after start[l]))
-  eventually some l: Launcher, w: Principal | share[l, w] and w in UdhcpcP
+  eventually some l: Launcher, w: Principal | share[l, w] and w in BwrapInitP
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1

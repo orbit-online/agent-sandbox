@@ -19,12 +19,12 @@ func TestMarker(t *testing.T) {
 		e    entry
 		want string
 	}{
-		{entry{"claude-desktop-work", "level=INFO msg=Step step=dhcp", time.Time{}}, stepDHCP},
+		{entry{"claude-desktop-work", "level=INFO msg=Step step=network", time.Time{}}, stepNetwork},
 		{entry{"dbus-proxy", "level=INFO msg=Listening path=/run/bus", time.Time{}}, stepProxy},
-		{entry{"claude-desktop", "level=INFO msg=Step step=dhcp", time.Time{}}, ""},
-		{entry{"dbus-proxy", `level=WARN msg=Refused member="x msg=Step step=dhcp"`, time.Time{}}, ""},
-		{entry{"claude-desktop-work", `level=WARN msg=Refused member="x level=INFO msg=Step step=dhcp"`, time.Time{}}, ""},
-		{entry{"udhcpc", "level=INFO msg=Step step=dhcp", time.Time{}}, ""},
+		{entry{"claude-desktop", "level=INFO msg=Step step=network", time.Time{}}, ""},
+		{entry{"dbus-proxy", `level=WARN msg=Refused member="x msg=Step step=network"`, time.Time{}}, ""},
+		{entry{"claude-desktop-work", `level=WARN msg=Refused member="x level=INFO msg=Step step=network"`, time.Time{}}, ""},
+		{entry{"subid-broker", "level=INFO msg=Step step=network", time.Time{}}, ""},
 	} {
 		if got := marker(cfg, c.e); got != c.want {
 			t.Errorf("%v: %q, want %q", c.e, got, c.want)
@@ -43,9 +43,9 @@ func secs(kv ...any) map[string]time.Duration {
 // Each step at its median share of the whole start, the bar creeping towards the next one and never past it
 func TestEstimate(t *testing.T) {
 	hist := []map[string]time.Duration{
-		secs(stepPrepared, 1.0, stepProxy, 2.0, stepSandbox, 3.0, stepNetwork, 4.0, stepDHCP, 6.0, stepReady, 10.0),
-		secs(stepPrepared, 0.5, stepProxy, 1.0, stepSandbox, 2.0, stepNetwork, 3.0, stepDHCP, 5.0, stepReady, 8.0),
-		secs(stepPrepared, 2.0, stepProxy, 3.0, stepSandbox, 4.0, stepNetwork, 5.0, stepDHCP, 7.0, stepReady, 12.0),
+		secs(stepPrepared, 1.0, stepProxy, 2.0, stepSandbox, 3.0, stepNetwork, 6.0, stepReady, 10.0),
+		secs(stepPrepared, 0.5, stepProxy, 1.0, stepSandbox, 2.0, stepNetwork, 5.0, stepReady, 8.0),
+		secs(stepPrepared, 2.0, stepProxy, 3.0, stepSandbox, 4.0, stepNetwork, 7.0, stepReady, 12.0),
 	}
 	p := newProgress(&splash{}, time.Now(), hist)
 	near := func(got, want float64) bool { return got > want-1e-9 && got < want+1e-9 }
@@ -58,10 +58,10 @@ func TestEstimate(t *testing.T) {
 	if f, _ := p.estimate(time.Hour); f > 0.1 || f < 0.09 {
 		t.Errorf("Stuck before prepared: %v", f)
 	}
-	p.mark(stepDHCP, time.Now())
-	p.at[stepDHCP] = 7 * time.Second
+	p.mark(stepNetwork, time.Now())
+	p.at[stepNetwork] = 7 * time.Second
 	if f, _ := p.estimate(7 * time.Second); !near(f, 0.6) {
-		t.Errorf("At dhcp: %v", f)
+		t.Errorf("At network: %v", f)
 	}
 	if f, _ := p.estimate(9 * time.Second); !near(f, 0.6+0.4*0.5) {
 		t.Errorf("Halfway to ready: %v", f)
@@ -98,10 +98,10 @@ func TestStartedLine(t *testing.T) {
 	slog.SetDefault(slog.New(journal.Handler(&buf, true)))
 	defer slog.SetDefault(prev)
 	p := newProgress(&splash{}, time.Now(), nil)
-	p.at = secs("", 0.0, stepPrepared, 0.512, stepDHCP, 3.25, stepReady, 9.0)
+	p.at = secs("", 0.0, stepPrepared, 0.512, stepNetwork, 3.25, stepReady, 9.0)
 	p.started()
 	line := strings.TrimSuffix(strings.TrimPrefix(buf.String(), "<6>"), "\n")
-	want := secs(stepPrepared, 0.512, stepDHCP, 3.25, stepReady, 9.0)
+	want := secs(stepPrepared, 0.512, stepNetwork, 3.25, stepReady, 9.0)
 	if got := parseStarted(line); !maps.Equal(got, want) {
 		t.Errorf("%q: %v", line, got)
 	}
@@ -112,10 +112,10 @@ func TestStartedLine(t *testing.T) {
 
 func TestReadable(t *testing.T) {
 	for in, want := range map[string]string{
-		`level=WARN msg="No address from DHCP yet" k=v`: "No address from DHCP yet k=v",
-		`level=ERROR msg=Refused member=x`:              "Refused member=x",
-		`plain output`:                                  "plain output",
-		`level=WARN msg="unterminated`:                  `level=WARN msg="unterminated`,
+		`level=WARN msg="No uplink yet" k=v`: "No uplink yet k=v",
+		`level=ERROR msg=Refused member=x`:   "Refused member=x",
+		`plain output`:                       "plain output",
+		`level=WARN msg="unterminated`:       `level=WARN msg="unterminated`,
 	} {
 		if got := readable(in); got != want {
 			t.Errorf("%q: %q", in, got)
@@ -141,12 +141,12 @@ not json
 func TestLateMarker(t *testing.T) {
 	began := time.Now()
 	p := newProgress(&splash{}, began, nil)
-	p.mark(stepNetwork, began.Add(2*time.Second))
+	p.mark(stepSandbox, began.Add(2*time.Second))
 	p.mark(stepProxy, began.Add(time.Second))
 	p.mark(stepReady, began.Add(5*time.Second))
-	p.mark(stepDHCP, began.Add(4*time.Second))
-	p.mark(stepDHCP, began.Add(6*time.Second))
-	want := secs("", 0.0, stepProxy, 1.0, stepNetwork, 2.0, stepDHCP, 4.0, stepReady, 5.0)
+	p.mark(stepNetwork, began.Add(4*time.Second))
+	p.mark(stepNetwork, began.Add(6*time.Second))
+	want := secs("", 0.0, stepProxy, 1.0, stepSandbox, 2.0, stepNetwork, 4.0, stepReady, 5.0)
 	if !maps.Equal(p.at, want) || steps[p.cur].name != stepReady {
 		t.Errorf("%v at %s", p.at, steps[p.cur].name)
 	}

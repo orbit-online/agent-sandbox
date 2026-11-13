@@ -178,8 +178,8 @@ pred gateOpen[l: Launcher, c: Capability] { c not in l.asking + l.blocked }
 pred hostOnly[w: Principal] { w.domain = Host }
 
 // share only from M1 (handleRequest, sockets.go): bwrap's init and the
-// FHS env script, and udhcpc, which runs there too.
-pred inM1[w: Principal] { w in BwrapInitP + UdhcpcP }
+// FHS env script.
+pred inM1[w: Principal] { w in BwrapInitP }
 
 // askOn ignores an action within a second of the notification appearing
 // (notify.go).

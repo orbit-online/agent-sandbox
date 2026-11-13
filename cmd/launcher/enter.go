@@ -161,6 +161,15 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 	}
 	argv := []string{cfg.Tools.SystemdRun, "--user", "--quiet", "--collect", "--unit=" + cfg.Unit, "--slice=" + cfg.Slice,
 		"-p", "Delegate=yes", "-p", "DelegateSubgroup=supervisor", "-p", "Type=notify", "-p", "TimeoutStartSec=infinity"}
+	// The sandbox's network ends with the unit, however it ends: the pins and registration of its netkit pair, and the
+	// pair while the kernel still tears the netns down (sandbox-uplink removes them too, but only once the pair is gone)
+	if cfg.Tools.WrapperDir != "" {
+		down := "ExecStopPost=-" + filepath.Join(cfg.Tools.WrapperDir, "netns-netkit") + " down"
+		if cfg.Launcher != "" {
+			down += " --name=" + cfg.Launcher
+		}
+		argv = append(argv, "-p", down)
+	}
 	for _, kv := range os.Environ() {
 		if !unitOwnVar(strings.SplitN(kv, "=", 2)[0]) {
 			argv = append(argv, "--setenv="+kv)

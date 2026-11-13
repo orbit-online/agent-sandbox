@@ -35,8 +35,7 @@ default launcher and `claude-desktop-<name>` for a named one
 (`ls /var/log/journal` shows which):
 
 - The sandbox's, the one `journalctl`, `logger` and `systemd-cat` use by
-  default: the app's output (Chromium's stderr), udhcpc and the
-  manager's units.
+  default: the app's output (Chromium's stderr) and the manager's units.
 - The host side's, which you read but can't write to:
   `journalctl --namespace=<it>`. The launcher (its warnings about the
   start among it), the permissions broker,
@@ -101,8 +100,18 @@ unless you ask otherwise); release it when you're done.
   else the desktop's processes export are out of reach. Links open in the
   host browser via OpenURI. There is no system bus. Processes running as a
   subuid can't connect to the session bus.
-- Own network namespace with a macvlan on the LAN (DHCP), so host-only
-  services (VPN mesh, auth proxies, the host's `127.0.0.1`) are out of reach.
+- Own network namespace, joined to the host by a netkit pair (`eth0`
+  here). Its programs let packets out only through the physical uplinks of
+  the host (Ethernet and Wi-Fi), NATed there, and only replies back in: the
+  addresses of the host (its `127.0.0.1` and LAN address included),
+  host-only networks (VPN mesh, container bridges, auth proxies) and other
+  sandboxes are out of reach. Behind a full-tunnel VPN you still leave through the
+  physical uplink with the default route, never into the VPN. Addresses:
+  an IPv4 /32 from `169.254.100.0/22` and an IPv6 /128 from a ULA /48 of
+  the machine, both stable per launcher, with default routes through
+  `eth0`. The host reaches a port of yours only while the user grants it.
+  DNS: the servers in `/etc/resolv.conf`, from the `nameservers` option of
+  the launcher; none listed means no DNS.
 - No SSH agent and no `~/.ssh`.
 
 ## User namespaces

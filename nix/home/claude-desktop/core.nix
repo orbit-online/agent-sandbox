@@ -66,6 +66,7 @@ let
       STATE_DIR = ids.stateDir;
       SANDBOX_HOME = ids.home;
       RESOLV_CONF = "${ids.home}/.config/resolv.conf";
+      NAMESERVERS = lib.concatStringsSep " " config.nameservers;
       DOT_CLAUDE = hostPath ".claude";
       CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
       MCP_SERVERS = "${pkgs.writeText "mcp-servers.json" (builtins.toJSON config.mcpServers)}";
@@ -194,7 +195,7 @@ in
           # The tightest of what the name goes into: the broker's control socket and request.sock, 61 bytes besides
           # the name with a 10-digit uid, bound by path (at most 107 bytes and the NUL). The app ID (D-Bus's 255 bytes, 21
           # besides), the slice (systemd's 255 characters, 27 besides and 3 more for each - escaped) and the state
-          # dir's file name (255, 15 besides) allow more; the macvlan is eth0 whatever the name
+          # dir's file name (255, 15 besides) allow more; the netkit primary's name hashes it
           assertion = lib.stringLength launcherName <= sl.launcherNameMax;
           message = "agent-sandbox.claude-desktop: launcher name ${launcherName} must be at most ${toString sl.launcherNameMax} characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 107 bytes and its NUL";
         }

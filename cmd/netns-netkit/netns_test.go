@@ -9,22 +9,21 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
 // Re-executed as the process whose netns openNetns inspects; blocks until stdin closes. With "nest", it runs in a user
 // namespace of its own and starts another such process below it, in a network namespace and, with
-// NETNS_MACVLAN_TEST_USERNS=true, a user namespace of its own, and prints that one's pid
+// NETNS_NETKIT_TEST_USERNS=true, a user namespace of its own, and prints that one's pid
 func TestMain(m *testing.M) {
-	switch os.Getenv("NETNS_MACVLAN_TEST_CHILD") {
+	switch os.Getenv("NETNS_NETKIT_TEST_CHILD") {
 	case "1":
 		io.Copy(io.Discard, os.Stdin)
 		os.Exit(0)
 	case "nest":
 		flags := uintptr(syscall.CLONE_NEWNET)
 		var maps []syscall.SysProcIDMap
-		if os.Getenv("NETNS_MACVLAN_TEST_USERNS") == "true" {
+		if os.Getenv("NETNS_NETKIT_TEST_USERNS") == "true" {
 			flags |= syscall.CLONE_NEWUSER
 			maps = []syscall.SysProcIDMap{{ContainerID: 0, HostID: 0, Size: 1}}
 		}
@@ -45,7 +44,7 @@ func TestMain(m *testing.M) {
 // Starts this test binary as a child in mode with clone flags, its uid map maps
 func start(flags uintptr, maps []syscall.SysProcIDMap, mode string) (*exec.Cmd, io.WriteCloser, error) {
 	child := exec.Command("/proc/self/exe")
-	child.Env = append(os.Environ(), "NETNS_MACVLAN_TEST_CHILD="+mode)
+	child.Env = append(os.Environ(), "NETNS_NETKIT_TEST_CHILD="+mode)
 	child.Stderr = os.Stderr
 	stdin, err := child.StdinPipe()
 	if err != nil {
@@ -64,7 +63,7 @@ func nest(t *testing.T, userns bool) (*exec.Cmd, int, func()) {
 	t.Helper()
 	uid := unix.Getuid()
 	child := exec.Command("/proc/self/exe")
-	child.Env = append(os.Environ(), "NETNS_MACVLAN_TEST_CHILD=nest", fmt.Sprintf("NETNS_MACVLAN_TEST_USERNS=%t", userns))
+	child.Env = append(os.Environ(), "NETNS_NETKIT_TEST_CHILD=nest", fmt.Sprintf("NETNS_NETKIT_TEST_USERNS=%t", userns))
 	child.Stderr = os.Stderr
 	stdin, err := child.StdinPipe()
 	if err != nil {
@@ -90,49 +89,6 @@ func nest(t *testing.T, userns bool) (*exec.Cmd, int, func()) {
 	return child, pid, func() {
 		stdin.Close()
 		child.Wait()
-	}
-}
-
-func TestStableMAC(t *testing.T) {
-	id := []byte("0123456789abcdef0123456789abcdef\n")
-	mac := stableMAC(id, 1000, "")
-	// A changed derivation hands every sandbox a new DHCP lease
-	if got := mac.String(); got != "0a:47:3f:c0:f2:e7" {
-		t.Errorf("stableMAC = %s, want 0a:47:3f:c0:f2:e7", got)
-	}
-	for uid := range 64 {
-		if mac := stableMAC(id, uid, ""); mac[0]&0x01 != 0 || mac[0]&0x02 == 0 {
-			t.Errorf("%s is not a locally administered unicast MAC", mac)
-		}
-	}
-	if stableMAC(id, 1001, "").String() == mac.String() {
-		t.Error("Same MAC for different uids")
-	}
-	if stableMAC([]byte("fedcba9876543210fedcba9876543210\n"), 1000, "").String() == mac.String() {
-		t.Error("Same MAC for different machine IDs")
-	}
-	if stableMAC(id, 1000, "work").String() == mac.String() {
-		t.Error("Same MAC for different names")
-	}
-	if mac := stableMAC(id, 1000, "work"); mac[0]&0x01 != 0 || mac[0]&0x02 == 0 {
-		t.Errorf("%s is not a locally administered unicast MAC", mac)
-	}
-}
-
-func TestLowestMetric(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		routes []netlink.Route
-		want   int
-	}{
-		{"none", nil, -1},
-		{"no device", []netlink.Route{{LinkIndex: 0, Priority: 0}}, -1},
-		{"lowest metric", []netlink.Route{{LinkIndex: 2, Priority: 600}, {LinkIndex: 3, Priority: 100}, {LinkIndex: 4, Priority: 300}}, 3},
-		{"skips deviceless", []netlink.Route{{LinkIndex: 0, Priority: 0}, {LinkIndex: 5, Priority: 50}}, 5},
-	} {
-		if got := lowestMetric(tc.routes); got != tc.want {
-			t.Errorf("%s: lowestMetric = %d, want %d", tc.name, got, tc.want)
-		}
 	}
 }
 

@@ -110,8 +110,8 @@ func (s *sandbox) Members() []int {
 
 // copied reports whether a process of the sandbox is in a copy of M1: a mount namespace owned by a user namespace
 // below the sandbox's. The FHS env's bwrap (or anything else in the sandbox) made it, and a share now wouldn't reach
-// it. Not one owned by the sandbox's user namespace itself: only the host has the capabilities to make those (udhcpc's,
-// the clone helper's), from the host's mounts, as it has for joining U1 on the host's mounts (net-setup's ip)
+// it. Not one owned by the sandbox's user namespace itself: only the host has the capabilities to make those (the
+// clone helper's), from the host's mounts, as it has for joining U1 on the host's mounts (net-setup's ip)
 func (s *sandbox) copied() (bool, error) {
 	if s.mnt == nil || s.userns == nil {
 		return false, errors.New("The sandbox's namespaces aren't known")

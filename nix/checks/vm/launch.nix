@@ -1,11 +1,15 @@
 # The default launcher: its launch, D-Bus, links planted in its state, subordinate ids, the scratchpad, store GC, the
-# theme, re-entries and --shell, the network, /etc and the store, netns-macvlan's refusals
+# theme, re-entries and --shell, the network on its netkit pair, /etc and the store, netns-netkit's refusals
 {
+  pkgs,
   gdbus,
   dbusProxy,
   stateDir,
   sandboxHome,
   routerIP,
+  routerIP6,
+  internet4,
+  internet6,
   workstationIP,
   ...
 }:
@@ -16,11 +20,13 @@
       for t in host_only:
           workstation.succeed(f"curl -sf http://{t}/")
 
+  netkit = "/run/wrappers/bin/netns-netkit"
   with subtest("setcap wrapper"):
-      workstation.succeed("getcap /run/wrappers/bin/netns-macvlan | grep -q cap_net_admin=ep")
+      workstation.succeed(f"getcap {netkit} | grep -q cap_net_admin,cap_bpf=ep")
+      assert workstation.succeed(f"stat -c '%A %U %G' {netkit}").strip() == "-r-x--s--x root sandbox-uplink"
       # System users can't run it, only group users
-      status, out = as_user("nobody", "/run/wrappers/bin/netns-macvlan 1")
-      assert status != 0 and "Permission denied" in out, f"nobody ran the wrapper: {status} {out}"
+      status, out = as_user("nobody", f"{netkit} up 1")
+      assert status != 0 and "Only members of group users may run netns-netkit" in out, f"nobody ran the wrapper: {status} {out}"
 
   # alice's own files, which links the sandbox planted in its state point at
   # c parses as a keyfile, so gsettings would carry its group into the sandbox's
@@ -149,7 +155,7 @@
           "journalctl --namespace=claude-desktop --no-pager -o cat -t dbus-proxy -p warning | grep -q member=getClipboardContents",
           timeout=30)
       assert "time=" not in host_journal("claude-desktop", "-t dbus-proxy -p warning"), "slog's time in the journal"
-      # What supervise pumps (nixpak, bwrap, the app, its ready line among it) and udhcpc, in the sandbox's; supervise's
+      # What supervise pumps (nixpak, bwrap, the app, its ready line among it), in the sandbox's; supervise's
       # own messages, under the same name, on the host side
       assert "agent-sandbox: ready" in host_journal("claude-desktop_sandbox", "-t claude-desktop")
       assert "agent-sandbox: ready" not in host_journal("claude-desktop", "")
@@ -157,15 +163,13 @@
       # durations to each, which the next start estimates from. Steps in the durations came through supervise's follow
       launcher = host_journal("claude-desktop", "-t claude-desktop")
       timeline = host_journal("claude-desktop", "-o short-precise -t claude-desktop -t dbus-proxy -g 'Step|Started|Listening'")
-      for step in ["sandbox", "network", "dhcp"]:
+      for step in ["sandbox", "network"]:
           assert f"level=INFO msg=Step step={step}" in launcher, timeline
       started = [l for l in launcher.splitlines() if l.startswith("level=INFO msg=Started ")]
-      assert started and all(f" {s}=" in started[-1] for s in ["prepared", "proxy", "sandbox", "network", "dhcp", "ready"]), timeline
+      assert started and all(f" {s}=" in started[-1] for s in ["prepared", "proxy", "sandbox", "network", "ready"]), timeline
       assert "level=INFO msg=Listening " in host_journal("claude-desktop", "-t dbus-proxy"), "no Listening from the proxy"
       sandbox_steps = [l for l in host_journal("claude-desktop_sandbox", "").splitlines() if "msg=Step" in l]
       assert not sandbox_steps, f"steps in the sandbox's namespace: {sandbox_steps}"
-      assert host_journal("claude-desktop_sandbox", "-t udhcpc").strip(), "nothing from udhcpc"
-      assert not host_journal("claude-desktop", "-t udhcpc").strip(), "udhcpc on the host side"
       in_sandbox("logger -t probe-in hello-from-inside")
       in_sandbox("systemd-cat -t probe-cat echo hello-from-cat")
       workstation.wait_until_succeeds(sandbox_cmd("journalctl --no-pager -o cat -t probe-in -t probe-cat") + " | grep -c hello-from | grep -qx 2", timeout=30)
@@ -337,30 +341,163 @@
       assert out == [app_pidns, app_mntns], f"--shell in {out}, app in {[app_pidns, app_mntns]}"
       workstation.succeed("systemctl --user -M alice@ stop nest")
 
-  with subtest("DHCP lease on the macvlan"):
-      workstation.wait_until_succeeds(
-          sandbox_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"), timeout=60
-      )
+  import ipaddress, time
+  sandbox_pid = bwrap_info()["child-pid"]
+  ns = f"nsenter -t {sandbox_pid} -n"
+  primary = "sbx-rs-e3b0c442"
+  pins = "/run/sandbox-uplink/1000"
+
+  # An address as the registration map keys it, for bpftool
+  def key(a):
+      b = ipaddress.ip_address(a)
+      b = ipaddress.IPv6Address(f"::ffff:{a}") if b.version == 4 else b
+      return "hex " + " ".join(f"{x:02x}" for x in b.packed)
+
+  def reaches(host, port, run=sandbox_cmd):
+      return workstation.execute(run(tcp_connect(host, port)))[0] == 0
+
+  # Starts capturing on dev (in the netns netns enters) what filt matches; the returned function stops and returns the
+  # count
+  def capture(dev, filt, netns=""):
+      workstation.succeed(f"systemd-run --collect --unit=cap-{dev} {netns} /run/current-system/sw/bin/tcpdump -U -ni {dev} -w /tmp/{dev}.pcap {shlex.quote(filt)}")
+      time.sleep(1)
+      def stop():
+          workstation.succeed(f"systemctl stop cap-{dev}")
+          return int(workstation.succeed(f"tcpdump -r /tmp/{dev}.pcap 2>/dev/null | wc -l").strip())
+      return stop
+
+  with subtest("the netkit pair: eth0 with the sandbox's addresses and routes, its programs and maps pinned, registered"):
+      workstation.succeed(sandbox_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"))
       links = in_sandbox("ip -o link show")
       assert [l.split(":")[1].strip().split("@")[0] for l in links.splitlines()] == ["lo", "eth0"], links
-      assert "macvlan" in in_sandbox("ip -d link show eth0")
-      assert "inet 192.168.1." in in_sandbox("ip -4 -o addr show dev eth0")
-      assert "default via ${routerIP} dev eth0" in in_sandbox("ip route")
-      # udhcpc runs in a mount namespace of its own, holding only its closure, not the sandbox's: there the sandbox
-      # could swap the store directory for one of its own and have udhcpc run it
-      udhcpc = workstation.succeed("pgrep -u alice -x udhcpc").split()[0]
-      sb_mnt = workstation.succeed(f"readlink /proc/{bwrap_info()['child-pid']}/ns/mnt").strip()
-      assert workstation.succeed(f"readlink /proc/{udhcpc}/ns/mnt").strip() != sb_mnt, "udhcpc runs in M1"
-      store = workstation.succeed(f"ls /proc/{udhcpc}/root/nix/store").split()
-      assert any(p.endswith("-claude-desktop-udhcpc") for p in store), store
-      assert not any("stub" in p or "claude-desktop-store-roots" in p for p in store), store
-      workstation.succeed(f"test -f /proc/{udhcpc}/root/home/alice/.config/resolv.conf")
-      workstation.fail(f"test -e /proc/{udhcpc}/root/home/alice/victim-a")
-      # A unit of its own beside the app's, outside the sandbox's cgroups, bound to the app's
-      assert workstation.succeed(f"cat /proc/{udhcpc}/cgroup").strip().endswith(
-          "/claude\\x2ddesktop.slice/claude-desktop-dhcp.service"), udhcpc
-      assert "claude-desktop-app.service" in workstation.succeed(
-          "systemctl --user -M alice@ show -P BindsTo claude-desktop-dhcp"), "udhcpc isn't bound to the app"
+      assert "netkit" in in_sandbox("ip -d link show eth0")
+      sb4 = in_sandbox("ip -4 -o addr show dev eth0").split()[3]
+      sb6 = in_sandbox("ip -6 -o addr show dev eth0 scope global").split()[3]
+      assert ipaddress.ip_interface(sb4) in ipaddress.ip_network("169.254.100.0/22") and sb4.endswith("/32"), sb4
+      assert sb6.startswith("fd") and sb6.endswith("/128"), sb6
+      sb4, sb6 = sb4.split("/")[0], sb6.split("/")[0]
+      assert "default dev eth0" in in_sandbox("ip -4 route") and "default dev eth0" in in_sandbox("ip -6 route")
+      # The primary in the host, routed to, forwarding on, its programs from the pins
+      assert "netkit" in workstation.succeed(f"ip -d link show {primary}")
+      for a in [sb4, sb6]:
+          assert f"dev {primary}" in workstation.succeed(f"ip route get {a}")
+      assert workstation.succeed(f"cat /proc/sys/net/ipv{{4,6}}/conf/{primary}/forwarding").split() == ["1", "1"]
+      print(workstation.succeed(f"bpftool net show dev {primary}", "bpftool link show"))
+      assert sorted(workstation.succeed(f"ls {pins}").split()) == ["flows", "peer", "ports", "primary", "sandbox"]
+      assert workstation.succeed(f"stat -c '%a %U %G' {pins}").strip() == "770 alice sandbox-uplink"
+      assert workstation.succeed("stat -c '%a %U %G' /run/sandbox-uplink").strip() == "1770 sandbox-uplink sandbox-uplink"
+      for a in [sb4, sb6]:
+          workstation.succeed(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(a)}")
+      # alice can't reach the pins herself, only through the wrapper
+      assert as_user("alice", f"ls {pins}")[0] != 0
+
+  with subtest("the sandbox reaches the LAN and the internet stand-in, IPv4 and IPv6, and nothing of the host's"):
+      for host in ["${routerIP}", "${routerIP6}", "${internet4}", "${internet6}"]:
+          assert reaches(host, 443), host
+      # A container behind a bridge of the host's: its listener answers the host
+      workstation.succeed(
+          "ip link add br0 type bridge && ip addr add 10.98.0.1/24 dev br0 && ip link set br0 up",
+          "ip netns add ctr && ip link add vb0 type veth peer vb1 && ip link set vb0 master br0 && ip link set vb0 up",
+          "ip link set vb1 netns ctr && ip netns exec ctr ip addr add 10.98.0.2/24 dev vb1",
+          "ip netns exec ctr ip link set vb1 up && ip netns exec ctr ip link set lo up",
+          "ip netns exec ctr ip route add default via 10.98.0.1",
+          "systemd-run --unit ctr-web ip netns exec ctr ${pkgs.python3}/bin/python3 -m http.server 80 --directory /var/empty",
+      )
+      workstation.wait_until_succeeds("curl -sf -m3 http://10.98.0.2/", timeout=30)
+      stop = capture("br0", f"host {sb4}")
+      # What peer passes into the host stack arrives on the primary
+      stop_local = capture(primary, f"src host {sb4} or src host {sb6}")
+      for host, port in [("${workstationIP}", 80), ("10.99.0.1", 80), ("10.98.0.2", 80), ("10.98.0.1", 80)]:
+          assert not reaches(host, port), f"{host}:{port}"
+      assert stop() == 0, "the sandbox reached the bridge"
+      # 127.0.0.1 routed out of the sandbox, route_localnet on both sides (as kube-proxy sets it): the host's
+      # loopback service still out of reach
+      workstation.succeed(
+          f"sysctl -w net.ipv4.conf.all.route_localnet=1 net.ipv4.conf.{primary}.route_localnet=1",
+          f"{ns} ip route del table local local 127.0.0.1 dev lo",
+          f"{ns} ip route del table local local 127.0.0.0/8 dev lo",
+          f"{ns} sysctl -w net.ipv4.conf.all.route_localnet=1 net.ipv4.conf.eth0.route_localnet=1",
+          f"{ns} ip route add 127.0.0.1/32 dev eth0 src {sb4}",
+      )
+      workstation.fail(f"{ns} curl -sf -m3 http://127.0.0.1:80/")
+      assert stop_local() == 0, "the sandbox reached the host stack"
+      workstation.succeed(
+          f"{ns} ip route del 127.0.0.1/32 dev eth0",
+          # lo coming up puts its local routes back
+          f"{ns} ip link set lo down",
+          f"{ns} ip link set lo up",
+          f"{ns} sysctl -w net.ipv4.conf.all.route_localnet=0 net.ipv4.conf.eth0.route_localnet=0",
+          f"sysctl -w net.ipv4.conf.all.route_localnet=0 net.ipv4.conf.{primary}.route_localnet=0",
+      )
+
+  with subtest("a source other than the sandbox's own goes nowhere"):
+      workstation.succeed(f"{ns} ip addr add 169.254.103.250/32 dev eth0", f"{ns} ip addr add fd00::bad/128 dev eth0 nodad")
+      workstation.succeed(f"{ns} ping -c1 -W2 -I {sb4} ${internet4}", f"{ns} ping -c1 -W2 -I {sb6} ${internet6}")
+      stop = capture("eth1", "icmp or (icmp6 and ip6[40] == 128)")
+      workstation.fail(f"{ns} ping -c1 -W2 -I 169.254.103.250 ${internet4}")
+      workstation.fail(f"{ns} ping -c1 -W2 -I fd00::bad ${internet6}")
+      workstation.fail(f"{ns} ping -c1 -W2 -I 169.254.103.250 ${workstationIP}")
+      assert stop() == 0, "a spoofed packet left"
+      workstation.succeed(f"{ns} ip addr del 169.254.103.250/32 dev eth0", f"{ns} ip addr del fd00::bad/128 dev eth0")
+
+  with subtest("a full-tunnel VPN: the sandbox leaves through the uplink, nothing of it into the VPN's device"):
+      workstation.succeed("ip link add vpn0 type dummy && ip link set vpn0 up")
+      shapes = {
+          # wg-quick: a table of its own, main's default suppressed
+          "wg-quick": [f"ip {f} {c}" for f in ["-4", "-6"] for c in [
+              "route add default dev vpn0 table 51820", "rule add not fwmark 51820 table 51820",
+              "rule add table main suppress_prefixlength 0"]],
+          # NetworkManager, OpenVPN: two halves of the address space in main
+          "split": ["ip route add 0.0.0.0/1 dev vpn0", "ip route add 128.0.0.0/1 dev vpn0",
+                    "ip -6 route add ::/1 dev vpn0", "ip -6 route add 8000::/1 dev vpn0"],
+      }
+      undo = {
+          "wg-quick": [f"ip {f} {c}" for f in ["-4", "-6"] for c in [
+              "rule del not fwmark 51820 table 51820", "rule del table main suppress_prefixlength 0",
+              "route flush table 51820"]],
+          "split": ["ip route del 0.0.0.0/1", "ip route del 128.0.0.0/1", "ip -6 route del ::/1", "ip -6 route del 8000::/1"],
+      }
+      for shape, cmds in shapes.items():
+          workstation.succeed(*cmds)
+          # The host's own traffic goes into the VPN
+          for host in ["${internet4}", "${internet6}"]:
+              assert "dev vpn0" in workstation.succeed(f"ip route get {host}"), f"{shape}: {host}"
+          stop = capture("vpn0", f"host {sb4} or host {sb6}")
+          for host in ["${internet4}", "${internet6}"]:
+              assert reaches(host, 443), f"{shape}: {host}"
+          assert stop() == 0, f"{shape}: the sandbox went into the VPN"
+          workstation.succeed(*undo[shape])
+      workstation.succeed("ip link del vpn0")
+
+  with subtest("port forwarding: a granted port from the host alone, its flows gone with the grant"):
+      in_sandbox("sh -c 'setsid python3 -m http.server 8080 --bind :: >/dev/null 2>&1 </dev/null &'")
+      workstation.wait_until_succeeds(sandbox_cmd(tcp_connect("::1", 8080)), timeout=30)
+      workstation.fail(f"curl -sf -m3 http://{sb4}:8080/")
+      status, out = as_user("alice", f"{netkit} grant tcp 8080")
+      assert status == 0, out
+      workstation.succeed(f"curl -sf -m5 -o /dev/null http://{sb4}:8080/", f"curl -sf -m5 -o /dev/null 'http://[{sb6}]:8080/'")
+      flows = lambda: json.loads(workstation.succeed(f"bpftool -j map dump pinned {pins}/flows"))
+      assert flows(), "no flow recorded"
+      # Forwarded by the host from a container: no socket on it, so the PRIMARY program drops it, granted port or not
+      workstation.succeed("sysctl -w net.ipv4.conf.br0.forwarding=1")
+      stop = capture("eth0", "host 10.98.0.2", ns)
+      workstation.fail(f"ip netns exec ctr curl -sf -m3 http://{sb4}:8080/")
+      assert stop() == 0, "a forwarded packet reached the sandbox"
+      workstation.succeed("sysctl -w net.ipv4.conf.br0.forwarding=0")
+      # Another user's grant reaches only their own sandbox, which bob has none of
+      status, out = as_bob(f"{netkit} grant tcp 8080")
+      assert status != 0 and "does the sandbox run?" in out, out
+      status, out = as_user("alice", f"{netkit} revoke tcp 8080")
+      assert status == 0, out
+      assert not flows(), f"flows left: {flows()}"
+      workstation.fail(f"curl -sf -m3 http://{sb4}:8080/")
+
+  with subtest("forwarding on the primary comes back after a change of all.forwarding reset it"):
+      workstation.succeed("sysctl -w net.ipv4.conf.all.forwarding=1 net.ipv6.conf.all.forwarding=1",
+                          "sysctl -w net.ipv4.conf.all.forwarding=0 net.ipv6.conf.all.forwarding=0")
+      workstation.wait_until_succeeds(f"[ \"$(cat /proc/sys/net/ipv{{4,6}}/conf/{primary}/forwarding)\" = \"$(printf '1\\n1')\" ]", timeout=10)
+      assert "Forwarding back on" in workstation.succeed("journalctl -u sandbox-uplink --no-pager -o cat")
+      assert reaches("${internet4}", 443) and reaches("${internet6}", 443)
 
   with subtest("Own hosts file"):
       workstation.succeed("grep -qw host-only.test /etc/hosts")
@@ -390,9 +527,7 @@
   with subtest("nettest.sh"):
       print(in_sandbox(f"nettest {' '.join(host_only)}"))
 
-  sandbox_pid = bwrap_info()["child-pid"]
-
-  with subtest("netns-macvlan refuses other users' namespaces"):
+  with subtest("netns-netkit refuses other users' namespaces"):
       bob_ns = spawn("bob-ns", "bob", "/run/current-system/sw/bin/unshare -Urn")
       alice_in_bob_ns = spawn("alice-in-bob-ns", "alice", netns_pid=bob_ns)
       bob_in_alice_ns = spawn("bob-in-alice-ns", "bob", netns_pid=sandbox_pid)
@@ -404,8 +539,8 @@
           (bob_in_alice_ns, "is owned by uid 1000, not 1001"),
           ("$$", "shares the caller's network namespace"),
       ]:
-          status, out = as_bob(f"sh -c {shlex.quote(f'exec /run/wrappers/bin/netns-macvlan {pid}')}")
-          assert status != 0 and error in out, f"netns-macvlan {pid}: {status} {out}"
+          status, out = as_bob(f"sh -c {shlex.quote(f'exec {netkit} up {pid}')}")
+          assert status != 0 and error in out, f"netns-netkit up {pid}: {status} {out}"
       # A network namespace owned by a user namespace of alice's, below one root made and mapped her uid into: the
       # immediate owner is hers, but she holds no capability there. The kernel's ptrace check on /proc/<pid>/ns/net
       # already refuses alice the process that made it, so the target is one of hers in the host's user namespace
@@ -420,16 +555,23 @@
           timeout=30,
       )
       alice_in_nested = spawn("alice-in-nested", "alice", netns_pid=under_root)
-      status, out = as_user("alice", f"/run/wrappers/bin/netns-macvlan {alice_in_nested}")
-      assert status != 0 and "is owned by uid 0, not 1000" in out, f"netns-macvlan {alice_in_nested}: {status} {out}"
+      status, out = as_user("alice", f"{netkit} up {alice_in_nested}")
+      assert status != 0 and "is owned by uid 0, not 1000" in out, f"netns-netkit up {alice_in_nested}: {status} {out}"
       workstation.succeed("systemctl stop alice-in-nested alice-under-root")
-      status, out = as_bob(f"/run/wrappers/bin/netns-macvlan {bob_ns}")
-      assert status == 0, out
-      workstation.succeed(f"nsenter -t {bob_ns} -n ip link show eth0")
-      # It holds the sandbox's netns, whose macvlan's MAC would then block the next sandbox's
+      # It holds the sandbox's netns
       workstation.succeed("systemctl stop bob-in-alice-ns")
+      # bob's own: a pair, which sandbox-uplink removes, its pins and registration with it, once the netns is gone
+      status, out = as_bob(f"{netkit} up {bob_ns}")
+      assert status == 0, out
+      workstation.succeed(f"nsenter -t {bob_ns} -n ip -d link show eth0 | grep -q netkit", "test -d /run/sandbox-uplink/1001")
+      bob4 = out.split()[-2]
+      # alice-in-bob-ns holds it too
+      workstation.succeed("systemctl stop bob-ns alice-in-bob-ns")
+      workstation.wait_until_fails("test -e /run/sandbox-uplink/1001", timeout=30)
+      workstation.fail(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(bob4)}")
 
   with subtest("the launcher's supervise, which follows the theme, is the app's unit and ends it"):
+      workstation.succeed("systemctl stop sandbox-uplink")
       main = workstation.succeed("systemctl --user -M alice@ show -P MainPID claude-desktop-app").strip()
       assert "launcher\x00supervise\x00" in workstation.succeed(f"cat /proc/{main}/cmdline"), main
       workstation.succeed("systemctl --user -M alice@ kill --kill-whom=main claude-desktop-app")
@@ -437,6 +579,11 @@
       workstation.wait_until_fails("pgrep -u alice -f 'launcher supervise'", timeout=30)
       workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
       workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")
-      for unit in ["subid", "dhcp"]:
-          workstation.wait_until_fails(f"systemctl --user -M alice@ -q is-active claude-desktop-{unit}", timeout=30)
+      workstation.wait_until_fails("systemctl --user -M alice@ -q is-active claude-desktop-subid", timeout=30)
+      # The unit's ExecStopPost ended its network: the pins and registration gone, sandbox-uplink stopped so it isn't the one
+      workstation.wait_until_fails(f"test -e {pins}", timeout=30)
+      workstation.fail(f"ip link show {primary}")
+      for a in [sb4, sb6]:
+          workstation.fail(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(a)}")
+      workstation.succeed("systemctl start sandbox-uplink")
 ''

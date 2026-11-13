@@ -46,7 +46,7 @@
         imports = [ (import ./nix/nixos/claude-desktop.nix { inherit self; }) ];
       };
       packages = forAllSystems (system: {
-        netns-macvlan = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-macvlan { };
+        netns-netkit = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-netkit { };
         subid-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/subid-broker { };
         dbus-proxy = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/dbus-proxy { };
         permissions-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-broker { };

@@ -328,7 +328,7 @@ let
     };
     testWrapper = {
       expr = {
-        inherit (system.config.security.wrappers.netns-macvlan)
+        inherit (system.config.security.wrappers.netns-netkit)
           source
           capabilities
           owner
@@ -337,15 +337,15 @@ let
           ;
       };
       expected = {
-        source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.netns-macvlan;
-        capabilities = "cap_net_admin+ep";
+        source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.netns-netkit;
+        capabilities = "cap_net_admin,cap_bpf+ep";
         owner = "root";
-        group = "users";
-        permissions = "u+rx,g+x";
+        group = "sandbox-uplink";
+        permissions = "u+rx,g+xs,o+x";
       };
     };
     testNoWrapperWhenDisabled = {
-      expr = (nixos { }).config.security.wrappers ? netns-macvlan;
+      expr = (nixos { }).config.security.wrappers ? netns-netkit;
       expected = false;
     };
     # The host side of the sandbox network comes with the sandbox, and only then
@@ -403,7 +403,7 @@ let
     testUsersGroupAssertion = {
       expr = map (a: a.message) (lib.filter (a: !a.assertion) ownGroup.config.assertions);
       expected = [
-        "agent-sandbox.claude-desktop: alice enables the sandbox but isn't in group users, which netns-macvlan is limited to. Add users to users.users.alice.extraGroups."
+        "agent-sandbox.claude-desktop: alice enables the sandbox but isn't in group users, which netns-netkit is limited to. Add users to users.users.alice.extraGroups."
       ];
     };
     testSubIdsAssertion = {
@@ -500,7 +500,7 @@ let
         )
       );
       expected = [
-        "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a macvlan; launchers.work.sandbox must not change bubblewrap.network or pasta"
+        "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a netkit pair; launchers.work.sandbox must not change bubblewrap.network or pasta"
       ];
     };
     # The proxy's rules: the portal's, and with a tray its item's name and the watcher's; a launcher's own pid, and
@@ -1065,7 +1065,7 @@ in
 
   checks = vmChecks // {
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
-      netns-macvlan
+      netns-netkit
       sandbox-uplink
       subid-broker
       dbus-proxy
@@ -1261,7 +1261,7 @@ in
           # The default launcher's ~/.claude is bound from /srv/claude, its ~/.config/Claude from the host's
           jq -e '.homeDirs == ["/home/alice/.local/share/claude-desktop/home", "/srv/claude", "/home/alice/.config/Claude"]' \
             "$dcfg0" >/dev/null || { echo "the default launcher's homeDirs are wrong" >&2; exit 1; }
-          # The name netns-macvlan salts the MAC with
+          # The name netns-netkit derives the addresses from
           # nixpak's bwrap, the launcher's mode subid, whose --net names it; the FHS env's, mode parent, has no --net
           name() {
             local b

@@ -8,8 +8,7 @@
  * and its storage read-only. The host helpers (supervise and
  * the D-Bus proxy in supervisor/, the permissions broker's and
  * subid-broker's units, through systemd-cat: internal/journal) log into
- * the same namespace, udhcpc too (helper.go, identifier udhcpc), and
- * supervise pumps nixpak's launcher's output there, the app's stderr among
+ * the same namespace, and supervise pumps nixpak's launcher's output there, the app's stderr among
  * it, as its own lines. In the fix bwrap's helper, in supervisor/ too,
  * logs into the host side's namespace itself (main.go hostLog), and the
  * splash reads both by namespace, ByNs: its markers and its labelled
@@ -32,9 +31,7 @@
  * scm_check_creds), so the attacker's entries can name only its own
  * processes, and only through pid reuse a host one. A sandbox process
  * can't leave sandbox/ (its cgroup namespace and the delegation's
- * containment rule). udhcpc runs in the dhcp unit (helper.go:159), a
- * cgroup outside sandbox/, and counts as the attacker's (README.md,
- * Principals 12).
+ * containment rule).
  *
  * The host's other processes (the desktop's) and pid wrap-around's
  * timing are left out: the attacker can count through pid_max (4194304)
@@ -49,12 +46,11 @@ one sig
   Supervisor,  // <app unit>/supervisor: supervise, nixpak's launcher, bwrap's parent half (helper.go:90), the D-Bus proxy
   PermUnit,    // claude-desktop[-<name>]-permissions.service
   SubidUnit,   // claude-desktop[-<name>]-subid.service
-  DhcpUnit,    // claude-desktop[-<name>]-dhcp.service, udhcpc's
   SandboxApp,  // <app unit>/sandbox/app (helper.go:90, enter.go:120)
   SandboxUser  // <app unit>/sandbox/user: the planned systemd --user manager's
   extends Cgroup {}
 fun helperCgs: set Cgroup { Supervisor + PermUnit + SubidUnit }
-fun attackerCgs: set Cgroup { DhcpUnit + SandboxApp + SandboxUser }
+fun attackerCgs: set Cgroup { SandboxApp + SandboxUser }
 
 // Journal namespaces: the one bound into the sandbox, and one it can't
 // reach (the host's default, or a second one, not bound)
@@ -93,14 +89,12 @@ one sig
 abstract sig Guard {}
 one sig
   HelpersApart, // the fix: the helpers log into HostNS, systemd-cat --namespace=claude-desktop[-<name>]
-  DhcpInSbx,    // the fix: the dhcp unit logs into SbxNS, being the attacker's
   PumpInSbx,    // the fix: supervise pumps nixpak's output into SbxNS (supervise.go appLog)
   OnlySbxBound  // only SbxNS's sockets are bound into the sandbox
   extends Guard {}
 
 fun nsOf[g: set Guard, p: Proc]: set NS {
   p.cg in SandboxApp + SandboxUser implies (OnlySbxBound in g implies SbxNS else NS)
-  else p.cg = DhcpUnit implies ((HelpersApart in g and DhcpInSbx not in g) implies HostNS else SbxNS)
   else (HelpersApart in g implies HostNS else SbxNS)
 }
 
@@ -169,8 +163,8 @@ check S15plan for 4 but 1..8 steps expect 1
 assert S15noReuse { (sys[OnlySbxBound] and noReuse) implies s15[ByCgroup] }
 check S15noReuse for 4 but 1..8 steps expect 1
 
-// S15, revert: a reader of everything outside sandbox/ takes udhcpc's
-// entries (the dhcp unit), and those whose sender was gone (no cgroup).
+// S15, revert: a reader of everything outside sandbox/ takes the entries
+// whose sender was gone (no cgroup).
 assert S15notSandboxRevert { (sys[OnlySbxBound] and noReuse) implies s15[NotSandbox] }
 check S15notSandboxRevert for 4 but 1..8 steps expect 1
 
@@ -182,23 +176,18 @@ check S15identRevert for 4 but 1..8 steps expect 1
 // S15 with the fix: the helpers in a namespace of their own, read by
 // _NAMESPACE, which is the receiving instance's, so pid reuse changes
 // nothing. Holds.
-pred fixed { sys[HelpersApart + DhcpInSbx + PumpInSbx + OnlySbxBound] }
+pred fixed { sys[HelpersApart + PumpInSbx + OnlySbxBound] }
 assert S15 { fixed implies s15[ByNs] }
 check S15 for 4 but 1..8 steps expect 0
 
-// S15 fix, revert: the dhcp unit logs with the helpers, and udhcpc
-// writes into their namespace.
-assert S15dhcpRevert { sys[HelpersApart + PumpInSbx + OnlySbxBound] implies s15[ByNs] }
-check S15dhcpRevert for 4 but 1..8 steps expect 1
-
 // S15 fix, revert: with the helpers' sockets bound in, the sandbox
 // writes there.
-assert S15boundRevert { sys[HelpersApart + DhcpInSbx + PumpInSbx] implies s15[ByNs] }
+assert S15boundRevert { sys[HelpersApart + PumpInSbx] implies s15[ByNs] }
 check S15boundRevert for 4 but 1..8 steps expect 1
 
 // S15 fix, revert: supervise pumps the app's output into the helpers'
 // namespace, as its own lines.
-assert S15pumpRevert { sys[HelpersApart + DhcpInSbx + OnlySbxBound] implies s15[ByNs] }
+assert S15pumpRevert { sys[HelpersApart + OnlySbxBound] implies s15[ByNs] }
 check S15pumpRevert for 4 but 1..8 steps expect 1
 
 // Vacuity: in the plan a helper's entry is host-side and the sandbox's

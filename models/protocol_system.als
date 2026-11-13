@@ -147,7 +147,7 @@ fact traces {
     or (some k: Conn | hangup[k] or connect[k, none] or some g: Grant | connect[k, g])
     or (some l: Launcher | lockEv[l] or lockLost[l] or lockGained[l] or crash[l] or stopPost[l]
           or start[l] or sandboxEnd[l] or instanceGone[l])
-    or (some l: Launcher, w: Clients + BwrapInitP + UdhcpcP | share[l, w])
+    or (some l: Launcher, w: Clients + BwrapInitP | share[l, w])
     or (some l: Launcher, c: Capability | unblock[l, c])
   )
 }

@@ -912,7 +912,7 @@ it's present or missing:
 - `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
 - `devices`: from `devices` and `kvm`, each bound if present;
 - `dbus`: the proxy's config, by name its policy and its call and broadcast rules;
-- `network`: its own network namespace with a macvlan on the LAN, which the module always sets up;
+- `network`: its own network namespace joined to the host by a netkit pair, which the module always sets up;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
   `files`), `/tmp` with the scratchpad, and `/run/permissions`.

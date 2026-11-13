@@ -8,12 +8,17 @@ all of that.
 
 agent-sandbox runs Claude Desktop (with its Code tab) in a bubblewrap sandbox
 on NixOS, built with [nixpak](https://github.com/nixpak/nixpak). It sees only
-the paths you bind into it. It gets its own network namespace with a macvlan
-on the LAN, so it reaches the internet like any other machine on your network
-but none of the host's VPN routes or local services. It has its own
-single-user Nix store, so `nix shell` and `nix build` work without the host's
-daemon. The only privileged part is a small helper, `netns-macvlan`, with
-`cap_net_admin` to give the sandbox's namespace its interface.
+the paths you bind into it. It gets its own network namespace, joined to the
+host by a netkit pair whose eBPF programs let it out only through the
+physical uplinks (Ethernet and Wi-Fi, IPv4 and IPv6, NATed by
+[einat](https://github.com/EHfive/einat-ebpf)), so it reaches the internet
+but none of the services on the host, VPN routes, container bridges or other
+sandboxes, whatever the host firewall says. It has its own single-user Nix
+store, so `nix shell` and `nix build` work without the daemon of the host. The
+privileged parts are a small helper, `netns-netkit`, with `cap_net_admin`
+and `cap_bpf` to create the pair and attach its programs, and two system
+services: einat and `sandbox-uplink`, which keeps the programs around einat
+on the uplinks.
 
 The sandbox comes with a doc for the Claude running inside it,
 `/etc/claude/environment.md`, which says what it can see and where its limits
@@ -43,11 +48,11 @@ Import both modules and enable the Home Manager one per user:
 }
 ```
 
-The NixOS module installs `netns-macvlan` for group `users`, so the user has
-to be in it. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
+The NixOS module installs `netns-netkit` for group `users`, so the user has
+to be in it, and needs Linux 6.8 or later. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
 
 Other options: `extraPath` (directories ahead of the PATH packages),
-`environmentFile` (your own version of
+`nameservers` (the DNS servers of the sandbox), `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
 (appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in

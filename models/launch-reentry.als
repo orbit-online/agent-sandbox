@@ -6,8 +6,8 @@
  * lookupSandbox). The launch itself is in launch.als.
  *
  * The state starts with the sandbox running: the outer bwrap's child
- * (Root, pid 1 in P), the FHS env's init (pid 1 in P2), setsid, the app at
- * APP_PID in P2, and udhcpc. The attacker adds processes; the host's
+ * (Root, pid 1 in P), the FHS env's init (pid 1 in P2), setsid, and the
+ * app at APP_PID in P2. The attacker adds processes; the host's
  * launcher and broker look them up. Pids are the host's (base), and a
  * dead process's pid can come back on any new one.
  */
@@ -68,7 +68,6 @@ one sig
 abstract sig Move {}
 one sig
   NestPid,      // a process in a pid ns of its own below P2, at APP_PID there
-  SpawnInP,     // udhcpc's child in P, at any pid there, APP_PID included
   AppExit,      // the app exits
   HostReuse,    // a host process takes a free pid
   OtherSandbox, // another launcher's sandbox process takes a free pid
@@ -131,16 +130,6 @@ pred nest[m: set Move] {
   some i: principal.BwrapInitP & pidns.P2, q: Process' - Process {
     i.ppid in Root  // P2's init
     born[q, NestedP, i, U3, M3, N, P3, Cap]
-    only[q, none]
-    tags[q, none, none, none] or tags[none, none, none, none]
-  }
-  quiet
-}
-
-pred spawnInP[m: set Move] {
-  SpawnInP in m
-  some u: principal.UdhcpcP, q: Process' - Process {
-    born[q, UdhcpcP, u, U1, M1, N, P, NetAdmin + NetRaw]
     only[q, none]
     tags[q, none, none, none] or tags[none, none, none, none]
   }
@@ -253,14 +242,12 @@ pred brokerLookup[g: set Guard] {
 
 pred init {
   no L.looked and no Reentry + NoNewPrivs + Handle
-  some disj l, r, i, s, a, u: Process {
-    Process = l + r + i + s + a + u
+  some disj l, r, i, s, a: Process {
+    Process = l + r + i + s + a
     l.principal = LauncherP and no l.ppid and no l.caps
     l.userns = InitUserNS and l.mnt = HostMnt and l.net = HostNet and l.pidns = InitPidNS
     r.principal = BwrapInitP and no r.ppid and no r.caps
     r.userns = U1 and r.mnt = M1 and r.net = N and r.pidns = P
-    u.principal = UdhcpcP and u.ppid = r and u.caps = NetAdmin + NetRaw
-    u.userns = U1 and u.mnt = M1 and u.net = N and u.pidns = P
     i.principal = BwrapInitP and i.ppid = r
     s.principal = BwrapInitP and s.ppid = i
     a.principal = AppP and a.ppid = s
@@ -272,7 +259,7 @@ pred init {
 
 pred system[g: set Guard, m: set Move] {
   init
-  always (nest[m] or spawnInP[m] or appExit[m] or hostSpawn[m] or otherSpawn[m]
+  always (nest[m] or appExit[m] or hostSpawn[m] or otherSpawn[m]
     or sandboxEnds[m] or cleanup or lookup[g] or enter[g] or permissions[g]
     or brokerLookup[g] or skip)
 }
@@ -292,12 +279,12 @@ pred l5 {
 }
 
 // L5, with a process at APP_PID in a pid ns of the attacker's below P2
-// (see nest) and udhcpc's children at any pid in P: app_pid takes only a
+// (see nest): app_pid takes only a
 // process whose NSpid has one entry more than the sandbox's pid 1, so in a
 // pid ns right below P, and none if two qualify. Holds without stale
 // instance dirs: with one, sandbox_pid can name another process (L7), the
 // FHS env's init for one, and app_pid then looks below that.
-assert L5 { (system[Guard, NestPid + SpawnInP] and no Cfg.stale) implies l5 }
+assert L5 { (system[Guard, NestPid] and no Cfg.stale) implies l5 }
 check L5 for 8 but 13 OwnedNS, 1..6 steps expect 0
 
 // L5, revert: the old app_pid took the first process breadth-first whose
@@ -311,36 +298,26 @@ check L5nestRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // L5 without nested pid namespaces. Known: the launcher names the app by
 // pid, and nsenter -t uses that number later. If the app exits in
-// between and its host pid comes back on a host process, or on udhcpc's
-// child in U1, the re-entry joins that. The attacker can't see host pids,
-// and the window is the launcher's few exec's, so this needs luck.
-assert L5noNest { system[Guard, SpawnInP + AppExit + HostReuse] implies l5 }
+// between and its host pid comes back on a host process, the re-entry
+// joins that. The attacker can't see host pids, and the window is the
+// launcher's few exec's, so this needs luck.
+assert L5noNest { system[Guard, AppExit + HostReuse] implies l5 }
 check L5noNest for 8 but 13 OwnedNS, 1..6 steps expect 1
 
-// L5 when the app stays and the attacker has no pid ns of its own: the
-// match outside P is the app.
-assert L5stable { system[Guard, SpawnInP] implies l5 }
-check L5stable for 8 but 13 OwnedNS, 1..6 steps expect 0
-
-// L5, revert: without AppLevel udhcpc's child at APP_PID in P is a
-// match, at depth 2, and the re-entry joins U1 and M1.
-assert L5stableRevert { system[Guard - AppLevel, SpawnInP] implies l5 }
-check L5stableRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
-
 // L5, revert: without NnpOnEntry a re-entry runs without no_new_privs.
-assert L5nnpRevert { system[Guard - NnpOnEntry, SpawnInP] implies l5 }
+assert L5nnpRevert { system[Guard - NnpOnEntry, none] implies l5 }
 
 // L5, revert for --shell, which ran without no_new_privs before: a
 // --shell re-entry without NnpOnEntry.
 assert L5nnpShellRevert {
-  (system[Guard - NnpOnEntry, SpawnInP] and Cfg.mode = Shell) implies l5
+  (system[Guard - NnpOnEntry, none] and Cfg.mode = Shell) implies l5
 }
 check L5nnpShellRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 check L5nnpRevert for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // Vacuity: a claude:// re-entry happens.
 run reentryRuns {
-  system[Guard, SpawnInP] and Cfg.mode = Url and eventually some Reentry
+  system[Guard, none] and Cfg.mode = Url and eventually some Reentry
 } for 8 but 13 OwnedNS, 1..6 steps expect 1
 
 // L6: --permissions never enters the sandbox: its only process is the

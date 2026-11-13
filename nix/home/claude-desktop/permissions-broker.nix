@@ -103,7 +103,7 @@ let
               );
           inherit (config.build) devices;
           dbus = config.build.dbusRules;
-          network = "Its own network namespace, with a macvlan on the LAN that gets its address by DHCP: no host-only services, routes or abstract sockets";
+          network = "Its own network namespace, joined to the host by a netkit pair whose programs let it out only through the uplinks, NATed: no host-only services, routes or abstract sockets";
           implicit =
             lib.optional (socketsOn != [ ])
               "Sockets: ${lib.concatMapStringsSep ", " (s: sockets.${s} or s) socketsOn}"

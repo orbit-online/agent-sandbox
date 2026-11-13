@@ -149,11 +149,11 @@ func TestSuperviseSteps(t *testing.T) {
 	w.file("history", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Started prepared=1s proxy=2s sandbox=3s ready=10s"}
 `)
 	w.file("follow", `{"SYSLOG_IDENTIFIER":"dbus-proxy","MESSAGE":"level=INFO msg=Listening path=/x"}
-{"SYSLOG_IDENTIFIER":"dbus-proxy","MESSAGE":"level=WARN msg=Refused member=\"x msg=Step step=dhcp\""}
+{"SYSLOG_IDENTIFIER":"dbus-proxy","MESSAGE":"level=WARN msg=Refused member=\"x msg=Step step=network\""}
 {"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Step step=sandbox"}
 `)
 	// A marker the follower didn't get before the ready line, which the files have
-	w.file("host", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Step step=dhcp"}
+	w.file("host", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Step step=network"}
 `)
 	w.cfg.NixpakLauncher = w.script("nixpak", `sleep 1; echo "agent-sandbox: ready"`)
 	var buf bytes.Buffer
@@ -170,7 +170,7 @@ func TestSuperviseSteps(t *testing.T) {
 		t.Errorf("The splash got:\n%s", in)
 	}
 	if !strings.Contains(buf.String(), "msg=Started prepared=") || !strings.Contains(buf.String(), " sandbox=") ||
-		!strings.Contains(buf.String(), " dhcp=") {
+		!strings.Contains(buf.String(), " network=") {
 		t.Errorf("Logged:\n%s", buf.String())
 	}
 }
@@ -182,18 +182,18 @@ func TestSuperviseFailureLogs(t *testing.T) {
 	fakeJournal(w)
 	splashIn := filepath.Join(w.dir, "splash-in")
 	w.cfg.Splash = []string{fakeSplash(w, splashIn)}
-	w.file("warnings", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=WARN msg=\"No address from DHCP yet\""}
+	w.file("warnings", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=WARN msg=\"No uplink yet\""}
 `)
 	w.file("sandbox", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"app says hi"}
-{"SYSLOG_IDENTIFIER":"udhcpc","MESSAGE":"no lease"}
+{"SYSLOG_IDENTIFIER":"probe","MESSAGE":"no peer"}
 `)
 	w.cfg.NixpakLauncher = w.script("nixpak", "exit 3")
 	if err := supervise(w.cfg, nil, nil); err == nil {
 		t.Fatal("Started")
 	}
 	in, _ := os.ReadFile(splashIn)
-	if !strings.Contains(string(in), `"host":"claude-desktop: No address from DHCP yet"`) ||
-		!strings.Contains(string(in), `"log":"app says hi\nudhcpc: no lease"`) {
+	if !strings.Contains(string(in), `"host":"claude-desktop: No uplink yet"`) ||
+		!strings.Contains(string(in), `"log":"app says hi\nprobe: no peer"`) {
 		t.Errorf("The splash got:\n%s", in)
 	}
 }

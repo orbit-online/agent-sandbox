@@ -1,5 +1,6 @@
 # The sandbox on a booted NixOS: alice's claude-desktop (the stub app) on a workstation whose LAN has a router with
-# DHCP and DNS. The router also stands in for the internet: its DNS points api.anthropic.com and github.com at itself.
+# DNS. The router also stands in for the internet: its DNS points api.anthropic.com and github.com at itself, and it
+# holds an address of each family off the LAN, behind the default routes.
 # Split into tests Nix runs in parallel, each booting the same two machines (built once) and running a part of the
 # script (./<part>.nix) after a shared prelude of helpers. Returns { <part> = test; }
 {
@@ -69,18 +70,31 @@ let
     ];
   } (builtins.readFile ../fake-portal.py);
   gdbus = lib.getExe' pkgs.glib "gdbus";
+  # The router's addresses off the LAN, standing in for the internet
+  internet4 = "203.0.113.1";
+  internet6 = "2001:db8:ffff::1";
 
   nodes.router =
     { nodes, ... }:
     {
       networking.firewall.enable = false;
+      # The internet stand-in's addresses, which the test framework's networking leaves off lo
+      systemd.services.internet = {
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        path = [ pkgs.iproute2 ];
+        script = "ip addr add ${internet4}/32 dev lo && ip addr add ${internet6}/128 dev lo";
+      };
+      environment.systemPackages = [ pkgs.tcpdump ];
       services.dnsmasq = {
         enable = true;
         resolveLocalQueries = false;
         settings = {
           interface = "eth1";
           no-resolv = true;
-          dhcp-range = "192.168.1.100,192.168.1.200,1h";
           address = map (d: "/${d}/${nodes.router.networking.primaryIPAddress}") [
             "api.anthropic.com"
             "github.com"
@@ -89,7 +103,8 @@ let
       };
       systemd.services.https = {
         wantedBy = [ "multi-user.target" ];
-        serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 -m http.server 443 --directory /var/empty";
+        # Both families: the sandbox reaches it over IPv6 too
+        serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 -m http.server 443 --bind :: --directory /var/empty";
       };
     };
 
@@ -103,6 +118,8 @@ let
           tray = true;
           # Missing until the launch subtest creates it
           binds."/srv/project" = { };
+          # Until the launcher follows the host's resolver
+          nameservers = [ nodes.router.networking.primaryIPAddress ];
           # Under /etc, which the FHS env doesn't take from nixpak's binds, and in the sandbox's home. Each references what
           # the sandbox lacks otherwise
           files =
@@ -113,6 +130,7 @@ let
           launchers.work = {
             package = stub;
             tray = true;
+            nameservers = [ nodes.router.networking.primaryIPAddress ];
             permissions = {
               enable = true;
               # Made by the test script, before the daemon's restart
@@ -161,9 +179,14 @@ let
         package = pkgs.emptyDirectory;
         extraPackages = lib.mkForce [ ];
       };
-      # netns-macvlan puts the macvlan on the default route's device
+      # The einat uplink the sandboxes leave through
       networking.defaultGateway = nodes.router.networking.primaryIPAddress;
-      # So the macvlan's isolation is what blocks the sandbox, not the firewall
+      # Ahead of the default route QEMU's router advertisements give eth0
+      networking.defaultGateway6 = {
+        address = nodes.router.networking.primaryIPv6Address;
+        metric = 1;
+      };
+      # So the programs on the netkit pairs are what blocks the sandbox, not the firewall
       networking.firewall.enable = false;
       # A host-only name, which the sandbox's own hosts file leaves out
       networking.hosts."127.0.0.1" = [ "host-only.test" ];
@@ -178,7 +201,11 @@ let
       };
       users.users.bob.isNormalUser = true;
       home-manager.useUserPackages = true;
-      environment.systemPackages = [ pkgs.libcap ];
+      environment.systemPackages = [
+        pkgs.libcap
+        pkgs.bpftools
+        pkgs.tcpdump
+      ];
       # A host service for the sandbox to miss, on the LAN address, loopback and dummy0 (setup in the test script)
       systemd.services.listener = {
         wantedBy = [ "multi-user.target" ];
@@ -213,6 +240,10 @@ let
     def in_work(cmd):
         return workstation.succeed(work_cmd(cmd))
 
+    # A command that connects to host:port over TCP within 3 seconds, or fails: python3, which the sandbox has
+    def tcp_connect(host, port):
+        return "python3 -c " + shlex.quote(f"import socket; socket.create_connection(({host!r}, {port}), 3)")
+
     # Not setpriv: it keeps root's capabilities through the exec permission check
     def as_user(user, cmd):
         return workstation.execute(f"runuser -u {user} -- {cmd} 2>&1")
@@ -222,7 +253,7 @@ let
 
     # Runs a sleep as `user` in a transient service (in the netns of `netns_pid` if given) and returns its pid.
     # Not setpriv: it keeps root's capabilities until the exec, which leaves the process undumpable, so the
-    # kernel's ptrace check on /proc/<pid>/ns/net would refuse bob before netns-macvlan's own checks do
+    # kernel's ptrace check on /proc/<pid>/ns/net would refuse bob before netns-netkit's own checks do
     def spawn(unit, user, cmd="", netns_pid=None):
         netns = f"-p NetworkNamespacePath=/proc/{netns_pid}/ns/net" if netns_pid else ""
         workstation.succeed(
@@ -301,6 +332,7 @@ let
     start_all()
     router.wait_for_unit("dnsmasq.service")
     router.wait_for_unit("https.service")
+    router.wait_for_unit("internet.service")
     workstation.wait_for_unit("home-manager-alice.service")
     workstation.wait_for_unit("user@1000.service")
     workstation.wait_for_unit("listener.service")
@@ -328,6 +360,8 @@ let
             ;
           mcpArgs = nodes.workstation.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.work.mcpServers.permissions.args;
           routerIP = nodes.router.networking.primaryIPAddress;
+          routerIP6 = nodes.router.networking.primaryIPv6Address;
+          inherit internet4 internet6;
           workstationIP = nodes.workstation.networking.primaryIPAddress;
         };
     };

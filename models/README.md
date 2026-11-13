@@ -83,8 +83,14 @@ in the init namespaces unless noted.
    stops the unit before it exits, so the broker can't watch whatever
    takes the pid next (L8window in `launch-host.als`). Writes uid and gid maps for user
    namespaces in the sandbox, on `/run/subid-broker.sock`.
-8. **netns-macvlan**: setcap `cap_net_admin` wrapper, group `users`.
-   Creates `eth0` in the sandbox's netns.
+8. **netns-netkit**: setcap `cap_net_admin` and `cap_bpf` wrapper,
+   setgid group `sandbox-uplink`, executable by everyone; the helper
+   refuses callers outside group `users`. `up` creates the netkit pair
+   (the primary `sbx-<uid>-<hash>` in the host netns, the peer `eth0` in
+   the sandbox netns, both ends with policy blackhole), attaches and
+   pins the programs `peer` and `primary` and registers the sandbox
+   addresses; `down` unregisters and unpins; `grant` and `revoke` a port
+   for forwarding.
 9. **Call units**: `perm[-<launcher>]_call-<id>`, one transient user
    unit per host command call (`systemd-run --pipe`), `BindsTo=` the
    daemon's unit, `RuntimeMaxSec=` the command's timeout; runs the
@@ -99,14 +105,11 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 11. **bwrap's init and the FHS env script**: in U1, N, M1, P, without
     capabilities. The script runs the launcher's bwrap in mode parent,
     which sends `share`.
-12. **udhcpc** and its event script: in U1, N, P with `net_admin` and
-    `net_raw` only (inheritable, ambient and bounding sets), in MU: a
-    mount namespace made from the host's and pivoted to a tmpfs with its
-    closure read-only, P's `/proc` and the sandbox's home
-    (`dhcp-root.sh`). Parses DHCP packets from the LAN, so counts as the
-    attacker's. Started by the bwrap helper as the transient unit
-    `claude-desktop[-<name>]-dhcp.service` (`Type=forking`, `BindsTo=` the
-    app's unit), so its cgroup is that unit's, outside `sandbox/`.
+12. Retired with the netkit network (2026-11-12): udhcpc, which parsed
+    DHCP packets from the LAN in U1 with `net_admin` and `net_raw`. The
+    bwrap helper now puts the addresses and routes on `eth0` itself
+    (`ip -batch` through `nsenter`, before the app starts), and nothing
+    of it stays in the sandbox namespaces.
 13. **The app** (Claude Desktop): in U2, N, M2, P2 at pid `APP_PID`.
 14. **Claude Code sessions** and what they spawn: shells, the local MCP
     servers, `permissions-broker mcp` (the `permissions` MCP server, a
@@ -126,7 +129,7 @@ Added with the journal (17) and the sandbox's systemd --user (18):
     (`systemd-journald@.service`). The host side's takes entries from the
     host helpers through systemd-cat (supervise, bwrap's helper and the D-Bus proxy in
     `supervisor/`, the broker's and subid-broker's units); the sandbox's
-    from the sandbox, udhcpc's unit and supervise's pump of nixpak's
+    from the sandbox and supervise's pump of nixpak's
     output (the app's stderr among it). Stamps the trusted fields (`_PID`, `_UID`, `_SYSTEMD_CGROUP`,
     `_COMM`, `_EXE`, ...) from the sender's credentials and from
     `/proc/<pid>` by pid (systemd 260.5 has no pidfd in journald).
@@ -150,10 +153,9 @@ Added with the journal (17) and the sandbox's systemd --user (18):
 | ns | kind | owner userns | created by | who has capabilities over it |
 |---|---|---|---|---|
 | init | all | - | kernel | host root; the host user over nothing of the init namespaces |
-| U1 | user | init, owner uid 1000 | nixpak's bwrap (`--unshare-user`, maps by subid) | every host process of uid 1000 (owner rule); bwrap's setup before it drops them; udhcpc (net_admin, net_raw); the broker's helpers after `nsenter --user` |
-| N | net | U1 | nixpak's bwrap | as U1; netns-macvlan adds `eth0` from init with `cap_net_admin` there |
+| U1 | user | init, owner uid 1000 | nixpak's bwrap (`--unshare-user`, maps by subid) | every host process of uid 1000 (owner rule); bwrap's setup before it drops them; `ip` of the bwrap helper (`nsenter --keep-caps`, before the app starts); the broker's helpers after `nsenter --user` |
+| N | net | U1 | nixpak's bwrap | as U1; netns-netkit creates `eth0` there from init with `cap_net_admin` |
 | M1 | mnt | U1 | nixpak's bwrap | as U1 |
-| MU | mnt | U1 | the bwrap helper's `unshare --mount`, from the host's mounts | as U1 |
 | P | pid | U1 | nixpak's bwrap | as U1; bwrap's init is pid 1 here, the broker's `sandbox.pid` |
 | ipc, uts, cgroup | | U1 | nixpak's bwrap | as U1 |
 | U2 | user | U1, owner uid 1000 | the FHS env's bwrap (identity map of U1's ids) | every process of uid 1000 in U1 or init (owner rule); app-pid.sh with CAP_CHECKPOINT_RESTORE until it drops it |
@@ -174,16 +176,16 @@ joining needs CAP_SYS_ADMIN in init).
 | `control.sock` (`$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
 | host socket addresses (`/run/permissions/sockets/<capability>[/<instance>]`) | broker, from its start or the instance's appearance | M1, M2 and copies | none of the peer: a grant is the sandbox's. Spliced to the host socket only while a live grant of that capability and instance covers it, closed at once otherwise and when the grant ends; bytes only, no fds; 64 connections per address |
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
-| netns-macvlan `<pid>` | netns-macvlan | the host (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
+| netns-netkit `up <pid>`, `down`, `grant`, `revoke` | netns-netkit | the host, callers in group `users` (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |
 | `nixpak-bus` | xdg-dbus-proxy | M1, M2 | the proxy's fixed rules |
 | notifications | notification daemon; the broker talks to it over godbus | host and sandbox (through the proxy) | each button's action key is random per notification, so a look-alike's or a replaced notification's buttons aren't the broker's (a click there denies); `ActionInvoked` and `NotificationClosed` count only from the current owner of `org.freedesktop.Notifications`; an action within 1 s of the notification appearing is ignored and the question asked again. The sandbox posts look-alikes through the portal, which keys them by app ID: it can't replace or close the broker's |
 | `bwrapinfo.json`, `info` under `$XDG_RUNTIME_DIR/.flatpak/` | read by broker and launcher | host only (not bound) | child-pid's mount ns differs from the reader's; pidfd taken, file re-read |
 | grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory; in M1 the helpers open it with `RESOLVE_NO_SYMLINKS`, check it's the host's directory (device and inode) and a mount root, and act on single entries beneath it |
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling and denied directories (lexical, then `openat2` without links or mount crossings beneath the root), no submounts, ro/nodev/nosuid |
 | the daemon's config (ceilings, standing grants) | the Home Manager module, a read-only path in the host's Nix store | host only (the host's store isn't bound) | nothing writes it at runtime; what the user ends lives in the daemon's memory |
-| helper binaries | nsenter, setpriv, the launcher's scripts | resolved on the host's mounts, or in MU's closure binds | never in M1 or M2, where the sandbox can swap a directory (S12) |
+| helper binaries | nsenter, setpriv, ip, the launcher's scripts | resolved on the host's mounts | never in M1 or M2, where the sandbox can swap a directory (S12) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
-| journal sockets: `socket`, `stdout`, `dev-log` of the launcher's sandbox journald namespace (`_sandbox`) at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; udhcpc and supervise's pump too; the host side's namespace's sockets aren't bound | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates only the sandbox's own namespace |
+| journal sockets: `socket`, `stdout`, `dev-log` of the launcher's sandbox journald namespace (`_sandbox`) at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; supervise's pump too; the host side's namespace's sockets aren't bound | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates only the sandbox's own namespace |
 | journal storage: `/var/log/journal/<machine-id>.claude-desktop[-<name>]_sandbox` ro at `/var/log/journal/<machine-id>`, and the host side's `.claude-desktop[-<name>]` ro under its own name | journald writes | the sandbox reads both | none: the helpers' messages (the proxy's refusals, which is why it's bound), command lines, executables and host pids, which the pid namespace hides otherwise |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
 | `/nix/store` where the sandbox runs | a mount of its own, the closure's ro binds on it | the sandbox writes beside the binds, and can rename it from a nested namespace | nothing host-side resolves a path there; a store dir other than the one the launch recorded (the launcher's `store.go`, by device and inode), or no record, and `nix/` is deleted and the closure synced into a fresh one |
@@ -191,13 +193,13 @@ joining needs CAP_SYS_ADMIN in init).
 ## Trust boundaries
 
 - B1: host processes | everything in U1 and below. Crossed by the sockets
-  above, binds, D-Bus through the proxy, the macvlan, and the host's own
+  above, binds, D-Bus through the proxy, the netkit pair (N1-N7), and the host's own
   `nsenter`s (the bwrap helper, the broker's helpers, re-entries).
 - B2: U1 | U2. U1 holds the capabilities over N, M1, P; nothing in U2 has
   any there. Crossed by the FHS env's start and the propagation of
   `/run/permissions`.
-- B3: one launcher's sandbox | another's. Separate namespaces, MAC, state
-  dir, broker; shared lock files for exclusive instances and the user's
+- B3: one launcher's sandbox | another's. Separate namespaces, netkit
+  pair and addresses, state dir, broker; shared lock files for exclusive instances and the user's
   runtime dir on the host.
 - B4: consent: what the user sees and clicks | what the sandbox can draw.
   The broker's notification and the window against look-alike
@@ -207,8 +209,8 @@ joining needs CAP_SYS_ADMIN in init).
 
 ## Attacker
 
-Anything a process in the sandbox can do, with every principal of 11 to
-16 (and 18, once built) under its control (udhcpc through a malicious DHCP server on the LAN).
+Anything a process in the sandbox can do, with every principal of 11 and
+13 to 16 (and 18, once built) under its control.
 The models give the attacker these moves:
 
 1. Run any code as uid 1000 in U1 (no capabilities), U2, or a namespace of
@@ -240,7 +242,8 @@ The models give the attacker these moves:
 10. Request, call, release and status any grant by id; ask for any lease.
 11. Write its own Nix store (`/nix` is a rw bind with the closure bound
     read-only over it), persistent across launches.
-12. Act through udhcpc's `net_admin` and `net_raw` over N.
+12. Send any packet on `eth0`, with any source and destination
+    (`network.als`).
 
 It can't: write the grant directory, reach `control.sock` or the
 `.flatpak` instance dirs (not bound), change the proxy's rules, see host
@@ -256,9 +259,8 @@ process whose principal is in the Sandbox domain, at any time.
 
 - S1. No sandbox process has a capability in the init user namespace or
   over any namespace it owns.
-- S2. No sandbox process other than udhcpc has a capability over N, M1, P
-  or anything else U1 owns; udhcpc has only `net_admin` and `net_raw`, and
-  only over N.
+- S2. No sandbox process has a capability over N, M1, P or anything else
+  U1 owns.
 - S3. No sandbox process can join (setns) U1, N, M1, P, or any host
   namespace.
 - S4. Every user namespace a sandbox process creates is strictly below
@@ -279,7 +281,7 @@ process whose principal is in the Sandbox domain, at any time.
   user namespace other than init; the map lands in that namespace even if
   the target moves on (unshare, exit and pid reuse) between check and
   write.
-- S8. netns-macvlan attaches `eth0` only to a network namespace that isn't
+- S8. netns-netkit creates `eth0` only in a network namespace that isn't
   the caller's and over which the caller's uid holds every capability by
   the owner rule: the user namespace right below the caller's, on the way
   up from the one owning it, is the caller's uid's.
@@ -291,10 +293,10 @@ process whose principal is in the Sandbox domain, at any time.
   above one; it carries no submounts; a read-only grant is mounted
   read-only, a directory nodev and nosuid.
 - S12. No binary a host-side process execs with capabilities in a sandbox
-  namespace (the broker's helpers, `setpriv`, udhcpc and its script) is
+  namespace (the broker's helpers, `ip` of the bwrap helper) is
   resolved in a mount tree the sandbox can swap a directory in (M1, M2
   and their copies): the broker's helpers are exec'd on the host's mounts
-  and join M1 after, udhcpc runs in MU, built from the host's. A mount of
+  and join M1 after, `ip` of the bwrap helper joins U1 and N only. A mount of
   its own at `/nix/store` didn't do it: the sandbox renames it from a
   nested namespace (Attacker 6).
 - S13. Every peer check that reads `/proc/<pid>` is about the process the
@@ -305,8 +307,8 @@ process whose principal is in the Sandbox domain, at any time.
   `$XDG_RUNTIME_DIR`, or in either's identity parts.
 - S15 (`journal.als`): no entry a reader counts as a host helper's was
   written by a sandbox process. Read by `_NAMESPACE`, the host side's:
-  the sandbox has no socket of it, and udhcpc and supervise's pump of the
-  app's output log to the sandbox's. Never by `SYSLOG_IDENTIFIER` or
+  the sandbox has no socket of it, and supervise's pump of the app's
+  output logs to the sandbox's. Never by `SYSLOG_IDENTIFIER` or
   `COMPONENT`, nor by `_SYSTEMD_CGROUP` in one shared namespace (the
   plan, known findings): the cgroup is read by pid at flush time, so a
   sandbox process can hold a line until its pid serves a helper, and the
@@ -394,11 +396,14 @@ process whose principal is in the Sandbox domain, at any time.
   failed map write kills bwrap's child, so nothing runs as the overflow
   id. U1 maps exactly the subuid range plus the user's own ids; U2 maps
   exactly U1's.
-- L2. The bwrap helper acts on the sandbox's pid only once its root is final, and
-  netns-macvlan only on N (S8).
-- L3. udhcpc and its script run in N, MU, P with `net_admin` and
-  `net_raw` alone, so a compromise of it gains nothing beyond S2's, and
-  nothing in the sandbox can swap what they exec.
+- L2. netns-netkit creates `eth0` only in N (S8). Its other half retired
+  with udhcpc (2026-11-12): the bwrap helper acted on the sandbox pid
+  only once the root there was final, so udhcpc didn't start on the host
+  tree; nothing the helper runs there now uses the root.
+- L3. Retired with udhcpc (2026-11-12): udhcpc and its script ran in N,
+  P and a mount namespace of their own with `net_admin` and `net_raw`
+  alone. Without them nothing in the sandbox holds a capability in U1
+  (S2).
 - L4. The app and everything it starts hold no capability in U2:
   CAP_CHECKPOINT_RESTORE is dropped before the app runs, whether or not
   the pid could be set.
@@ -413,9 +418,11 @@ process whose principal is in the Sandbox domain, at any time.
   redirected to a host process or a nested one.
 - L8. The broker exits when the sandbox's pidfd turns readable, and stops
   restarting when it never finds one; subid-broker when bwrap exits, or at
-  once when bwrap is gone already, and with the app's unit; udhcpc with
-  the sandbox's pid ns and the app's unit; call units when the broker's
-  unit stops.
+  once when bwrap is gone already, and with the app's unit; what
+  `netns-netkit up` left on the host (pins, registration) with
+  `netns-netkit down`, the `ExecStopPost=` of the app's unit, or with the sweep of sandbox-uplink once
+  the primary is gone (the pair goes with N); call units when the
+  broker's unit stops.
 - L9. `share` runs before the FHS env's bwrap copies M1, or the launcher
   goes on without attach (which the broker then refuses, P3).
 - L10. No host-side step reads a host file into the sandbox, or writes
@@ -450,30 +457,30 @@ reply, asked or forged.
 
 ### Network (`network.als`)
 
-The network on netkit that replaces the macvlan, modelled before it was
-built, so its claims cite the design (`design:`) until the code exists,
-the code where it does (`code:`, the uplink programs in
-`cmd/sandbox-uplink/uplink.bpf.c`), and the kernel. A netkit
-pair per launcher in L3 mode, both ends with policy drop: a PEER program
-on the sandbox end (attached through the primary in the host netns), a
-PRIMARY program on the host end for port forwarding, einat-ebpf for NAT
-on the uplinks with a program of ours on tcx ingress ahead of it (pre)
-and one after it (post). The attacker is both sandboxes (any packet,
-any source), every LAN host, every peer behind another host device (a
-VPN, a container bridge), and the host setup, which changes at any step:
-the ruleset, forwarding sysctls, route_localnet, routes and the default
-route, the program view of the default-route device, attached programs,
-einat running. Each check a program makes is a guard with a revert
-check. Six guards were not in the design (gaps, below): the checks
-hold with them, and their revert checks are the design as written. Two
-are built (3 and 5), the rest decided for the helper, one open (6).
+The sandbox network on netkit, as built: the helper `netns-netkit`
+(`cmd/netns-netkit`: `pair.go`, `addr.go`, `bpf.go`, the programs in
+`netkit.bpf.c`), the uplink programs and `sandbox-uplink`
+(`cmd/sandbox-uplink`: `uplink.bpf.c`, `attach.go`, `sandboxes.go`), and
+the kernel. A netkit pair per launcher in L3 mode, both ends with policy
+blackhole: the program `peer` on the sandbox end (attached through the
+primary in the host netns), the program `primary` on the host end for
+port forwarding, einat-ebpf for NAT on the uplinks with a program of ours
+on tcx ingress ahead of it (pre) and one after it (post). The attacker is
+both sandboxes (any packet, any source), every LAN host, every peer
+behind another host device (a VPN, a container bridge), and the host
+setup, which changes at any step: the ruleset, forwarding sysctls,
+route_localnet, routes and the default route, attached programs, einat
+running. Each check a program makes is a guard with a revert check. Six
+guards were missing from the first design (below): the checks hold with
+them, and their revert checks are that design.
 
 - N1. No sandbox packet reaches local delivery on the host except on a
   flow the host started to that sandbox under a grant.
-- N2. A sandbox packet leaves the host only through the device the PEER
-  program holds as the default route, only when that is an einat uplink,
-  SNATed from that sandbox address, and never to a multicast or
-  broadcast destination.
+- N2. A sandbox packet leaves the host only through an einat uplink (the
+  `uplinks` map), SNATed from that sandbox address, and never to a
+  multicast or broadcast destination. Behind a full-tunnel VPN `peer`
+  sends what the lookup routes into the tunnel out through the einat
+  uplink with the default route (the `gateways` map) instead.
 - N3. A packet from outside the host (LAN, VPN, container bridge)
   reaches a sandbox only reverse-NATed by an einat binding, on a flow
   that sandbox sent out itself (einat is endpoint-independent: any LAN
@@ -482,7 +489,7 @@ are built (3 and 5), the rest decided for the helper, one open (6).
   it is N3.
 - N5. Failures only narrow: N1 to N4 and N6 hold under every change of
   the host setup, a ruleset flush or FORWARD drop policy included
-  (netfilter is on no path). A detached PEER program or a primary
+  (netfilter is on no path). A detached `peer` program or a primary
   without forwarding (the lookup returns `FWD_DISABLED`) passes nothing,
   an uplink without einat carries no sandbox packet and delivers none,
   an einat restart that puts einat ahead of pre lets no reply in until
@@ -492,33 +499,38 @@ are built (3 and 5), the rest decided for the helper, one open (6).
 - N7. A revoked port carries nothing more: no sandbox reply on its flows
   reaches the host (as P4).
 
-Gaps, each a counterexample against the design as written:
+Found by the model in the first design, each a counterexample there and
+each built now:
 
-1. Source spoofing (N1, N2, N3): the PEER program doesn't check the
-   source. A sandbox sends with the other sandbox address; einat binds
-   it to that address and the LAN reply goes to the other sandbox, and a
-   shared flow map matches the other sandbox tuple. Fix: drop sources
-   other than the sandbox address.
-2. A VPN holding the default route (N2): the default-route device is
-   then the tunnel, and sandbox traffic goes into the VPN un-NATed. Fix:
-   redirect only to einat uplinks; the sandbox then has no network
-   behind a full-tunnel VPN (open).
+1. Source spoofing (N1, N2, N3): without a source check a sandbox sends
+   with the address of the other sandbox; einat binds it to that address
+   and the LAN reply goes to the other sandbox, and a shared flow map
+   matches the tuple of the other sandbox. `peer` drops sources other
+   than the sandbox address.
+2. A VPN holding a route (N2): redirecting to the default-route device
+   sends sandbox traffic into the tunnel un-NATed. `peer` redirects only
+   to an ifindex in the `uplinks` map, the einat uplinks sandbox-uplink
+   publishes, and sends what the host routes elsewhere through the uplink
+   with the default route in the `gateways` map.
 3. einat stopped or restarting (N2, N5): `bpf_redirect_neigh` still runs
    the uplink egress hooks, but with einat detached the packet leaves
-   with its link-local or ULA source. Fix: a program after einat on
-   uplink egress that drops sandbox sources (`egress`).
+   with its link-local or ULA source. A program after einat on uplink
+   egress drops sandbox sources (`egress`).
 4. Forwarded packets to a forwarded port (N3): a container on a host
    bridge or a VPN peer addresses the sandbox prefix; with forwarding on
    for its device and a permissive ruleset the host forwards it to the
-   primary, and the PRIMARY program takes it for the host. Fix: PRIMARY
-   passes only packets the host itself sent.
+   primary, and a `primary` that took it for the host would pass it.
+   `primary` requires `skb->sk`, so it passes only packets the host
+   itself sent.
 5. pre detached while post stays (N3): a LAN host addresses the sandbox
-   prefix and post redirects it. Fix: pre marks what it passed
-   (`skb->mark`, which survives einat) and post redirects only marked
-   packets.
-6. Revoke (N7, open): the design records flows on grant but doesn't say
-   whether a revoke clears them; without that, replies on a recorded flow
-   reach the host after the grant ended.
+   prefix and post redirects it. pre marks what it passed (`skb->mark`,
+   which survives einat) and post redirects only marked packets.
+6. Revoke (N7): with flows recorded on grant and left at revoke, replies
+   on a recorded flow reach the host after the grant ended. `revoke`
+   (`bpf.go`) deletes the recorded flows of the port.
+
+The first design also redirected only to the default-route device. The
+code doesn't, and N2 holds with the `uplinks` map alone.
 
 Also from the model: einat attaches first when it starts, so after a
 restart it runs ahead of pre, and pre drops every reverse-NATed reply
@@ -539,8 +551,8 @@ To confirm with Anders (plan Open 2):
 
 Also left out: host commands' and host sockets' own code (trusted host
 code the config declares; a host command's description reaches Claude
-as text), what a host socket's server does with the bytes spliced to it, the network beyond the macvlan
-(LAN peers, DHCP spoofing other than through udhcpc), side channels,
+as text), what a host socket's server does with the bytes spliced to it, the network beyond the host's uplinks
+(LAN peers), side channels,
 timing beyond the fake clock (plan decision 2026-10-31), and resource
 exhaustion of the host other than the broker's budgets. Taking back
 access a holder already has after a grant ends: Linux has no general
@@ -563,7 +575,7 @@ check: that's the user's own mount and ceiling configuration.
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
-| `network.als` | netkit | N1-N7: the network on netkit (the uplink programs built), each with a run for its premise and a revert check per guard enforcing it |
+| `network.als` | netkit | N1-N7: the network on netkit, each with a run for its premise and a revert check per guard enforcing it |
 | `proxy.als` | | the D-Bus proxy's system; `proxy-checks.als` checks D1, D2 and D4 (D3 retired), each with a run for its premise and a revert check per guard enforcing it |
 
 The proxy's Go tests run `proxy.als`'s actions as a `rapid` state machine
@@ -635,7 +647,7 @@ a model as a counterexample (`expect 1` until triaged in step 5).
    only kinds and ids, which `request.sock`'s `watch` gives too), but S6
    holds only because of that.
 4. `share` is accepted from any process in M1. Harmless (idempotent),
-   noted for S9. udhcpc no longer runs there (L3).
+   noted for S9.
 5. S12 holds because each host-side exec resolves its binary on the
    host's mounts. Nothing asserts that; a helper added later that execs
    after joining M1 runs the sandbox's code with full capabilities in U1.

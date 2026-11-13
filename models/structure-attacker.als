@@ -167,17 +167,14 @@ assert S1noInitCaps {
 }
 check S1noInitCaps for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
 
-// S2: only udhcpc holds a capability in U1, so over N, M1, P and the
-// rest U1 owns, and only net_admin and net_raw; those count over M1 and
-// P too, where they gate nothing. Holds. Revert: exec raising any
-// capability (no no_new_privs, a setcap or setuid binary in reach)
-// gives bwrap's init CAP_SYS_ADMIN in U1 (counterexample found); so does
-// udhcpc without setpriv's bounding set (keeps all, found).
-assert S2onlyUdhcpcInU1 {
-  always all p: Evil, c: Cap |
-    hasCap[p, U1, c] implies (p.principal = UdhcpcP and c in NetAdmin + NetRaw)
+// S2: no attacker process holds a capability in U1, so none over N, M1,
+// P and the rest U1 owns. Holds. Revert: exec raising any capability (no
+// no_new_privs, a setcap or setuid binary in reach) gives bwrap's init
+// CAP_SYS_ADMIN in U1 (counterexample found).
+assert S2noCapsInU1 {
+  always all p: Evil, c: Cap | not hasCap[p, U1, c]
 }
-check S2onlyUdhcpcInU1 for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
+check S2noCapsInU1 for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
 
 // S3: nothing the attacker runs can setns into U1, the init user
 // namespace, or any namespace either owns. Holds; the reverts for S1
@@ -192,7 +189,7 @@ check S3noJoinUp for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
 
 // S4: every user namespace the attacker makes is strictly below U1 and
 // maps only ids U1 maps. Holds (the kernel's map rule and S3). Not "U2
-// or below", as the README had it: bwrap's init and udhcpc run in U1
+// or below", as the README had it: bwrap's init runs in U1
 // and may unshare a user namespace there, a sibling of U2, which is no
 // more than U2 (owned by the user under U1, U1's ids).
 assert S4madeBelowU1 {
@@ -201,17 +198,18 @@ assert S4madeBelowU1 {
 check S4madeBelowU1 for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 0
 
 // Vacuity guards: the attacker gets every capability in a namespace of
-// its own, and a mount namespace there; udhcpc's net caps count in U1.
+// its own, and a mount namespace there; it runs in U1 beside bwrap's
+// init (S2).
 run attackerNests {
   eventually some p: Evil, n: MountNS |
     p.userns in Made and p.mnt = n and n.ownedBy = p.userns and hasCap[p, p.userns, SysAdmin]
 } for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 1
 
-run udhcpcNetAdmin {
-  some p: Evil | p.principal = UdhcpcP and hasCap[p, U1, NetAdmin]
+run S2attackerInU1 {
+  eventually some p: Evil - sb | p.userns = U1
 } for 5 but 6 UserNS, 12 OwnedNS, 7 Id, 1..4 steps expect 1
 
-// A U1 attacker (bwrap's init, udhcpc) gets every capability in U2 by
+// A U1 attacker (bwrap's init) gets every capability in U2 by
 // the owner rule, can setns into U2 and from there into M2. Not one of
 // S1-S4; L4 (nothing in U2 holds a capability) assumes U1 is clean.
 run u1AttackerOwnsU2 {

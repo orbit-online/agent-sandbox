@@ -1,7 +1,7 @@
 # agent-sandbox
 
 Sandboxes for AI agents on NixOS. Today that is Claude Desktop under nixpak
-(bubblewrap): its own network namespace with a macvlan on the LAN, its own
+(bubblewrap): its own network namespace on a netkit pair isolated by eBPF, its own
 single-user Nix store, and an environment doc for the Claude running inside.
 
 ## Layout
@@ -11,7 +11,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   sandbox's namespaces at the top). Its options configure the default
   launcher; `launchers.<name>` adds sandboxes next to it with the same
   options, each starting from the module's defaults alone, with its
-  own state dir, app ID, MAC and `claude-desktop-<name>`. Each launcher, the default one included, is a
+  own state dir, app ID, addresses and `claude-desktop-<name>`. Each launcher, the default one included, is a
   `submoduleWith` of the same feature modules, which take `launcherName` (null for the default one), Home Manager's
   config as `hm` and the shared helpers of `lib.nix` as `sl`, and meet in the internal `build` options
   (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's JSON config (`cmd/launcher`), the
@@ -47,11 +47,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   unit has it, which systemd's `user@.service` delegates). Each launcher's slice has `CPUWeight=50`, between
   `app.slice`'s 100 and `background.slice`'s 30 (`default.nix`), with `X-SwitchMethod=keep-old` and
   `RefuseManualStop=true` so a switch never stops it and the app with it. The broker and its host command calls are units in
-  the slice too, as are subid-broker and udhcpc (`hostUnits` in `helper.go`). Logs go to two journald namespaces per
+  the slice too, as is subid-broker (`hostUnits` in `helper.go`). Logs go to two journald namespaces per
   launcher, which the NixOS module runs (`ids.journal` and `ids.sandboxJournal` in `lib.nix`): the host side's
   (supervise, the broker, subid-broker and the D-Bus proxy, through `systemd-cat`, with `internal/journal`'s priority
   prefixes), whose files the sandbox reads and whose sockets it doesn't get, and the sandbox's (its sockets bound in,
-  udhcpc, supervise's pump of nixpak's output), so the sandbox can neither forge nor flood the host side's
+  supervise's pump of nixpak's output), so the sandbox can neither forge nor flood the host side's
   (`models/journal.als`). Then
   `environment.md`, which `environment-split.sh` turns into the default `environmentFile`, which
   `/etc/claude/environment.md` in the sandbox imports: all of it, or with `memo.enable` the sections without a
@@ -67,9 +67,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`claude-desktop[-<name>]-state`) in a bwrap holding only its closure and
   the directories named: links there resolve within that view.
 - `nix/nixos/claude-desktop.nix`: the NixOS module. Installs the
-  `netns-macvlan` wrapper (`cap_net_admin`, group `users`) when any Home
-  Manager user enables the Home Manager module, and asserts they're in
-  `users` and have a subuid and subgid range.
+  `netns-netkit` wrapper (`cap_net_admin` and `cap_bpf`, setgid `sandbox-uplink` through `permissions`, as the wrapper
+  module keeps setgid to wrappers without capabilities; anyone may run it, the helper refuses callers outside `users`)
+  when any Home Manager user enables the Home Manager module, and asserts they're in `users` and have a subuid and
+  subgid range.
 - `nix/nixos/network.nix`: the host side of the sandbox network on netkit, which `claude-desktop.nix` imports and
   enables (the internal `agent-sandbox.network.enable`) when a user enables the sandbox. It asserts Linux 6.8 or later
   (netkit programs need 6.7, bpffs' `uid` and `gid` options 6.8), runs einat-ebpf (`nix/packages/einat`, the `einat`
@@ -127,18 +128,32 @@ single-user Nix store, and an environment doc for the Claude running inside.
   that nixpak (mode subid) and the FHS env (mode parent) run, which maps a range of ids into bwrap's user namespace:
   it starts itself as `bwrap-helper` with bwrap's info and block pipes, then execs into bwrap; the helper writes the
   maps once bwrap made the namespace (killing bwrap and its child when they fail), lays out the cgroups and on the host
-  sets up the network (`--net`: netns-macvlan, the links up, udhcpc in a mount namespace of its own through
-  `dhcp-root.sh`) before it passes bwrap's info on to nixpak, whose pasta slot is a no-op that only keeps the netns.
+  sets up the network (`--net`: `netns-netkit up`, then its addresses, `lo` and `eth0` up and the default routes in N,
+  through `nsenter --keep-caps` and `ip -batch`) before it passes bwrap's info on to nixpak, whose pasta slot is a
+  no-op that only keeps the netns. The unit of the app runs `netns-netkit down` as `ExecStopPost=` (`enter.go`),
+  however it ends.
   `internal/sandbox`: finding a launcher's running
   sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
-- `cmd/netns-macvlan/`: the Go helper that gives the sandbox's netns
-  its macvlan (`netns-macvlan --help`).
+- `cmd/netns-netkit/`: the setcap helper that joins the netns of a sandbox to the host by a netkit pair
+  (`netns-netkit --help`): `main.go` (the commands, the caller in group `users`), `netns.go` (the checks on the
+  netns: its process belongs to the caller, by pidfd, and its user namespace lies below the one of the caller, owned
+  by the caller uid right below; opened with the real gid as fsgid, which the ptrace check compares), `addr.go` (the
+  addresses, from a hash of uid and launcher name, past those on the host and the registered ones, and the name of the
+  primary, `sbx-<uid in base 36>-<hash of the launcher name>`), `pair.go` (the pair, L3, both ends policy drop, the
+  peer `eth0` made in the sandbox netns; host routes to the addresses and forwarding on the primary) and `bpf.go`
+  (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants). `netkit.bpf.c` (dual MIT/GPL,
+  built by the package with clang): `peer` (`BPF_NETKIT_PEER`: multicast and broadcast dropped, any source but the
+  sandbox addresses dropped, `bpf_fib_lookup` with `tot_len` 0; local delivery only for a recorded flow, out with
+  `bpf_redirect_neigh` through an einat uplink, and what the host routes through any other device (a full-tunnel VPN,
+  a bridge) through the uplink in `gateways` to its gateway; everything else dropped, never `NETKIT_NEXT`) and
+  `primary` (`BPF_NETKIT_PRIMARY`: only packets with `skb->sk`, sent by the host itself, over TCP or UDP to a granted
+  port, recorded in the LRU `flows` map). Without CAP_PERFMON the verifier refuses variable offsets into packets and
+  pointers picked between map values, so the programs read no IPv4 options and compare both sandbox addresses.
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). The launcher's bwrap, which nixpak and the FHS env run, maps the user's subuid
-  range in and starts it as a unit, `claude-desktop[-<name>]-subid.service`; its helper starts udhcpc as
-  `claude-desktop[-<name>]-dhcp.service`. Both are transient units in the launcher's slice with `BindsTo=` the app's
-  unit (`hostUnits` in `helper.go`), so each logs as a unit of its own and stops with the app.
+  range in and starts it as a unit, `claude-desktop[-<name>]-subid.service`, a transient unit in the launcher's slice
+  with `BindsTo=` the app's unit (`hostUnits` in `helper.go`), so it logs as a unit of its own and stops with the app.
 - `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
   (`docs/permissions.md`, D-Bus), taking nixpak's argv and its rules from a
   JSON config, the module's `dbus` option, which the module passes as
@@ -265,7 +280,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   part of the checks.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
-`packages.<system>.netns-macvlan`, `packages.<system>.subid-broker`,
+`packages.<system>.netns-netkit`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
 `packages.<system>.request-send`, `packages.<system>.launcher`, `packages.<system>.sandbox-uplink`,
 `packages.<system>.einat`, and for CI
@@ -291,13 +306,18 @@ sandbox ends (`internal/uplink`):
   `uplink.ULABlock(machine-id)`, one ULA /48 per machine (`fd`, then 40 bits of HMAC-SHA256 keyed by the machine ID
   over the app ID of the package). A destination in these blocks that isn't registered is dropped.
 - The name of the primary starts with `uplink.PrimaryPrefix` (`sbx-`), which dhcpcd and NetworkManager leave alone.
+- netns-netkit pins the links and maps of each sandbox in `uplink.SandboxDir`, `/run/sandbox-uplink/<uid>[-<name>]`
+  (owner the user, group `sandbox-uplink`, 0770): `peer` and `primary` (the links), `ports` (granted ports,
+  `protocol << 16 | port`), `flows` (LRU) and `sandbox` (0640, `uplink.Sandbox`: the two keys and the ifindex of
+  the primary), which `down` and sandbox-uplink remove it by. The PEER programs read `uplink.UplinksMap` and
+  `uplink.GatewaysMap` (`uplink.Gateway`), whose shapes `netkit.bpf.c` repeats.
 
 ## Rules
 
 - Module defaults only hold what the module can't work without (the Claude
   paths, the `/etc` entries, the Nix store). Machine- and user-dependent
   settings, such as extra binds, go in the consumer's config.
-- The sandbox always gets its own netns with a macvlan. There is no option to
+- The sandbox always gets its own netns with a netkit pair. There is no option to
   share the host's; the module asserts it.
 - Gates and per-user opt-in live in the consumers.
 - `environment.md` is what Claude inside the sandbox knows about it, and
@@ -343,7 +363,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox's store in memo's config on the host, the
   files, package and `environmentFile` a launcher with `memo.enable` gets
   (and the default launcher doesn't), the NixOS wrapper appears only when a user
-  enables the module, for group users, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
+  enables the module, setgid `sandbox-uplink`, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
   `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the filesystem MCP roots,
@@ -393,7 +413,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   agent's logo from the unwrapped app, the asar's ready hook, its broker's
   slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
-  netns-macvlan gets, its `claude-environment.md` (with memo: the core
+  netns-netkit gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, memo's config in the FHS env with the store
   right after the embedded ones, the store in the closure), its permissions broker (the
   read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
@@ -404,11 +424,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   default launcher's `.desktop` file keeps the `claude://` handler and
   upstream's actions, and lacks the Permissions action. For `work`, the
   Permissions window's `--app-id` in its broker's config.
-- `netns-macvlan`: the package build runs its Go tests (`main_test.go`),
-  including `openNetns` against a child in its own user and network
-  namespace, and the user namespace chain: a netns two user namespaces down
-  accepted, refused from a sibling user namespace's view and for one owned by
-  the caller's own.
+- `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `netns_test.go`,
+  `openNetns` against a child in its own user and network namespace, and the user namespace chain: a netns two user
+  namespaces down accepted, refused as seen from a sibling user namespace and for one the user namespace of the caller
+  owns; `addr_test.go`, the addresses against Python over the same inputs, past taken ones, wrapping, never the first
+  or last of the block, a full block refused, and the names of primaries; `main_test.go`, launcher names and ports
+  refused.
 - `subid-broker`: the package build runs its Go tests (`main_test.go`):
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
@@ -687,8 +708,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
   some, see `nix/patches/`), `switch` switches to the workstation's specialisations while the app runs (the slice's
   CPU weight changed, its unit file gone) and back, the app's unit untouched. A router VM runs
-  dnsmasq for DHCP and DNS and stands in for the internet: its DNS points
-  api.anthropic.com and github.com at itself, which listens on 443. On the
+  dnsmasq for DNS and stands in for the internet: its DNS points
+  api.anthropic.com and github.com at itself, which listens on 443, and it holds an address of each family off the LAN,
+  behind the default routes of the workstation (the IPv6 one ahead of the one QEMU advertises on eth0); the
+  `nameservers` of the launchers name it. On the
   workstation VM, alice launches the sandbox with a stub app
   (`nix/checks/stub-app.nix`, shaped like the real package so the asar patch
   and FHS overrides apply), and a fake portal (`nix/checks/fake-portal.py`)
@@ -717,12 +740,22 @@ modules and a user alice (the `home-manager` input exists only for it).
   `app/`, its timers listed, its path unit running `claude-desktop-store-gc` on the marker; the script refused on the
   host), the journal namespaces (the proxy's refusals as warnings on the host side and readable inside, the start's
   steps from bwrap's helper and the proxy and supervise's `Started` durations there, supervise's
-  pump and udhcpc in the sandbox's, `logger` and `systemd-cat` inside, the host side's not writable from inside, the
+  pump in the sandbox's, `logger` and `systemd-cat` inside, the host side's not writable from inside, the
   sandbox's entries stamped `sandbox/app`), the GTK theme following the color scheme (at
-  launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), the macvlan's DHCP
-  lease, route and DNS (udhcpc in a mount namespace of its own with its
-  closure and the sandbox's home, none of alice's files), the launcher `work` running next to the default
-  sandbox (its own namespaces, MAC and lease, its own tray item at another
+  launch, live, and the launcher's supervise, which follows it, being the app's unit and ending it), the netkit pair (`lo`
+  and `eth0`, its addresses from the blocks and default routes, the primary routed to with forwarding on, the pins and
+  their modes, the registration, alice kept from the pins), the sandbox reaching the router and the internet stand-in
+  over IPv4 and IPv6 and none of the LAN address of the host, a dummy interface, a host bridge or a container behind
+  it (nothing of it on the bridge), nor `127.0.0.1` of the host with `127.0.0.1` routed out of the sandbox and
+  `route_localnet` on both sides, a spoofed source (IPv4, IPv6) going nowhere, a full-tunnel VPN (a dummy device as
+  wg-quick and NetworkManager set them up: a table of its own with the default of main suppressed, and the two halves
+  of the address space) taking the traffic of the host while the sandbox leaves through the uplink and nothing of it
+  reaches the VPN device, port forwarding (a port not granted refused, granted to the host over IPv4 and IPv6 with its
+  flows recorded, the same port refused to a container the host forwards for, bob refused a grant without a sandbox,
+  revoked with its flows gone), and forwarding on the primary back after a toggle of `all.forwarding`, the launcher
+  `work` running next to the default
+  sandbox (its own namespaces and addresses, neither sandbox reaching a listener of the other nor the host an ungranted
+  port, its own tray item at another
   pid, its re-entry found by app ID, its state dir and GC root, a
   `notify-send` from each launcher reaching the fake portal from its app ID,
   which names a `.desktop` file in alice's profile with that `StartupWMClass`, and its
@@ -757,10 +790,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces, with no_new_privs as `claude://` has it,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
   starting the app when it isn't running, in the app's unit), the wrapper refusing system
-  users, and
-  `netns-macvlan` refusing a second user, bob, alice's namespaces, each of
+  users (the capabilities of the wrapper, setgid `sandbox-uplink`), and
+  `netns-netkit up` refusing a second user, bob, alice's namespaces, each of
   its checks on its own, and alice a netns of hers below a user namespace
-  root made and mapped her uid into. bob's commands go through `runuser`,
+  root made and mapped her uid into, a netns of bob taken and its pins and registration removed by sandbox-uplink
+  once it is gone; the pins, primary and registration of the sandbox gone with the unit of the app (sandbox-uplink
+  stopped, so `ExecStopPost=` of the unit did it). bob's commands go through `runuser`,
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
   with `nix run .#checks.x86_64-linux.vm-<part>.driverInteractive`.
   The broker's state machine tests also run live there (`TestLiveMachine`,

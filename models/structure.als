@@ -75,12 +75,12 @@ fun sandboxProcs: set Process { principal.domain.Sandbox }
 // Where the code runs each principal, in one state.
 
 // Host principals run in the init namespaces as the user, without
-// capabilities, except netns-macvlan (cap_net_admin by setcap) and the
-// helpers below.
+// capabilities, except netns-netkit (cap_net_admin and cap_bpf by setcap)
+// and the helpers below.
 pred hostAt[p: Process] {
   p.userns = InitUserNS and p.mnt = HostMnt and p.net = HostNet
   p.pidns = InitPidNS and p.uid = HostUser
-  p.caps = (p.principal = NetnsMacvlanP => NetAdmin else none)
+  p.caps = (p.principal = NetnsNetkitP => NetAdmin + Bpf else none)
 }
 
 // The host's nsenters with capabilities:
@@ -91,12 +91,11 @@ pred hostAt[p: Process] {
 //   namespace (tree.go);
 // - subid-broker's write-map: the target's parent user namespace only
 //   (subid-broker/main.go:223);
-// - the launcher's bwrap helper's unshare and dhcp-root.sh, before setpriv execs udhcpc:
-//   U1, N, P with every capability, in MU, made from the host's mounts
-//   and pivoted to the closure's binds (cmd/launcher helper.go,
-//   hm/dhcp-root.sh). MU is as the host's here: no sandbox process
-//   reaches it.
-// All stay in the init pid namespace but the last.
+// - `ip -batch` of the bwrap helper of the launcher, which puts the addresses
+//   on eth0, sets lo and eth0 up and adds the default routes: nsenter -U
+//   -n --keep-caps, so U1 and N with every capability, on the host's
+//   mounts (cmd/launcher helper.go netSetup.run), before the app starts.
+// All stay in the init pid namespace.
 pred helperAt[p: Process] {
   p.uid = HostUser and p.caps = Cap
   p.principal = BrokerP implies {
@@ -107,7 +106,7 @@ pred helperAt[p: Process] {
     p.userns in U1.*~parent and p.mnt = HostMnt and p.net = HostNet and p.pidns = InitPidNS
   }
   p.principal = LauncherP implies {
-    p.userns = U1 and p.mnt = HostMnt and p.net = N and p.pidns = P
+    p.userns = U1 and p.mnt = HostMnt and p.net = N and p.pidns = InitPidNS
   }
   p.principal in BrokerP + SubidBrokerP + LauncherP
 }
@@ -117,18 +116,14 @@ pred hostPlaced {
 }
 
 // Where the sandbox's processes start (hm/default.nix's diagram):
-// bwrap's init and the FHS env script in U1 without capabilities,
-// udhcpc there with net_admin and net_raw (hm/dhcp-root.sh). udhcpc runs
-// in MU, which shows it a part of what M1 does (the closure, the home,
-// P's /proc): it stays in M1 here, which gives the attacker more. The
+// bwrap's init and the FHS env script in U1 without capabilities, the
 // app, sessions and re-entries in U2 without any (hm/app-pid.sh:9,
 // cmd/launcher enter.go:111).
 pred sandboxStart {
   all p: sandboxProcs {
     p.uid = HostUser
-    p.principal in BwrapInitP + UdhcpcP implies {
-      p.userns = U1 and p.mnt = M1 and p.net = N and p.pidns = P
-      p.caps in (p.principal = UdhcpcP => NetAdmin + NetRaw else none)
+    p.principal = BwrapInitP implies {
+      p.userns = U1 and p.mnt = M1 and p.net = N and p.pidns = P and no p.caps
     }
     p.principal in AppP + SessionP + ReentryP implies {
       p.userns = U2 and p.mnt = M2 and p.net = N and p.pidns = P2 and no p.caps
@@ -145,9 +140,8 @@ pred sandboxStart {
 pred reach {
   all p: sandboxProcs {
     p.uid in p.userns.mapped
-    (p.userns = U1 and p.principal in BwrapInitP + UdhcpcP
-      and p.mnt = M1 and p.net = N and p.pidns = P
-      and p.caps in (p.principal = UdhcpcP => NetAdmin + NetRaw else none))
+    (p.userns = U1 and p.principal = BwrapInitP
+      and p.mnt = M1 and p.net = N and p.pidns = P and no p.caps)
     or (p.userns in U1.^~parent and p.mnt.ownedBy in U1.*~parent
       and p.net.ownedBy in U1.*~parent and p.pidns in P.*~pparent)
   }
@@ -224,20 +218,21 @@ assert S9shareOnlyFromM1 {
 }
 check S9shareOnlyFromM1 for 4 but 11 OwnedNS, 1 steps expect 0
 
-// S9's vacuity guard, and README lead 4: udhcpc, in M1, may send share.
-run S9udhcpcShares {
+// S9's vacuity guard, and README lead 4: the FHS env script, in M1,
+// sends share.
+run S9scriptShares {
   world and sbPinned and some p: sandboxProcs |
-    p.principal = UdhcpcP and served[p, RequestSock, Share]
+    p.principal = BwrapInitP and served[p, RequestSock, Share]
 } for 4 but 11 OwnedNS, 1 steps expect 1
 
 // ---------------------------------------------------------------------
-// netns-macvlan (netns-macvlan/main.go openNetns, ownedBelow): the
+// netns-netkit (netns-netkit/netns.go openNetns, ownedBelow): the
 // target pid's /proc entry belongs to the caller (checked against a
 // pidfd), its network namespace isn't the caller's, and walking up from
 // the user namespace owning it (NS_GET_PARENT), the one right below the
 // caller's is owned by the caller's uid (NS_GET_OWNER_UID). setcap
-// cap_net_admin, so only the host runs it with effect (no_new_privs in
-// the sandbox).
+// cap_net_admin and cap_bpf, so only the host runs it with effect
+// (no_new_privs in the sandbox).
 
 // The owner rule alone: c could act on namespaces of u without any
 // file capability.
@@ -245,14 +240,14 @@ pred ownsBelow[c: Process, u: UserNS] {
   some a: u.*parent | a.parent = c.userns and a.owner = c.uid
 }
 
-pred macvlanAccepts[c, q: Process] {
+pred netkitAccepts[c, q: Process] {
   q.uid = c.uid
   q.net != c.net
   ownsBelow[c, q.net.ownedBy]
 }
 
 // The check before the fix: the immediate owner's uid only
-pred macvlanAcceptedBefore[c, q: Process] {
+pred netkitAcceptedBefore[c, q: Process] {
   q.uid = c.uid
   q.net != c.net
   q.net.ownedBy.owner = c.uid
@@ -260,19 +255,19 @@ pred macvlanAcceptedBefore[c, q: Process] {
 
 // S8: eth0 lands only in a network namespace other than the caller's
 // over which the caller's uid holds every capability by the owner rule,
-// so netns-macvlan does only what the caller could do there with
+// so netns-netkit does only what the caller could do there with
 // cap_net_admin of its own. Holds.
-assert S8macvlanOwned {
-  all c, q: Process | (hostAt[c] and macvlanAccepts[c, q]) implies {
+assert S8netkitOwned {
+  all c, q: Process | (hostAt[c] and netkitAccepts[c, q]) implies {
     q.net != c.net
     ownsBelow[c, q.net.ownedBy]
   }
 }
-check S8macvlanOwned for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 0
+check S8netkitOwned for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 0
 
-run S8macvlanOnN {
+run S8netkitOnN {
   world and sbPinned and some c: Process |
-    c.principal = LauncherP and hostAt[c] and macvlanAccepts[c, sb] and sb.net = N
+    c.principal = LauncherP and hostAt[c] and netkitAccepts[c, sb] and sb.net = N
 } for 4 but 11 OwnedNS, 1 steps expect 1
 
 // S8, revert: the check before the fix read the immediate owner's uid
@@ -284,7 +279,7 @@ run S8macvlanOnN {
 // netns passed. Outside the sandbox's attacker (it can't run setcap
 // binaries); a host-side gap of the setcap wrapper.
 assert S8ownerChainRevert {
-  all c, q: Process | (hostAt[c] and macvlanAcceptedBefore[c, q]) implies ownsBelow[c, q.net.ownedBy]
+  all c, q: Process | (hostAt[c] and netkitAcceptedBefore[c, q]) implies ownsBelow[c, q.net.ownedBy]
 }
 check S8ownerChainRevert for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
 
@@ -302,8 +297,7 @@ check S8ownerChainRevert for 4 but 6 UserNS, 11 OwnedNS, 1 steps expect 1
 // path is resolved (resolvesIn) and where it then acts (inNs).
 
 sig StorePath { refs: set StorePath }
-one sig FhsEnv, BwrapFhs, BrokerBin, NetSetup, UtilLinux, Busybox, Iproute2,
-  DhcpScript extends StorePath {}
+one sig FhsEnv, BwrapFhs, BrokerBin, NetSetup, UtilLinux, Iproute2 extends StorePath {}
 // storeRoots' list (hm/build.nix:19, hm/store.nix:37-46)
 sig Root in StorePath {}
 fun closure: set StorePath { Root.*refs }
@@ -313,10 +307,9 @@ abstract sig Exec { bin: one StorePath, resolvesIn: one MountNS, inNs: one Mount
 // every capability in the owner of sb's mount namespace, which the
 // helper joins after the exec (permissions-broker/helpers.go)
 one sig BrokerHelper extends Exec {}
-// dhcp-root.sh's setpriv with every capability in U1, and udhcpc and its
-// script's ip with net_admin and net_raw (cmd/launcher helper.go,
-// hm/dhcp-root.sh, hm/udhcpc.sh)
-one sig NetSetupSetpriv, Udhcpc, UdhcpcIp extends Exec {}
+// ip of the bwrap helper, exec'd by nsenter --keep-caps with every
+// capability in U1 (cmd/launcher helper.go netSetup.run)
+one sig NetSetupIp extends Exec {}
 // Today's helpers; a later one would be another Exec
 sig LaterExec extends Exec {}
 
@@ -326,25 +319,19 @@ fact store {
   // the broker for share (hm/lib.nix:119-124)
   BwrapFhs in FhsEnv.refs
   BrokerBin in BwrapFhs.refs
-  // the bwrap helper's --net (hm/network.nix)
-  UtilLinux + Busybox + DhcpScript + Iproute2 in NetSetup.refs
-  // udhcpc.sh's runtimeInputs (hm/network.nix:15-19)
-  Iproute2 in DhcpScript.refs
+  // the bwrap helper's --net (hm/network.nix): nsenter and ip
+  UtilLinux + Iproute2 in NetSetup.refs
   BrokerHelper.bin = BrokerBin and BrokerHelper.keeps = Cap
-  NetSetupSetpriv.bin = UtilLinux and NetSetupSetpriv.keeps = Cap
-  Udhcpc.bin = Busybox and Udhcpc.keeps = NetAdmin + NetRaw
-  UdhcpcIp.bin = Iproute2 and UdhcpcIp.keeps = NetAdmin + NetRaw
+  NetSetupIp.bin = Iproute2 and NetSetupIp.keeps = Cap
   BrokerHelper.inNs = sb.mnt
 }
 
 // Where today's code resolves them: the broker's nsenter joins only the
-// user (and uts) namespace and execs on the host's mounts; udhcpc's
-// mount namespace is made from the host's, pivoted to a tmpfs of its own
-// holding the closure's binds of the host's store (hm/dhcp-root.sh),
-// which no sandbox process reaches: as the host's here.
+// user (and uts) namespace and execs on the host's mounts; that of the
+// bwrap helper joins the user and network namespaces only.
 pred resolvedOnHost {
-  (BrokerHelper + NetSetupSetpriv + Udhcpc + UdhcpcIp).resolvesIn = HostMnt
-  (NetSetupSetpriv + Udhcpc + UdhcpcIp).inNs = HostMnt
+  (BrokerHelper + NetSetupIp).resolvesIn = HostMnt
+  NetSetupIp.inNs = HostMnt
 }
 
 // Mount trees the sandbox can swap a directory in: M1 and every mount
@@ -370,7 +357,7 @@ assert S12helpersFromHost {
 check S12helpersFromHost for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 0
 
 // S12, revert: the helpers exec'd in M1 as before the fix (nsenter
-// --mount, nsenter -m -r for udhcpc), every binary in the closure: the
+// --mount), every binary in the closure: the
 // swap of /nix/store replaces them all the same (counterexample found).
 assert S12resolvedInM1 {
   (world and sbPinned and (Exec - LaterExec).resolvesIn = M1) implies
