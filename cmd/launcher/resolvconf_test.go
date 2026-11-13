@@ -60,12 +60,45 @@ func TestResolved(t *testing.T) {
 		{Ifindex: 2, Name: "routed.example", RouteOnly: true},
 		{Ifindex: 0, Name: "example.org."},
 		{Ifindex: 0, Name: "lan"},
+		// Not a domain name: a line of its own, a label too long or empty, a name too long, an underscore
+		{Ifindex: 0, Name: "evil\nnameserver 10.66.0.1"},
+		{Ifindex: 0, Name: "a b"},
+		{Ifindex: 0, Name: strings.Repeat("a", 64) + ".example"},
+		{Ifindex: 0, Name: "a..example"},
+		{Ifindex: 0, Name: strings.Repeat("a.", 126) + "ab"},
+		{Ifindex: 0, Name: "_srv.example"},
+		{Ifindex: 0, Name: "-a.example"},
+		{Ifindex: 0, Name: "."},
+		// 63-character labels, 253 characters
+		{Ifindex: 0, Name: strings.Repeat(strings.Repeat("b", 63)+".", 3) + strings.Repeat("c", 61)},
 	}
-	got := resolvConf(fromResolved(servers, domains), testUplinks, testRoute)
+	got := resolvConf(fromResolved(servers, domains, nil), testUplinks, testRoute)
 	want := "nameserver 192.168.1.1\nnameserver 2001:db8:1::1\nnameserver 9.9.9.9\nnameserver 192.168.1.3\n" +
-		"search lan example.org\n"
+		"search lan example.org " + strings.Repeat(strings.Repeat("b", 63)+".", 3) + strings.Repeat("c", 61) + "\n"
 	if got != want {
 		t.Errorf("Got\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Split DNS stays out: the global CoreDNS of k3s for ~k3s.internal (ops-cluster, on an address of Cilium the host
+// routes to the default gateway), a link that isn't a default route; ~. alone leaves a scope whole
+func TestResolvedSplit(t *testing.T) {
+	servers := []resolvedServer{
+		{Ifindex: 0, Family: 2, Addr: ip("10.44.0.10")},
+		{Ifindex: 2, Family: 2, Addr: ip("192.168.1.1")},
+	}
+	domains := []resolvedDomain{{Ifindex: 0, Name: "k3s.internal", RouteOnly: true}}
+	route := func(netip.Addr) (int, bool, error) { return 2, false, nil }
+	if got, want := resolvConf(fromResolved(servers, domains, map[int]bool{2: true}), testUplinks, route),
+		"nameserver 192.168.1.1\n"; got != want {
+		t.Errorf("Global for ~k3s.internal: %q, want %q", got, want)
+	}
+	if got, want := resolvConf(fromResolved(servers, []resolvedDomain{{Ifindex: 0, Name: ".", RouteOnly: true}}, nil),
+		testUplinks, route), "nameserver 10.44.0.10\nnameserver 192.168.1.1\n"; got != want {
+		t.Errorf("Global for ~.: %q, want %q", got, want)
+	}
+	if got := resolvConf(fromResolved(servers, domains, map[int]bool{2: false}), testUplinks, route); got != "" {
+		t.Errorf("The uplink no default route: %q", got)
 	}
 }
 
@@ -81,6 +114,9 @@ func TestNM(t *testing.T) {
 		{"nameservers": v([]string{"2001:db8:1::1"}), "interface": v("eth0"), "priority": v(int32(-10)),
 			"vpn": v(false)},
 		{"nameservers": v([]string{"172.17.0.2"}), "interface": v("docker0"), "priority": v(int32(100)), "vpn": v(false)},
+		// Split DNS on the uplink
+		{"nameservers": v([]string{"192.168.1.8"}), "domains": v([]string{"~corp.example", "corp.example"}),
+			"interface": v("eth0"), "priority": v(int32(100)), "vpn": v(false)},
 		// Gone meanwhile
 		{"nameservers": v([]string{"192.168.1.7"}), "interface": v("eth9"), "priority": v(int32(100)), "vpn": v(false)},
 	}
@@ -98,15 +134,15 @@ func TestNM(t *testing.T) {
 // The option wins; without it and without a bus, no DNS; without a network none, the option set or not
 func TestDNSSources(t *testing.T) {
 	d := &dns{cfg: &config{Network: true, Nameservers: []string{"192.168.1.1", "2001:db8::1"}}}
-	if got, src := d.read(); got != "nameserver 192.168.1.1\nnameserver 2001:db8::1\n" || src != "nameservers option" {
+	if got, src, _ := d.read(); got != "nameserver 192.168.1.1\nnameserver 2001:db8::1\n" || src != "nameservers option" {
 		t.Errorf("Static: %q from %s", got, src)
 	}
 	d = &dns{cfg: &config{Network: true}}
-	if got, src := d.read(); got != "" || src != "none" {
+	if got, src, _ := d.read(); got != "" || src != "none" {
 		t.Errorf("Without a source: %q from %s", got, src)
 	}
 	d = newDNS(&config{Nameservers: []string{"192.168.1.1"}})
-	if got, src := d.read(); got != "" || src != "no network" || d.bus != nil {
+	if got, src, _ := d.read(); got != "" || src != "no network" || d.bus != nil {
 		t.Errorf("Without a network: %q from %s, bus %v", got, src, d.bus)
 	}
 }

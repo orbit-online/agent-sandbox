@@ -12,6 +12,15 @@
 }:
 let
   ids = sl.idsOf launcherName;
+  # An IPv4 or IPv6 address (no prefix length or zone), all a nameserver line of resolv.conf takes
+  octet = "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
+  isIP =
+    s:
+    builtins.match "${octet}(\\.${octet}){3}" s != null
+    || (
+      !lib.hasInfix "/" s
+      && (builtins.tryEval (builtins.deepSeq (lib.network.ipv6.fromString s) true)).success
+    );
   # nixpak's bwrap, mode subid (cmd/launcher bwrap.go), whose helper sets up the netns before nixpak's launcher
   # hears the sandbox is there and lets the app start (helper.go, netSetup)
   bwrapHost = sl.bwrapOf (
@@ -80,10 +89,10 @@ in
     default = [ ];
     example = [ "192.168.1.1" ];
     description = ''
-      The DNS servers of the sandbox, which each launch writes to its resolv.conf. Empty: the launcher follows
-      systemd-resolved on the host, or NetworkManager without it, and gives the sandbox the servers of the uplink with
-      the default route (none of a VPN); with neither, the sandbox has no DNS. The sandbox reaches its servers through
-      the uplinks only: a resolver of the host, on 127.0.0.53 say, is out of its reach.
+      The DNS servers of the sandbox, IPv4 or IPv6 addresses, which each launch writes to its resolv.conf. Empty: the
+      launcher follows systemd-resolved on the host, or NetworkManager without it, and gives the sandbox the servers of
+      the uplink with the default route (none of a VPN); with neither, the sandbox has no DNS. The sandbox reaches its
+      servers through the uplinks only: a resolver of the host, on 127.0.0.53 say, is out of its reach.
     '';
   };
 
@@ -108,6 +117,12 @@ in
       }
     ];
     build.assertions = [
+      {
+        assertion = lib.all isIP config.nameservers;
+        message = "agent-sandbox.claude-desktop: ${
+          if launcherName == null then "" else "launchers.${launcherName}."
+        }nameservers must be IP addresses: ${lib.concatStringsSep ", " (map builtins.toJSON config.nameservers)}";
+      }
       {
         assertion = nixpak.bubblewrap.network && nixpak.pasta.enable && nixpak.pasta.package == netSetup;
         message = "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a netkit pair; ${

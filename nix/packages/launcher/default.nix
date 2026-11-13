@@ -1,5 +1,6 @@
 {
   buildGoModule,
+  dbus,
   lib,
   util-linux,
   ...
@@ -22,10 +23,13 @@ buildGoModule {
     "cmd/launcher"
     "internal/..."
   ];
-  vendorHash = "sha256-5Z5+FZ3a+Af7EjXgxh1DwwpGwx++zPBzrOoSMl+C0Tk=";
+  vendorHash = "sha256-8MjdStRba6RVMaQ2mHZGO623li6fgGKLg2BhyMsZzaA=";
   env.CGO_ENABLED = 0;
-  # internal/sandbox's tests make pid namespaces with unshare
-  nativeCheckInputs = [ util-linux ];
+  # internal/sandbox's tests make pid namespaces with unshare; the DNS test runs a system bus of its own
+  nativeCheckInputs = [
+    dbus
+    util-linux
+  ];
   meta = {
     description = "Start a sandbox's launcher, or join the running sandbox";
     mainProgram = "launcher";

@@ -84,6 +84,7 @@ type config struct {
 	Nameservers    []string `json:"nameservers"` // The sandbox's DNS servers, the host's (dns.go) when empty
 	Network        bool     `json:"network"`     // Off: lo alone in the netns of the sandbox, no netkit pair and no DNS
 	Tools          struct {
+		IP         string `json:"ip"`
 		Journalctl string `json:"journalctl"`
 		Nsenter    string `json:"nsenter"`
 		NixStore   string `json:"nixStore"`

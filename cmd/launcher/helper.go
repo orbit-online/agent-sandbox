@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/orbit-online/agent-sandbox/internal/journal"
+	"github.com/orbit-online/agent-sandbox/internal/proc"
 )
 
 // The helper bwrap.go starts before it execs into bwrap, with bwrap's info pipe on fd 3, its user namespace's block
@@ -175,24 +176,107 @@ func (n *netSetup) run(pid int) error {
 	if len(addrs) != 2 {
 		return fmt.Errorf("%s: addresses %q", n.NetnsNetkit, out)
 	}
-	// The sandbox's userns owns its netns. --keep-caps: exec would otherwise drop the caps setns granted
-	ip := exec.Command(n.Nsenter, "-t", strconv.Itoa(pid), "-U", "-n", "--preserve-credentials", "--keep-caps", n.IP, "-batch", "-")
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return fmt.Errorf("Open the sandbox: %w", err)
+	}
+	defer unix.Close(pidfd)
+	ns, err := openNs(pid, pidfd)
+	if err != nil {
+		return err
+	}
+	defer closeNs(ns)
+	ip := ipIn(n.Nsenter, n.IP, ns)
 	ip.Stdin = strings.NewReader(ipBatch(addrs[0], addrs[1]))
 	ip.Stdout, ip.Stderr = hostOut, hostOut
 	if err := ip.Run(); err != nil {
 		return fmt.Errorf("Address the sandbox: %w", err)
 	}
+	if err := sandboxRoutes(n.NetnsNetkit, n.Nsenter, n.IP, ns); err != nil {
+		return err
+	}
 	slog.Info("Step", "step", stepNetwork)
 	return nil
 }
 
-// ipBatch is what eth0 in the sandbox gets: its addresses, up, and the default routes through it. No neighbours: netkit
-// in L3 mode has no ARP
+// ipBatch is what eth0 in the sandbox gets: its addresses and up (sandboxRoutes adds the default routes). No
+// neighbours: netkit in L3 mode has no ARP
 func ipBatch(v4, v6 string) string {
 	return "link set lo up\n" +
 		"addr add " + v4 + "/32 dev eth0\n" +
 		"addr add " + v6 + "/128 dev eth0 nodad\n" +
-		"link set eth0 up\n" +
-		"route add default dev eth0\n" +
-		"route add ::/0 dev eth0\n"
+		"link set eth0 up\n"
+}
+
+// defaultUplinks asks netns-netkit for the ifindexes of the uplinks with the default route of IPv4 and of IPv6, 0 for
+// none, which only its group reads
+func defaultUplinks(netnsNetkit string) ([2]int, error) {
+	var ups [2]int
+	out, err := exec.Command(netnsNetkit, "uplinks").Output()
+	if err != nil {
+		return ups, fmt.Errorf("Run netns-netkit uplinks: %w", err)
+	}
+	if _, err := fmt.Sscan(string(out), &ups[0], &ups[1]); err != nil {
+		return ups, fmt.Errorf("Read netns-netkit uplinks %q: %w", out, err)
+	}
+	return ups, nil
+}
+
+// openNs opens the user and net namespaces of pid, the process of pidfd, which must still run after: a pid that was
+// reused in between would name the namespaces of another process
+func openNs(pid, pidfd int) ([]*os.File, error) {
+	var ns []*os.File
+	for _, kind := range []string{"user", "net"} {
+		f, err := os.Open(fmt.Sprintf("/proc/%d/ns/%s", pid, kind))
+		if err != nil {
+			closeNs(ns)
+			return nil, fmt.Errorf("Open the %s namespace of the sandbox: %w", kind, err)
+		}
+		ns = append(ns, f)
+	}
+	if !proc.Alive(pidfd) {
+		closeNs(ns)
+		return nil, errors.New("The sandbox exited")
+	}
+	return ns, nil
+}
+
+func closeNs(ns []*os.File) {
+	for _, f := range ns {
+		f.Close()
+	}
+}
+
+// ipIn runs ip in ns (openNs) as the owner of the user namespace, which owns the netns. --keep-caps: exec would
+// otherwise drop the caps setns granted
+func ipIn(nsenter, ipTool string, ns []*os.File) *exec.Cmd {
+	ip := exec.Command(nsenter, "--user=/proc/self/fd/3", "--net=/proc/self/fd/4", "--preserve-credentials", "--keep-caps",
+		ipTool, "-batch", "-")
+	ip.ExtraFiles = ns
+	return ip
+}
+
+// sandboxRoutes gives eth0 in the netns of ns (openNs) a default route for each family the host has an uplink with a default
+// route of, and none for the others: peer drops what no uplink takes, and with a default route there a connection to a
+// dual-stack name would wait on IPv6, which glibc prefers, instead of failing over to IPv4 at once. As the owner of the
+// user namespace of the sandbox: netns-netkit has no CAP_SYS_ADMIN to enter its netns
+func sandboxRoutes(netnsNetkit, nsenter, ipTool string, ns []*os.File) error {
+	ups, err := defaultUplinks(netnsNetkit)
+	if err != nil {
+		return err
+	}
+	var batch strings.Builder
+	for i, dst := range []string{"0.0.0.0/0", "::/0"} {
+		fmt.Fprintf(&batch, "route replace %s dev eth0\n", dst)
+		// Replaced first, so the delete succeeds whether the route was there or not
+		if ups[i] == 0 {
+			fmt.Fprintf(&batch, "route del %s dev eth0\n", dst)
+		}
+	}
+	ip := ipIn(nsenter, ipTool, ns)
+	ip.Stdin = strings.NewReader(batch.String())
+	if out, err := ip.CombinedOutput(); err != nil {
+		return fmt.Errorf("Route the sandbox: %w: %s", err, out)
+	}
+	return nil
 }

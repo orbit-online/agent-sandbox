@@ -55,6 +55,7 @@ let
         nixpakLauncher = lib.getExe sandboxed.config.script;
         ready = sl.readyLine;
         tools = {
+          ip = lib.getExe' pkgs.iproute2 "ip";
           journalctl = lib.getExe' osConfig.systemd.package "journalctl";
           nsenter = lib.getExe' pkgs.util-linux "nsenter";
           nixStore = lib.getExe' osConfig.nix.package "nix-store";

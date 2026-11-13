@@ -407,6 +407,18 @@
       workstation.wait_until_succeeds(f"grep -qx 'nameserver ${routerIP}' {conf}", timeout=10)
       assert workstation.succeed(f"cat {conf}") == want
 
+  with subtest("split DNS stays out: the uplink no default route of resolved leaves no server"):
+      # DefaultRoute of a link emits no PropertiesChanged (it is EmitsChangedSignal("false"), as Manager.Domains is),
+      # so the DNS of the link changes alongside it to have the launcher read again
+      workstation.succeed("resolvectl default-route eth1 no")
+      workstation.succeed("resolvectl dns eth1 ${routerIP6}")
+      workstation.wait_until_succeeds(f"test ! -s {conf}", timeout=10)
+      workstation.fail(sandbox_cmd("test -s /etc/resolv.conf"))
+      workstation.succeed("resolvectl default-route eth1 yes")
+      workstation.succeed("resolvectl dns eth1 ${routerIP} 127.0.0.1")
+      workstation.wait_until_succeeds(f"grep -qx 'nameserver ${routerIP}' {conf}", timeout=10)
+      assert workstation.succeed(f"cat {conf}") == want
+
   with subtest("the sandbox reaches the LAN and the internet stand-in, IPv4 and IPv6, and nothing of the host's"):
       for host in ["${routerIP}", "${routerIP6}", "${internet4}", "${internet6}"]:
           assert reaches(host, 443), host

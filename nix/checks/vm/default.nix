@@ -233,7 +233,9 @@ let
         pkgs.tcpdump
       ];
       # The default launcher follows resolved's DNS (work has the nameservers option): the router on the uplink, beside a
-      # loopback server, and a VPN's link with a server and domain of its own, which the sandbox doesn't get
+      # loopback server, and a VPN's link with a server and domain of its own, which the sandbox doesn't get. The
+      # uplink is a default route by its own word: a routing domain alone would make resolved take it for split DNS,
+      # which the launcher leaves out
       services.resolved = {
         enable = true;
         settings.Resolve = {
@@ -259,6 +261,7 @@ let
           resolvectl dns corp0 10.97.0.53 && resolvectl domain corp0 corp.test
           resolvectl dns eth1 ${nodes.router.networking.primaryIPAddress} 127.0.0.1
           resolvectl domain eth1 lan.test '~routed.test'
+          resolvectl default-route eth1 yes
         '';
       };
       # A host service for the sandbox to miss, on the LAN address, loopback and dummy0 (setup in the test script)

@@ -207,7 +207,10 @@ func prepare(cfg *config, p *progress, dns *dns) error {
 	if out, err := state.CombinedOutput(); err != nil {
 		return fmt.Errorf("Prepare the sandbox's home: %w: %s", err, out)
 	}
-	if err := dns.update(); err != nil {
+	// The DNS of the host unread is no reason to fail the start: follow reads it again
+	if err := dns.update(); errors.Is(err, errUnread) {
+		slog.Warn("DNS", "err", err)
+	} else if err != nil {
 		return err
 	}
 	err := syncStore(cfg, p.copying)
