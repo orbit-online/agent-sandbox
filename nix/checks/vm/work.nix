@@ -101,7 +101,9 @@
       assert re.fullmatch(r"0::/user/app\.slice/run-[^/]+\.scope", cg) and limit == str(64 << 20) and weight == "50", out
       # The launcher's slice below app.slice's
       assert workstation.succeed(f"cat '/sys/fs/cgroup{work_slice}/cpu.weight'").strip() == "50"
-      out = in_work(f"sh -c '{job} -- sh -c \"head -c 512M /dev/zero | tail\"; echo exit=$?'")
+      # One process, so the OOM kill is what ends it: with a pipeline the scope stopping after the kill could end the
+      # shell with SIGTERM first (exit 143)
+      out = in_work(f"sh -c '{job} -- dd if=/dev/zero of=/dev/null bs=512M count=1; echo exit=$?'")
       assert out.strip().splitlines()[-1] == "exit=137", out
       # What it leaves running ends with a stop of its scope (environment.md)
       in_work("sh -c 'systemd-run --user --scope --quiet --unit=job -- sh -c \"sleep 600 & exit 0\" && systemctl --user stop job.scope'")
