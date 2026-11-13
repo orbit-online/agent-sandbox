@@ -254,6 +254,13 @@ let
                     capability = "vm";
                     params.vm = "win11";
                   }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "tcp";
+                      port = 8081;
+                    };
+                  }
                 ];
               };
             };
@@ -697,7 +704,8 @@ let
         }
       ];
     };
-    # Standing grants only with the broker, of a host command or host socket it has, never of folders
+    # Standing grants only with the broker, of a host command or host socket it has or a port, never of folders; a port's
+    # params as the broker takes them, and no host socket or command named after the port capability
     testStandingGrants = {
       expr = map (a: a.message) (
         failedAssertions (
@@ -711,6 +719,10 @@ let
                   description = "an agent";
                   path = "/srv/agent.sock";
                 };
+                sockets.port = {
+                  description = "a socket named port";
+                  path = "/srv/port.sock";
+                };
                 grants = [
                   {
                     capability = "folders/folder";
@@ -718,6 +730,45 @@ let
                   }
                   { capability = "none"; }
                   { capability = "agent"; }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "tcp";
+                      port = 65535;
+                    };
+                  }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "sctp";
+                      port = 80;
+                    };
+                  }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "udp";
+                      port = 0;
+                    };
+                  }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "udp";
+                      port = 65536;
+                    };
+                  }
+                  {
+                    capability = "port";
+                    params.protocol = "tcp";
+                  }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "tcp";
+                      port = "80";
+                    };
+                  }
                 ];
               };
             }
@@ -729,6 +780,10 @@ let
         "agent-sandbox.claude-desktop: permissions.grants: no capability vm in permissions.commands or permissions.sockets"
         "agent-sandbox.claude-desktop: launchers.work.permissions.grants: folders get no standing grants, a folder that should always be there is a bind (binds)"
         "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no capability none in permissions.commands or permissions.sockets"
+      ]
+      ++ lib.replicate 5 "agent-sandbox.claude-desktop: launchers.work.permissions.grants: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)"
+      ++ [
+        "agent-sandbox.claude-desktop: launchers.work.permissions: port is a capability built into the broker, not a host command or host socket name"
       ];
     };
     # Host sockets the broker would refuse, caught at eval: a bad name or one host commands have, neither or both of a
@@ -1321,7 +1376,9 @@ in
               "${"$"}{XDG_RUNTIME_DIR}"]
             and .folders == [{path: "/srv/notes", rw: false}] and (has("plugins") | not)
             and .sockets == [{name: "agent", description: "an agent", path: "$XDG_RUNTIME_DIR/agent.sock", bounding: {}}]
-            and .grants == [{capability: "agent", params: {}}, {capability: "vm", params: {vm: "win11"}}]
+            and .grants == [{capability: "agent", params: {}}, {capability: "vm", params: {vm: "win11"}},
+              {capability: "port", params: {protocol: "tcp", port: 8081}}]
+            and .netnsNetkit == "/run/wrappers/bin/netns-netkit"
             and .commands == [{name: "vm", description: "a VM", consent: {title: "use the VM"}, exclusive: false,
               bounding: {vm: {type: "string", description: "the VM"}}, commands: {shot: {description: "a screenshot",
               consent: "Take screenshots", arguments: {}, result: "image/png", timeout: "PT1M", run: ["/srv/shot"]}}}]

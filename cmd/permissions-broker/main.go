@@ -80,7 +80,7 @@ func main() {
 		var cfg config
 		if cfg, err = readConfig(opts["<config>"].(string)); err == nil {
 			sb, _ := lookupSandbox(os.Getenv("XDG_RUNTIME_DIR"), cfg.AppID)
-			cleanup(cfg, sb)
+			cleanup(cfg, sb, realClock{})
 		}
 	case opts["mcp"] == true:
 		commands, _ := opts.String("--commands")

@@ -74,6 +74,60 @@ run P4crashMounted {
 } for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1
 
+// P18. The host reaches a port of the sandbox only under a live grant of
+// it or a pending revoke: the port is on while its grant lives, after
+// that only while the daemon records it closing (its revoke failed and is
+// tried again), and the ports of a crashed daemon only until ExecStopPost
+// or the next start ran its cleanup, which tries until the helper revokes
+// them (live, end, portOff and closePort of portKind, revokePorts in
+// cleanup, ports.go; the helper switching it in the ports map of the
+// sandbox, netns-netkit bpf.go). A grant that switched its port on and
+// then failed to find its addresses leaves it closing as an end does.
+// Revert: change keeping Forwarded for E; change not recording F as
+// Closing; cleanup leaving Forwarded; start keeping those of the old
+// daemon: a counterexample each (2026-11-12). stopPost done while the
+// helper fails (one try of revoke --all, as before 2026-11-13); dropPort
+// leaving the port on without recording g: a counterexample each
+// (2026-11-13).
+assert P18portsLive {
+  always Forwarded in typed[Fwd]
+  always Closing in Forwarded - Live
+  always all g: Forwarded - Live | g.gl in Dirty or g in Closing
+}
+check P18portsLive for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 1 Dir,
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
+// P18's premise: a port granted and revoked, a crash with a port on that
+// the cleanup switches off, and a cleanup failing first.
+run P18ports {
+  eventually some g: Grant | g.gcap.dtype = Fwd and revoke[g, WindowP]
+  some l: Launcher | eventually (crash[l] and some Forwarded & gl.l and after (stopPost[l] and l in Failing
+    and after eventually stopPost[l]))
+} for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 1 Dir,
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1
+
+// P18, once the helper revokes again: every closing port goes off. A
+// record goes only with its port off, with a grant of the port, or with
+// the daemon, whose cleanup switches the port off. The tries of closePort
+// are weakly fair: one enabled from some step on is taken.
+// Revert: crash keeping Closing: the record outlives the daemon, which
+// tries no more (counterexample, 2026-11-12).
+assert P18closingEnds {
+  ((eventually always no Failing) and (all g: Grant | (eventually always closeEnabled[g]) implies
+    (always eventually closeRetry[g])))
+  implies (all g: Grant | always (g in Closing implies eventually g not in Closing))
+}
+check P18closingEnds for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 1 Dir,
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
+// The premise of P18: the revoke of a port failing, then a grant of it
+// again, a try succeeding for another, and a grant that failed after
+// switching its port on left closing.
+run P18closing {
+  some g: Grant | eventually (g in Closing and after some samePort[g] & Live - g)
+  some g: Grant | eventually closeRetry[g]
+  some r: Req, g: Grant | eventually (dropPort[r, g] and after g in Closing)
+} for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 1 Dir,
+  3 Grant, 3 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 1
+
 // P4, host commands: no call starts once its grant ended. A call a live
 // grant covers waits for its slot (callSlot, call.go); runCall checks the
 // grant is still live once it has one, before the unit starts, and again
@@ -135,7 +189,7 @@ run P10calls {
 // Revert: crash keeping Live: counterexample.
 assert P11endsWithDaemonAndSandbox {
   always all l: Launcher - Up | no Live & gl.l
-  always all l: Gone | no (Live + Mounted) & gl.l and no (Queued + Running).under & gl.l and no Spliced.via & gl.l
+  always all l: Gone | no (Live + Mounted + Forwarded) & gl.l and no (Queued + Running).under & gl.l and no Spliced.via & gl.l
 }
 check P11endsWithDaemonAndSandbox for 3 but 0 Process, 1 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   3 Grant, 3 Req, 1 Conn, 2 Text, 3 Int, 1..8 steps expect 0

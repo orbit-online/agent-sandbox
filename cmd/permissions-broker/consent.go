@@ -118,10 +118,11 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 		return nil, err
 	}
 	lease = answer.Lease
-	if len(answer.Params) > 0 && c.Type == "command" {
-		// The call needs these bounding values; the window may change only the lease
+	if len(answer.Params) > 0 && (c.Type == "command" || c.Type == "port") {
+		// The call needs these bounding values, a port grant the port the sandbox listens on: the window may change
+		// only the lease
 		if p, err := c.validate(answer.Params); err != nil || string(p) != string(params) {
-			return nil, refusef(refParams, "A host command grant's parameters can't be changed: only its lease")
+			return nil, refusef(refParams, "The parameters of a host command or port grant can't be changed: only its lease")
 		}
 	} else if len(answer.Params) > 0 {
 		if params, err = c.validate(answer.Params); err != nil {

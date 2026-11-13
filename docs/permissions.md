@@ -11,7 +11,8 @@ static rules (step 5) and the sandbox on it in place of xdg-dbus-proxy (step 6, 
 system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and removed 2026-11-04 until a capability needs
 them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). The
 proxy's static rules then moved from its argv to a JSON config the module writes from its `dbus` option (2026-11-04).
-Not built yet: device grants. Steps lists the order.
+The `port` capability came with the sandbox network on netkit (2026-11-12). Not built yet: device grants. Steps lists
+the order.
 
 ## Why
 
@@ -216,14 +217,15 @@ only the daemon creates.
 
 ## What can be granted
 
-A grant is of a capability, with values for its bounding arguments where it has any. Four types, each named for what
-is granted and declared in the launcher's `permissions` options:
+A grant is of a capability, with values for its bounding arguments where it has any. Five types, each named for what
+is granted, four declared in the `permissions` options of the launcher:
 
 - `command` (`permissions.commands`): host commands, scripts run on the host per call;
 - `socket` (`permissions.sockets`): host sockets, each reachable at a stable address inside (the first design's
   `service`, which named what ran behind the socket rather than what was granted);
 - `mount` (`permissions.folders`, later devices): a folder or device node mounted in the sandbox's namespaces;
-- `dbus` (`permissions.dbus`): rules added to a D-Bus proxy. Not built: removed 2026-11-04 (D-Bus).
+- `dbus` (`permissions.dbus`): rules added to a D-Bus proxy. Not built: removed 2026-11-04 (D-Bus);
+- `port`, built into the broker: a port of the sandbox the host reaches (Ports).
 
 ### Declared host commands
 
@@ -400,6 +402,30 @@ on its path (`openat2` with `RESOLVE_NO_SYMLINKS`), requires it to be a socket, 
 planted in a glob's directory or swapped in for a declared socket leads nowhere, and a glob match that is a link isn't
 an instance. This list is a guard against the known buses, not a proof: what any other socket gives the sandbox is the
 config's responsibility, as with host commands.
+
+### Ports
+
+The capability `port` lets the host reach one TCP or UDP port of the sandbox: `{"protocol": "tcp", "port": 8080}`,
+both required, the protocol `tcp` or `udp`, the port 1 to 65535. Every launcher with the broker has it; the sandbox's
+network (`netns-netkit --help`) drops everything the host sends it otherwise. The consent reads "Claude asks for TCP
+port 8080 of the sandbox, reachable from the host", and the window shows the protocol and port and lets the user
+change only the lease, as for a host command: the port is the one the sandbox listens on.
+
+Making the grant live runs `netns-netkit grant [--name=<launcher>] tcp 8080` as the user, which switches the port on in
+the `ports` map of the sandbox, then `netns-netkit addr`, which prints the sandbox addresses. If either fails, nothing is
+granted (`failed`) and the port is switched off again. The grant carries `addresses`, `<IPv4>:8080` and
+`[<IPv6>]:8080`, in the answer to the request, `status`, `list` and the window. Its end, whatever ends it, runs
+`netns-netkit revoke`, which switches the port off and deletes the flows recorded on it, so open connections from the
+host stop too, unless another live grant holds the port. The runs of the helper for one port are serialized, so a grant
+of a port and the end of another grant of it don't interleave. A revoke that fails is tried twice more within a
+second; if it still fails the daemon keeps the port as closing (on, without a grant), tries again in the background
+after 1 s, then twice as long each time up to a minute, until it succeeds, a grant switches the port on again or the
+sandbox ends, and logs each failure to its journal on the host side (the window shows no closing ports). The cleanup
+of the daemon (its `ExecStopPost=` and its start) runs `netns-netkit revoke --all`, which needs only the name of the
+launcher, whether or not it finds the sandbox, so no port outlives the daemon that granted it. While the sandbox runs, a
+failed `revoke --all` is tried again at the same pauses until it succeeds, each failure logged, and a daemon starting
+serves nothing until then. The helper acts on sandboxes of the caller alone, and refuses
+while the sandbox isn't running; with the sandbox, its ports go.
 
 ### Mounts
 
@@ -709,7 +735,7 @@ description.
 | op        | parameters                                          | answer                                         |
 |-----------|-----------------------------------------------------|------------------------------------------------|
 | `list`    |                                                     | capabilities and instances, with live grants   |
-| `request` | `capability`, `params`, `reason`, `lease`           | the grant: its id, and a mount or socket path  |
+| `request` | `capability`, `params`, `reason`, `lease`           | the grant: its id, and a mount or socket path or the addresses of a port |
 | `call`    | `capability`, `command`, `params`, `arguments`, `reason`, `lease` | the command's output              |
 | `release` | `grant`                                             | ends the grant                                 |
 | `status`  |                                                     | the live grants                                |
@@ -725,7 +751,7 @@ for people, and `refused`, its category, for clients and tests to go by instead 
 | `refused`  | why                                                                                                   |
 |------------|-------------------------------------------------------------------------------------------------------|
 | `unknown`  | no such capability, a call of one that isn't host commands, or no such command                         |
-| `params`   | the bounding values: not an object, a key not declared, a value against its schema; or a host command grant's changed in the window |
+| `params`   | the bounding values: not an object, a key not declared, a value against its schema, one of a port missing; or those of a host command or port grant changed in the window |
 | `arguments`| a call's free arguments: not an object, one missing or not declared, a value against its schema        |
 | `reason`   | no reason left once whitespace and control characters are folded                                       |
 | `lease`    | none of `lock`, a positive duration, or `once` for a call; or `lock` while the lock isn't watched      |
@@ -855,7 +881,8 @@ tell whether a folder or a host socket is still in use. Claude Code's channels c
 ## Standing grants
 
 A launcher's `permissions.grants` lists grants the daemon makes whenever it starts, without asking: each a capability
-and the values of its bounding arguments, of host commands and host sockets. Folders get none: what should always
+and the values of its bounding arguments, of host commands, host sockets and ports (`{ capability = "port"; params =
+{ protocol = "tcp"; port = 3000; }; }`). Folders get none: what should always
 be there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
 config, and taken away by a rebuild. One click in a dialog the sandbox brought up never widens access for good.
 
@@ -881,7 +908,7 @@ and needs no `list` to do it; a call waits up to 30 seconds for `request.sock` t
 - `list`: what can be granted, with instances, and what's granted.
 - `request(capability, params, reason, lease)`: blocks until the user answers, 2 minutes at most (10 with the window
   open), well inside Claude Code's MCP tool timeouts. Returns the grant, with the mount path under `/run/permissions`
-  for a folder and the socket path for a host socket.
+  for a folder, the socket path for a host socket and the addresses the host reaches for a port.
 - `release(grant)`, `status`.
 - `<capability>_<command>` for every declared host command, taking the capability's bounding arguments, the command's
   free ones, `reason` and `lease`. A call goes to the daemon as `call` and blocks like `request` when it has to ask.

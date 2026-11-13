@@ -182,6 +182,25 @@ pred drop[r: Req] {
   keepDaemons and keepEnv and keepGrants and ended' = ended
 }
 
+// Allowed, a port grant switched its port on, and addr failed (live of
+// portKind, ports.go): portOff switches it off again, unless a live grant
+// holds it, or the helper fails to revoke it and g, never live, is
+// recorded closing.
+pred dropPort[r: Req, g: Grant] {
+  r in Pending and r.rcap.dtype = Fwd
+  g not in Live + Ended + Forwarded
+  g.gl = r.rl and g.gcap = r.rcap and g.gparams = r.rparams
+  settle[r, none]
+  asking' = asking - r.rl -> r.rcap and refused' = refused - r.rl -> r.rcap -> Int and blocked' = blocked
+  some samePort[g] & Live implies (Forwarded' = Forwarded and Closing' = Closing)
+  else r.rl in Failing implies (Forwarded' = Forwarded + g and Closing' = Closing + g)
+  else (Forwarded' = Forwarded - (Closing & samePort[g]) and Closing' = Closing - samePort[g])
+  Live' = Live and Ended' = Ended and Mounted' = Mounted
+  left' = left and mdir' = mdir and lockFile' = lockFile
+  keepCalls and keepConns
+  keepDaemons and keepEnv and ended' = ended
+}
+
 pred unblock[l: Launcher, c: Capability] {
   c in l.blocked
   blocked' = blocked - l -> c and asking' = asking and refused' = refused
@@ -280,7 +299,7 @@ pred instanceGone[l: Launcher] {
 pred tick {
   all g: Grant | (g in Live and g.glease = LDuration and g.left > 0)
     implies g.left' = minus[g.left, 1] else g.left' = g.left
-  Live' = Live and Ended' = Ended and Mounted' = Mounted
+  Live' = Live and Ended' = Ended and Mounted' = Mounted and Forwarded' = Forwarded and Closing' = Closing
   mdir' = mdir and lockFile' = lockFile and keepCalls and keepConns
   keepDaemons and keepGates and keepEnv and keepReqs and ended' = ended
 }

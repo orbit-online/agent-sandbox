@@ -4,6 +4,7 @@
   lib,
   pkgs,
   config,
+  osConfig,
   sl,
   launcherName,
   ...
@@ -63,6 +64,8 @@ let
       # Every launcher's state directory and runtime directory, and anything holding one
       denied = map sl.stateDirOf sl.names ++ [ "\${XDG_RUNTIME_DIR}" ];
       inherit (config.permissions) folders;
+      # The helper of the port capability, the wrapper of the NixOS module
+      netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
       commands = commandsOf true;
       sockets = lib.mapAttrsToList (
         name: sock:

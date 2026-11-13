@@ -53,7 +53,8 @@ func newServer(socket string, n *nudger) *mcp.Server {
 			"capability unless one covers the call. list shows what can be asked for. request asks the user, who " +
 			"sees what you ask for and your reason, and waits for their answer. A host socket's grant lets anything " +
 			"in the sandbox connect at its address under /run/permissions/sockets, which list names; without one " +
-			"a connection is closed at once. Ask only for what the task needs, for as short as it needs, and " +
+			"a connection is closed at once. A grant of port lets the host user reach a port you listen on, at the " +
+			"addresses the grant names. Ask only for what the task needs, for as short as it needs, and " +
 			"release a grant as soon as you're done with it. A grant belongs to the whole sandbox, not to the " +
 			"session that asked: every session can use it, and any can release it. Grants with lease standing " +
 			"come from the sandbox's configuration and are there from the start.",
@@ -70,7 +71,8 @@ func newServer(socket string, n *nudger) *mcp.Server {
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "request", Description: "Ask the user for a grant. Waits for their " +
 		"answer, up to two minutes, longer if they open the Permissions window on it. Returns the grant: for a " +
-		"host socket the address to connect to, for a folder where it's mounted. A host command capability can be asked for ahead of its calls, with the values of its " +
+		"host socket the address to connect to, for a folder where it's mounted, for a port the addresses the host " +
+		"reaches it at. A host command capability can be asked for ahead of its calls, with the values of its " +
 		"bounding arguments as params."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			params, _ := json.Marshal(in.Params)

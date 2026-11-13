@@ -27,6 +27,8 @@ type config struct {
 	Denied []string `json:"denied"`
 	// What the folders capability may grant
 	Folders []mounts.Source `json:"folders"`
+	// netns-netkit, which the port capability runs; none without it
+	NetnsNetkit string `json:"netnsNetkit,omitempty"`
 	// Host command and host socket capabilities
 	Commands []commandConfig  `json:"commands"`
 	Sockets  []socketConfig   `json:"sockets"`
@@ -63,15 +65,21 @@ func readConfig(path string) (config, error) {
 	return cfg, nil
 }
 
-// loadCapabilities makes the config's capabilities: folders, host commands and host sockets
+// loadCapabilities makes the config's capabilities: folders, ports, host commands and host sockets
 func loadCapabilities(cfg config) (map[string]*capability, error) {
 	caps := map[string]*capability{}
 	folders, err := foldersCap(cfg.Folders)
 	if err != nil {
 		return nil, err
 	}
-	if folders != nil {
-		caps[folders.id()] = folders
+	port, err := portCap(cfg)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range []*capability{folders, port} {
+		if c != nil {
+			caps[c.id()] = c
+		}
 	}
 	if err := loadCommands(cfg.Commands, caps); err != nil {
 		return nil, err

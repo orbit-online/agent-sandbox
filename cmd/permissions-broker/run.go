@@ -18,7 +18,7 @@ func newBroker(cfg config, caps map[string]*capability, sb *sandbox, ask asker) 
 	if err != nil {
 		return nil, err
 	}
-	return &broker{cfg: cfg, caps: caps, sb: sb, ask: ask, grants: map[string]*grant{}, pending: map[string]*pending{},
+	return &broker{cfg: cfg, caps: caps, sb: sb, ask: ask, grants: map[string]*grant{}, ports: map[string]*portState{}, pending: map[string]*pending{},
 		gates: map[string]*gate{}, watches: map[chan []byte]bool{}, clock: realClock{}, standing: standing}, nil
 }
 
@@ -50,7 +50,7 @@ func (b *broker) run() error {
 // listens on both sockets: served, the daemon has its standing grants
 func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	// What an earlier daemon left, if its ExecStopPost didn't get to it
-	cleanup(b.cfg, b.sb)
+	cleanup(b.cfg, b.sb, b.clock)
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("Create the grant directory: %w", err)
 	}

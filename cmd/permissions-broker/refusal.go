@@ -13,8 +13,8 @@ type refusal string
 const (
 	// No such capability, a call of one that isn't host commands, or no such command
 	refUnknown refusal = "unknown"
-	// The parameters (bounding values): not an object, a key not declared, a value against its schema; or a host
-	// command grant's parameters changed in the window
+	// The parameters (bounding values): not an object, a key not declared, a value against its schema, one of a port
+	// missing; or those of a host command or port grant changed in the window
 	refParams refusal = "params"
 	// A call's free arguments: not an object, one missing or not declared, a value against its schema
 	refArguments refusal = "arguments"

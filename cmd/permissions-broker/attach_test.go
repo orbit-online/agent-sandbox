@@ -234,7 +234,7 @@ func TestCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The daemon is gone (its grants still in its memory): cleanup knows them only from the sandbox and the host
-	cleanup(b.cfg, b.sb)
+	cleanup(b.cfg, b.sb, realClock{})
 	if _, err := os.Stat(inside); err == nil {
 		t.Error("The folder grant is still mounted")
 	}
@@ -254,7 +254,7 @@ func TestCleanup(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(b.cfg.GrantDir, "stale"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cleanup(b.cfg, nil)
+	cleanup(b.cfg, nil, realClock{})
 	if _, err := os.Lstat(filepath.Join(b.cfg.GrantDir, "stale")); err == nil {
 		t.Error("A stale mountpoint is left")
 	}

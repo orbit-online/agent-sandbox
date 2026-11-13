@@ -7,9 +7,9 @@
 module protocol_state
 open sandbox
 
-// Host sockets, host commands, folders (capability.go).
+// Host sockets, host commands, folders, ports (capability.go, ports.go).
 abstract sig DType {}
-one sig Socket, Command, Attach extends DType {}
+one sig Socket, Command, Attach, Fwd extends DType {}
 
 // Requested or granted lease. A duration is LDuration with a counter.
 // LStanding only for a standing grant from the config: no request or
@@ -49,7 +49,7 @@ sig Capability {
 // instances glob names the instances locked (an attach one would lock by
 // its parameters; none is).
 sig Exclusive in Capability {}
-fact { no Exclusive & dtype.Attach }
+fact { no Exclusive & dtype.(Attach + Fwd) }
 // What an attach parameter resolves to now: the attacker renames
 // directories under a ceiling root at will.
 sig Param { var resolves: lone Dir }
@@ -69,7 +69,14 @@ sig Grant {
   var mdir: lone Dir
 }
 // Mounted: the attach mount in M1 and everywhere it propagated.
-var sig Live, Ended, Mounted in Grant {}
+// Forwarded: the port of a port grant on in the ports map of the sandbox
+// (netns-netkit grant). Closing: an ended port grant whose revoke failed,
+// its port on until a try in the background succeeds (portState.closing,
+// ports.go).
+var sig Live, Ended, Mounted, Forwarded, Closing in Grant {}
+// Failing: the helper fails to revoke the ports of the sandbox of the
+// launcher now; free in every step.
+var sig Failing in Launcher {}
 
 // One request on request.sock: what the sandbox sends and the daemon
 // derives from it. summary: the
@@ -226,9 +233,14 @@ pred bindsTo[l: Launcher] { Running' = Running - under.(gl.l) }
 
 // cleanup (attach.go): stops the launcher's call units, removes its locks,
 // detaches its folders and removes their mountpoints and the host sockets'
-// addresses.
+// addresses, and last switches its ports off (revokePorts, ports.go), with
+// or without the sandbox found: revoke --all needs only the launcher name.
+// While the helper fails, the ports stay on and the cleanup tries again
+// (retry): it isn't done.
 pred cleanup[l: Launcher] {
   Mounted' = Mounted - gl.l
+  Forwarded' = Forwarded - gl.(l - Failing)
+  Closing' = Closing - gl.l
   Running' = Running - under.(gl.l)
   lockFile' = lockFile - (Capability -> Instance -> l)
 }
@@ -237,6 +249,10 @@ pred cleanup[l: Launcher] {
 // Frames and the grant bookkeeping every event shares.
 
 fun typed[t: DType]: set Grant { (gcap.dtype).t }
+// The port grants of the same launcher and port as one of G.
+fun samePort[G: set Grant]: set Grant {
+  { g: typed[Fwd] | some x: G & typed[Fwd] | g.gl = x.gl and g.gcap = x.gcap and g.gparams = x.gparams }
+}
 fun locksOf[G: set Grant]: Capability -> Instance -> Launcher {
   { c: Exclusive, i: Instance, l: Launcher | some g: G | g.gcap = c and i in g.gparams.(c.matches) and g.gl = l }
 }
@@ -256,7 +272,7 @@ pred keepReqs {
 pred keepCalls { Queued' = Queued and Running' = Running and under' = under }
 pred keepConns { Spliced' = Spliced and Closed' = Closed and via' = via }
 pred keepLive {
-  Live' = Live and Ended' = Ended and Mounted' = Mounted
+  Live' = Live and Ended' = Ended and Mounted' = Mounted and Forwarded' = Forwarded and Closing' = Closing
   left' = left and mdir' = mdir and lockFile' = lockFile
 }
 pred keepGrants { keepLive and keepCalls and keepConns }
@@ -272,6 +288,16 @@ pred change[N, E: set Grant] {
   Live' = Live - E + N
   Ended' = Ended + E
   Mounted' = Mounted - E + (N & typed[Attach])
+  // live and end of portKind (ports.go): a port grant that can't switch its
+  // port on isn't made, and one that does clears a closing record of its
+  // port; the port of an ended one goes off unless a live grant holds it,
+  // or the helper fails to revoke it, all tries of portOff, and it's
+  // closing. The runs of the helper for a port are serialized
+  // (portState.mu), so a grant and the revoke of another don't interleave
+  let F = (E & typed[Fwd] & gl.Failing) - samePort[Live - E + N] {
+    Forwarded' = Forwarded - E - (Closing & samePort[N]) + F + (N & typed[Fwd])
+    Closing' = Closing - samePort[N] + F
+  }
   all g: N & typed[Attach] | g.mdir' = g.gparams.resolves
   all g: Grant - (N & typed[Attach]) | g.mdir' = g.mdir
   all g: N | g.glease = LDuration implies g.left' > 0 else no g.left'
@@ -305,7 +331,7 @@ pred settle[r: Req, w: lone Principal] {
 
 pred init {
   no Up + Dirty + Gone
-  no Live + Ended + Mounted
+  no Live + Ended + Mounted + Forwarded + Closing
   no Pending + Mature + Opened + Asked + Forged
   no Queued + Running + Spliced + Closed
   no under and no via

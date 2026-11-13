@@ -6,7 +6,7 @@ import (
 
 // kind is what a capability's type adds to what every capability shares: the checks of its declaration, what makes
 // its grants live and ends them, and what the consent and the list say it covers. Each type's is in its own file:
-// commands.go, hostsockets.go and attach.go. A kind embeds baseKind and overrides what its type needs
+// commands.go, hostsockets.go, attach.go and ports.go. A kind embeds baseKind and overrides what its type needs
 type kind interface {
 	// check checks the type's own part of c's declaration, after the parameters' schemas
 	check(c *capability) error
@@ -27,7 +27,7 @@ type kind interface {
 }
 
 // The kinds by capability type
-var kinds = map[string]kind{"command": commandKind{}, "socket": socketKind{}, "attach": attachKind{}}
+var kinds = map[string]kind{"command": commandKind{}, "socket": socketKind{}, "attach": attachKind{}, "port": portKind{}}
 
 // kind is c's type's kind, nil for a type there's none of
 func (c *capability) kind() kind { return kinds[c.Type] }

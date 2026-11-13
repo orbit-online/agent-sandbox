@@ -41,8 +41,9 @@ open protocol_system
 // cleaned up and starts again. No claim about the broker; protocol-*.als
 // hold those.
 
+// Ports are granted and end in P18ports (protocol-life.als).
 run deliveries {
-  all t: DType | eventually some g: Grant | g.gcap.dtype = t and born[g]
+  all t: DType - Fwd | eventually some g: Grant | g.gcap.dtype = t and born[g]
   eventually some g: Grant | g in Ended and g.gcap.dtype = Attach
 } for 3 but 0 Process, 1 Launcher, 3 Capability, 2 Param, 2 Instance, 2 Dir,
   3 Grant, 3 Req, 1 Conn, 2 Text, 3 Int, 1..8 steps expect 1

@@ -163,6 +163,14 @@ let
               grants = [
                 { capability = "test"; }
                 { capability = "echo"; }
+                # A port of the sandbox the host reaches from the start
+                {
+                  capability = "port";
+                  params = {
+                    protocol = "tcp";
+                    port = 8081;
+                  };
+                }
               ];
             };
           };

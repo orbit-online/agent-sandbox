@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // A request waiting for the user's answer, as a card: what Claude asks for as a heading, then its values one a row
-// (fields that narrow it, or for a host command capability its bounding values, never editable: the broker refuses
-// others), what a grant covers (a line per consent phrase, then Details), the call asking, Claude's reason, and the
+// (fields that narrow it, or for a host command capability or a port its bounding values, never editable: the broker
+// refuses others), what a grant covers (a line per consent phrase, then Details), the call asking, Claude's reason, and the
 // lease, Deny and Allow at the bottom
 Card {
     id: request
@@ -12,9 +12,11 @@ Card {
     required property var view
     readonly property var cap: view.caps[modelData.capability] || {}
     readonly property bool isCommand: cap.type === "command"
+    // The bounding values of a host command, or a port: what the sandbox needs, which the user allows or denies as it is
+    readonly property bool fixed: isCommand || cap.type === "port"
     // The request's parameters, as the fields below narrow them, and its lease, kept across refreshes
     readonly property var edits: view.editsOf(modelData)
-    readonly property var paramTypes: isCommand ? ({}) : view.types[modelData.capability] || {}
+    readonly property var paramTypes: fixed ? ({}) : view.types[modelData.capability] || {}
     readonly property var resolved: view.resolvedTarget(modelData.summary)
 
     RowLayout {
@@ -33,9 +35,9 @@ Card {
         }
     }
 
-    // A host command's bounding values
+    // The bounding values of a host command, the protocol and port of a port
     Repeater {
-        model: request.isCommand ? Object.keys(request.modelData.params || {}).sort() : []
+        model: request.fixed ? Object.keys(request.modelData.params || {}).sort() : []
         delegate: FieldRow {
             required property string modelData
             name: modelData
@@ -162,7 +164,7 @@ Card {
             onClicked: {
                 const answer = { op: "answer", pending: request.modelData.id, allow: true,
                                  lease: lease.currentValue }
-                if (!request.isCommand)
+                if (!request.fixed)
                     answer.params = request.edits.params
                 request.view.send(answer)
             }

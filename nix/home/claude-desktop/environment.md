@@ -109,7 +109,12 @@ unless you ask otherwise); release it when you're done.
   physical uplink with the default route, never into the VPN. Addresses:
   an IPv4 /32 from `169.254.100.0/22` and an IPv6 /128 from a ULA /48 of
   the machine, both stable per launcher, with default routes through
-  `eth0`. The host reaches a port of yours only while the user grants it.
+  `eth0`. The host reaches a port of yours only while the user grants it:
+  listen on it (on `::` or `0.0.0.0`), then `request` the capability `port`
+  with `params` `{"protocol": "tcp", "port": 8080}` (or `udp`) and a reason.
+  The `addresses` of the grant say where the host user reaches it
+  (`<IPv4>:8080` and `[<IPv6>]:8080`); tell them. Connections the host
+  opened end with the grant.
   DNS: the servers in `/etc/resolv.conf`, from the `nameservers` option of
   the launcher; none listed means no DNS.
 - No SSH agent and no `~/.ssh`.

@@ -389,6 +389,14 @@ process whose principal is in the Sandbox domain, at any time.
   socket only while a live grant of that capability and instance covers
   it; otherwise it is closed at once, and a grant's end closes what was
   spliced under it.
+- P18. The host reaches a port of the sandbox only while a live grant of
+  the `port` capability names it or a revoke of it is pending: a grant
+  whose port the helper can't switch on isn't made, its end switches it
+  off or, when the helper fails to, leaves it closing until a try in the
+  background succeeds (so does a grant that switched its port on and then
+  failed), and the ports of a crashed daemon stay on only until its
+  cleanup runs, which tries until the helper revokes them. Once the helper
+  revokes again, every closing port goes off.
 
 ### Launch (`launch.als`)
 
@@ -571,7 +579,7 @@ check: that's the user's own mount and ceiling configuration.
 |---|---|---|
 | `sandbox.als` | 1 | shared base: signatures and kernel facts, no sandbox claims |
 | `structure.als` | 2 | S1-S14 (S7's race and S13 need two states) |
-| `protocol.als` | 3 | P1-P17 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
+| `protocol.als` | 3 | P1-P18 (P8 and P15 retired; `protocol-consent.als`, `protocol-life.als`, `protocol-calls.als`, `protocol-tree.als`, `protocol-window.als`) |
 | `launch.als` | 4 | L1-L10 (with `launch-fhs.als`, `launch-reentry.als`, `launch-host.als`), and S12 for the launch's `nsenter`s |
 | `launch-pid.als` | journal-systemd | L11: the app's pid with a systemd --user manager in P2 |
 | `journal.als` | journal-systemd | S15: the journald namespaces' entries, the helpers' against the sandbox's |
@@ -606,7 +614,11 @@ and live against the work launcher's daemon in the VM test,
 `live*_test.go`), and compare it with a reference model
 (`machine_model_test.go`) after every step. They check P1, P2, P3, P4,
 P6, P7, P9, P10, P11 (the daemon's restart), P12, P13, P14, P16 and P17,
-and S6 and S9. Model actions without a machine action: `startCall` and
+and S6 and S9. P18 has a machine of its own (`ports_machine_test.go`):
+port requests answered, releases, revokes, time passing, the helper
+failing to grant, to print the addresses, to revoke or to revoke all and
+recovering, a crash with its cleanup,
+against a fake `netns-netkit`. Model actions without a machine action: `startCall` and
 `answerCall` apart (a machine's call runs to its answer in one step, so
 a call waiting for its slot or running across a revoke is left to
 `TestCallEndedBeforeStart`, `TestNoOutputAfterEnd` and `TestCallUnit`),

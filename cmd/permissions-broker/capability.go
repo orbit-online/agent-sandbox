@@ -75,7 +75,7 @@ func (c *capability) check() error {
 	}
 	k := c.kind()
 	if k == nil {
-		return fmt.Errorf("%s has type %q, not command, socket or attach", c.Name, c.Type)
+		return fmt.Errorf("%s has type %q, not command, socket, attach or port", c.Name, c.Type)
 	}
 	return k.check(c)
 }

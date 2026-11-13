@@ -78,9 +78,11 @@ type grant struct {
 	// Host sockets: the address in the sandbox
 	Socket string `json:"socket,omitempty"`
 	// Attach: where it's mounted in the sandbox, and what, as resolved
-	Path    string    `json:"path,omitempty"`
-	Source  string    `json:"source,omitempty"`
-	Granted time.Time `json:"granted"`
+	Path   string `json:"path,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Ports: where the host reaches it, the IPv4 and IPv6 address of the sandbox with the port
+	Addresses []string  `json:"addresses,omitempty"`
+	Granted   time.Time `json:"granted"`
 	// Attach, once revoked: what still held files on it
 	Holders []mounts.Holder `json:"holders,omitempty"`
 	// Attach: its mount in M1, by which copies of it are found
@@ -154,6 +156,8 @@ type broker struct {
 	heldGrants []held
 	// The last maxCalls host command calls, for the window
 	calls []callRecord
+	// The ports this daemon switched, by protocol and port (tcp-8080)
+	ports map[string]*portState
 	// The time and the timers of leases and answers, which tests fake
 	clock clock
 	// Listening at the host sockets' addresses, by address relative to the grant directory

@@ -228,11 +228,11 @@
           workstation.wait_until_succeeds(f"grep -q {shlex.quote(want)} ${workStateDir}/home/{name}.out", timeout=60)
 
       # The standing grants from the config, there since the daemon started: the host command, a tool of the MCP
-      # server's from its start, called without asking and told its maxValidity, and the host socket
+      # server's from its start, called without asking and told its maxValidity, the host socket and a port
       make_folders()
       start_echo()
       standing = {g["capability"]: g["id"] for g in control({"op": "state"}, tries=30)["grants"] if g["lease"] == "standing"}
-      assert sorted(standing) == ["echo", "test"], f"standing grants {standing}"
+      assert sorted(standing) == ["echo", "port", "test"], f"standing grants {standing}"
       mcp_until(mcp_script({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
           "name": "test_thing", "arguments": {"reason": "the VM test"}}}), "issued-PT28800S")
       # The call ran as a unit in the launcher's slice
@@ -275,8 +275,34 @@
       opts = grants[0].split()[5].split(",")
       assert {"ro", "nodev", "nosuid"} <= set(opts), grants[0]
 
-      # A crash ends the daemon's grants: ExecStopPost detaches the folder, and its connections close with it.
-      # Started again, it has its standing grants alone, the revoked one too, under new ids
+      # Ports: the standing one reached from the host from the start; another refused until Claude asks and the user
+      # allows it, then reached at the addresses the grant names, and refused again once revoked, with the standing
+      # one's, its flows gone
+      work6 = in_work("ip -6 -o addr show dev eth0 scope global").split()[3].split("/")[0]
+      for p in (8001, 8081):
+          in_work(f"sh -c 'setsid python3 -m http.server {p} --bind :: >/dev/null 2>&1 </dev/null &'")
+          workstation.wait_until_succeeds(work_cmd(tcp_connect("::1", p)), timeout=30)
+      curl = lambda a, p: f"curl -gsf -m5 -o /dev/null http://{a}:{p}/"
+      workstation.succeed(curl(work4, 8081), curl(f"[{work6}]", 8081))
+      workstation.fail(curl(work4, 8001), curl(f"[{work6}]", 8001))
+      granted("port", "port", {"port": 8001, "protocol": "tcp"}, f"[{work6}]:8001")
+      out = workstation.succeed(f"cat {work_home}/port.out")
+      assert f"{work4}:8001" in out, f"the grant's addresses: {out}"
+      ports = {g["params"]["port"]: g for g in control({"op": "state"})["grants"] if g["capability"] == "port"}
+      assert ports[8001]["addresses"] == [f"{work4}:8001", f"[{work6}]:8001"], ports
+      workstation.succeed(curl(work4, 8001), curl(f"[{work6}]", 8001))
+      flows = lambda: json.loads(workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/1000-work/flows"))
+      assert flows(), "no flow recorded"
+      for p in (8001, 8081):
+          control({"op": "revoke", "grant": ports[p]["id"]})
+          workstation.fail(curl(work4, p), curl(f"[{work6}]", p))
+      assert not flows(), f"flows left: {flows()}"
+      # Granted again, for the crash below to end
+      granted("port2", "port", {"port": 8001, "protocol": "tcp"}, f"[{work6}]:8001")
+      workstation.succeed(curl(work4, 8001))
+
+      # A crash ends the daemon's grants: ExecStopPost detaches the folder, revokes the ports, and its connections
+      # close with it. Started again, it has its standing grants alone, the revoked ones too, under new ids
       folder = grants[0].split()[4]
       hold("crashed")
       stop_post = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-work-permissions")
@@ -287,12 +313,14 @@
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
       state = control({"op": "state"}, tries=30)
       again = {g["capability"]: g["id"] for g in state["grants"] if g["lease"] == "standing"}
-      assert sorted(again) == ["echo", "test"] and len(state["grants"]) == 2, f"grants after a restart: {state}"
+      assert sorted(again) == ["echo", "port", "test"] and len(state["grants"]) == 3, f"grants after a restart: {state}"
       assert not set(again.values()) & set(standing.values()), f"the same ids after a restart: {again}"
       # The window's overview of the configuration
       assert state["overview"]["network"] and any(b["path"] == "/home/alice" for b in state["overview"]["binds"]), state["overview"]
       out = in_work(f"sh -c {shlex.quote('echo ping | timeout 10 ' + connect)}")
       assert out.strip() == "ping", f"the standing grant back after a restart: {out!r}"
+      workstation.succeed(curl(work4, 8081))
+      workstation.fail(curl(work4, 8001))
 
       # No system bus inside: D-Bus grants and the system-bus proxy aren't built (docs/permissions.md, D-Bus)
       status, _ = workstation.execute(work_cmd("test -e /run/dbus/system_bus_socket"))

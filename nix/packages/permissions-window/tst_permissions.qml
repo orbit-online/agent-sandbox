@@ -404,6 +404,36 @@ TestCase {
         mock.state = before
     }
 
+    // A port request: its protocol and port shown, never editable, and Allow sends none. Its grant names the port and
+    // where the host reaches it
+    function test_port() {
+        const before = mock.state
+        const st = JSON.parse(before)
+        st.capabilities.push({ id: "port", type: "port", description: "a port of the sandbox, reachable from the host",
+                               params: { protocol: { type: "string", enum: ["tcp", "udp"] }, port: { type: "integer" } } })
+        st.pending = [{ id: "p5", capability: "port", params: { port: 8080, protocol: "tcp" },
+                        summary: "TCP port 8080 of the sandbox, reachable from the host", reason: "a dev server",
+                        lease: "PT1H" }]
+        st.grants.push({ id: "g5", capability: "port", params: { port: 3000, protocol: "udp" }, lease: "PT1H",
+                         summary: "UDP port 3000 of the sandbox, reachable from the host", reason: "dns",
+                         addresses: ["169.254.100.7:3000", "[fd12::7]:3000"] })
+        mock.state = JSON.stringify(st)
+        tryVerify(() => !view.settling, 3000)
+        compare(findChild(view, "summary-p5").text, "Claude asks for a port of the sandbox, reachable from the host")
+        compare(findChild(view, "bound-p5-port").text, "8080")
+        compare(findChild(view, "bound-p5-protocol").text, "tcp")
+        const field = findChild(view, "field-port")
+        verify(!field || !field.visible, "an editable port")
+        mouseClick(findChild(view, "allow"))
+        compare(sent().pending, "p5")
+        verify(sent().params === undefined, "sent parameters")
+        show("granted")
+        compare(findChild(view, "grant-g5").text, "UDP port 3000 of the sandbox, reachable from the host")
+        click("toggle-g5")
+        compare(findChild(view, "param-g5-addresses").text, "169.254.100.7:3000\n[fd12::7]:3000")
+        mock.state = before
+    }
+
     // A row replaced in place: the sandbox times another request for the moment its first ends, [p1] turns [p2] and
     // [p0, p1] turns [p0, p2], and nothing moves. A click right then answers neither
     function test_rows_replaced() {

@@ -141,7 +141,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   addresses, from a hash of uid and launcher name, past those on the host and the registered ones, and the name of the
   primary, `sbx-<uid in base 36>-<hash of the launcher name>`), `pair.go` (the pair, L3, both ends policy drop, the
   peer `eth0` made in the sandbox netns; host routes to the addresses and forwarding on the primary) and `bpf.go`
-  (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants). `netkit.bpf.c` (dual MIT/GPL,
+  (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants: `grant`, `revoke`, `revoke --all`
+  for the cleanup of the broker, and `addr`, the addresses of the running sandbox, which port grants report). `netkit.bpf.c` (dual MIT/GPL,
   built by the package with clang): `peer` (`BPF_NETKIT_PEER`: multicast and broadcast dropped, any source but the
   sandbox addresses dropped, `bpf_fib_lookup` with `tot_len` 0; local delivery only for a recorded flow, out with
   `bpf_redirect_neigh` through an einat uplink, and what the host routes through any other device (a full-tunnel VPN,
@@ -203,7 +204,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   window, "The agent" without it, the module's "Claude"), `run.go` (serving
   until the sandbox ends), `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
-  logind), `standing.go` (the standing grants from the config), `views.go` (and
+  logind), `standing.go` (the standing grants from the config), `ports.go` (the port capability, through
+  `netns-netkit`), `views.go` (and
   opening the window), `overview.go` (the config's overview, with what the sandbox's mount table lacks), `types.go`, `clock.go` (the time and timers of leases and
   answers, which tests fake), `capability.go` (a capability, its parameters and
   summary), `kind.go` (what a capability's type adds, which the core calls into:
@@ -376,7 +378,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
-  broker, of a host command or host socket it has, none of folders), the assertions on host commands (names, described
+  broker, of a host command or host socket it has or a port with its protocol and port, none of folders; no host
+  command or socket named `port`), the assertions on host commands (names, described
   arguments, results, and the consent's title and each command's phrase: present, one line, at most 80 characters,
   counted in UTF-8 characters: Danish of 46 and 80, CJK of 80 taken, of 81 refused),
   the assertions on host sockets (a
@@ -416,7 +419,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-netkit gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, memo's config in the FHS env with the store
   right after the embedded ones, the store in the closure), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants, `netnsNetkit` and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, no `claude://` handler; both launchers' actions running the launcher by name, no store path). For both launchers, their app
   ID in the launcher config and `/.flatpak-info`, which names their only `.desktop`
@@ -549,7 +552,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   in arrival order, a click on the notification's body (the `default`
   action, first: a deny, on cosmic-notifications the window's options and a
   deny without a window), and unit
-  names per launcher. Attach grants against a stand-in
+  names per launcher. Ports (`ports_test.go`, against a fake `netns-netkit`): a grant running `grant` and `addr` with
+  the name of the launcher and carrying the addresses, its release, lease, revoke and the end of the daemon running
+  `revoke`, `grant` or `addr` of the helper failing leaving no grant and no port, a port, protocol or other key refused
+  before asking, an answer from the window for another port refused, a standing port at start and `revoke --all` in the
+  cleanup, with the sandbox found or not, and tried again while it fails until the sandbox ends, a grant of a port while the end of another revokes it (the revoke first, the
+  port on)
+  (not without the sandbox); and a stateful property test (`ports_machine_test.go`) of requests answered, releases,
+  revokes, time passing, the helper failing to grant, to print the addresses, to revoke or to revoke all and
+  recovering, and a crash with its cleanup (trying again, the ports on, while the helper fails to revoke all): after
+  every step the live grants have their ports on and a port on without one is closing in the model and the broker,
+  and once the helper revokes again time passing closes every closing port (P18). Attach grants against a stand-in
   sandbox (a child in a user and mount namespace of its own with the grant
   directory bound in and shared): the source ceiling, the cloned tree
   received close-on-exec, a folder mounted read-only where the app sees it and
@@ -638,7 +651,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   command request headed "Claude wants to" and the consent's title, its bounding values a row each and never
   editable (escaped runes escaped, in Claude's reason too), its heading on the lease picked, its consent lines,
   Details (the scope) and the call asking, its arguments a row each, its lease still editable (once
-  and Claude's proposal offered, no session lease) and Allow sending no parameters, and the text read-only and selectable.
+  and Claude's proposal offered, no session lease) and Allow sending no parameters, the protocol and port of a port request
+  never editable and the line and addresses of its grant, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can. `splash/splash_test.go`: the splash loads without QML warnings through a start and a
   failure without logos, the button's Abort once it shows writing the command and turning to aborting, then Close after a failure closing the window, an `activate` line putting its token in the
@@ -762,10 +776,13 @@ modules and a user alice (the `home-manager` input exists only for it).
   permissions broker: the daemon's unit and its start limit, `/run/permissions` read-only, shared
   in the outer mount namespace and a slave where the app runs, `share` refused
   from there, the standing grants from the config: the host command, a tool of
-  the MCP server's from its start, called without asking, and the host socket: an echo server of alice's
+  the MCP server's from its start, called without asking, a port reached from the host, and the host socket: an echo
+  server of alice's
   reached at `/run/permissions/sockets/echo` (the test binary's `live-connect` as the client), a held connection
   closed by the revoke, one without a grant closed at once; grants through the MCP
-  server that the test answers on `control.sock`: the host socket again, a folder
+  server that the test answers on `control.sock`: a port refused to the host until granted, then reached at the
+  IPv4 and IPv6 addresses of the grant, refused again once revoked with the standing one, the flows gone, and not back
+  after a crash of the daemon; the host socket again, a folder
   mounted read-only, nodev and nosuid where the app runs and one with a mount
   beneath it refused; a SIGKILL of the daemon closing its connections and ending its
   folder grant, the standing grants alone back under new ids after its restart, the overview in its state, no

@@ -24,8 +24,9 @@ const usage = `netns-netkit - Connect a user-owned network namespace to the netw
 Usage:
   netns-netkit up [--name=<name>] <pid>
   netns-netkit down [--name=<name>]
+  netns-netkit addr [--name=<name>]
   netns-netkit grant [--name=<name>] (tcp|udp) <port>
-  netns-netkit revoke [--name=<name>] (tcp|udp) <port>
+  netns-netkit revoke [--name=<name>] (--all | (tcp|udp) <port>)
 
 up creates eth0 in the network namespace of <pid>, the peer of a netkit pair
 whose primary stays in the host netns, and prints the addresses of the sandbox
@@ -38,12 +39,14 @@ topmost one below the caller's the caller owns: the caller then holds every
 capability over it by owning that user namespace, cap_net_admin included.
 What an earlier sandbox of <name> left goes first.
 
-down ends what up set up for <name>, once the sandbox ended. grant lets the
-host reach a port of the sandbox over TCP or UDP, revoke ends that and the
-connections made under it.
+down ends what up set up for <name>, once the sandbox ended. addr prints the
+addresses of the running sandbox of <name>, as up did. grant lets the host
+reach a port of the sandbox over TCP or UDP, revoke ends that and the
+connections made under it, or with --all every grant and connection.
 
 Options:
   --name=<name>  The name of the launcher, empty for the default launcher
+  --all          Every port granted
 `
 
 // What a launcher name may be (the assertion of the module), so it makes a pin name
@@ -68,8 +71,9 @@ func run(opts docopt.Opts) error {
 		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 46 characters", name)
 	}
 	grants := opts["grant"] == true || opts["revoke"] == true
+	all := opts["--all"] == true
 	var port uint64
-	if grants {
+	if grants && !all {
 		var err error
 		port, err = strconv.ParseUint(opts["<port>"].(string), 10, 16)
 		if err != nil || port == 0 {
@@ -81,6 +85,12 @@ func run(opts docopt.Opts) error {
 	}
 	uid := unix.Getuid()
 	dir := uplink.SandboxDir(uid, name)
+	if opts["addr"] == true {
+		return printAddr(dir)
+	}
+	if all {
+		return revokeAll(dir)
+	}
 	if grants {
 		proto := "udp"
 		if opts["tcp"] == true {

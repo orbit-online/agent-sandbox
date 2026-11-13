@@ -153,9 +153,10 @@ func (b *broker) detachGrant(g *grant) {
 
 // cleanup ends the grants a daemon leaves when it stops, a crash included (the unit's ExecStopPost runs it, and a
 // daemon starting runs it too): its call units stopped, its locks removed, its folder grants detached in the sandbox
-// if it got as far as sharing the grant directory, their mountpoints removed, and its host sockets. sb is nil when the
-// sandbox is gone, and with it their mounts
-func cleanup(cfg config, sb *sandbox) {
+// if it got as far as sharing the grant directory, their mountpoints removed, its host sockets, and last its ports,
+// which it tries until they're off. sb is nil when the sandbox wasn't found: its mounts went with it, and its ports
+// are revoked all the same
+func cleanup(cfg config, sb *sandbox, clk clock) {
 	stopAllCalls(cfg.Launcher)
 	removeLocks(cfg.Launcher)
 	// Removing the mountpoints below ends their mounts in every namespace as well; this is in case that fails
@@ -171,6 +172,7 @@ func cleanup(cfg config, sb *sandbox) {
 			removeMountpoint(cfg.GrantDir, e.Name())
 		}
 	}
+	revokePorts(cfg, sb, clk)
 }
 
 // attachKind is the kind of folder capabilities: a grant mounts the folder in the sandbox's grant directory, its end

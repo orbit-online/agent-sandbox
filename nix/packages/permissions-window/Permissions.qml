@@ -214,10 +214,11 @@ Item {
             return root.agent + " wants to " + (cap.title || req.summary)
         return root.agent + " asks for " + (cap.description || req.summary)
     }
-    // A grant's line: the same words, as a sentence of its own
+    // A grant's line: the same words, as a sentence of its own; for a port its summary, which names it
     function grantTitle(g) {
         const cap = caps[g.capability] || {}
-        const t = cap.type === "command" ? cap.title || g.summary : cap.description || g.summary
+        const t = cap.type === "command" ? cap.title || g.summary
+                                         : cap.type === "port" ? g.summary : cap.description || g.summary
         return t.charAt(0).toUpperCase() + t.slice(1)
     }
     // What the broker found an attach request's target to be, from the end of its summary (describeAttach: the
@@ -232,7 +233,7 @@ Item {
             return null
         }
     }
-    // A grant's values a row each: its parameters by name, where it's mounted, its socket
+    // A grant's values a row each: its parameters by name, where it's mounted, its socket, where the host reaches a port
     function grantFields(g) {
         const rows = Object.keys(g.params || {}).sort().map(k => {
             const d = ((caps[g.capability] || {}).params || {})[k] || {}
@@ -246,6 +247,8 @@ Item {
             rows.push({ key: "path", name: "mounted at", value: g.path })
         if (g.socket)
             rows.push({ key: "socket", name: "socket", value: g.socket })
+        if (g.addresses)
+            rows.push({ key: "addresses", name: "on the host at", value: g.addresses.join("\n") })
         return rows
     }
     // A call's free arguments, one a line after the call's own: the broker has opaque ones by digest

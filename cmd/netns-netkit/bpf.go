@@ -197,3 +197,53 @@ func clearFlows(dir string, proto uint8, port uint16) error {
 	}
 	return nil
 }
+
+// printAddr prints the addresses of the sandbox of dir, as up did
+func printAddr(dir string) error {
+	m, err := ebpf.LoadPinnedMap(filepath.Join(dir, uplink.SandboxMap), &ebpf.LoadPinOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("Open %s (does the sandbox run?): %w", dir, err)
+	}
+	defer m.Close()
+	var sb uplink.Sandbox
+	if err := m.Lookup(uint32(0), &sb); err != nil {
+		return fmt.Errorf("Read %s: %w", dir, err)
+	}
+	fmt.Println(netip.AddrFrom16(sb.V4).Unmap(), netip.AddrFrom16(sb.V6))
+	return nil
+}
+
+// revokeAll ends every port grant of the sandbox of dir and the flows recorded on them
+func revokeAll(dir string) error {
+	for _, name := range []string{"ports", "flows"} {
+		m, err := ebpf.LoadPinnedMap(filepath.Join(dir, name), nil)
+		if err != nil {
+			return fmt.Errorf("Open the %s of %s (does the sandbox run?): %w", name, dir, err)
+		}
+		err = clearMap(m)
+		m.Close()
+		if err != nil {
+			return fmt.Errorf("Clear the %s of %s: %w", name, dir, err)
+		}
+	}
+	return nil
+}
+
+// clearMap deletes every key of m, the ports before the flows, so none is recorded again meanwhile
+func clearMap(m *ebpf.Map) error {
+	var keys [][]byte
+	k, v := make([]byte, m.KeySize()), make([]byte, m.ValueSize())
+	it := m.Iterate()
+	for it.Next(&k, &v) {
+		keys = append(keys, append([]byte(nil), k...))
+	}
+	if err := it.Err(); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := m.Delete(k); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return err
+		}
+	}
+	return nil
+}

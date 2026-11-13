@@ -24,6 +24,23 @@ in
           assertion = false;
           message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
         }
+      else if g.capability == "port" then
+        {
+          # As the schema of the port capability in the broker (ports.go)
+          assertion =
+            lib.attrNames g.params == [
+              "port"
+              "protocol"
+            ]
+            && lib.elem g.params.protocol [
+              "tcp"
+              "udp"
+            ]
+            && lib.isInt g.params.port
+            && g.params.port >= 1
+            && g.params.port <= 65535;
+          message = "${opt}: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)";
+        }
       else
         {
           assertion =
@@ -31,6 +48,13 @@ in
           message = "${opt}: no capability ${g.capability} in permissions.commands or permissions.sockets";
         }
     ) config.permissions.grants
+    # The capability of that name built into the broker
+    ++ [
+      {
+        assertion = !(config.permissions.commands ? port || config.permissions.sockets ? port);
+        message = "${ids.opt}permissions: port is a capability built into the broker, not a host command or host socket name";
+      }
+    ]
     # Host sockets the broker would refuse, caught at eval: a name of its own that makes a file name, a path or
     # one instances glob, and nothing that would hand the sandbox the host user's standing (a D-Bus bus,
     # $XDG_RUNTIME_DIR as a whole, the launchers' own sockets)

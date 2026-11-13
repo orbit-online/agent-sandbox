@@ -147,7 +147,7 @@ in
             options = {
               capability = mkOption {
                 type = types.str;
-                description = "A capability of `permissions.commands` or `permissions.sockets`.";
+                description = "A capability of `permissions.commands` or `permissions.sockets`, or `port`.";
               };
               params = mkOption {
                 type = (pkgs.formats.json { }).type;
@@ -158,12 +158,16 @@ in
           }
         );
         default = [ ];
-        example = lib.literalExpression ''[ { capability = "windows-vm"; params.vm = "win11"; } ]'';
+        example = lib.literalExpression ''[
+          { capability = "windows-vm"; params.vm = "win11"; }
+          { capability = "port"; params = { protocol = "tcp"; port = 3000; }; }
+        ]'';
         description = ''
           Standing grants: the broker grants them at every start, without asking, still within the capability's
           instances (one its capability doesn't take stops the broker). Revoked or released, one stays ended until the
-          broker starts again. Host command calls under it run without asking, told their `maxValidity`. No folders:
-          what should always be there is a bind (`binds`).
+          broker starts again. Host command calls under it run without asking, told their `maxValidity`. A `port`
+          grant (`protocol` `tcp` or `udp`, `port`) lets the host reach that port of the sandbox. No folders: what
+          should always be there is a bind (`binds`).
         '';
       };
       folders = mkOption {

@@ -21,6 +21,8 @@ func TestRunRefuses(t *testing.T) {
 		{[]string{"grant", "tcp", "0"}, "is not 1 to 65535"},
 		{[]string{"grant", "udp", "65536"}, "is not 1 to 65535"},
 		{[]string{"revoke", "tcp", "http"}, "is not 1 to 65535"},
+		{[]string{"revoke", "--all", "--name=Work"}, "is not [a-z][a-z0-9-]*"},
+		{[]string{"addr", "--name=a/b"}, "is not [a-z][a-z0-9-]*"},
 	} {
 		opts, err := docopt.ParseArgs(usage, tc.args, "")
 		if err != nil {
