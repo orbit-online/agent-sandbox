@@ -388,7 +388,7 @@ let
         };
       };
     # agent-sandbox.hooks: their config and the wrapper with the union of their capabilities, setgid sandbox-hooks, only
-    # with hooks and a sandbox user; store paths and capabilities that exist alone
+    # with hooks and a sandbox user, the group with a sandbox user alone; store paths and capabilities that exist alone
     testHooks =
       let
         hook = lib.getExe pkgs.hello;
@@ -416,6 +416,9 @@ let
         expr = {
           none = system.config.environment.etc ? "agent-sandbox/hooks.json" || system.config.security.wrappers ? sandbox-hooks;
           noUser = (with' (nixos { }) { stop = [ { path = hook; } ]; }).security.wrappers ? sandbox-hooks;
+          # The group with the sandbox, hooks or not, for files a hook reads
+          group = system.config.users.groups ? sandbox-hooks;
+          noUserGroup = (nixos { }).config.users.groups ? sandbox-hooks;
           config = builtins.fromJSON (builtins.unsafeDiscardStringContext c.environment.etc."agent-sandbox/hooks.json".text);
           wrapper = {
             inherit (c.security.wrappers.sandbox-hooks)
@@ -440,6 +443,8 @@ let
         expected = {
           none = false;
           noUser = false;
+          group = true;
+          noUserGroup = false;
           config = {
             start = [
               {

@@ -77,7 +77,11 @@ let
         Hooks the launcher of every sandbox of every user runs ${when}, in order, as `<hook> ${args}` (the launcher
         name empty for the default one), with the capabilities each declares, the user's uid and group
         `sandbox-hooks` as its gids, an empty environment and `/`, killed after 30 seconds. A hook that fails is
-        logged${lib.optionalString (args != "stop <uid> <launcher name>") ", and the sandbox starts without what it does after a warning on the splash"}.
+        logged${
+          lib.optionalString (
+            args != "stop <uid> <launcher name>"
+          ) ", and the sandbox starts without what it does after a warning on the splash"
+        }.
       '';
     };
   all = cfg.start ++ cfg.stop;
@@ -85,28 +89,35 @@ let
 in
 {
   options.agent-sandbox.hooks = {
-    start =
-      phase
-        "once the network namespace of the sandbox is set up (its netkit pair and addresses), before the app starts and before the launcher's network.hooks, with that network namespace on fd 3 (`ip link set <dev> netns /proc/self/fd/3`)"
-        "start <uid> <launcher name>";
+    start = phase "once the network namespace of the sandbox is set up (its netkit pair and addresses), before the app starts and before the launcher's network.hooks, with that network namespace on fd 3 (`ip link set <dev> netns /proc/self/fd/3`)" "start <uid> <launcher name>";
     stop = phase "after the sandbox ended" "stop <uid> <launcher name>";
   };
 
-  # Only with a sandbox user, as netns-netkit
-  config = lib.mkIf (all != [ ] && config.agent-sandbox.network.enable) {
-    # Read by sandbox-hooks, which checks that root owns it and every hook in it
-    environment.etc."agent-sandbox/hooks.json".text = builtins.toJSON (
-      lib.mapAttrs (_: map (h: { inherit (h) path capabilities; })) { inherit (cfg) start stop; }
-    );
-    users.groups.sandbox-hooks = { };
-    # As netns-netkit: the wrapper module keeps setgid to wrappers without capabilities, so it goes in permissions, and
-    # the helper refuses callers outside group users itself. Without a capability, none in the set
-    security.wrappers.sandbox-hooks = {
-      source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox-hooks;
-      capabilities = lib.optionalString (caps != [ ]) "${lib.concatMapStringsSep "," lib.toLower caps}+ep";
-      owner = "root";
-      group = "sandbox-hooks";
-      permissions = "u+rx,g+xs,o+x";
-    };
-  };
+  config = lib.mkMerge [
+    # With a sandbox user, hooks or not: consumers own files by it (keys a hook reads) before any hook is configured
+    (lib.mkIf config.agent-sandbox.network.enable { users.groups.sandbox-hooks = { }; })
+    # Only with hooks and a sandbox user, as netns-netkit
+    (lib.mkIf (all != [ ] && config.agent-sandbox.network.enable) {
+      # Read by sandbox-hooks, which checks that root owns it and every hook in it
+      environment.etc."agent-sandbox/hooks.json".text = builtins.toJSON (
+        lib.mapAttrs (
+          _:
+          map (h: {
+            inherit (h) path capabilities;
+          })
+        ) { inherit (cfg) start stop; }
+      );
+      # As netns-netkit: the wrapper module keeps setgid to wrappers without capabilities, so it goes in permissions, and
+      # the helper refuses callers outside group users itself. Without a capability, none in the set
+      security.wrappers.sandbox-hooks = {
+        source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox-hooks;
+        capabilities =
+          lib.optionalString (caps != [ ])
+            "${lib.concatMapStringsSep "," lib.toLower caps}+ep";
+        owner = "root";
+        group = "sandbox-hooks";
+        permissions = "u+rx,g+xs,o+x";
+      };
+    })
+  ];
 }

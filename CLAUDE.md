@@ -73,7 +73,9 @@ single-user Nix store, and an environment doc for the Claude running inside.
   subgid range.
 - `nix/nixos/hooks.nix`: `agent-sandbox.hooks.start` and `.stop`, root-owned hooks (store paths, each with the
   capabilities it declares) that every launcher runs at those phases through `sandbox-hooks`; `claude-desktop.nix`
-  imports it. Only with hooks and a sandbox user: `/etc/agent-sandbox/hooks.json` and the `sandbox-hooks` wrapper,
+  imports it. The group `sandbox-hooks` comes with a sandbox user, hooks or not, so consumers can give it files a hook
+  will read before they configure one. Only with hooks and a sandbox user: `/etc/agent-sandbox/hooks.json` and the
+  `sandbox-hooks` wrapper,
   whose capabilities are the union of what the hooks declare (`+ep`, none without), setgid `sandbox-hooks` through
   `permissions` as netns-netkit is.
 - `nix/nixos/network.nix`: the host side of the sandbox network on netkit, which `claude-desktop.nix` imports and
@@ -516,7 +518,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing, a rule it refuses
   and its caps: 64 names, 64 rules a list, 64 KiB of config, each at and past the cap),
   `agent-sandbox.hooks` (`testHooks`: the config and the wrapper with the union of capabilities, setgid
-  `sandbox-hooks`, none without hooks or without a sandbox user, a path outside the store and an unknown capability
+  `sandbox-hooks`, none without hooks or without a sandbox user, the group with a sandbox user alone, a path outside the store and an unknown capability
   refused), the launchers' `--hooks` only with start hooks, `hooks` in their config with any, and a launcher's
   `network.hooks` in its `--net` alone (`testLauncherHooks`),
   and the assertion on binds that reach a launcher's
