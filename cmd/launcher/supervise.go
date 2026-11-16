@@ -36,6 +36,8 @@ func supervise(cfg *config, vars, args []string) error {
 	began := time.Now()
 	sp := showSplash(cfg)
 	shown.Store(sp)
+	warns := listenWarnings(cfg, sp)
+	defer warns.close()
 	p := newProgress(sp, began, history(cfg))
 	onEntry := func(e entry) {
 		if m := marker(cfg, e); m != "" {

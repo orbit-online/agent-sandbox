@@ -47,6 +47,7 @@
       };
       packages = forAllSystems (system: {
         netns-netkit = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-netkit { };
+        sandbox-hooks = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/sandbox-hooks { };
         subid-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/subid-broker { };
         dbus-proxy = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/dbus-proxy { };
         permissions-broker = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/permissions-broker { };

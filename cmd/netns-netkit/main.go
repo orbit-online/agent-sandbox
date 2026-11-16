@@ -7,15 +7,13 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"os/user"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/docopt/docopt-go"
+	"github.com/orbit-online/agent-sandbox/internal/caller"
 	"github.com/orbit-online/agent-sandbox/internal/journal"
 	"github.com/orbit-online/agent-sandbox/internal/uplink"
 	"github.com/vishvananda/netlink"
@@ -62,9 +60,6 @@ Options:
   --mdns         Copy mDNS queries out and responses in
 `
 
-// What a launcher name may be (the assertion of the module), so it makes a pin name
-var launcherName = regexp.MustCompile(`^([a-z][a-z0-9-]{0,45})?$`)
-
 func main() {
 	journal.Setup()
 	opts, err := docopt.ParseDoc(usage)
@@ -80,7 +75,7 @@ func main() {
 
 func run(opts docopt.Opts) error {
 	name, _ := opts.String("--name")
-	if !launcherName.MatchString(name) {
+	if !caller.LauncherName.MatchString(name) {
 		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 46 characters", name)
 	}
 	grants := opts["grant"] == true || opts["revoke"] == true
@@ -93,7 +88,7 @@ func run(opts docopt.Opts) error {
 			return fmt.Errorf("Port %q is not 1 to 65535", opts["<port>"])
 		}
 	}
-	if err := humanCaller(); err != nil {
+	if err := caller.Human(); err != nil {
 		return err
 	}
 	if opts["uplinks"] == true {
@@ -134,27 +129,8 @@ func run(opts docopt.Opts) error {
 	return up(reg, uid, pid, name, primary, dir, opts["--mdns"] == true)
 }
 
-// humanCaller refuses callers outside group users: the wrapper is setgid sandbox-uplink, which takes the group of the
-// file, so the group can't limit who runs it. Whoever runs it gives their own namespaces a network outside the host
-// firewall
-func humanCaller() error {
-	g, err := user.LookupGroup("users")
-	if err != nil {
-		return fmt.Errorf("Look up group users: %w", err)
-	}
-	gid, _ := strconv.Atoi(g.Gid)
-	groups, err := unix.Getgroups()
-	if err != nil {
-		return fmt.Errorf("Read the groups of the caller: %w", err)
-	}
-	if unix.Getgid() != gid && !slices.Contains(groups, gid) {
-		return errors.New("Only members of group users may run netns-netkit")
-	}
-	return nil
-}
-
 func up(reg *ebpf.Map, uid, pid int, name, primary, dir string, mdns bool) (err error) {
-	netnsFd, err := openNetns(pid, uid, "/proc/self/ns/user")
+	netnsFd, err := caller.OpenNetns(pid, uid, "/proc/self/ns/user")
 	if err != nil {
 		return err
 	}

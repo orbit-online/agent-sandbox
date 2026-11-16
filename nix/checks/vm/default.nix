@@ -73,6 +73,37 @@ let
   mdnsQuery = pkgs.writers.writePython3 "mdns-query" { flakeIgnore = [ "E501" ]; } (
     builtins.readFile ./mdns-query.py
   );
+  # The hooks (agent-sandbox.hooks of the NixOS module, network.hooks of the launcher). meshUp, a start hook with
+  # CAP_NET_ADMIN, moves a dummy mesh-<uid> into the sandbox after writing down what it got (no PATH: absolute paths),
+  # held while /tmp/hook-hold exists; it fails for the launcher work and leaves offline alone. noCaps, a start hook
+  # without capabilities, and stopHook write down what they got. meshAddr, the default launcher's network hook,
+  # addresses and routes mesh-1000
+  hookRecord = ''
+    {
+      echo "args=$*"
+      ${pkgs.coreutils}/bin/env | ${pkgs.gnugrep}/bin/grep -v '^\(PWD\|SHLVL\|_\)=' | ${pkgs.gnused}/bin/sed 's/^/env=/' || :
+      echo "pwd=$(pwd)"
+      ${pkgs.gnugrep}/bin/grep -E '^(Cap(Inh|Prm|Eff|Amb)|Gid):' /proc/self/status
+    }'';
+  meshUp = pkgs.writeShellScript "mesh-up" ''
+    ${hookRecord} >"/tmp/hook-$1-$2-$3"
+    if [ -e /tmp/hook-hold ]; then
+      echo $$ >/tmp/hook-pid
+      while [ -e /tmp/hook-hold ]; do ${pkgs.coreutils}/bin/sleep 0.2; done
+    fi
+    [ "$3" != work ] || exit 1
+    [ "$3" != offline ] || exit 0
+    ${pkgs.iproute2}/bin/ip link add "mesh-$2" type dummy
+    ${pkgs.iproute2}/bin/ip link set "mesh-$2" netns /proc/self/fd/3
+  '';
+  noCaps = pkgs.writeShellScript "no-caps" ''${hookRecord} >"/tmp/hook-nocaps-$2-$3"'';
+  stopHook = pkgs.writeShellScript "stop-hook" ''${hookRecord} >"/tmp/hook-$1-$2-$3"'';
+  meshAddr = pkgs.writeShellScript "mesh-addr" ''
+    ip=${pkgs.iproute2}/bin/ip
+    $ip addr add 10.98.0.1/32 dev mesh-1000
+    $ip link set mesh-1000 up
+    $ip route add 10.98.0.0/16 dev mesh-1000
+  '';
   # The router's addresses off the LAN, standing in for the internet
   internet4 = "203.0.113.1";
   internet6 = "2001:db8:ffff::1";
@@ -137,6 +168,7 @@ let
           enable = true;
           package = stub;
           tray = true;
+          network.hooks = [ meshAddr ];
           # Missing until the launch subtest creates it
           binds."/srv/project" = { };
           # Under /etc, which the FHS env doesn't take from nixpak's binds, and in the sandbox's home. Each references what
@@ -234,6 +266,16 @@ let
         slice-gone.configuration.home-manager.users.alice.systemd.user.slices = lib.mkForce { };
       };
       users.users.bob.isNormalUser = true;
+      agent-sandbox.hooks = {
+        start = [
+          {
+            path = meshUp;
+            capabilities = [ "CAP_NET_ADMIN" ];
+          }
+          { path = noCaps; }
+        ];
+        stop = [ { path = stopHook; } ];
+      };
       home-manager.useUserPackages = true;
       environment.systemPackages = [
         pkgs.libcap

@@ -25,7 +25,9 @@ host and log (why the start failed, the launcher's warnings and the app's
 last output, each shown apart); activate, an
 xdg-activation token, brings the window to the front. Closes when stdin
 does, unless it shows an error: then when the user closes it. After 10 seconds
-it offers Abort, which prints "abort" on stdout for the launcher.
+it offers Abort, which prints "abort" on stdout for the launcher. A warning
+(the start goes on without something) shows with Continue at once, which
+prints "continue"; the launcher ends it with an empty warning.
 
 Options:
   --app-id=<id>        The window's Wayland app ID: the sandbox's, so it shows
@@ -80,10 +82,10 @@ func main() {
 func load(opts docopt.Opts, path string, warn func(string)) (*qml.QQmlApplicationEngine, *qml.QQmlPropertyMap) {
 	splash := qml.NewQQmlPropertyMap()
 	publish(splash, newState())
-	// The QML writes command; abort goes to the launcher as a line on stdout
+	// The QML writes command; abort and continue go to the launcher as a line on stdout
 	splash.OnValueChanged(func(key string, value *qt.QVariant) {
-		if key == "command" && value.ToString() == "abort" {
-			fmt.Println("abort")
+		if v := value.ToString(); key == "command" && (v == "abort" || v == "continue") {
+			emit(v)
 		}
 	})
 	engine := qml.NewQQmlApplicationEngine()
@@ -123,11 +125,15 @@ func take(m *qml.QQmlPropertyMap, st *state, line []byte) {
 	publish(m, st)
 }
 
+// emit tells the launcher what the user chose; the tests record it
+var emit = func(command string) { fmt.Println(command) }
+
 func publish(m *qml.QQmlPropertyMap, s *state) {
 	m.Insert("dark", qt.NewQVariant8(s.Dark))
 	m.Insert("text", qt.NewQVariant14(s.Text))
 	m.Insert("progress", qt.NewQVariant9(s.Progress))
 	m.Insert("error", qt.NewQVariant14(s.Error))
+	m.Insert("warning", qt.NewQVariant14(s.Warning))
 	m.Insert("host", qt.NewQVariant14(s.Host))
 	m.Insert("log", qt.NewQVariant14(s.Log))
 	m.Insert("activations", qt.NewQVariant4(s.Activations))

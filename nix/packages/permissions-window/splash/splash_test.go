@@ -44,12 +44,36 @@ func qmlCheck() []string {
 		}
 		return nil
 	}
-	root.SetProperty("canAbort", qt.NewQVariant8(true))
-	qt.QCoreApplication_ProcessEvents()
 	button := find(root, "action")
 	if button == nil {
 		return append(warnings, "No button")
 	}
+	// A warning: Continue at once, before Abort would show, twice in a row; the step back once the launcher ends it
+	var emitted []string
+	emit = func(c string) { emitted = append(emitted, c) }
+	st := newState()
+	for i := 0; i < 2; i++ {
+		take(splash, st, []byte(`{"warning":"A network hook failed"}`))
+		qt.QCoreApplication_ProcessEvents()
+		if l := find(root, "error"); l == nil || !l.Property("visible").ToBool() || l.Property("text").ToString() != "A network hook failed" {
+			warnings = append(warnings, "The warning isn't shown")
+		}
+		if got := button.Property("text").ToString(); got != "Continue" || !button.Property("enabled").ToBool() {
+			warnings = append(warnings, "The button with a warning: "+got)
+		}
+		qt.QMetaObject_InvokeMethod4(button, "click")
+		qt.QCoreApplication_ProcessEvents()
+		take(splash, st, []byte(`{"warning":""}`))
+		qt.QCoreApplication_ProcessEvents()
+	}
+	if fmt.Sprint(emitted) != "[continue continue]" {
+		warnings = append(warnings, fmt.Sprintf("Continue sent %v", emitted))
+	}
+	if s := find(root, "step"); s == nil || !s.Property("visible").ToBool() {
+		warnings = append(warnings, "The step isn't back after the warning")
+	}
+	root.SetProperty("canAbort", qt.NewQVariant8(true))
+	qt.QCoreApplication_ProcessEvents()
 	if got := button.Property("text").ToString(); got != "Abort" {
 		warnings = append(warnings, "The button says "+got+" while starting")
 	}
@@ -63,7 +87,7 @@ func qmlCheck() []string {
 	if !root.Property("aborting").ToBool() {
 		warnings = append(warnings, "Not aborting after the click")
 	}
-	st := newState()
+	emit = func(string) {}
 	for _, line := range []string{`{"dark":true}`, `{"text":"Copying","progress":0.5}`, `{"error":"No","host":"dbus-proxy: Refused","log":"a\nb"}`} {
 		if err := st.apply([]byte(line)); err != nil {
 			warnings = append(warnings, err.Error())

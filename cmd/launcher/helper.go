@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +34,12 @@ type netSetup struct {
 	IP          string `json:"ip"`
 	Name        string `json:"name,omitempty"` // The launcher's, which its addresses derive from; empty for the default one
 	Mdns        bool   `json:"mdns,omitempty"` // mDNS queries out and responses in (network.mdns)
+	// network.hooks: run in the netns as its owner, once eth0 is up
+	Hooks []string `json:"hooks,omitempty"`
 }
+
+// A hook of network.hooks gets this long
+var netHookTimeout = 30 * time.Second
 
 // The host's units for the sandbox's daemons, in the launcher's slice and bound to the app's unit, so they stop with
 // it and log to the journal as units of their own
@@ -131,10 +137,23 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 	if spec.Units != nil {
 		slog.Info("Step", "step", stepSandbox)
 	}
+	// What the sandbox starts without, which the user acknowledges on the splash: the hooks run in this order, each
+	// after what it builds on
+	var warnings []string
 	if spec.Net != nil {
 		if err := spec.Net.run(pid); err != nil {
 			return err
 		}
+	}
+	if spec.Hooks != nil {
+		warnings = append(warnings, spec.Hooks.start(pid)...)
+	}
+	if spec.Net != nil {
+		warnings = append(warnings, spec.Net.hooks(pid)...)
+		slog.Info("Step", "step", stepNetwork)
+	}
+	if len(warnings) > 0 && spec.Units != nil {
+		acknowledge(spec.Units.App, warnings)
 	}
 	if spec.Forward {
 		forward := os.NewFile(5, "forward")
@@ -146,6 +165,7 @@ func helperSteps(spec helperSpec, info []byte, pid, bwrapPid int, block *os.File
 	return nil
 }
 
+// run joins the netns of pid to the network: the netkit pair, its addresses and default routes
 func (n *netSetup) run(pid int) error {
 	// bwrap's parent reports the pid while the child is still building the mount tree; nixpak binds /.flatpak-info
 	// last, so once it shows up the sandbox's root is final
@@ -176,12 +196,7 @@ func (n *netSetup) run(pid int) error {
 	if len(addrs) != 2 {
 		return fmt.Errorf("%s: addresses %q", n.NetnsNetkit, out)
 	}
-	pidfd, err := unix.PidfdOpen(pid, 0)
-	if err != nil {
-		return fmt.Errorf("Open the sandbox: %w", err)
-	}
-	defer unix.Close(pidfd)
-	ns, err := openNs(pid, pidfd)
+	ns, err := openSandbox(pid)
 	if err != nil {
 		return err
 	}
@@ -192,11 +207,66 @@ func (n *netSetup) run(pid int) error {
 	if err := ip.Run(); err != nil {
 		return fmt.Errorf("Address the sandbox: %w", err)
 	}
-	if err := sandboxRoutes(n.NetnsNetkit, n.Nsenter, n.IP, ns); err != nil {
-		return err
+	return sandboxRoutes(n.NetnsNetkit, n.Nsenter, n.IP, ns)
+}
+
+// hooks runs network.hooks in the netns of pid as its owner, and says which failed
+func (n *netSetup) hooks(pid int) []string {
+	if len(n.Hooks) == 0 {
+		return nil
 	}
-	slog.Info("Step", "step", stepNetwork)
-	return nil
+	ns, err := openSandbox(pid)
+	if err != nil {
+		return []string{fmt.Sprintf("The network hooks didn't run (%v), so the sandbox starts without what they set up.", err)}
+	}
+	defer closeNs(ns)
+	var warnings []string
+	for _, hook := range n.Hooks {
+		if err := runIn(n.Nsenter, hook, ns); err != nil {
+			slog.Error("Network hook failed", "hook", hook, "err", err)
+			warnings = append(warnings, fmt.Sprintf("The network hook %s failed (%v), so the sandbox starts without "+
+				"what it sets up.", hook, err))
+		}
+	}
+	return warnings
+}
+
+// openSandbox opens the user and net namespaces of pid, see openNs
+func openSandbox(pid int) ([]*os.File, error) {
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return nil, fmt.Errorf("Open the sandbox: %w", err)
+	}
+	defer unix.Close(pidfd)
+	return openNs(pid, pidfd)
+}
+
+// The hooks of agent-sandbox.hooks (NixOS module), which sandbox-hooks runs with the capabilities each declares
+type sandboxHooks struct {
+	Exe  string `json:"exe"`            // The wrapper
+	Name string `json:"name,omitempty"` // The launcher's, empty for the default one
+}
+
+// start runs the start hooks for the sandbox of pid, and says what failed
+func (h *sandboxHooks) start(pid int) []string {
+	args := []string{"start", strconv.Itoa(pid)}
+	if h.Name != "" {
+		args = append(args, "--name="+h.Name)
+	}
+	cmd := exec.Command(h.Exe, args...)
+	cmd.Stdout, cmd.Stderr = hostOut, hostOut
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &exit) && exit.ExitCode() == 3:
+		return []string{"A start hook on the host failed, so the sandbox starts without what it sets up (the host " +
+			"side's journal says which and why)."}
+	default:
+		return []string{fmt.Sprintf("The start hooks on the host didn't run (%s: %v), so the sandbox starts without "+
+			"what they set up.", h.Exe, err)}
+	}
 }
 
 // ipBatch is what eth0 in the sandbox gets: its addresses and up (sandboxRoutes adds the default routes). No
@@ -254,6 +324,21 @@ func ipIn(nsenter, ipTool string, ns []*os.File) *exec.Cmd {
 		ipTool, "-batch", "-")
 	ip.ExtraFiles = ns
 	return ip
+}
+
+// runIn runs a hook of network.hooks in ns (openNs) as the owner of the user namespace, as ipIn runs ip
+func runIn(nsenter, hook string, ns []*os.File) error {
+	ctx, cancel := context.WithTimeout(context.Background(), netHookTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, nsenter, "--user=/proc/self/fd/3", "--net=/proc/self/fd/4", "--preserve-credentials",
+		"--keep-caps", hook)
+	cmd.ExtraFiles = ns
+	cmd.Stdout, cmd.Stderr = hostOut, hostOut
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("killed after %s", netHookTimeout)
+	}
+	return err
 }
 
 // sandboxRoutes gives eth0 in the netns of ns (openNs) a default route for each family the host has an uplink with a default

@@ -22,7 +22,8 @@ Usage:
   launcher store-sync --config=<file>
   launcher theme --config=<file> [<scheme>]
   launcher bwrap --mode=<mode> --bwrap=<exe> --newuidmap=<exe> --newgidmap=<exe> [--subid-broker=<exe>]
-                 [--permissions-broker=<exe>] [--net=<json>] [--units=<json>] [--] [<arg>...]
+                 [--permissions-broker=<exe>] [--net=<json>] [--hooks=<json>] [--units=<json>]
+                 [--] [<arg>...]
   launcher bwrap-helper <spec>
 
 start is the launcher on the host's PATH. A first argument --permissions opens
@@ -42,7 +43,8 @@ from the portal's colour scheme, or <scheme> (1 dark), once.
 
 bwrap is bwrap for the sandbox, with a range of ids mapped into its user
 namespace (bwrap.go): mode subid is nixpak's bwrap on the host, with the user's
-/etc/subuid range, the sandbox's cgroups and, with --net, its network; mode
+/etc/subuid range, the sandbox's cgroups and, with --net, its network, with
+--hooks the start hooks of sandbox-hooks after it; mode
 parent the FHS env's inside, mapping the parent user namespace's ids as
 themselves. bwrap-helper is its helper, which it starts itself.
 
@@ -58,6 +60,8 @@ Options:
   --permissions-broker=<exe>  The permissions broker, which shares
                               /run/permissions in mode parent
   --net=<json>         The network setup, for mode subid (helper.go, netSetup)
+  --hooks=<json>       The start hooks, for mode subid (helper.go,
+                       sandboxHooks)
   --units=<json>       The host unit for subid-broker, for mode subid
                        (helper.go, hostUnits)
 `
@@ -83,6 +87,7 @@ type config struct {
 	Ready          string   `json:"ready"`       // The line the app prints on stdout when its first window is ready
 	Nameservers    []string `json:"nameservers"` // The sandbox's DNS servers, the host's (dns.go) when empty
 	Network        bool     `json:"network"`     // Off: lo alone in the netns of the sandbox, no netkit pair and no DNS
+	Hooks          bool     `json:"hooks"`       // sandbox-hooks has hooks: stop runs them when the unit ends
 	Tools          struct {
 		IP         string `json:"ip"`
 		Journalctl string `json:"journalctl"`
@@ -176,6 +181,12 @@ func runTool(opts docopt.Opts) error {
 		o.net = &netSetup{}
 		if err := json.Unmarshal([]byte(n), o.net); err != nil {
 			return fmt.Errorf("--net: %w", err)
+		}
+	}
+	if h, _ := opts.String("--hooks"); h != "" {
+		o.hooks = &sandboxHooks{}
+		if err := json.Unmarshal([]byte(h), o.hooks); err != nil {
+			return fmt.Errorf("--hooks: %w", err)
 		}
 	}
 	if u, _ := opts.String("--units"); u != "" {

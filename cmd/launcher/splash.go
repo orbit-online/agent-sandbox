@@ -17,6 +17,9 @@ import (
 type splash struct {
 	// Closed when the user aborts the start from the splash
 	aborted chan struct{}
+	// A value when the user goes on past a warning, closed when the splash is gone
+	continued chan struct{}
+	gone      chan struct{}
 
 	mu  sync.Mutex
 	cmd *exec.Cmd
@@ -30,14 +33,16 @@ type splashState struct {
 	Text     string   `json:"text,omitempty"`
 	Progress *float64 `json:"progress,omitempty"` // 0 to 1; none for a step of unknown length
 	Error    string   `json:"error,omitempty"`    // Shown until the user closes the window
+	Warning  *string  `json:"warning,omitempty"`  // Shown, the start held, until the user goes on; "" ends it
 	Host     string   `json:"host,omitempty"`     // The host side's warnings and errors, beneath the error
 	Log      string   `json:"log,omitempty"`      // The app's last output, beneath those
 	Activate string   `json:"activate,omitempty"` // An xdg-activation token: the window to the front
 }
 
 func showSplash(cfg *config) *splash {
-	s := &splash{aborted: make(chan struct{})}
+	s := &splash{aborted: make(chan struct{}), continued: make(chan struct{}, 1), gone: make(chan struct{})}
 	if len(cfg.Splash) == 0 {
+		close(s.gone)
 		return s
 	}
 	cmd := exec.Command(cfg.Splash[0], append(cfg.Splash[1:], "--app-id="+cfg.AppID)...)
@@ -52,16 +57,27 @@ func showSplash(cfg *config) *splash {
 	}
 	if err != nil {
 		slog.Warn("No splash", "err", err)
+		close(s.gone)
 		return s
 	}
 	s.cmd, s.in, s.enc = cmd, in, json.NewEncoder(in)
-	// Its Abort button's line
+	// Its button's lines: Abort, or Continue past a warning
 	go func() {
+		defer close(s.gone)
 		lines := bufio.NewScanner(out)
+		aborted := false
 		for lines.Scan() {
-			if lines.Text() == "abort" {
-				close(s.aborted)
-				return
+			switch lines.Text() {
+			case "abort":
+				if !aborted {
+					aborted = true
+					close(s.aborted)
+				}
+			case "continue":
+				select {
+				case s.continued <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}()
@@ -89,6 +105,22 @@ func (s *splash) up() bool {
 }
 
 func (s *splash) dark(dark bool) { s.send(splashState{Dark: &dark}) }
+
+// warn shows text with Continue and returns once the user chose it, or at once without a splash, or when it goes away
+// or the start is aborted. Warnings come one at a time: each holds the helper's start
+func (s *splash) warn(text string) {
+	if !s.up() {
+		return
+	}
+	s.send(splashState{Warning: &text})
+	select {
+	case <-s.continued:
+	case <-s.aborted:
+	case <-s.gone:
+	}
+	none := ""
+	s.send(splashState{Warning: &none})
+}
 
 // close ends the splash: its stdin closing tells it to quit
 func (s *splash) close() {

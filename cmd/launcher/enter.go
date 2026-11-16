@@ -170,6 +170,14 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 		}
 		argv = append(argv, "-p", down)
 	}
+	// The stop hooks of sandbox-hooks, likewise
+	if cfg.Hooks && cfg.Tools.WrapperDir != "" {
+		stop := "ExecStopPost=-" + filepath.Join(cfg.Tools.WrapperDir, "sandbox-hooks") + " stop"
+		if cfg.Launcher != "" {
+			stop += " --name=" + cfg.Launcher
+		}
+		argv = append(argv, "-p", stop)
+	}
 	for _, kv := range os.Environ() {
 		if !unitOwnVar(strings.SplitN(kv, "=", 2)[0]) {
 			argv = append(argv, "--setenv="+kv)

@@ -1,4 +1,4 @@
-package main
+package caller
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 
 // Opens the network namespace of pid after checking that the caller, of uid in user namespace ownUserns (a path),
 // may give it a netkit pair
-func openNetns(pid, uid int, ownUserns string) (int, error) {
+func OpenNetns(pid, uid int, ownUserns string) (int, error) {
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return -1, fmt.Errorf("Open pidfd for %d: %w", pid, err)

@@ -12,6 +12,7 @@ type state struct {
 	Text     string  `json:"text"`
 	Progress float64 `json:"progress"` // -1: a step of unknown length
 	Error    string  `json:"error"`
+	Warning  string  `json:"warning"` // Shown with Continue, the start held, until the launcher ends it with ""
 	Host     string  `json:"host"` // The host side's warnings, labelled by the launcher
 	Log      string  `json:"log"`  // The app's output
 	// How often the launcher asked to bring the window to the front, and the activation token for the next time
@@ -28,6 +29,7 @@ func (s *state) apply(line []byte) error {
 		Text     *string  `json:"text"`
 		Progress *float64 `json:"progress"`
 		Error    *string  `json:"error"`
+		Warning  *string  `json:"warning"`
 		Host     *string  `json:"host"`
 		Log      *string  `json:"log"`
 		Activate *string  `json:"activate"`
@@ -47,6 +49,9 @@ func (s *state) apply(line []byte) error {
 	}
 	if l.Error != nil {
 		s.Error = *l.Error
+	}
+	if l.Warning != nil {
+		s.Warning = *l.Warning
 	}
 	if l.Host != nil {
 		s.Host = *l.Host

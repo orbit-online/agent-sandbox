@@ -12,6 +12,11 @@
 }:
 let
   ids = sl.idsOf launcherName;
+  # The NixOS module's hooks (nix/nixos/hooks.nix), which its sandbox-hooks wrapper runs for every launcher
+  osHooks = osConfig.agent-sandbox.hooks or {
+    start = [ ];
+    stop = [ ];
+  };
   # An IPv4 or IPv6 address (no prefix length or zone), all a nameserver line of resolv.conf takes
   octet = "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
   isIP =
@@ -40,6 +45,12 @@ let
         }
       }"
     ]
+    ++ lib.optional (osHooks.start != [ ]) "--hooks=${
+      builtins.toJSON (
+        { exe = "${osConfig.security.wrapperDir}/sandbox-hooks"; }
+        // lib.optionalAttrs (launcherName != null) { name = launcherName; }
+      )
+    }"
     # Without it the netns keeps what bwrap gives it: lo, up
     ++ lib.optional config.network.enable "--net=${
       builtins.toJSON (
@@ -47,7 +58,7 @@ let
           netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
           nsenter = lib.getExe' pkgs.util-linux "nsenter";
           ip = lib.getExe' pkgs.iproute2 "ip";
-          inherit (config.network) mdns;
+          inherit (config.network) mdns hooks;
         }
         // lib.optionalAttrs (launcherName != null) { name = launcherName; }
       )
@@ -84,6 +95,17 @@ in
     '';
   };
 
+  options.network.hooks = lib.mkOption {
+    type = lib.types.listOf lib.types.pathInStore;
+    default = [ ];
+    description = ''
+      Executables the launcher runs in the netns of the sandbox, as the owner of its user namespace (all capabilities
+      over the netns, none on the host), once `eth0` is up and the NixOS module's `agent-sandbox.hooks.start` ran,
+      before the app starts: addresses and routes for devices such a hook moved in. A hook that fails starts the sandbox
+      without what it does, after a warning on the splash. Without `network.enable` none run.
+    '';
+  };
+
   options.nameservers = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
@@ -101,6 +123,7 @@ in
     build.launcherConfig = {
       inherit (config) nameservers;
       network = config.network.enable;
+      hooks = osHooks.start ++ osHooks.stop != [ ];
     };
     # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in fhs.nix), no
     # extra pasta args

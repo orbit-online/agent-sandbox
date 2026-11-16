@@ -71,6 +71,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   module keeps setgid to wrappers without capabilities; anyone may run it, the helper refuses callers outside `users`)
   when any Home Manager user enables the Home Manager module, and asserts they're in `users` and have a subuid and
   subgid range.
+- `nix/nixos/hooks.nix`: `agent-sandbox.hooks.start` and `.stop`, root-owned hooks (store paths, each with the
+  capabilities it declares) that every launcher runs at those phases through `sandbox-hooks`; `claude-desktop.nix`
+  imports it. Only with hooks and a sandbox user: `/etc/agent-sandbox/hooks.json` and the `sandbox-hooks` wrapper,
+  whose capabilities are the union of what the hooks declare (`+ep`, none without), setgid `sandbox-hooks` through
+  `permissions` as netns-netkit is.
 - `nix/nixos/network.nix`: the host side of the sandbox network on netkit, which `claude-desktop.nix` imports and
   enables (the internal `agent-sandbox.network.enable`) when a user enables the sandbox. It asserts Linux 6.8 or later
   (netkit programs need 6.7, bpffs' `uid` and `gid` options 6.8), runs einat-ebpf (`nix/packages/einat`, the `einat`
@@ -179,16 +184,22 @@ single-user Nix store, and an environment doc for the Claude running inside.
   sets up the network (`--net`: `netns-netkit up`, then its addresses, `lo` and `eth0` up and the default routes in N,
   through `nsenter --keep-caps` and `ip -batch`: `sandboxRoutes`, a default route of each family that
   `netns-netkit uplinks` names an uplink for, the other removed, as the netns of the sandbox is the user's and
-  netns-netkit has no CAP_SYS_ADMIN to enter it) before it passes bwrap's info on to nixpak, whose pasta slot is a
+  netns-netkit has no CAP_SYS_ADMIN to enter it), then with `--hooks` `sandbox-hooks start` (the NixOS module's start
+  hooks, with or without a network), then the launcher's `network.hooks` in N as its owner, then the warnings,
+  before it passes bwrap's info on to nixpak, whose pasta slot is a
   no-op that only keeps the netns. The unit of the app runs `netns-netkit down` as `ExecStopPost=` (`enter.go`),
   however it ends. With `network.enable` off (`network.nix`) neither: no `--net`, so the netns keeps the `lo` bwrap
   brings up, and `network` false in the launcher config.
+  The unit of the app runs `sandbox-hooks stop` as `ExecStopPost=` too when the NixOS module has hooks (`hooks` in
+  the launcher config). `warn.go`: what the sandbox starts without (`sandbox-hooks start` exiting 3 or refusing, a
+  `network.hooks` hook failing) goes from bwrap's helper to supervise over
+  `$XDG_RUNTIME_DIR/claude-desktop/<unit>.warn` on the host, and the helper holds the start until supervise answers:
+  once the user chose Continue on the splash, at once without a splash or when nothing listens.
+  `TimeoutStartSec=infinity` lets the start wait.
   `internal/sandbox`: finding a launcher's running
   sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
 - `cmd/netns-netkit/`: the setcap helper that joins the netns of a sandbox to the host by a netkit pair
-  (`netns-netkit --help`): `main.go` (the commands, the caller in group `users`), `netns.go` (the checks on the
-  netns: its process belongs to the caller, by pidfd, and its user namespace lies below the one of the caller, owned
-  by the caller uid right below; opened with the real gid as fsgid, which the ptrace check compares), `addr.go` (the
+  (`netns-netkit --help`): `main.go` (the commands, through `internal/caller`'s checks), `addr.go` (the
   addresses, from a hash of uid and launcher name, past those on the host and the registered ones, and the name of the
   primary, `sbx-<uid in base 36>-<hash of the launcher name>`), `pair.go` (the pair, L3, both ends policy drop, the
   peer `eth0` made in the sandbox netns; host routes to the addresses and forwarding on the primary) and `bpf.go`
@@ -221,6 +232,20 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `mdns` the mDNS responses `pre` copied in, by their mark, which the
   primary keeps for it (`NETKIT_SCRUB_NONE`, `pair.go`) and the program clears with the priority). Without CAP_PERFMON the verifier refuses variable offsets into packets and
   pointers picked between map values, so the programs read no IPv4 options and compare both sandbox addresses.
+- `internal/caller/`: what the privileged helpers (netns-netkit, sandbox-hooks) check about their caller before
+  anything: `caller.go` (the caller in group `users`, which the setgid wrappers can't limit; the launcher name) and
+  `netns.go` (`OpenNetns`: the process belongs to the caller, by pidfd, and its netns to a user namespace below the
+  one of the caller, owned by the caller uid right below; opened with the real gid as fsgid, which the ptrace check
+  compares).
+- `cmd/sandbox-hooks/`: the setcap helper that runs the NixOS module's hooks (`sandbox-hooks --help`), the one
+  entrypoint for privileged work of consumers: `main.go` (the phases, `start <pid>` and `stop`, what the caller names
+  checked through `internal/caller` before anything runs), `config.go` (`/etc/agent-sandbox/hooks.json`, decoded
+  strictly: the phases, absolute paths, capabilities by name; the file and each hook a regular file of root, links
+  followed: only root writes `/etc` and `/nix/store`, so nothing above them is checked) and `run.go` (each hook as
+  `<hook> <phase> <uid> <name>` on one locked thread: the wrapper's group as real, effective and saved gid, as bash
+  drops an effective gid other than the real one; per hook its declared capabilities alone as inheritable and
+  ambient, others cleared; an empty environment, `/`, stdin `/dev/null`, its output on stderr, the netns of the
+  sandbox on fd 3 for start, a process group of its own killed after 30 s; every hook runs, a failed one makes exit 3).
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). The launcher's bwrap, which nixpak and the FHS env run, maps the user's subuid
@@ -323,7 +348,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   and the app's last output, each in a box of its own, until the user closes it; JSON lines on stdin (`state.go`) drive it, `activate` with an xdg-activation token bringing the window to
   the front (Qt's `requestActivate` takes it from the environment). Its one button offers Abort after 10 seconds, which says
   "Aborting startup" at once and prints `abort` on its stdout for the launcher, and turns to Close once the start
-  failed. SVG logos load through qtsvg; around them the clear space
+  failed. A `warning` line shows the warning in place of the step with the button as Continue at once, which prints
+  `continue`; the launcher ends it with an empty warning. SVG logos load through qtsvg; around them the clear space
   brand logos ask for, half the symbol's height.
 - `nix/patches/`: patches to what the module builds from its inputs, each
   with a header saying why. `nixpak-launcher-reaper.patch` (meant for
@@ -354,7 +380,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   part of the checks.
 
 Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
-`packages.<system>.netns-netkit`, `packages.<system>.subid-broker`,
+`packages.<system>.netns-netkit`, `packages.<system>.sandbox-hooks`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
 `packages.<system>.request-send`, `packages.<system>.launcher`, `packages.<system>.sandbox-uplink`,
 `packages.<system>.einat`, and for CI
@@ -414,6 +440,12 @@ sandbox ends (`internal/uplink`):
   checksum offsets the programs don't check, and no change to the netkit device. `vm-launch` tests it ("the sandbox
   holds no CAP_NET_RAW or CAP_NET_ADMIN over its netns"); keep it so, and don't handle checksum offload in BPF instead.
 - Gates and per-user opt-in live in the consumers.
+- Privileged work of consumers goes through `sandbox-hooks` alone: it checks everything the caller names before any
+  hook runs, and a hook gets nothing the caller controls past the checked uid, name and netns, and no capability it
+  didn't declare. The caller is the user, whom the design trusts; the sandbox can't run it with privileges
+  (no_new_privs). What a hook does with a device on the host, the sandbox mustn't be able to redo: a WireGuard device
+  moved in keeps its UDP socket in the host netns, so the sandbox holding no CAP_NET_ADMIN over its netns (above) is
+  what keeps it from setting endpoints there.
 - `environment.md` is what Claude inside the sandbox knows about it, and
   stays generic: consumers replace it with `environmentFile`. A section only
   some work needs gets a memo marker; one every session needs stays unmarked.
@@ -483,6 +515,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   launcher's pid and the watcher's, the user's rules merged in), the assertions on D-Bus rules (`sandbox`
   setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing, a rule it refuses
   and its caps: 64 names, 64 rules a list, 64 KiB of config, each at and past the cap),
+  `agent-sandbox.hooks` (`testHooks`: the config and the wrapper with the union of capabilities, setgid
+  `sandbox-hooks`, none without hooks or without a sandbox user, a path outside the store and an unknown capability
+  refused), the launchers' `--hooks` only with start hooks, `hooks` in their config with any, and a launcher's
+  `network.hooks` in its `--net` alone (`testLauncherHooks`),
   and the assertion on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
   `work`.
@@ -521,13 +557,19 @@ modules and a user alice (the `home-manager` input exists only for it).
   default launcher's `.desktop` file keeps the `claude://` handler and
   upstream's actions, and lacks the Permissions action. For `work`, the
   Permissions window's `--app-id` in its broker's config.
-- `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `netns_test.go`,
-  `openNetns` against a child in its own user and network namespace, and the user namespace chain: a netns two user
-  namespaces down accepted, refused as seen from a sibling user namespace and for one the user namespace of the caller
-  owns; `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
+- `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
   or last of the block, a full block refused, and the names of primaries; `main_test.go`, launcher names and ports
   refused, the sandbox dirs and primaries of a uid counted, the lock of a uid exclusive, and neither the lock of another
-  uid nor one on `/run/sandbox-uplink` itself holding it up.
+  uid nor one on `/run/sandbox-uplink` itself holding it up. `internal/caller`'s tests run with the launcher's
+  (`netns_test.go`: `OpenNetns` against a child in its own user and network namespace, and the user namespace chain: a
+  netns two user namespaces down accepted, refused as seen from a sibling user namespace and for one the user
+  namespace of the caller owns).
+- `sandbox-hooks`: the package build runs its Go tests: `config_test.go` (the owner check: links followed, another
+  owner and a directory refused; the config: none without the file, the phases with their hooks and capabilities,
+  a relative, missing or unowned hook, an unknown capability, phase or field refused), `run_test.go` (a hook's
+  arguments, fd 3, empty environment, `/`, stdin, stdout on stderr, every hook run, a failure and the timeout as
+  `errHooks`, a capability the process lacks refused; `run` refusing a caller outside `users`, a bad name or pid and
+  the caller's own netns before any hook runs, and running only the phase's hooks).
 - `subid-broker`: the package build runs its Go tests (`main_test.go`):
   `parseMap`, and `authorize` against a client in a userns of its own and a
   target below it, refusing a client outside one, a sibling userns, the
@@ -750,7 +792,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   never editable and the line and addresses of its grant, and the text read-only and selectable.
   Repeater delegates aren't QObject children, so the Go side can't find
   them; Qt Quick Test can. `splash/splash_test.go`: the splash loads without QML warnings through a start and a
-  failure without logos, the button's Abort once it shows writing the command and turning to aborting, then Close after a failure closing the window, an `activate` line putting its token in the
+  failure without logos, a warning twice with Continue enabled at once and sending `continue` each time, the step
+  back after, the button's Abort once it shows writing the command and turning to aborting, then Close after a failure closing the window, an `activate` line putting its token in the
   environment and telling the window, and a line sets what it names (a new step's progress unknown until it says).
 - `launcher`: the package build runs the Go tests of `cmd/launcher` and `internal/` with fake tools (the state
   script, nix-store, nixpak's launcher and the splash as scripts) and a notify socket of the test's: supervise
@@ -777,7 +820,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   outside a range); `launcher bwrap` in mode parent against a fake bwrap (`bwrap_test.go`: the maps written once it
   reported its child, then unblocked, the subuid and subgid lines on fds 22 and 23, its arguments after the
   launcher's; a failing newuidmap killing bwrap before it's unblocked); `internal/sandbox`'s `AppPid` on a real pid
-  namespace tree (the app one level below the init, not one further down, two at its level ambiguous).
+  namespace tree (the app one level below the init, not one further down, two at its level ambiguous); a warning
+  holding `acknowledge` until the splash's Continue and clearing it after, and going on at once without a listener or a
+  splash (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
+  refusal (`hooks_test.go`).
 - `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
   broker runs the binary, with the test binary as a fake `step` (its key standing in for the TPM's, every run
   recorded) against an httptest TLS server that requires a client certificate from the test users CA: a read and
@@ -833,7 +879,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
   network (and the launcher `offline`, without one), `store` its store dir swapped or without a record, `--shell`
   starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
-  sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one with
+  sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one (its start hook failing: started without `mesh-1000`, the other
+  hook run, the failure and the warning in its host side journal) with
   its permissions broker and mDNS (work has `network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each
   netns, with the QU bit set: the default sandbox resolving `printer.local` of avahi on the router, over IPv4 and IPv6,
   the router seeing the queries from the workstation address and port 5353 without QU (a one-shot query from another
@@ -884,7 +931,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   router and `lan.test`, a name resolving inside, a change of the server of eth1 reaching the file within seconds in place,
   the same inode), the netkit pair (`lo`
   and `eth0`, its addresses from the blocks and default routes, the primary routed to with forwarding on, the pins and
-  their modes, the registration, alice kept from the pins), the sandbox reaching the router and the internet stand-in
+  their modes, the registration, alice kept from the pins), the hooks (`vm/default.nix`: the wrapper with
+  `cap_net_admin=ep` alone, mode 2511 root:sandbox-hooks; `meshUp`, a start hook with CAP_NET_ADMIN, moving a dummy
+  `mesh-<uid>` in with exactly that in its inheritable, permitted, effective and ambient sets and `noCaps` with none,
+  both with `sandbox-hooks` as all their gids though bash, no environment and `/`; the launcher's `meshAddr`
+  addressing and routing it; the sandbox refused `ip link set mesh-1000 down`; alice refused the `environ`, `mem` and
+  fd 3 of her own hook while it runs; `sandbox-hooks` refusing a netns of bob, a bad name, the caller's own netns,
+  `nobody` outside `users`, and a config or hook of alice's, with no hook run; `stopHook` run without capabilities
+  when the unit of the app ends), the sandbox reaching the router and the internet stand-in
   over IPv4 and IPv6 and none of the LAN address of the host, a dummy interface, a host bridge or a container behind
   it (nothing of it on the bridge), nor `127.0.0.1` of the host with `127.0.0.1` routed out of the sandbox and
   `route_localnet` on both sides, a spoofed source (IPv4, IPv6) going nowhere, no AF_PACKET socket on `eth0` and no
@@ -959,7 +1013,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   once it is gone; the pins, primary and registration of the sandbox gone with the unit of the app (sandbox-uplink
   stopped, so `ExecStopPost=` of the unit did it); then the launcher `offline` with `network.enable` off: inside `lo`
   alone and up, no IPv4 route nor default route, the router and the internet stand-in unreachable, an empty resolv.conf;
-  on the host no `sbx-*` primary, no pins and no `ExecStopPost=` of netns-netkit, no DNS warning in its journal namespace.
+  on the host no `sbx-*` primary, no pins and no `ExecStopPost=` of netns-netkit (one of `sandbox-hooks stop`), the
+  start hooks run all the same, no DNS warning in its journal namespace.
   bob's commands go through `runuser`,
   not `setpriv`, which keeps root's capabilities through the exec. Debug it
   with `nix run .#checks.x86_64-linux.vm-<part>.driverInteractive`.

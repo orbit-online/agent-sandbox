@@ -38,6 +38,7 @@ buildGoModule {
       ../../../go.mod
       ../../../go.sum
       ../../../cmd/netns-netkit
+      ../../../internal/caller
       ../../../internal/journal
       ../../../internal/uplink
     ];

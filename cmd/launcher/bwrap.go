@@ -36,20 +36,22 @@ const (
 type bwrapOpts struct {
 	mode, bwrap, newuidmap, newgidmap, subidBroker, permissionsBroker string
 	net                                                               *netSetup
+	hooks                                                             *sandboxHooks
 	units                                                             *hostUnits
 }
 
 // What the helper does, as its argument
 type helperSpec struct {
-	NewUIDMap string     `json:"newuidmap"`
-	NewGIDMap string     `json:"newgidmap"`
-	UIDMap    []int      `json:"uidMap"`
-	GIDMap    []int      `json:"gidMap"`
-	CgRoot    string     `json:"cgRoot,omitempty"` // The app's unit's cgroup, on the host
-	Ctl       []string   `json:"ctl,omitempty"`    // The controllers for sandbox/
-	Forward   bool       `json:"forward"`          // Whether fd 5 is nixpak's info fd, to pass the info on to
-	Net       *netSetup  `json:"net,omitempty"`
-	Units     *hostUnits `json:"units,omitempty"`
+	NewUIDMap string        `json:"newuidmap"`
+	NewGIDMap string        `json:"newgidmap"`
+	UIDMap    []int         `json:"uidMap"`
+	GIDMap    []int         `json:"gidMap"`
+	CgRoot    string        `json:"cgRoot,omitempty"` // The app's unit's cgroup, on the host
+	Ctl       []string      `json:"ctl,omitempty"`    // The controllers for sandbox/
+	Forward   bool          `json:"forward"`          // Whether fd 5 is nixpak's info fd, to pass the info on to
+	Net       *netSetup     `json:"net,omitempty"`
+	Hooks     *sandboxHooks `json:"hooks,omitempty"`
+	Units     *hostUnits    `json:"units,omitempty"`
 }
 
 func runBwrap(o bwrapOpts, args []string) error {
@@ -119,6 +121,7 @@ func runBwrap(o bwrapOpts, args []string) error {
 		}
 		pass = append(append(pass, cgBind, spec.CgRoot+"/sandbox", "/sys/fs/cgroup"), rest...)
 		spec.Net = o.net
+		spec.Hooks = o.hooks
 		spec.Units = o.units
 	case "parent":
 		if err := parentMaps(&spec, u.Username, uid, gid); err != nil {

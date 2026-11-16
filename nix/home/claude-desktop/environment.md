@@ -163,6 +163,11 @@ unless you ask otherwise); release it when you're done.
   only keep responders from repeating them. Queries leave at 10 a second
   after a burst of 20, and over IPv6 only while the host has an IPv6
   default route.
+  Other devices in `ip link` come from network hooks the user configured
+  (a VPN tunnel, say): what they reach and the rules above don't cover,
+  since their traffic never crosses `eth0`. You can't change them. A hook
+  that failed at launch was shown as a warning, and the sandbox runs
+  without what it sets up.
   A launcher with `network.enable` off (for local models) leaves you a
   network namespace with `lo` alone (`ip link` shows no `eth0`): no
   routes, an empty `/etc/resolv.conf` and no `port` capability. A model

@@ -1,4 +1,4 @@
-package main
+package caller
 
 import (
 	"fmt"
@@ -96,7 +96,7 @@ func TestOpenNetns(t *testing.T) {
 	uid := unix.Getuid()
 	self := "/proc/self/ns/user"
 
-	if _, err := openNetns(os.Getpid(), uid, self); err == nil || !strings.Contains(err.Error(), "shares the caller's network namespace") {
+	if _, err := OpenNetns(os.Getpid(), uid, self); err == nil || !strings.Contains(err.Error(), "shares the caller's network namespace") {
 		t.Errorf("Own pid: err = %v, want a shared netns error", err)
 	}
 
@@ -106,13 +106,13 @@ func TestOpenNetns(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := child.Process.Pid
-	fd, err := openNetns(pid, uid, self)
+	fd, err := OpenNetns(pid, uid, self)
 	if err != nil {
 		t.Errorf("Child's netns: %v", err)
 	} else {
 		unix.Close(fd)
 	}
-	if _, err := openNetns(pid, uid+1, self); err == nil {
+	if _, err := OpenNetns(pid, uid+1, self); err == nil {
 		t.Error("Child's netns opened for a uid that doesn't own it")
 	}
 
@@ -120,7 +120,7 @@ func TestOpenNetns(t *testing.T) {
 	if err := child.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openNetns(pid, uid, self); err == nil {
+	if _, err := OpenNetns(pid, uid, self); err == nil {
 		t.Error("Exited child's netns opened")
 	}
 }
@@ -133,7 +133,7 @@ func TestOpenNetnsChain(t *testing.T) {
 	// Two user namespaces down, as a container in the sandbox: the topmost one is the caller's
 	outer, pid, end := nest(t, true)
 	defer end()
-	fd, err := openNetns(pid, uid, self)
+	fd, err := OpenNetns(pid, uid, self)
 	if err != nil {
 		t.Errorf("Netns two user namespaces down: %v", err)
 	} else {
@@ -149,11 +149,11 @@ func TestOpenNetnsChain(t *testing.T) {
 		sibling.Wait()
 	}()
 	siblingUserns := fmt.Sprintf("/proc/%d/ns/user", sibling.Process.Pid)
-	if _, err := openNetns(pid, uid, siblingUserns); err == nil || !strings.Contains(err.Error(), "isn't below the caller's user namespace") {
+	if _, err := OpenNetns(pid, uid, siblingUserns); err == nil || !strings.Contains(err.Error(), "isn't below the caller's user namespace") {
 		t.Errorf("From a sibling user namespace: err = %v, want not below", err)
 	}
 	// From the middle one, owned by the caller's uid there too
-	if fd, err := openNetns(pid, uid, fmt.Sprintf("/proc/%d/ns/user", outer.Process.Pid)); err != nil {
+	if fd, err := OpenNetns(pid, uid, fmt.Sprintf("/proc/%d/ns/user", outer.Process.Pid)); err != nil {
 		t.Errorf("From the middle user namespace: %v", err)
 	} else {
 		unix.Close(fd)
@@ -164,7 +164,7 @@ func TestOpenNetnsChain(t *testing.T) {
 	outer, pid, end2 := nest(t, false)
 	defer end2()
 	outerUserns := fmt.Sprintf("/proc/%d/ns/user", outer.Process.Pid)
-	if _, err := openNetns(pid, uid, outerUserns); err == nil || !strings.Contains(err.Error(), "caller's own user namespace") {
+	if _, err := OpenNetns(pid, uid, outerUserns); err == nil || !strings.Contains(err.Error(), "caller's own user namespace") {
 		t.Errorf("Netns of the caller's own user namespace: err = %v, want refused", err)
 	}
 }

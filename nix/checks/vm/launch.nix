@@ -386,7 +386,8 @@
   with subtest("the netkit pair: eth0 with the sandbox's addresses and routes, its programs and maps pinned, registered"):
       workstation.succeed(sandbox_cmd("grep -qx 'nameserver ${routerIP}' /etc/resolv.conf"))
       links = in_sandbox("ip -o link show")
-      assert [l.split(":")[1].strip().split("@")[0] for l in links.splitlines()] == ["lo", "eth0"], links
+      # mesh-1000: the hooks', below
+      assert [l.split(":")[1].strip().split("@")[0] for l in links.splitlines()] == ["lo", "eth0", "mesh-1000"], links
       assert "netkit" in in_sandbox("ip -d link show eth0")
       sb4 = in_sandbox("ip -4 -o addr show dev eth0").split()[3]
       sb6 = in_sandbox("ip -6 -o addr show dev eth0 scope global").split()[3]
@@ -407,6 +408,75 @@
           workstation.succeed(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(a)}")
       # alice can't reach the pins herself, only through the wrapper
       assert as_user("alice", f"ls {pins}")[0] != 0
+
+  hooks = "/run/wrappers/bin/sandbox-hooks"
+  hook_gid = workstation.succeed("getent group sandbox-hooks | cut -d: -f3").strip()
+
+  def hook_status(path):
+      got = workstation.succeed(f"cat {path}").splitlines()
+      return got, {l.split(":")[0]: l.split()[1:] for l in got if ":" in l}
+
+  with subtest("hooks: the wrapper holds the union of the hooks' capabilities, setgid sandbox-hooks"):
+      assert workstation.succeed(f"getcap $(readlink -f {hooks})").strip().endswith("cap_net_admin=ep"), \
+          workstation.succeed(f"getcap $(readlink -f {hooks})")
+      assert workstation.succeed(f"stat -c '%a %U %G' {hooks}").strip() == "2511 root sandbox-hooks"
+
+  with subtest("hooks: the start hooks ran with their own capabilities alone, the launcher's routed mesh-1000"):
+      dev = in_sandbox("ip -o addr show dev mesh-1000")
+      assert "inet 10.98.0.1/32" in dev, dev
+      assert "10.98.0.0/16 dev mesh-1000" in in_sandbox("ip -4 route"), in_sandbox("ip -4 route")
+      assert ",UP" in in_sandbox("ip -o link show dev mesh-1000")
+      for path, caps in [("/tmp/hook-start-1000-", "0000000000001000"), ("/tmp/hook-nocaps-1000-", "0000000000000000")]:
+          got, fields = hook_status(path)
+          for cap in ["CapInh", "CapPrm", "CapEff", "CapAmb"]:
+              assert fields[cap] == [caps], f"{path} {cap}: {got}"
+          # sandbox-hooks as its real gid too, which bash keeps (it drops an effective gid other than the real one)
+          assert fields["Gid"] == [hook_gid] * 4, got
+          assert "args=start 1000 " in got and "pwd=/" in got and not [l for l in got if l.startswith("env=")], got
+      # The sandbox holds nothing over it
+      status, out = workstation.execute(sandbox_cmd("ip link set mesh-1000 down") + " 2>&1")
+      assert status != 0 and "Operation not permitted" in out, out
+
+  with subtest("hooks: alice can't look into her own hook, which holds CAP_NET_ADMIN of the host"):
+      hook_ns = spawn("alice-hook-ns", "alice", "/run/current-system/sw/bin/unshare -Urn")
+      workstation.succeed("touch /tmp/hook-hold")
+      workstation.succeed(f"systemd-run --unit hook-start -p User=alice -- {hooks} start --name=hooktest {hook_ns}")
+      workstation.wait_until_succeeds("test -s /tmp/hook-pid", timeout=30)
+      hook = workstation.succeed("cat /tmp/hook-pid").strip()
+      for path in [f"/proc/{hook}/environ", f"/proc/{hook}/mem"]:
+          status, out = as_user("alice", f"cat {path}")
+          assert status != 0 and "Permission denied" in out, f"{path}: {status} {out}"
+      status, out = as_user("alice", f"readlink /proc/{hook}/fd/3")
+      assert status != 0, f"fd 3 of the hook: {out}"
+      workstation.succeed("rm /tmp/hook-hold /tmp/hook-pid")
+      workstation.wait_until_fails("systemctl is-active hook-start", timeout=30)
+      assert workstation.succeed("systemctl show -P ExecMainStatus hook-start").strip() == "0"
+      workstation.succeed(f"nsenter -t {hook_ns} -n ip link show mesh-1000")
+
+  with subtest("hooks: sandbox-hooks checks what it's given before any hook runs"):
+      workstation.succeed("rm -f /tmp/hook-*hooktest*")
+      bob_ns = spawn("bob-hook-ns", "bob", "/run/current-system/sw/bin/unshare -Urn")
+      for args, error in [(f"start {bob_ns}", "belongs to uid 1001, not 1000"),
+                          (f"start --name=Work {hook_ns}", "is not [a-z][a-z0-9-]*"),
+                          ("start $$", "shares the caller's network namespace")]:
+          status, out = as_user("alice", f"sh -c {shlex.quote(f'exec {hooks} {args}')}")
+          assert status == 1 and error in out, f"{args}: {status} {out}"
+      status, out = as_user("nobody", f"{hooks} stop")
+      assert status == 1 and "Only members of group users may run sandbox-hooks" in out, out
+      # A config or hook that isn't root's
+      cfg = "/etc/agent-sandbox/hooks.json"
+      orig = workstation.succeed(f"readlink {cfg}").strip()
+      hook = workstation.succeed(f"${pkgs.jq}/bin/jq -r '.start[0].path' {cfg}").strip()
+      workstation.succeed(f"cp {cfg} /tmp/hooks-alice.json && chown alice /tmp/hooks-alice.json",
+                          f"cp {hook} /tmp/hook-alice && chown alice /tmp/hook-alice",
+                          "echo '{\"start\": [{\"path\": \"/tmp/hook-alice\"}]}' >/tmp/hooks-hook.json")
+      for conf, error in [("/tmp/hooks-alice.json", f"{cfg} is not root owned: it belongs to uid 1000"),
+                          ("/tmp/hooks-hook.json", "/tmp/hook-alice is not root owned: it belongs to uid 1000")]:
+          workstation.succeed(f"ln -sfn {conf} {cfg}")
+          status, out = as_user("alice", f"{hooks} start --name=hooktest {hook_ns}")
+          assert status == 1 and error in out, f"{conf}: {status} {out}"
+      workstation.succeed(f"ln -sfn {orig} {cfg}", "systemctl stop alice-hook-ns bob-hook-ns")
+      workstation.fail("ls /tmp/hook-*hooktest*")
 
   with subtest("DNS from the host's resolved: the uplink's server alone, followed in place"):
       conf = "${sandboxHome}/.config/resolv.conf"
@@ -899,6 +969,10 @@
       for a in [sb4, sb6]:
           workstation.fail(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(a)}")
       workstation.succeed("systemctl start sandbox-uplink")
+      # And ran the stop hooks
+      workstation.wait_until_succeeds("test -e /tmp/hook-stop-1000-", timeout=30)
+      got, fields = hook_status("/tmp/hook-stop-1000-")
+      assert "args=stop 1000 " in got and fields["CapEff"] == ["0000000000000000"], got
 
   with subtest("a launcher without a network: lo alone, no routes, no netkit pair, no DNS"):
       launch("claude-desktop-offline", "/home/alice/.local/share/claude-desktop-offline/home")
@@ -916,7 +990,9 @@
       workstation.fail("ip -o link show | grep sbx-")
       workstation.fail("test -e /run/sandbox-uplink/1000-offline")
       stop = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-offline-app")
-      assert "netns-netkit" not in stop, stop
+      assert "netns-netkit" not in stop and "sandbox-hooks stop --name=offline" in stop, stop
+      # The start hooks run without a network too
+      assert workstation.succeed("cat /tmp/hook-nocaps-1000-offline").startswith("args=start 1000 offline")
       # An empty resolv.conf, without the warning about it
       workstation.fail(offline_cmd("test -s /etc/resolv.conf"))
       journal = workstation.succeed("journalctl --namespace=claude-desktop-offline --no-pager")

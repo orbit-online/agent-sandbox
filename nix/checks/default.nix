@@ -387,6 +387,146 @@ let
           udev = true;
         };
       };
+    # agent-sandbox.hooks: their config and the wrapper with the union of their capabilities, setgid sandbox-hooks, only
+    # with hooks and a sandbox user; store paths and capabilities that exist alone
+    testHooks =
+      let
+        hook = lib.getExe pkgs.hello;
+        with' =
+          sys: hooks: (sys.extendModules { modules = [ { agent-sandbox.hooks = hooks; } ]; }).config;
+        c = with' system {
+          start = [
+            {
+              path = hook;
+              capabilities = [ "CAP_NET_ADMIN" ];
+            }
+            {
+              path = hook;
+              capabilities = [
+                "CAP_BPF"
+                "CAP_NET_ADMIN"
+              ];
+            }
+          ];
+          stop = [ { path = hook; } ];
+        };
+        fails = hooks: !(builtins.tryEval (builtins.deepSeq (with' system hooks).environment.etc true)).success;
+      in
+      {
+        expr = {
+          none = system.config.environment.etc ? "agent-sandbox/hooks.json" || system.config.security.wrappers ? sandbox-hooks;
+          noUser = (with' (nixos { }) { stop = [ { path = hook; } ]; }).security.wrappers ? sandbox-hooks;
+          config = builtins.fromJSON (builtins.unsafeDiscardStringContext c.environment.etc."agent-sandbox/hooks.json".text);
+          wrapper = {
+            inherit (c.security.wrappers.sandbox-hooks)
+              source
+              capabilities
+              owner
+              group
+              permissions
+              ;
+          };
+          noCaps = (with' system { stop = [ { path = hook; } ]; }).security.wrappers.sandbox-hooks.capabilities;
+          outside = fails { start = [ { path = "/usr/local/bin/hook"; } ]; };
+          unknownCap = fails {
+            start = [
+              {
+                path = hook;
+                capabilities = [ "CAP_EVERYTHING" ];
+              }
+            ];
+          };
+        };
+        expected = {
+          none = false;
+          noUser = false;
+          config = {
+            start = [
+              {
+                path = hook;
+                capabilities = [ "CAP_NET_ADMIN" ];
+              }
+              {
+                path = hook;
+                capabilities = [
+                  "CAP_BPF"
+                  "CAP_NET_ADMIN"
+                ];
+              }
+            ];
+            stop = [
+              {
+                path = hook;
+                capabilities = [ ];
+              }
+            ];
+          };
+          wrapper = {
+            source = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox-hooks;
+            capabilities = "cap_net_admin,cap_bpf+ep";
+            owner = "root";
+            group = "sandbox-hooks";
+            permissions = "u+rx,g+xs,o+x";
+          };
+          noCaps = "";
+          outside = true;
+          unknownCap = true;
+        };
+      };
+    # The launchers get --hooks only with start hooks, and run the stop hooks when any hooks are there; a launcher's
+    # network.hooks reach its helper's --net, of that launcher alone
+    testLauncherHooks =
+      let
+        hook = lib.getExe pkgs.hello;
+        sys =
+          hooks:
+          (nixos (lib.recursiveUpdate enabled { network.hooks = [ hook ]; })).extendModules {
+            modules = [ { agent-sandbox.hooks = hooks; } ];
+          };
+        of =
+          hooks:
+          let
+            c = (sys hooks).config.home-manager.users.alice.agent-sandbox.claude-desktop;
+            roots = l: lib.concatMapStrings (r: r.text or "") l.build.storeRoots;
+            pick = l: {
+              start = lib.hasInfix "'--hooks=" (roots l);
+              named = lib.hasInfix ''"name":"work"'' (roots l) && lib.hasInfix "sandbox-hooks" (roots l);
+              stop = l.build.launcherConfig.hooks;
+              net = lib.hasInfix (builtins.unsafeDiscardStringContext ''"hooks":["${hook}"]'') (roots l);
+            };
+          in
+          {
+            default = pick c;
+            work = pick c.launchers.work;
+          };
+      in
+      {
+        expr = {
+          none = of { };
+          stop = of { stop = [ { path = hook; } ]; };
+          start = of { start = [ { path = hook; } ]; };
+        };
+        expected =
+          let
+            both = start: stop: {
+              default = {
+                inherit start stop;
+                named = false;
+                net = true;
+              };
+              work = {
+                inherit start stop;
+                named = start;
+                net = false;
+              };
+            };
+          in
+          {
+            none = both false false;
+            stop = both false true;
+            start = both true true;
+          };
+      };
     # systemd-networkd leaves the netkit primaries alone
     testNetworkd = {
       expr = {
@@ -1226,6 +1366,7 @@ in
   checks = vmChecks // {
     inherit (self.packages.${pkgs.stdenv.hostPlatform.system})
       netns-netkit
+      sandbox-hooks
       sandbox-uplink
       subid-broker
       dbus-proxy

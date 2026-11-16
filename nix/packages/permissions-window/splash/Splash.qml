@@ -4,10 +4,12 @@ import QtQuick.Layouts
 
 // splash, windowTitle, logo, logoDark, agentLogo and titleFont are context properties from main.go. While the sandbox starts: the
 // title, the main logo, the step and its progress, the agent's logo small at the right over the bar. When the start fails: why,
-// the launcher's warnings and the app's last output, until the user closes it. Light or dark as the desktop is
+// the launcher's warnings and the app's last output, until the user closes it. A warning (the start goes on without
+// something) in place of the step, the start held until the user chooses Continue. Light or dark as the desktop is
 ApplicationWindow {
     id: root
     readonly property bool failed: splash.error !== ""
+    readonly property bool warned: !failed && splash.warning !== ""
     // The button offers Abort after 10 s; clicked, the step says so at once while the launcher tears the start down
     property bool canAbort: false
     property bool aborting: false
@@ -31,7 +33,7 @@ ApplicationWindow {
     readonly property int clear: 32
 
     width: failed ? 640 : 460
-    height: failed ? 600 : 380
+    height: failed ? 600 : warned ? 420 : 380
     visible: true
     title: windowTitle
     color: bgColor
@@ -75,11 +77,11 @@ ApplicationWindow {
         // The step, centred, and the agent's logo small at the right, over the progress bar or beside the error
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: root.failed ? Math.max(24, errorLabel.implicitHeight) : 24
+            Layout.preferredHeight: root.failed || root.warned ? Math.max(24, errorLabel.implicitHeight) : 24
 
             Label {
                 objectName: "step"
-                visible: !root.failed
+                visible: !root.failed && !root.warned
                 text: root.aborting ? "Aborting startup" : splash.text
                 color: root.mutedColor
                 anchors.centerIn: parent
@@ -87,10 +89,10 @@ ApplicationWindow {
             Label {
                 id: errorLabel
                 objectName: "error"
-                visible: root.failed
-                text: splash.error
+                visible: root.failed || root.warned
+                text: root.failed ? splash.error : splash.warning
                 color: root.fgColor
-                font.bold: true
+                font.bold: root.failed
                 wrapMode: Text.Wrap
                 anchors.left: parent.left
                 anchors.right: agentIcon.left
@@ -164,17 +166,23 @@ ApplicationWindow {
                 background: Rectangle { color: splash.dark ? "#2a2a2e" : "#ffffff" }
             }
         }
-        // Abort while the sandbox starts, its place kept from the start so the window doesn't grow when it shows; Close
-        // once the start failed
+        // Abort while the sandbox starts, its place kept from the start so the window doesn't grow when it shows; Continue
+        // past a warning, at once; Close once the start failed
         Button {
             objectName: "action"
-            opacity: root.failed || root.canAbort ? 1 : 0
-            enabled: root.failed || (root.canAbort && !root.aborting)
-            text: root.failed ? "Close" : "Abort"
+            opacity: root.failed || root.warned || root.canAbort ? 1 : 0
+            enabled: root.failed || root.warned || (root.canAbort && !root.aborting)
+            text: root.failed ? "Close" : root.warned ? "Continue" : "Abort"
             Layout.alignment: Qt.AlignRight
             onClicked: {
                 if (root.failed) {
                     root.close()
+                    return
+                }
+                if (root.warned) {
+                    // Back to empty, so the next warning's Continue is a change too
+                    splash.command = "continue"
+                    splash.command = ""
                     return
                 }
                 root.aborting = true

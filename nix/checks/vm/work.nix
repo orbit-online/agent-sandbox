@@ -42,6 +42,13 @@
       workstation.succeed(f"test -d {work_home}/.claude && test -s {work_home}/.config/Claude/claude_desktop_config.json")
       workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
       workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
+      # The start hook fails for work (vm/default.nix): it started anyway, without mesh-1000, the other hook ran, and
+      # the host side says why; with no splash to acknowledge on, at once
+      assert [l.split(":")[1].strip().split("@")[0] for l in in_work("ip -o link show").splitlines()] == ["lo", "eth0"]
+      host = workstation.succeed("journalctl --namespace=claude-desktop-work --no-pager -o cat")
+      assert "Hook failed" in host and "A start hook on the host failed" in host, host
+      assert workstation.succeed("cat /tmp/hook-start-1000-work").startswith("args=start 1000 work")
+      workstation.succeed("test -e /tmp/hook-nocaps-1000-work")
 
   with subtest("mDNS: queries of the default sandbox out, responses in; work, without mDNS, neither"):
       app_ns = f"nsenter -t {bwrap_info()['child-pid']} -n ${mdnsQuery}"

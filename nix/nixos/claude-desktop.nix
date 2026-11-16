@@ -48,7 +48,10 @@ let
     u.autoSubUidGidRange || (u.subUidRanges != [ ] && u.subGidRanges != [ ]);
 in
 {
-  imports = [ (import ./network.nix { inherit self; }) ];
+  imports = [
+    (import ./network.nix { inherit self; })
+    (import ./hooks.nix { inherit self; })
+  ];
 
   config = lib.mkIf (users != [ ]) {
     agent-sandbox.network.enable = true;
