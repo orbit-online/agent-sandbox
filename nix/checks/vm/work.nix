@@ -400,9 +400,10 @@
 
       # A crash ends the daemon's grants: ExecStopPost detaches the folder, revokes the ports, and its connections
       # close with it. Started again, it has its standing grants alone, the revoked ones too, under new ids. The
-      # new daemon revokes the ports as it starts as well: the line of ExecStopPost in the journal of the unit (those
-      # of the daemon go to the journal namespace of the launcher) says it did first
-      revoked = ("journalctl _SYSTEMD_USER_UNIT=claude-desktop-work-permissions.service -o cat"
+      # new daemon revokes the ports as it starts as well: the line of ExecStopPost in the default journal (those of
+      # the daemon go to the journal namespace of the launcher) says it did first. By its uid and identifier: journald
+      # often can't tell the unit of a process that exited already, and leaves _SYSTEMD_USER_UNIT out
+      revoked = ("journalctl _UID=1000 SYSLOG_IDENTIFIER=permissions-broker -o cat"
                  " | grep -c 'Revoked the ports' || true")
       revoked_before = int(workstation.succeed(revoked))
       folder = grants[0].split()[4]
@@ -413,7 +414,12 @@
       workstation.wait_until_succeeds(f"test -s {work_home}/crashed.exit", timeout=30)
       workstation.wait_until_succeeds(work_cmd(f"sh -c '! grep -q \" {folder} \" /proc/self/mountinfo'"), timeout=30)
       workstation.wait_until_succeeds("systemctl --user -M alice@ is-active -q claude-desktop-work-permissions", timeout=30)
-      workstation.wait_until_succeeds(f"[ $({revoked}) -eq {revoked_before + 1} ]", timeout=10)
+      try:
+          workstation.wait_until_succeeds(f"[ $({revoked}) -eq {revoked_before + 1} ]", timeout=10)
+      except Exception:
+          print("DEBUG before", revoked_before, "now", workstation.execute(revoked)[1])
+          print("DEBUG", workstation.execute("journalctl -o verbose --no-pager -g 'Revoked the ports' | grep -E 'MESSAGE=|_SYSTEMD_USER_UNIT=|_SYSTEMD_UNIT=|SYSLOG_IDENTIFIER=|_UID=|_TRANSPORT=|_COMM=|^[A-Z][a-z]{2} '")[1])
+          raise
       state = control({"op": "state"}, tries=30)
       again = {g["capability"]: g["id"] for g in state["grants"] if g["lease"] == "standing"}
       assert sorted(again) == ["echo", "port", "test"] and len(state["grants"]) == 3, f"grants after a restart: {state}"
