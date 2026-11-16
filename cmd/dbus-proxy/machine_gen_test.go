@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/godbus/dbus/v5"
 	"strings"
 
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/gen"
@@ -47,6 +48,15 @@ func (v modelView) Calls(name, path, iface, member string) bool {
 	}
 	_, fs := v.mc.m.lookup(v.c, role)
 	return rules.AnyMatches(fs, rules.Call, path, iface, member)
+}
+
+func (v modelView) Version(name, path, iface string) (uint32, bool) {
+	role, ok := v.role(name)
+	if !ok {
+		return 0, false
+	}
+	_, fs := v.mc.m.lookup(v.c, role)
+	return rules.VersionOf(fs, path, iface)
 }
 
 func (v modelView) Asked(caller string, serial uint32) bool {
@@ -100,6 +110,8 @@ func (mc *machine) Generated(t *rapid.T) {
 		msg.Set(gen.StrField(3, rapid.OneOf(rapid.SampledFrom(genDriverMembers), gen.MemberName()).Draw(t, "member")))
 		msg.Args(names.Dest.Draw(t, "arg0"))
 		gen.Perturb(t, msg)
+	} else if rapid.IntRange(0, 3).Draw(t, "version") == 0 {
+		gen.GetVersion(t, msg, names.Dest, configPaths, configIfaces)
 	}
 	msg.Serial = mc.drawSerial(t, c, p)
 	raw := msg.Encode()
@@ -145,9 +157,12 @@ func (mc *machine) Generated(t *rapid.T) {
 	case spec.End:
 		m.leave(role)
 	case spec.Refuse:
-		if v.Error == spec.FalseReply {
+		switch v.Error {
+		case spec.FalseReply:
 			m.rec(role, "R %s proxy [false]", tok)
-		} else {
+		case spec.VersionReply:
+			m.rec(role, "R %s proxy %s", tok, mc.body([]any{dbus.MakeVariant(v.Version)}))
+		default:
 			m.rec(role, "E %s proxy %s", tok, v.Error)
 		}
 	case spec.Forward:

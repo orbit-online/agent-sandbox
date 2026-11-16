@@ -25,9 +25,11 @@ const (
 )
 
 // The proxy's configs in the machine's world, from internal/gen: the world's names, paths, interfaces and members
-var configNames = gen.ConfigNames{Name: rapid.SampledFrom(allNames),
-	Path: rapid.SampledFrom([]string{"/org/test", "/org", "/"}), Iface: rapid.SampledFrom([]string{svcIface, sigIface,
-		"org.test"}), Member: rapid.SampledFrom([]string{"Echo", "Other", "Ping", "Iface"})}
+var configNames = gen.ConfigNames{Name: rapid.SampledFrom(allNames), Path: rapid.SampledFrom(configPaths),
+	Iface: rapid.SampledFrom(configIfaces), Member: rapid.SampledFrom([]string{"Echo", "Other", "Ping", "Iface"})}
+
+// The paths and interfaces of the configs, which generated version calls ask about too
+var configPaths, configIfaces = []string{"/org/test", "/org", "/"}, []string{svcIface, sigIface, "org.test"}
 
 // Names services take, names clients ask for, and every name a call may go to
 var (

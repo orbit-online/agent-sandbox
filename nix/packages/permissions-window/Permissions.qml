@@ -48,18 +48,21 @@ Item {
         add("devices", "Devices", (o.devices || []).map(v => ({ value: v, mono: true, badges: [{ text: optional(v) }],
                                                                 rows: [] })),
             (o.devices || []).map(v => known ? v + " (" + optional(v) + ")" : v))
-        // The proxy's config: by name, its policy, calls and broadcasts
+        // The proxy's config: by name, its policy, calls, broadcasts and the versions it answers
         const names = Object.keys(d)
+        const versions = n => Object.keys(d[n].versions || {}).map(k => k + " = " + d[n].versions[k])
         add("dbus", "D-Bus, through the proxy", names.map(n => ({
                 value: n,
                 mono: true,
                 badges: d[n].policy ? [{ text: d[n].policy }] : [],
                 rows: (d[n].call || []).map(c => ({ name: "calls", value: c }))
                       .concat((d[n].broadcast || []).map(c => ({ name: "broadcasts", value: c })))
+                      .concat(versions(n).map(v => ({ name: "answers version", value: v })))
             })), names.reduce((lines, n) => lines.concat(
                 d[n].policy ? [n + ": " + d[n].policy] : [],
                 (d[n].call || []).length > 0 ? [n + ": calls " + d[n].call.join(", ")] : [],
-                (d[n].broadcast || []).length > 0 ? [n + ": broadcasts " + d[n].broadcast.join(", ")] : []), []))
+                (d[n].broadcast || []).length > 0 ? [n + ": broadcasts " + d[n].broadcast.join(", ")] : [],
+                versions(n).length > 0 ? [n + ": answers version " + versions(n).join(", ")] : []), []))
         add("network", "Network", plain(o.network ? [o.network] : [], false), o.network ? [o.network] : [])
         const state = g => g.ended ? "ended until the broker starts again" : g.grant ? "granted" : "not granted now"
         add("standing", "Standing grants", root.standing.map(g => ({

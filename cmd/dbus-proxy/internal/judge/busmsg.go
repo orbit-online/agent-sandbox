@@ -1,6 +1,8 @@
 package judge
 
 import (
+	"reflect"
+
 	"github.com/godbus/dbus/v5"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/rules"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
@@ -55,6 +57,18 @@ func boolReply(replySerial uint32, v bool) *dbus.Message {
 			dbus.FieldSignature:   dbus.MakeVariant(dbus.SignatureOf(true)),
 		},
 		Body: []any{v},
+	}
+}
+
+func versionReply(replySerial, v uint32) *dbus.Message {
+	return &dbus.Message{
+		Type:  dbus.TypeMethodReply,
+		Flags: dbus.FlagNoReplyExpected,
+		Headers: map[dbus.HeaderField]dbus.Variant{
+			dbus.FieldReplySerial: dbus.MakeVariant(replySerial),
+			dbus.FieldSignature:   dbus.MakeVariant(dbus.SignatureOfType(reflect.TypeFor[dbus.Variant]())),
+		},
+		Body: []any{dbus.MakeVariant(v)},
 	}
 }
 

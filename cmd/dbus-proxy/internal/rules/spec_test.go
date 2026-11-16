@@ -11,7 +11,7 @@ import (
 )
 
 // Generated configs, valid and near misses (internal/gen), are taken exactly when the specification's model of the
-// config takes them, and then give every name the model's policy, calls and broadcasts. 3000 configs in about a
+// config takes them, and then give every name the model's policy, calls, broadcasts and versions. 3000 configs in about a
 // fifth of a second, unless the command line says otherwise
 func TestConfigAgainstSpec(t *testing.T) {
 	set := false
@@ -57,6 +57,10 @@ func TestConfigAgainstSpec(t *testing.T) {
 			}
 			if got := AnyMatches(fs, Call, path, iface, member); got != want.Calls(name, path, iface, member) {
 				t.Fatalf("%s: a call to %s %s.%s passes: %v", name, path, iface, member, got)
+			}
+			v, ok := VersionOf(fs, path, iface)
+			if wv, wok := want.Version(name, path, iface); v != wv || ok != wok {
+				t.Fatalf("%s: version of %s at %s %d %v, the model's %d %v", name, iface, path, v, ok, wv, wok)
 			}
 			if got := BroadcastPasses(fs, path, iface, member); got != want.Broadcasts(name, path, iface, member) {
 				t.Fatalf("%s: a broadcast %s %s.%s passes: %v", name, path, iface, member, got)

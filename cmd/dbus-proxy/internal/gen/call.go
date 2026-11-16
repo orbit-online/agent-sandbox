@@ -81,3 +81,27 @@ func Message(n Names, replySerials *rapid.Generator[uint32]) *rapid.Generator[*M
 		return m
 	})
 }
+
+// GetVersion makes m a Properties.Get of an interface's "version", or a near miss: to a destination, at a path, of an
+// interface, mostly from the lists, else the grammar's; now and then another interface or member, property or
+// arguments
+func GetVersion(t *rapid.T, m *Msg, dest *rapid.Generator[string], paths, ifaces []string) {
+	m.Type = 1
+	m.Fields = nil
+	m.Set(StrField(6, dest.Draw(t, "dest")))
+	m.Set(StrField(1, rapid.OneOf(rapid.SampledFrom(paths), rapid.SampledFrom(paths), ObjectPath()).Draw(t, "path")))
+	props := "org.freedesktop.DBus.Properties"
+	m.Set(StrField(2, rapid.SampledFrom([]string{props, props, props, "org.freedesktop.DBus.Peer"}).Draw(t, "iface")))
+	m.Set(StrField(3, rapid.SampledFrom([]string{"Get", "Get", "Get", "GetAll"}).Draw(t, "member")))
+	iface := rapid.OneOf(rapid.SampledFrom(ifaces), rapid.SampledFrom(ifaces), InterfaceName()).Draw(t, "of")
+	prop := rapid.SampledFrom([]string{"version", "version", "Version", ""}).Draw(t, "prop")
+	switch rapid.IntRange(0, 5).Draw(t, "args") {
+	case 0:
+		m.Args(iface)
+	case 1:
+		m.Args(iface, prop, uint32(1))
+	default:
+		m.Args(iface, prop)
+	}
+	Perturb(t, m)
+}

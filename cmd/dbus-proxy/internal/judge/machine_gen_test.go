@@ -39,6 +39,13 @@ func (v oracleView) Calls(name, path, iface, member string) bool {
 	return v.m.cfg.Calls(name, path, iface, member)
 }
 
+func (v oracleView) Version(name, path, iface string) (uint32, bool) {
+	if name == self {
+		return 0, false
+	}
+	return v.m.cfg.Version(name, path, iface)
+}
+
 func (v oracleView) Asked(string, uint32) bool   { return false } // No peer calls the client here
 func (v oracleView) Awaiting(serial uint32) bool { return v.awaiting[serial] }
 func (v oracleView) HelloSent() bool             { return v.m.hello }
@@ -92,8 +99,13 @@ func genDriverCall(t *rapid.T, m *gen.Msg) {
 // Generated: the client sends a generated message, perhaps to the bus driver, perhaps mutated at the byte level
 func (m *judgeMachine) Generated(t *rapid.T) {
 	msg := gen.Message(machineNames(), rapid.Uint32Range(1, m.serial+1)).Draw(t, "msg")
-	if rapid.Bool().Draw(t, "driver") {
+	switch rapid.IntRange(0, 4).Draw(t, "kind") {
+	case 0, 1:
 		genDriverCall(t, msg)
+	case 2, 3:
+		names, paths, ifaces := m.cfg.Versioned()
+		dest := rapid.OneOf(rapid.SampledFrom(append(names, wellKnown...)), machineNames().Dest)
+		gen.GetVersion(t, msg, dest, append(paths, configPaths...), append(ifaces, configIfaces...))
 	}
 	if m.j.Held() != nil {
 		t.Skip("held")
@@ -154,7 +166,7 @@ func (m *judgeMachine) Generated(t *rapid.T) {
 	wantsReply := sm.Type == spec.TypeCall && sm.Flags&spec.FlagNoReplyExpected == 0
 	switch a.Verdict {
 	case Replace:
-		m.refusals[serial] = want.Error
+		m.refusals[serial] = want
 		m.rewrites[serial] = true
 		m.queue = append(m.queue, func() *dbus.Message { return reply(serial, busName) })
 	case Forward:
@@ -165,7 +177,7 @@ func (m *judgeMachine) Generated(t *rapid.T) {
 // A generated message let through: D1 for its destination, and the bus's answer
 func (m *judgeMachine) forwarded(t *rapid.T, sm *spec.Message, toBus, wantsReply bool, serial uint32, member string) {
 	dest := sm.Str(spec.FieldDestination)
-	if !toBus && dest != "" && !m.allowed(dest) {
+	if !toBus && dest != "" && !m.allowed(dest, sm.Str(spec.FieldPath), sm.Str(spec.FieldInterface), member) {
 		t.Fatalf("D1: a message to %s passed outside the rules", dest)
 	}
 	hello := toBus && member == "Hello" && sm.Str(spec.FieldInterface) == busIface
@@ -203,15 +215,21 @@ func (m *judgeMachine) checkRefusal(t *rapid.T, rs uint32, a Action) {
 		t.Fatal(err)
 	}
 	got := r.Header(dbus.FieldErrorName)
-	if want == spec.FalseReply {
+	switch want.Error {
+	case spec.FalseReply:
 		r.DecodeBody(64)
 		if r.Type != dbus.TypeMethodReply || len(r.Body) != 1 || r.Body[0] != false {
 			t.Fatalf("NameHasOwner of a hidden name: %v %v", r.Type, r.Body)
 		}
-		return
-	}
-	if got != want {
-		t.Fatalf("Refused with %q, want %q", got, want)
+	case spec.VersionReply:
+		r.DecodeBody(64)
+		if r.Type != dbus.TypeMethodReply || len(r.Body) != 1 || r.Body[0] != dbus.MakeVariant(want.Version) {
+			t.Fatalf("Version %d: %v %v", want.Version, r.Type, r.Body)
+		}
+	default:
+		if got != want.Error {
+			t.Fatalf("Refused with %q, want %q", got, want.Error)
+		}
 	}
 }
 

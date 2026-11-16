@@ -545,18 +545,27 @@ proxy, which refuses them. The config is the module's `dbus` option without what
 ```json
 {
   "org.freedesktop.portal.Desktop": {
-    "call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"]
+    "call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"],
+    "versions": { "org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop": 1 }
   },
   "org.freedesktop.StatusNotifierItem-100-1": { "policy": "own" }
 }
 ```
 
-Each name has a `policy` (`see`, `talk` or `own`, as xdg-dbus-proxy's), `call` and `broadcast` rules, or both. A rule is
-`[METHOD][@PATH]`, not empty: METHOD `*`, `IFACE.*` or `IFACE.MEMBER` (split at the last dot, as xdg-dbus-proxy does, so
-`org.foo.Bar` is member `Bar` of `org.foo`), PATH an object path, one ending in `/*` for it and its subtree, or `/*` for
-any. The proxy reads it strictly and refuses to start on anything else: a name that isn't well-known or is the bus
-driver's, a key twice, a field it doesn't know (in any case: encoding/json would take `Policy` for `policy`), a null, a
-name with neither policy nor rule, data after the object, and more than 64 KiB, 64 names or 64 rules in a list.
+Each name has a `policy` (`see`, `talk` or `own`, as xdg-dbus-proxy's), `call` and `broadcast` rules, `versions`, or
+more of them. A rule is `[METHOD][@PATH]`, not empty: METHOD `*`, `IFACE.*` or `IFACE.MEMBER` (split at the last dot, as
+xdg-dbus-proxy does, so `org.foo.Bar` is member `Bar` of `org.foo`), PATH an object path, one ending in `/*` for it and
+its subtree, or `/*` for any. `versions` maps `IFACE@PATH`, an interface and an exact object path, to a uint32: a call
+to the name (or a unique name that owns it) of `org.freedesktop.DBus.Properties.Get` at PATH with the arguments IFACE
+and `version`, signature `ss`, is answered by the proxy with that number as a variant, whatever the rules say, and
+never reaches the owner; as a refusal is, through a Ping to the bus on the call's serial (one wanting no reply is
+dropped). A version makes its name visible as a rule does. It exists for Chromium's portal probe: Chromium asks
+FileChooser's version once and uses it both to read Settings (any version but 0) and to pick its file chooser (the
+portal's from 3), so the module answers 1 and the app opens its own GTK chooser inside the sandbox while the portal's
+FileChooser stays refused. The proxy reads the config strictly and refuses to start on anything else: a name that isn't
+well-known or is the bus driver's, a key twice, a field it doesn't know (in any case: encoding/json would take `Policy`
+for `policy`), a null, a name with neither policy, rule nor version, a version that isn't a uint32 in decimal, data
+after the object, and more than 64 KiB, 64 names or 64 rules in a list or versions.
 `internal/spec` holds a model of the format, which the decoder's property test is held against. The module checks
 the names, the rules' syntax and the caps at eval, so a bad rule fails the build instead of the proxy's start.
 

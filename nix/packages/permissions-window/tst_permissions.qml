@@ -35,7 +35,8 @@ TestCase {
                         { path: "/srv/notes", src: "/srv/notes", rw: false, optional: true }],
                 devices: ["/dev/kvm"],
                 dbus: { "org.kde.StatusNotifierItem-100-1": { policy: "own" },
-                        "org.freedesktop.portal.Desktop": { call: ["a@/x", "b@/x"], broadcast: ["c@/x"] },
+                        "org.freedesktop.portal.Desktop": { call: ["a@/x", "b@/x"], broadcast: ["c@/x"],
+                                                            versions: { "e@/x": 1 } },
                         "org.test.Seen": { policy: "see", call: ["d"] } },
                 network: "its own",
                 implicit: ["Sockets: Wayland"]
@@ -326,7 +327,8 @@ TestCase {
         compare(findChild(view, "overview-devices").text, "/dev/kvm")
         compare(findChild(view, "overview-dbus").text,
                 "org.kde.StatusNotifierItem-100-1: own\norg.freedesktop.portal.Desktop: calls a@/x, b@/x\n"
-                + "org.freedesktop.portal.Desktop: broadcasts c@/x\norg.test.Seen: see\norg.test.Seen: calls d")
+                + "org.freedesktop.portal.Desktop: broadcasts c@/x\norg.freedesktop.portal.Desktop: answers version e@/x = 1\n"
+                + "org.test.Seen: see\norg.test.Seen: calls d")
         compare(findChild(view, "overview-network").text, "its own")
         compare(findChild(view, "overview-standing").text,
                 "the echo: granted\nthe test thing: ended until the broker starts again")

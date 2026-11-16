@@ -24,6 +24,8 @@ type Rules interface {
 	Level(name string) Level
 	// Calls is whether a call or a call rule lets the client call member of iface at path on name
 	Calls(name, path, iface, member string) bool
+	// Version is the version a rule of name's has the proxy answer a Properties.Get of iface's "version" at path with
+	Version(name, path, iface string) (uint32, bool)
 	// Asked is whether a call from caller with serial awaits the client's reply
 	Asked(caller string, serial uint32) bool
 	// Awaiting is whether a call of the client's with serial awaits its reply from the bus side
@@ -44,9 +46,10 @@ const (
 
 // Verdict is the proxy's verdict on one message
 type Verdict struct {
-	Kind  Kind
-	Error string // For Refuse: the error, or FalseReply
-	ToBus bool   // For Forward: a call to the bus driver
+	Kind    Kind
+	Error   string // For Refuse: the error, FalseReply or VersionReply
+	Version uint32 // For VersionReply
+	ToBus   bool   // For Forward: a call to the bus driver
 }
 
 const (
@@ -55,6 +58,8 @@ const (
 	ServiceUnknown = "org.freedesktop.DBus.Error.ServiceUnknown"
 	// NameHasOwner of a hidden name: a reply of false the proxy makes up
 	FalseReply = "false"
+	// Properties.Get of a version the rules give: a reply of it the proxy makes up, the owner never asked
+	VersionReply = "version"
 
 	DriverName = "org.freedesktop.DBus"
 	BusIface   = "org.freedesktop.DBus"
@@ -115,6 +120,13 @@ func ProxyVerdict(m *Message, r Rules) Verdict {
 		return refuse(AccessDenied)
 	case toDriver && iface == BusIface && member == "Hello" && r.HelloSent():
 		return refuse(AccessDenied)
+	}
+	if of, ok := ProxyGetVersion(m); ok {
+		if n, ok := r.Version(dest, m.Str(FieldPath), of); ok {
+			answer := refuse(VersionReply)
+			answer.Version = n
+			return answer
+		}
 	}
 	level := func(name string) Level {
 		if name == "" || name == DriverName {

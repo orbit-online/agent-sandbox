@@ -584,8 +584,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `see` (visible, a call denied), `talk` (any call and its reply, by the
   owner's unique name too), `own`, call rules (method and path, an interface on a `/*`
   subtree, `@/*`, `*`), broadcast rules (none without a rule, with `see` or with a
-  call rule alone, only the ones a broadcast rule matches, all with `talk` or `own`),
-  replies (let through to calls let through, refused unasked both ways, a call
+  call rule alone, only the ones a broadcast rule matches, all with `talk` or `own`), versions (answered by the proxy,
+  another interface's passed on by a call rule, another path's refused), replies (let through to calls let through, refused unasked both ways, a call
   carrying a pending reply serial refused), NameOwnerChanged by policy,
   `BecomeMonitor` and eavesdropping match rules refused, file descriptors
   both ways, `--fd` (the byte, exit and the socket removed when it closes, as
@@ -616,8 +616,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   what arrived at each end, the connections closed and every name's owner match a reference model
   (`machine_model_test.go`, `machine_bus_test.go`: each client's name table, pending calls both ways, the bus's
   owners, match rules and pending calls; D1, D2 and D4). Its `Generated` action (`machine_gen_test.go`) sends
-  messages from `internal/gen`, to the world's names and the grammar's and to the bus driver with any method, broken
-  at the header or the bytes; `spec.ProxyReads` and `spec.ProxyVerdict` predict whether the proxy reads it and
+  messages from `internal/gen`, to the world's names and the grammar's and to the bus driver with any method, and
+  `Properties.Get` of versions and near them, broken at the header or the bytes; `spec.ProxyReads` and `spec.ProxyVerdict` predict whether the proxy reads it and
   passes, refuses (which error), drops it or ends the connection, never consulting the proxy's parsers (one the proxy
   would pass with a body that contradicts its signature isn't sent: the bus's reaction is the bus's). `go test` runs 50 sequences of about 30 steps (a few seconds); more with `-rapid.checks=1000
   -rapid.steps=100` (or `RAPID_CHECKS`, `RAPID_STEPS`), a failure again with the `-rapid.seed` it prints.
@@ -629,12 +629,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   on a socket pair: EXTERNAL accepted with and without an initial response, file descriptors as negotiated,
   refusals, the command and line caps; `TestSASLAgainstSpec`, generated input against `spec.SASLServer`), `rules` (rules parsed as xdg-dbus-proxy's, the lookup, configs refused by
   example, and `TestConfigAgainstSpec`: 3000 generated configs, valid and near misses, taken exactly when
-  `spec.ParseConfig` takes them, a field null beside one that gives the entry something among the misses, then each name's policy, calls and broadcasts the model's), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
-  forgotten, a reply only to its caller; the eavesdrop match, the bounded name and owned-name tables; the bus
+  `spec.ParseConfig` takes them, a field null beside one that gives the entry something among the misses, then each name's policy, calls, broadcasts and versions the model's), `judge` (state alone: a peer's reply to a call to the bus dropped, a unique name that left
+  forgotten, a reply only to its caller, a version answered through a Ping and other properties, interfaces and paths
+  judged by the rules; `TestVersionAgainstSpec`, `Properties.Get` calls near the versions of configs that always give
+  some, against `spec.ProxyVerdict` and down to the version answered, since the machine's configs seldom do; the eavesdrop match, the bounded name and owned-name tables; the bus
   driver's default refusal, the monitoring guard on its own, Introspectable passing, the 4 KiB inspection cap; and a
   stateful property test, `machine_test.go`, that drives one connection's judge with the bus as a queue answered in
   order, with a config generated for each sequence, checking D1 and D2 after every step by `spec`'s model of it, with generated messages (`machine_gen_test.go`: grammar names and
-  bodies, any bus driver method, mutations) judged against `spec.ProxyVerdict` down to the refusal's error name, 1000
+  bodies, any bus driver method, `Properties.Get` of the config's versions and near them, mutations) judged against `spec.ProxyVerdict` down to the refusal's error name, 1000
   sequences in about a second; more with `-rapid.checks=20000 -rapid.steps=100`), `spec` (the specification's own
   examples) and `gen` (what it means valid is, by `spec`, configs too).
 - `permissions-broker`: the package build runs its Go tests (`*_test.go`):

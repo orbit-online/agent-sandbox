@@ -7,15 +7,17 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 // The proxy's static rules as docs/permissions.md (D-Bus) describes their config: a JSON object of well-known names
-// (exact, not the bus driver's), each an object of a "policy" ("see", "talk" or "own") and "call" and "broadcast"
-// lists of rules, at least one rule or a policy; a rule is [METHOD][@PATH], METHOD "*", "IFACE.*" or "IFACE.MEMBER",
-// PATH an object path, one ending in "/*" for it and its subtree, or "/*" for any. No key twice, no other field, no
-// null, nothing after the object; at most 64 KiB, 64 names and 64 rules a list. Read here as a tree of the JSON
-// first, then checked, without the proxy's decoder
+// (exact, not the bus driver's), each an object of a "policy" ("see", "talk" or "own"), "call" and "broadcast"
+// lists of rules and "versions", at least one rule or a policy; a rule is [METHOD][@PATH], METHOD "*", "IFACE.*" or
+// "IFACE.MEMBER", PATH an object path, one ending in "/*" for it and its subtree, or "/*" for any; "versions" an
+// object of IFACE@PATH, an interface and an exact path, to a uint32 in decimal, each a rule. No key twice, no other
+// field, no null, nothing after the object; at most 64 KiB, 64 names and 64 rules a list or versions. Read here as a
+// tree of the JSON first, then checked, without the proxy's decoder
 
 const (
 	ConfigMaxBytes = 64 << 10
@@ -80,7 +82,8 @@ type configName struct {
 	policy     Level
 	calls      []configRule
 	broadcasts []configRule
-	ruled      bool // any call or broadcast rule
+	versions   map[string]uint32 // by IFACE@PATH
+	ruled      bool              // any call or broadcast rule or version
 }
 
 // Config is a config the proxy takes
@@ -94,6 +97,7 @@ func ParseConfig(data []byte) (*Config, error) {
 		return nil, errors.New("too big")
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	top, err := readJSON(dec)
 	if err != nil {
 		return nil, err
@@ -109,7 +113,7 @@ func ParseConfig(data []byte) (*Config, error) {
 		if !WellKnownName(m.key) || m.key == DriverName || m.val.tok != json.Delim('{') || dupKeys(m.val) {
 			return nil, fmt.Errorf("%q: not a name with an object of its own", m.key)
 		}
-		n := &configName{}
+		n := &configName{versions: map[string]uint32{}}
 		for _, f := range m.val.members {
 			switch f.key {
 			case "policy":
@@ -134,6 +138,20 @@ func ParseConfig(data []byte) (*Config, error) {
 					} else {
 						n.broadcasts = append(n.broadcasts, r)
 					}
+				}
+			case "versions":
+				if f.val.tok != json.Delim('{') || len(f.val.members) > ConfigMaxRules || dupKeys(f.val) {
+					return nil, fmt.Errorf("%q: versions not an object of at most 64", m.key)
+				}
+				for _, v := range f.val.members {
+					iface, path, ok := strings.Cut(v.key, "@")
+					num, isNum := v.val.tok.(json.Number)
+					u, err := strconv.ParseUint(string(num), 10, 32)
+					if !ok || !Interface(iface) || !Path(path) || !isNum || err != nil {
+						return nil, fmt.Errorf("%q: version %q %v", m.key, v.key, v.val.tok)
+					}
+					n.versions[v.key] = uint32(u)
+					n.ruled = true
 				}
 			default:
 				return nil, fmt.Errorf("%q: field %q", m.key, f.key)
@@ -226,6 +244,30 @@ func (c *Config) Calls(name, path, iface, member string) bool {
 		return false
 	}
 	return n.policy >= Talk || anyRule(n.calls, path, iface, member)
+}
+
+// Version is the version a well-known name's versions give iface at path
+func (c *Config) Version(name, path, iface string) (uint32, bool) {
+	n := c.names[name]
+	if n == nil {
+		return 0, false
+	}
+	v, ok := n.versions[iface+"@"+path]
+	return v, ok
+}
+
+// Versioned is the names with versions and the paths and interfaces they give them for, sorted, for generators
+func (c *Config) Versioned() (names, paths, ifaces []string) {
+	for name, n := range c.names {
+		for key := range n.versions {
+			iface, path, _ := strings.Cut(key, "@")
+			names, paths, ifaces = append(names, name), append(paths, path), append(ifaces, iface)
+		}
+	}
+	for _, l := range [][]string{names, paths, ifaces} {
+		slices.Sort(l)
+	}
+	return names, paths, ifaces
 }
 
 func anyRule(rs []configRule, path, iface, member string) bool {

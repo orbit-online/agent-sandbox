@@ -52,10 +52,14 @@ func Load(path string) (*Set, error) {
 }
 
 // Decode reads a config: a JSON object with an entry per well-known name, exact and not the bus driver's, each an
-// object with a "policy" ("see", "talk" or "own"), "call" and "broadcast" lists of rules, or both:
+// object with a "policy" ("see", "talk" or "own"), "call" and "broadcast" lists of rules, "versions", or more of them:
 //
-//	{"org.freedesktop.portal.Desktop": {"call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"]},
+//	{"org.freedesktop.portal.Desktop": {"call": ["org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"],
+//	                                    "versions": {"org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop": 1}},
 //	 "org.freedesktop.StatusNotifierItem-100-1": {"policy": "own"}}
+//
+// "versions" maps IFACE@PATH, an interface and an exact object path, to the uint32 the proxy answers a
+// Properties.Get of the interface's "version" there with, in place of the name's owner.
 //
 // Exactly that: a key twice, a field unknown (encoding/json would take "Policy" for "policy"), a null, data after the
 // object, a config past the caps are refused
@@ -158,6 +162,25 @@ func decodeName(dec *json.Decoder, name string) ([]*Filter, error) {
 				}
 				fs = append(fs, f)
 			}
+		case "versions":
+			n := 0
+			err := object(dec, func(key string) error {
+				if n++; n > MaxRules {
+					return fmt.Errorf("More than %d", MaxRules)
+				}
+				f, err := parseVersionKey(key)
+				if err == nil {
+					err = value(dec, &f.version)
+				}
+				if err != nil {
+					return fmt.Errorf("%q: %w", key, err)
+				}
+				fs = append(fs, f)
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("versions: %w", err)
+			}
 		default:
 			return fmt.Errorf("Unknown field %q", field)
 		}
@@ -195,6 +218,15 @@ func parseRule(rule string, t Kind) (*Filter, error) {
 		f.member = m
 	}
 	return f, nil
+}
+
+// A version's key, IFACE@PATH: an interface and an exact object path
+func parseVersionKey(key string) (*Filter, error) {
+	iface, path, ok := strings.Cut(key, "@")
+	if !ok || !isDotted(iface, false) || !dbus.ObjectPath(path).IsValid() {
+		return nil, errors.New("Not IFACE@PATH")
+	}
+	return &Filter{policy: Talk, types: Version, hasPath: true, path: path, iface: iface}, nil
 }
 
 // A well-known bus name: two or more dot-separated elements of [A-Za-z0-9_-], none empty or starting with a digit,

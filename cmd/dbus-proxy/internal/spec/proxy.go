@@ -79,3 +79,23 @@ func ProxyArg0(m *Message) (string, bool) {
 	s, err := r.str()
 	return s, err == nil
 }
+
+// ProxyGetVersion is the interface a call asks the "version" property of: org.freedesktop.DBus.Properties.Get with
+// two strings, the second "version", in a body of at most 4 KiB
+func ProxyGetVersion(m *Message) (string, bool) {
+	sig := ""
+	if f, ok := m.Field(FieldSignature); ok {
+		sig = f.Str
+	}
+	if m.Type != TypeCall || m.Str(FieldInterface) != "org.freedesktop.DBus.Properties" || m.Str(FieldMember) != "Get" ||
+		sig != "ss" || len(m.Body) > ProxyMaxInspect || CheckBody(m) != nil {
+		return "", false
+	}
+	r := &reader{b: m.Body, order: m.Order}
+	iface, err := r.str()
+	if err != nil {
+		return "", false
+	}
+	prop, err := r.str()
+	return iface, err == nil && prop == "version"
+}

@@ -821,7 +821,7 @@ let
       ++ map
         (
           n:
-          "agent-sandbox.claude-desktop: dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy or a rule"
+          "agent-sandbox.claude-desktop: dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version"
         )
         [
           "org.freedesktop.DBus"
@@ -854,6 +854,10 @@ let
                     "org.test.I.${lib.strings.replicate 255 "m"}"
                   ];
                   broadcast = [ "org.test.I.S@/a" ];
+                  versions = {
+                    "org.test.I@/" = 0;
+                    "org.test.I@/a_1/b" = 4294967295;
+                  };
                 };
                 "org.test.Bad" = {
                   call = [
@@ -872,9 +876,23 @@ let
                     "org.test.I.${lib.strings.replicate 256 "m"}"
                   ];
                   broadcast = [ "*.Get" ];
+                  versions = lib.genAttrs [
+                    "org.test.I"
+                    "org.test.I@"
+                    "org.test.I@/a/"
+                    "org.test.I@/a/*"
+                    "org.test.I.*@/a"
+                    "I@/a"
+                  ] (_: 1);
                 };
-                "org.test.Edge".call = lib.genList (_: "*") 64;
+                "org.test.Edge" = {
+                  call = lib.genList (_: "*") 64;
+                  versions = lib.genAttrs (map (i: "org.test.I${toString i}@/") (lib.range 1 64)) (_: 1);
+                };
                 "org.test.Many".broadcast = lib.genList (_: "*") 65;
+                "org.test.ManyVersions".versions = lib.genAttrs (map (i: "org.test.I${toString i}@/") (lib.range 1 65)) (
+                  _: 1
+                );
                 # Over 64 KiB in one rule
                 "org.test.Big".call = [ "@/${lib.strings.replicate (64 * 1024) "a"}" ];
               };
@@ -888,11 +906,12 @@ let
       );
       expected =
         let
-          rules = "at most 64 call and 64 broadcast rules, each [METHOD][@PATH] as dbus-proxy --help says";
+          rules = "at most 64 call and 64 broadcast rules, each [METHOD][@PATH], and 64 versions, each IFACE@PATH, as dbus-proxy --help says";
         in
         [
-          ''agent-sandbox.claude-desktop: dbus."org.test.Bad": ${rules}, not "", "@", "org.test.I.M@", "@//*", "@/a/", "@/a/*/b", "org.test.I.M@/a@/b", "Iface.*", "org.test..M", "org.test.I.9M", "org.test.I.M-x", " *", "org.test.I.${lib.strings.replicate 256 "m"}", "*.Get"''
+          ''agent-sandbox.claude-desktop: dbus."org.test.Bad": ${rules}, not "", "@", "org.test.I.M@", "@//*", "@/a/", "@/a/*/b", "org.test.I.M@/a@/b", "Iface.*", "org.test..M", "org.test.I.9M", "org.test.I.M-x", " *", "org.test.I.${lib.strings.replicate 256 "m"}", "*.Get", "I@/a", "org.test.I", "org.test.I.*@/a", "org.test.I@", "org.test.I@/a/", "org.test.I@/a/*"''
           ''agent-sandbox.claude-desktop: dbus."org.test.Many": ${rules}''
+          ''agent-sandbox.claude-desktop: dbus."org.test.ManyVersions": ${rules}''
           "agent-sandbox.claude-desktop: dbus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
           "agent-sandbox.claude-desktop: launchers.work.dbus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
         ];
@@ -1637,7 +1656,7 @@ in
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
             and .overview.devices == []
             and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 5 and .broadcast == ["org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"]
-              and (has("policy") | not))
+              and .versions == {"org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop": 1} and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
             and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           # No live D-Bus layer: no proxy takes rules from the broker, and no system-bus proxy or /run/dbus

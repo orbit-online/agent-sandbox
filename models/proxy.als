@@ -140,9 +140,10 @@ pred disconnect[c: Client] {
 }
 
 // call: client c sends a call with serial s to d, method m. A serial
-// awaiting its reply ends the connection; a call the rules refuse goes
-// to the bus as a Ping on its serial; one they let through reaches d's
-// owner, and every client eavesdropping
+// awaiting its reply ends the connection; a call the rules refuse, or
+// one the proxy answers itself (a version), goes to the bus as a Ping
+// on its serial; one they let through reaches d's owner, and every
+// client eavesdropping
 pred call[g: set Guard, c: Client, s: Serial, d: Dest, m: Method] {
   c in Registered - Closed
   let ok = d = Bus or m in allowed[c, d] or Verdict not in g,

@@ -52,8 +52,8 @@ type judgeMachine struct {
 	// The serial of the client's Hello
 	helloSerial uint32
 	serial      uint32
-	// The refusals made up for the client's messages, by serial: the error the oracle says (machine_oracle_test.go)
-	refusals map[uint32]string
+	// The refusals made up for the client's messages, by serial: the oracle's verdict (machine_oracle_test.go)
+	refusals map[uint32]spec.Verdict
 	// The refused calls whose Ping awaits the bus's reply, and the ListNames calls awaiting theirs
 	rewrites  map[uint32]bool
 	listNames map[uint32]bool
@@ -67,11 +67,14 @@ type judgeMachine struct {
 	pending map[uint32]bool
 }
 
+// The paths and interfaces of the machine's configs, which its version calls ask about too
+var configPaths, configIfaces = []string{"/", "/org"}, []string{"org.test.I", "org.test"}
+
 func newJudgeMachine(t *rapid.T) *judgeMachine {
 	// A config of the machine's names, its call's path, interface and member and the grammar's
 	data := gen.Config(gen.ConfigNames{Name: rapid.SampledFrom(wellKnown),
-		Path:   rapid.OneOf(rapid.SampledFrom([]string{"/", "/org"}), gen.ObjectPath().Filter(spec.Path)),
-		Iface:  rapid.OneOf(rapid.SampledFrom([]string{"org.test.I", "org.test"}), gen.InterfaceName().Filter(spec.Interface)),
+		Path:   rapid.OneOf(rapid.SampledFrom(configPaths), gen.ObjectPath().Filter(spec.Path)),
+		Iface:  rapid.OneOf(rapid.SampledFrom(configIfaces), gen.InterfaceName().Filter(spec.Interface)),
 		Member: rapid.OneOf(rapid.SampledFrom([]string{"M", "I"}), gen.MemberName().Filter(spec.Member))}, false).Draw(t, "config")
 	cfg, err := spec.ParseConfig(data)
 	if err != nil {
@@ -90,7 +93,7 @@ func newJudgeMachine(t *rapid.T) *judgeMachine {
 func (m *judgeMachine) connect() {
 	m.j = New(m.rules, true)
 	m.hello, m.selfTalk, m.helloSerial, m.serial = false, false, 0, 0
-	m.refusals, m.rewrites, m.listNames = map[uint32]string{}, map[uint32]bool{}, map[uint32]bool{}
+	m.refusals, m.rewrites, m.listNames = map[uint32]spec.Verdict{}, map[uint32]bool{}, map[uint32]bool{}
 	m.watched, m.queue = map[string]int{}, nil
 	m.pending = map[uint32]bool{}
 }
@@ -119,17 +122,17 @@ func reply(serial uint32, sender string, body ...any) *dbus.Message {
 	return &dbus.Message{Type: dbus.TypeMethodReply, Headers: h, Body: body}
 }
 
-// Whether the config lets the client make the machine's call (/, org.test.I.M) to dest: the bus, itself, a well-known
-// name that lets it, or a unique name that ever owned one
-func (m *judgeMachine) allowed(dest string) bool {
+// Whether the config lets the client call member of iface at path on dest: the bus, itself, a well-known name that
+// lets it, or a unique name that ever owned one
+func (m *judgeMachine) allowed(dest, path, iface, member string) bool {
 	if dest == busName || dest == self {
 		return true
 	}
 	if dest[0] != ':' {
-		return m.cfg.Calls(dest, "/", "org.test.I", "M")
+		return m.cfg.Calls(dest, path, iface, member)
 	}
 	for n := range m.owned[dest] {
-		if m.cfg.Calls(n, "/", "org.test.I", "M") {
+		if m.cfg.Calls(n, path, iface, member) {
 			return true
 		}
 	}
@@ -209,7 +212,7 @@ func (m *judgeMachine) Call(t *rapid.T) {
 		dbus.FieldInterface: dbus.MakeVariant("org.test.I"), dbus.FieldMember: dbus.MakeVariant("M")}})
 	switch a.Verdict {
 	case Forward:
-		if !m.allowed(dest) {
+		if !m.allowed(dest, "/", "org.test.I", "M") {
 			t.Fatalf("D1: a call to %s passed outside the rules", dest)
 		}
 		m.pending[serial] = false

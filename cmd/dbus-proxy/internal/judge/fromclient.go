@@ -100,6 +100,21 @@ func (j *Judge) verdict(m *wire.Message) verdict {
 	return deny
 }
 
+// The version the rules have the proxy answer a call with: a Properties.Get of an interface's "version" at a path
+// one of them gives for the destination
+func (j *Judge) version(m *wire.Message) (uint32, bool) {
+	if m.Type != dbus.TypeMethodCall || m.Header(dbus.FieldInterface) != "org.freedesktop.DBus.Properties" ||
+		m.Header(dbus.FieldMember) != "Get" {
+		return 0, false
+	}
+	sig, _ := m.Headers[dbus.FieldSignature].Value().(dbus.Signature)
+	if sig.String() != "ss" || !m.DecodeBody(maxInspectBody) || m.Body[1] != "version" {
+		return 0, false
+	}
+	_, fs := j.lookup(m.Header(dbus.FieldDestination))
+	return rules.VersionOf(fs, m.Header(dbus.FieldPath), m.Body[0].(string))
+}
+
 // The policy of the name in a bus call's first argument; none when it has no string there
 func (j *Judge) arg0Policy(m *wire.Message) rules.Policy {
 	name, ok := arg0(m)
@@ -168,6 +183,13 @@ func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 			return refuse(ErrAccessDenied)
 		}
 		kind = expectHello
+	}
+	if n, ok := j.version(m); ok {
+		// Answered in the owner's place, through a Ping as a refusal
+		if !generatesReply(m) {
+			return dropped, nil
+		}
+		return j.rewrite(m, versionReply(m.Serial(), n))
 	}
 	v := j.verdict(m)
 	switch v {

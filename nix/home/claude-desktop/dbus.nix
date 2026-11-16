@@ -12,7 +12,7 @@ let
   inherit (lib) mkOption types;
   ids = sl.idsOf launcherName;
   # The D-Bus proxy's config (dbus-proxy --help): dbus without what's unset
-  dbusRules = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null && v != [ ])) config.dbus;
+  dbusRules = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null && v != [ ] && v != { })) config.dbus;
   dbusArgs = [
     "--config=${pkgs.writeText "dbus-proxy${ids.suffix}.json" (builtins.toJSON dbusRules)}"
   ];
@@ -37,6 +37,15 @@ let
       pathOk = path == null || path == "/*" || builtins.match "/|(/[A-Za-z0-9_]+)+(/\\*)?" path != null;
     in
     methodOk && pathOk;
+  # A version's key the proxy takes (parseVersionKey): IFACE@PATH, an interface of two elements or more and at most 255
+  # bytes, and an exact object path
+  dbusVersionKeyOk =
+    key:
+    let
+      elem = "[A-Za-z_][A-Za-z0-9_]*";
+      parts = builtins.match "(${elem}(\\.${elem})+)@(/|(/[A-Za-z0-9_]+)+)" key;
+    in
+    parts != null && lib.stringLength (lib.elemAt parts 0) <= 255;
   # The proxy's caps on its config (MaxNames, MaxRules and MaxConfig there)
   maxNames = 64;
   maxRules = 64;
@@ -75,15 +84,20 @@ in
               default = [ ];
               description = "Broadcasts the app may receive, each a rule as `call`'s. Any rule also makes the name visible, as xdg-dbus-proxy's `--broadcast` does.";
             };
+            versions = mkOption {
+              type = types.attrsOf (types.ints.between 0 4294967295);
+              default = { };
+              description = "Versions the proxy answers itself, by `IFACE@PATH` (an exact path): a `Properties.Get` of the interface's `version` there gets this number and never reaches the owner. Each makes the name visible, as a rule does.";
+            };
           };
         }
       );
-      defaultText = lib.literalMD "the portal's OpenURI, Settings and Notification, and with `tray` the tray's registration and the tray item's name";
+      defaultText = lib.literalMD "the portal's OpenURI, Settings and Notification, its FileChooser's version as 1, and with `tray` the tray's registration and the tray item's name";
       description = ''
         What the app reaches on the session bus through the D-Bus proxy (`dbus-proxy --help`), by well-known name,
-        exact: a policy, call and broadcast rules, or both. Any rule also makes the name visible. A call rule passes
-        no broadcasts: those need a broadcast rule, or talk or own. Talk reaches every object the name's owner exports,
-        so prefer call and broadcast rules.
+        exact: a policy, call and broadcast rules, versions, or more of them. Any rule or version also makes the name
+        visible. A call rule passes no broadcasts: those need a broadcast rule, or talk or own. Talk reaches every
+        object the name's owner exports, so prefer call and broadcast rules.
       '';
     };
     build.dbusRules = mkOption {
@@ -120,6 +134,10 @@ in
             # its GTK fallback lags one switch behind
             "org.freedesktop.DBus.Properties.Get@/org/freedesktop/portal/desktop"
           ];
+          # That version also picks Chromium's file chooser (components/dbus/xdg/portal.cc): 3 or more the portal's,
+          # whose FileChooser the rules refuse, below its own GTK one, inside the sandbox. Not 0, which leaves Settings
+          # unread (ui/linux/portal_settings_linux.cc)
+          versions."org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop" = 1;
           # Chromium follows the color scheme and accent color by it (ui/linux/portal_settings_linux.cc)
           broadcast = [ "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop" ];
         };
@@ -154,18 +172,24 @@ in
         lib.stringLength n <= 255
         && n != "org.freedesktop.DBus"
         && builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" n != null
-        && (r.policy != null || r.call != [ ] || r.broadcast != [ ]);
-      message = "${ids.opt}dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy or a rule";
+        && (r.policy != null || r.call != [ ] || r.broadcast != [ ] || r.versions != { });
+      message = "${ids.opt}dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version";
     }) config.dbus
     ++ lib.mapAttrsToList (
       n: r:
       let
         bad = lib.filter (rule: !dbusRuleOk rule) (r.call ++ r.broadcast);
+        badKeys = lib.filter (key: !dbusVersionKeyOk key) (lib.attrNames r.versions);
       in
       {
-        assertion = bad == [ ] && lib.length r.call <= maxRules && lib.length r.broadcast <= maxRules;
-        message = "${ids.opt}dbus.\"${n}\": at most ${toString maxRules} call and ${toString maxRules} broadcast rules, each [METHOD][@PATH] as dbus-proxy --help says${
-          lib.optionalString (bad != [ ]) ", not ${lib.concatMapStringsSep ", " builtins.toJSON bad}"
+        assertion =
+          bad == [ ]
+          && badKeys == [ ]
+          && lib.length r.call <= maxRules
+          && lib.length r.broadcast <= maxRules
+          && lib.length (lib.attrNames r.versions) <= maxRules;
+        message = "${ids.opt}dbus.\"${n}\": at most ${toString maxRules} call and ${toString maxRules} broadcast rules, each [METHOD][@PATH], and ${toString maxRules} versions, each IFACE@PATH, as dbus-proxy --help says${
+          lib.optionalString (bad ++ badKeys != [ ]) ", not ${lib.concatMapStringsSep ", " builtins.toJSON (bad ++ badKeys)}"
         }";
       }
     ) config.dbus

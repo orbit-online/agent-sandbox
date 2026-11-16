@@ -103,3 +103,50 @@ func TestReplyToCaller(t *testing.T) {
 		t.Errorf("The reply to the caller was dropped: %v", err)
 	}
 }
+
+// A version the rules give is answered in the owner's place, Chromium's FileChooser probe the case: the call goes to
+// the bus as a Ping and the bus's reply becomes the version. Another property, interface or path follows the rules
+func TestVersionAnswered(t *testing.T) {
+	const portal, path = "org.freedesktop.portal.Desktop", dbus.ObjectPath("/org/freedesktop/portal/desktop")
+	j := testJudge(t, `{"`+portal+`": {"call": ["org.freedesktop.DBus.Properties.Get@`+string(path)+`"],
+		"versions": {"org.freedesktop.portal.FileChooser@`+string(path)+`": 1}}}`)
+	get := func(serial uint32, p dbus.ObjectPath, iface, prop string) Action {
+		t.Helper()
+		a, err := j.FromClient(fakeMessage(t, dbus.TypeMethodCall, serial, map[dbus.HeaderField]any{
+			dbus.FieldDestination: portal, dbus.FieldPath: p, dbus.FieldInterface: "org.freedesktop.DBus.Properties",
+			dbus.FieldMember: "Get"}, iface, prop))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	a := get(2, path, "org.freedesktop.portal.FileChooser", "version")
+	ping, err := wire.Parse(a.Message)
+	if err != nil || a.Verdict != Replace || ping.Header(dbus.FieldMember) != "Ping" || ping.Serial() != 2 {
+		t.Fatalf("The version's Get went on as %v %v", a.Verdict, err)
+	}
+	a, err = j.FromBus(fakeMessage(t, dbus.TypeMethodReply, 9, map[dbus.HeaderField]any{
+		dbus.FieldReplySerial: uint32(2), dbus.FieldSender: busName}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := wire.Parse(a.Message)
+	if err != nil || !r.DecodeBody(64) {
+		t.Fatal(err)
+	}
+	if v, _ := r.Body[0].(dbus.Variant); a.Verdict != Replace || r.Type != dbus.TypeMethodReply || v.Value() != uint32(1) {
+		t.Errorf("The answer: %v %v %v", a.Verdict, r.Type, r.Body)
+	}
+	for i, c := range []struct {
+		path        dbus.ObjectPath
+		iface, prop string
+	}{
+		{path, "org.freedesktop.portal.FileChooser", "Version"},
+		{path, "org.freedesktop.portal.Settings", "version"},
+		{"/", "org.freedesktop.portal.FileChooser", "version"},
+	} {
+		if a := get(uint32(3+i), c.path, c.iface, c.prop); (a.Verdict == Forward) != (c.path == path) {
+			t.Errorf("%s %s.%s: %v", c.path, c.iface, c.prop, a.Verdict)
+		}
+	}
+}

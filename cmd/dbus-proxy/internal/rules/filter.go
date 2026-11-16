@@ -14,12 +14,14 @@ const (
 	Own
 )
 
-// What a filter from a call or broadcast rule applies to; one from a policy applies to both
+// What a filter from a call or broadcast rule applies to; one from a policy applies to both. A version's applies to
+// neither: the proxy answers it in the owner's place
 type Kind uint8
 
 const (
 	Call Kind = 1 << iota
 	Broadcast
+	Version
 	All = Call | Broadcast
 )
 
@@ -32,6 +34,7 @@ type Filter struct {
 	pathSubtree bool // The path ended in "/*"; "@/*" leaves path empty and covers every path
 	iface       string
 	member      string
+	version     uint32
 }
 
 var matchAll = map[Policy]*Filter{
@@ -73,6 +76,16 @@ func AnyMatches(fs []*Filter, t Kind, path, iface, member string) bool {
 		}
 	}
 	return false
+}
+
+// VersionOf is the version the proxy answers a Properties.Get of iface's "version" at path with, by a name's filters
+func VersionOf(fs []*Filter, path, iface string) (uint32, bool) {
+	for _, f := range fs {
+		if f.types == Version && f.path == path && f.iface == iface {
+			return f.version, true
+		}
+	}
+	return 0, false
 }
 
 // MatchAll is the filter a unique name gets from its own policy p, xdg-dbus-proxy's match_all

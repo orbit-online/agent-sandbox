@@ -59,6 +59,20 @@ func cfgRule(t *rapid.T, n ConfigNames) string {
 	return method + path
 }
 
+// Versions: up to k IFACE@PATH, each once, with a uint32
+func cfgVersions(t *rapid.T, n ConfigNames, k int) string {
+	var members []string
+	seen := map[string]bool{}
+	for range k {
+		key := n.Iface.Draw(t, "iface") + "@" + n.Path.Draw(t, "path")
+		if !seen[key] {
+			seen[key] = true
+			members = append(members, quote(key)+":"+fmt.Sprint(rapid.Uint32().Draw(t, "version")))
+		}
+	}
+	return "{" + strings.Join(members, ",") + "}"
+}
+
 // An entry: a policy, call and broadcast rules, or both, its fields in any order
 func cfgEntryOf(t *rapid.T, n ConfigNames, name string) cfgEntry {
 	e := cfgEntry{name: name}
@@ -74,9 +88,12 @@ func cfgEntryOf(t *rapid.T, n ConfigNames, name string) cfgEntry {
 			e.fields = append(e.fields, [2]string{kind, quoteList(rules)})
 		}
 	}
+	if k := rapid.IntRange(-2, 3).Draw(t, "versions"); k >= 0 {
+		e.fields = append(e.fields, [2]string{"versions", cfgVersions(t, n, k)})
+	}
 	gives := false
 	for _, f := range e.fields {
-		gives = gives || f[1] != "[]"
+		gives = gives || f[1] != "[]" && f[1] != "{}"
 	}
 	if !gives {
 		e.fields = append(e.fields, [2]string{"policy", quote("see")})
@@ -110,7 +127,8 @@ func render(t *rapid.T, entries []cfgEntry) string {
 // Config: the proxy's static rules as JSON. Without misses, valid when the names drawn are: up to five names, each
 // once. With them, a near miss one time in three: a field unknown or of another case, a policy that isn't, a name
 // that isn't (a wildcard, a unique name, the bus driver's), a name or field twice, an entry giving nothing, a rule
-// that isn't, a null, not an object, data after it, a cap reached and passed (names, rules, bytes), or cut short
+// or version that isn't, a null, not an object, data after it, a cap reached and passed (names, rules, versions,
+// bytes), or cut short
 func Config(n ConfigNames, misses bool) *rapid.Generator[[]byte] {
 	return rapid.Custom(func(t *rapid.T) []byte {
 		var entries []cfgEntry
@@ -146,7 +164,7 @@ func cfgMiss(t *rapid.T, n ConfigNames, entries []cfgEntry) string {
 		}
 		e.fields = append(e.fields, [2]string{key, val})
 	}
-	switch rapid.IntRange(0, 14).Draw(t, "kind") {
+	switch rapid.IntRange(0, 16).Draw(t, "kind") {
 	case 0:
 		set(rapid.SampledFrom([]string{"polcy", "Policy", "CALL", "", "talk"}).Draw(t, "field"), quote("see"))
 	case 1:
@@ -162,8 +180,8 @@ func cfgMiss(t *rapid.T, n ConfigNames, entries []cfgEntry) string {
 		e := some()
 		e.fields = append(e.fields, e.fields[0])
 	case 5:
-		some().fields = rapid.SampledFrom([][][2]string{nil, {{"call", "[]"}}, {{"call", "[]"}, {"broadcast", "[]"}}}).
-			Draw(t, "empty")
+		some().fields = rapid.SampledFrom([][][2]string{nil, {{"call", "[]"}}, {{"call", "[]"}, {"broadcast", "[]"}},
+			{{"versions", "{}"}}}).Draw(t, "empty")
 	case 6:
 		bad := rapid.SampledFrom([]string{"", "@//*", "*.Get", "Iface", "Iface.*", "org.test.I.M@", "@", "@bad",
 			"@/a/", "@/a/*/b", "org.test.I.M@/a@/b", "org.test..M", "org.test.I.9M", "org.test.I.M-x", "*@",
@@ -200,12 +218,29 @@ func cfgMiss(t *rapid.T, n ConfigNames, entries []cfgEntry) string {
 	case 14:
 		// A field null beside one that gives the entry something, so the null alone is what's wrong
 		e := some()
-		field := rapid.SampledFrom([]string{"policy", "call", "broadcast"}).Draw(t, "null field")
+		field := rapid.SampledFrom([]string{"policy", "call", "broadcast", "versions"}).Draw(t, "null field")
 		other := [2]string{"policy", quote("see")}
 		if field == "policy" {
 			other = [2]string{"call", quoteList([]string{cfgRule(t, n)})}
 		}
 		e.fields = rapid.Permutation([][2]string{other, {field, "null"}}).Draw(t, "null order")
+	case 15:
+		// A version that isn't, beside one that is: its key, its value, the object, a key twice
+		good := quote(n.Iface.Draw(t, "iface")+"@"+n.Path.Draw(t, "path")) + ":1"
+		bad := rapid.SampledFrom([]string{`"org.test.I":1`, `"org.test.I@/a/*":1`, `"@/a":1`, `"org.test.I@":1`,
+			`"I@/a":1`, `"org.test.I@/a@/b":1`, `"org.test.I@a":1`, `"org.test.I.*@/a":1`, `"org.test.I@/a":-1`,
+			`"org.test.I@/a":4294967296`, `"org.test.I@/a":1.5`, `"org.test.I@/a":1.0`, `"org.test.I@/a":1e0`,
+			`"org.test.I@/a":-0`, `"org.test.I@/a":"1"`, `"org.test.I@/a":null`, `"org.test.I@/a":true`,
+			`"org.test.I@/a":[1]`, good}).Draw(t, "bad")
+		val := "{" + strings.Join(rapid.Permutation([]string{good, bad}).Draw(t, "versions order"), ",") + "}"
+		set("versions", rapid.SampledFrom([]string{val, "[]", `"x"`, "1", `["org.test.I@/a"]`}).Draw(t, "versions"))
+	case 16:
+		// 64 versions may be, 65 may not
+		members := make([]string, rapid.SampledFrom([]int{64, 65}).Draw(t, "count"))
+		for i := range members {
+			members[i] = fmt.Sprintf(`"org.test.I%d@/":%d`, i, i)
+		}
+		set("versions", "{"+strings.Join(members, ",")+"}")
 	}
 	return render(t, entries)
 }

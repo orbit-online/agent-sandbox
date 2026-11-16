@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -72,4 +73,24 @@ func TestBroadcast(t *testing.T) {
 			t.Errorf("%v on %s: got %d signals, want them: %v", tc.args, tc.path, n, tc.want)
 		}
 	}
+}
+
+// A version the config gives is answered by the proxy, whose service exports no properties; another interface's goes
+// on to the service by the call rule, another path's is refused
+func TestVersion(t *testing.T) {
+	bus := startBus(t)
+	startService(t, bus)
+	c := connect(t, startProxy(t, bus, fmt.Sprintf(`%q: {"call": ["org.freedesktop.DBus.Properties.Get@/org/test"],
+		"versions": {"org.test.Iface@/org/test": 7}}`, svcName)))
+	const get = "org.freedesktop.DBus.Properties.Get"
+	r, err := call(c, svcName, "/org/test", get, svcIface, "version")
+	var v dbus.Variant
+	if err != nil || r.Store(&v) != nil || v.Value() != uint32(7) {
+		t.Errorf("The version: %v %v", v, err)
+	}
+	if _, err := call(c, svcName, "/org/test", get, "org.test.Other", "version"); err == nil || errName(err) == errAccessDenied {
+		t.Errorf("Another interface's version: %v", err)
+	}
+	_, err = call(c, svcName, "/other", get, svcIface, "version")
+	wantErr(t, "Another path's version", err, errAccessDenied)
 }

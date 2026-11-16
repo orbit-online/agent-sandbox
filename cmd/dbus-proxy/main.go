@@ -23,12 +23,15 @@ Listens on <path> and connects each client to the bus at <address>, passing what
 
   --fd=<fd>          Write a byte to <fd> once listening, exit when it closes
   --config=<file>    The rules, JSON with an entry per well-known name:
-                       {"<name>": {"policy": "see"|"talk"|"own", "call": [RULE], "broadcast": [RULE]}}
-                     a policy, rules or both. RULE is [METHOD][@PATH]: METHOD "*", "IFACE.*" or
-                     "IFACE.MEMBER", PATH an object path, ending in "/*" for its subtree too
+                       {"<name>": {"policy": "see"|"talk"|"own", "call": [RULE], "broadcast": [RULE],
+                                   "versions": {"IFACE@PATH": N}}}
+                     a policy, rules, versions or more of them. RULE is [METHOD][@PATH]: METHOD "*",
+                     "IFACE.*" or "IFACE.MEMBER", PATH an object path, ending in "/*" for its subtree too.
+                     A version: the proxy answers a Properties.Get of IFACE's "version" at PATH, exact,
+                     with the uint32 N itself
   --filter           Required, as nixpak always passes it
 
-Names are exact; any rule makes its name visible. Broadcasts pass by broadcast rule, or all of a name with talk or
+Names are exact; any rule or version makes its name visible. Broadcasts pass by broadcast rule, or all of a name with talk or
 own. The client can't monitor the bus or eavesdrop, whatever the rules (docs/permissions.md, D-Bus).
 `
 

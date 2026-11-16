@@ -98,7 +98,9 @@ unless you ask otherwise); release it when you're done.
   portal (`NOTIFY_FORCE_PORTAL=1` for libnotify, `notify-send`); the
   notification server itself (`org.freedesktop.Notifications`) and anything
   else the desktop's processes export are out of reach. Links open in the
-  host browser via OpenURI. There is no system bus. Processes running as a
+  host browser via OpenURI. The proxy answers the portal's FileChooser
+  version itself (1), so the app's file dialogs are its own GTK chooser,
+  which sees the sandbox's files only. There is no system bus. Processes running as a
   subuid can't connect to the session bus.
 - Own network namespace, joined to the host by a netkit pair (`eth0`
   here). Its programs let packets out only through the uplink with the
