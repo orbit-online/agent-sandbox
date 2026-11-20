@@ -25,6 +25,9 @@ type fakeNotifications struct {
 	bodies map[uint32]string
 	sums   map[uint32]string
 	posted chan uint32
+	// Whether it closes a notification on any action, as a server without the resident hint does
+	closes bool
+	closed map[uint32]bool
 }
 
 func (f *fakeNotifications) GetServerInformation() (string, string, string, string, *dbus.Error) {
@@ -38,7 +41,7 @@ func (f *fakeNotifications) Notify(app string, replaces uint32, icon, summary, b
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := replaces
-	if id == 0 {
+	if id == 0 || f.closed[id] {
 		f.last++
 		id = f.last
 	}
@@ -65,6 +68,7 @@ func (f *fakeNotifications) click(t *testing.T, id uint32, label string) {
 			if err := f.conn.Emit(notifyPath, notifyIface+".ActionInvoked", id, actions[i]); err != nil {
 				t.Fatal(err)
 			}
+			f.closeOnAction(t, id)
 			return
 		}
 	}
@@ -90,6 +94,25 @@ func (f *fakeNotifications) clickBody(t *testing.T, id uint32) {
 	if err := f.conn.Emit(notifyPath, notifyIface+".ActionInvoked", id, key); err != nil {
 		t.Fatal(err)
 	}
+	f.closeOnAction(t, id)
+}
+
+// closeOnAction closes notification id after an action, when the server does
+func (f *fakeNotifications) closeOnAction(t *testing.T, id uint32) {
+	t.Helper()
+	f.mu.Lock()
+	closes := f.closes
+	f.mu.Unlock()
+	if !closes {
+		return
+	}
+	// A moment after the action, as a server does once its animation ends: the broker may have asked again by then
+	time.AfterFunc(50*time.Millisecond, func() {
+		f.mu.Lock()
+		f.closed[id] = true
+		f.mu.Unlock()
+		_ = f.conn.Emit(notifyPath, notifyIface+".NotificationClosed", id, uint32(2))
+	})
 }
 
 // key is the action key of the button labelled label on notification id
@@ -137,7 +160,7 @@ func testBus(t *testing.T) (string, *fakeNotifications) {
 	}
 	addr := "unix:path=" + dir + "/bus"
 	f := &fakeNotifications{conn: busConn(t, addr), name: "fake", shown: map[uint32][]string{},
-		bodies: map[uint32]string{}, sums: map[uint32]string{}, posted: make(chan uint32, 8)}
+		bodies: map[uint32]string{}, sums: map[uint32]string{}, closed: map[uint32]bool{}, posted: make(chan uint32, 8)}
 	if err := f.conn.Export(f, notifyPath, notifyIface); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +234,7 @@ func TestNotificationForged(t *testing.T) {
 	}
 	<-f.posted
 	f.click(t, id, "Deny")
-	if a := answered(t, answer); a != "deny" {
+	if a := answered(t, answer); a != Foreign {
 		t.Errorf("A click on the sandbox's replacement answered %q", a)
 	}
 
@@ -219,8 +242,9 @@ func TestNotificationForged(t *testing.T) {
 	if err := sandbox.Emit(notifyPath, notifyIface+".ActionInvoked", id, f.key(id, "Allow")); err != nil {
 		t.Fatal(err)
 	}
+	// The first action labelled Deny is the body's
 	f.click(t, id, "Deny")
-	if a := answered(t, answer); a != "deny" {
+	if a := answered(t, answer); a != Body {
 		t.Errorf("The sandbox's ActionInvoked answered %q", a)
 	}
 
@@ -242,7 +266,7 @@ func TestNotificationDefault(t *testing.T) {
 		server string
 		p      Prompt
 		want   string
-	}{{"fake", window, "deny"}, {cosmicServer, window, "options"}, {cosmicServer, Prompt{Agent: "Claude", Summary: "x", Reason: "y"}, "deny"}} {
+	}{{"fake", window, Body}, {cosmicServer, window, "options"}, {cosmicServer, Prompt{Agent: "Claude", Summary: "x", Reason: "y"}, Body}} {
 		f.mu.Lock()
 		f.name = c.server
 		f.mu.Unlock()
@@ -297,7 +321,7 @@ func TestNotificationDefaultGuards(t *testing.T) {
 		f.clickBody(t, again)
 		select {
 		case a := <-answer:
-			if a != "deny" {
+			if a != Body {
 				t.Errorf("A click on the body later answered %q", a)
 			}
 			return

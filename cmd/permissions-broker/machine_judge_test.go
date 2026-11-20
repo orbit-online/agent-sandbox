@@ -111,7 +111,8 @@ func (m *model) judge(call bool, id, command string, params, args json.RawMessag
 		v.kind = "standing"
 		return v
 	}
-	if g := m.gate(id); g.asking {
+	// One open request per capability and parameters, maxAsking per capability
+	if g := m.gate(id); g.asking[v.params] || len(g.asking) >= maxAsking {
 		v.broken = []refusal{refAsking}
 	} else if m.now.Before(g.blockedUntil) {
 		v.broken = []refusal{refBlocked}

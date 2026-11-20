@@ -692,8 +692,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   call slot; plus a window answer while the notification is up, pending requests
   in arrival order, a click on the notification's body (the `default`
   action, first: a deny, on cosmic-notifications the window's options and a
-  deny without a window), and unit
-  names per launcher. Ports (`ports_test.go`, against a fake `netns-netkit`): a grant running `grant` and `addr` with
+  deny without a window), an early click asked again in the same notification saying it came too soon, the clicks
+  after it counted from when that notification first appeared (Allow clicked every 100 ms on one that keeps coming
+  back answers), and a new notification with its own second where the server closes it on the action anyway
+  (`early_test.go`), and unit
+  names per launcher. Asking (`asking_test.go`): requests of one capability on other parameters each asked and each
+  answered by its own answer, the same parameters again refused as `asking`, and `maxAsking` open per capability; a
+  caller hanging up on `request.sock` taking its notification down (`ErrGone`) and its request out of the window,
+  counting no refusal, the same request asked again at once, and a tool call the MCP client cancels doing the same
+  (`mcp_test.go`); no answer in time and a notification closed unanswered refused as `unanswered`, a body click or a
+  foreign key as `denied`; and the journal: `Asking`, `Answered` (`via` the button, the body), `Timed out` and
+  `Refused` with its category by the request's id, an opaque value by digest alone and the reason never. Ports (`ports_test.go`, against a fake `netns-netkit`): a grant running `grant` and `addr` with
   the name of the launcher and carrying the addresses, its release, lease, revoke and the end of the daemon running
   `revoke`, `grant` or `addr` of the helper failing leaving no grant and no port, a port, protocol or other key refused
   before asking, an answer from the window for another port refused, a standing port at start and `revoke --all` in the
@@ -759,8 +768,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   valid share between a fifth and nine tenths), each judged by an oracle written from `docs/permissions.md`
   (`machine_oracle_test.go`, `machine_judge_test.go`) without the broker's own checks: refused with a category
   (`refused` in the answer, `refusal.go`) of a rule it breaks and nothing else changed, or served by a live grant,
-  granted as a standing grant or asked; answers on the
-  notification and in the window (leases and narrowed parameters generated too), releases of live, ended and made-up grant ids, lock events,
+  granted as a standing grant or asked (several requests of one capability open at once on other parameters, each
+  gate by capability and parameters, `asking` past `maxAsking`); answers on the
+  notification and in the window (leases and narrowed parameters generated too), no answer in time refused as
+  `unanswered`, releases of live, ended and made-up grant ids, lock events,
   time passing, revoke, a restart (granting the standing grants whose instance is there and the locks, ended ones
   too), `share`, the instances changing (an instance gone closing its console's connections), connections to the
   instances' consoles (echoed from the host under a live grant, closed at once otherwise, kept open and closed

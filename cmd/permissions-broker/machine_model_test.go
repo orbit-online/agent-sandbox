@@ -38,7 +38,8 @@ type refPending struct {
 }
 
 type refGate struct {
-	asking       bool
+	// The parameters of the open requests
+	asking       map[string]bool
 	refused      int
 	blockedUntil time.Time
 }
@@ -95,7 +96,7 @@ func (m *model) endedByUser(g *refGrant) {
 
 func (m *model) gate(c string) *refGate {
 	if m.gates[c] == nil {
-		m.gates[c] = &refGate{}
+		m.gates[c] = &refGate{asking: map[string]bool{}}
 	}
 	return m.gates[c]
 }
@@ -180,10 +181,10 @@ func (m *model) endWhere(f func(*refGrant) bool) []string {
 	return ended
 }
 
-// closeGate is the gate's unlock with the user's decision (P14)
-func (m *model) closeGate(cap string, allowed bool) {
-	g := m.gate(cap)
-	g.asking = false
+// closeGate is the gate's unlock of p with the user's decision (P14)
+func (m *model) closeGate(p *refPending, allowed bool) {
+	g := m.gate(p.cap)
+	delete(g.asking, p.params)
 	if allowed {
 		g.refused = 0
 		return

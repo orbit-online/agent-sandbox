@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostcmd"
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mcpserver"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/notify"
 )
 
 // The MCP server, internal/mcpserver, against the broker
@@ -139,5 +141,43 @@ func TestNudgeLive(t *testing.T) {
 	out, err := mcpSession(t, sock).CallTool(context.Background(), &mcp.CallToolParams{Name: "status"})
 	if err != nil || len(out.Content) != 2 || !strings.Contains(out.Content[1].(*mcp.TextContent).Text, "the test thing") {
 		t.Errorf("No nudge in status: %+v, %v", out, err)
+	}
+}
+
+// A tool call the client cancels (Claude Code giving up on it) hangs up on the broker, which takes the question down
+// and asks again for the next request
+func TestMCPCancelWithdraws(t *testing.T) {
+	b, _ := testBroker(t)
+	h := newHeldAsker()
+	b.ask = h.ask
+	c := testCap(t, "command")
+	b.caps[c.id()] = c
+	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(b.cfg.GrantDir, "request.sock")
+	ln, err := listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go b.serveOn(ln, b.handleRequest)
+	cs := mcpSession(t, sock)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "request", Arguments: map[string]any{
+			"capability": c.id(), "params": map[string]any{"path": "mimir"}, "reason": "testing"}})
+		done <- err
+	}()
+	h.waitAsked(t, pathSummary("mimir"), done)
+	cancel()
+	select {
+	case cause := <-h.causes:
+		if !errors.Is(cause, notify.ErrGone) {
+			t.Errorf("Notification taken down with %v, want %v", cause, notify.ErrGone)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("The notification stayed up after the tool call was cancelled")
 	}
 }

@@ -38,7 +38,7 @@ func (mc *liveMachine) answer(t *rapid.T, p *refPending, ans wire.Request) {
 	mc.m.now = time.Now()
 	if !ans.Allow {
 		mc.m.dropPending(p)
-		mc.m.closeGate(p.cap, false)
+		mc.m.closeGate(p, false)
 		if res.Refused != refDenied {
 			mc.fatalf(t, "Request %s %s on a refusal: %+v", p.cap, p.params, res)
 		}
@@ -53,7 +53,7 @@ func (mc *liveMachine) allowed(t *rapid.T, p *refPending, lease string, params j
 	m := mc.m
 	v := m.answered(p, lease, params)
 	m.dropPending(p)
-	m.closeGate(p.cap, true)
+	m.closeGate(p, true)
 	if v.refused() {
 		if !refusedAs(res, v) {
 			mc.fatalf(t, "Allowed %s %s %q %s: %q (%s), want refused as one of %v", p.cap, p.params, lease, params,

@@ -56,7 +56,7 @@ pred crash[l: Launcher] {
   left' = left and mdir' = mdir
   Pending' = Pending - rl.l and Mature' = Mature - rl.l and Opened' = Opened - rl.l
   Asked' = Asked and Forged' = Forged and shownDir' = shownDir and shows' = shows and by' = by
-  asking' = asking - l -> Capability and refused' = refused - l -> Capability -> Int
+  asking' = asking - l -> Capability -> Param and refused' = refused - l -> Capability -> Int
   blocked' = blocked - l -> Capability
   keepEnv and ended' = ended
 }
@@ -121,7 +121,7 @@ pred sandboxEnd[l: Launcher] {
   left' = left and mdir' = mdir
   Pending' = Pending - rl.l and Mature' = Mature - rl.l and Opened' = Opened - rl.l
   Asked' = Asked and Forged' = Forged and shownDir' = shownDir and shows' = shows and by' = by
-  asking' = asking - l -> Capability and refused' = refused and blocked' = blocked
+  asking' = asking - l -> Capability -> Param and refused' = refused and blocked' = blocked
   keepEnv and ended' = ended
 }
 
@@ -160,7 +160,7 @@ fact traces {
   init
   always (
     stutter or env or tick
-    or (some r: Req | ask[r] or mature[r] or options[r] or forge[r] or refuse[r] or drop[r]
+    or (some r: Req | ask[r] or mature[r] or options[r] or forge[r] or refuse[r] or withdraw[r] or drop[r]
           or startCall[r] or answerCall[r] or some g: Grant | dropPort[r, g])
     or (some r: Req, g: Grant | matchLive[r, g] or fromConfig[r, g] or notifAllow[r, g])
     or (some r: Req, w: Clients, ls: Lease, p: Param, g: Grant | windowAllow[r, w, ls, p, g])

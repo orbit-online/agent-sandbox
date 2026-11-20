@@ -59,11 +59,11 @@ func newServer(socket string, n *nudger) *mcp.Server {
 			"session that asked: every session can use it, and any can release it. Grants with lease standing " +
 			"come from the sandbox's configuration and are there from the start.",
 	})
-	call := func(req wire.Request) (reply, error) { return callBroker(socket, req) }
+	call := func(ctx context.Context, req wire.Request) (reply, error) { return callBroker(ctx, socket, req) }
 
 	mcp.AddTool(server, &mcp.Tool{Name: "list", Description: "What can be granted, with its parameters, and what is."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-			res, err := call(wire.Request{Op: "list"})
+			res, err := call(ctx, wire.Request{Op: "list"})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -76,7 +76,7 @@ func newServer(socket string, n *nudger) *mcp.Server {
 		"bounding arguments as params."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in requestIn) (*mcp.CallToolResult, any, error) {
 			params, _ := json.Marshal(in.Params)
-			res, err := call(wire.Request{Op: "request", Capability: in.Capability, Params: params, Reason: in.Reason,
+			res, err := call(ctx, wire.Request{Op: "request", Capability: in.Capability, Params: params, Reason: in.Reason,
 				Lease: in.Lease})
 			if err != nil {
 				return nil, nil, err
@@ -86,7 +86,7 @@ func newServer(socket string, n *nudger) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "release", Description: "Give a grant back once you're done with it. " +
 		"It ends for the whole sandbox."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in releaseIn) (*mcp.CallToolResult, any, error) {
-			if _, err := call(wire.Request{Op: "release", Grant: in.Grant}); err != nil {
+			if _, err := call(ctx, wire.Request{Op: "release", Grant: in.Grant}); err != nil {
 				return nil, nil, err
 			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Released"}}}, nil, nil
@@ -94,7 +94,7 @@ func newServer(socket string, n *nudger) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Description: "The sandbox's live grants, usable from the " +
 		"whole sandbox."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-			res, err := call(wire.Request{Op: "status"})
+			res, err := call(ctx, wire.Request{Op: "status"})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -129,9 +129,11 @@ type heldGrant struct {
 	Granted time.Time `json:"granted"`
 }
 
-func callBroker(socket string, req wire.Request) (reply, error) {
+// callBroker hangs up when ctx ends: the client cancelled the tool call, or gave up waiting, and the broker stops
+// asking the user
+func callBroker(ctx context.Context, socket string, req wire.Request) (reply, error) {
 	var res reply
-	if err := wire.Call(socket, req, &res); err != nil {
+	if err := wire.CallContext(ctx, socket, req, &res); err != nil {
 		return reply{}, err
 	}
 	return res, nil
@@ -170,7 +172,7 @@ func (n *nudger) note() string {
 	if now.Sub(n.last) < nudgeEvery {
 		return ""
 	}
-	status, err := callBroker(n.socket, wire.Request{Op: "status"})
+	status, err := callBroker(context.Background(), n.socket, wire.Request{Op: "status"})
 	if err != nil {
 		return ""
 	}

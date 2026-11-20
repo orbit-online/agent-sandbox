@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +31,18 @@ type Prompt struct {
 	Options bool
 }
 
+// Answers that deny besides Deny: a click on the body, and an action key that isn't the broker's (a replacement's
+// button)
+const (
+	Body    = "body"
+	Foreign = "foreign"
+)
+
 // Why a notification is taken down early: the user answered in the window
 var ErrAnswered = errors.New("answered in the window")
+
+// Why a notification is taken down early: the caller stopped waiting for the answer
+var ErrGone = errors.New("the caller stopped waiting")
 
 const (
 	notifyName  = "org.freedesktop.Notifications"
@@ -69,6 +80,11 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 	conn.Signal(signals)
 	defer conn.RemoveSignal(signals)
 	server := conn.Object(notifyName, notifyPath)
+	// The notification asked on, once posted, and when it first appeared: asking again replaces it in place, so the
+	// time a click must wait counts from then, not from each time it comes back
+	var id uint32
+	var shown time.Time
+	early := false
 	for {
 		var owner string
 		if err := conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetNameOwner", 0, notifyName).
@@ -76,6 +92,9 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 			return "", fmt.Errorf("Find the notification server: %w", err)
 		}
 		click, label, hint := bodyClick(ctx, server, p)
+		if early {
+			hint = strings.TrimSuffix(tooSoon+"\n"+hint, "\n")
+		}
 		summary, body := Text(p, hint)
 		allow, deny, options := randomKey(), randomKey(), randomKey()
 		keys := map[string]string{"default": click, allow: "allow", deny: "deny"}
@@ -85,33 +104,78 @@ func askOn(ctx context.Context, conn *dbus.Conn, p Prompt) (string, error) {
 			keys[options] = "options"
 			actions = append(actions, options, "Options…")
 		}
-		var id uint32
-		if err := server.CallWithContext(ctx, notifyIface+".Notify", 0, p.Agent+" permissions", uint32(0),
-			"security-medium", summary, body, actions, map[string]dbus.Variant{"urgency": dbus.MakeVariant(byte(2))},
-			int32(0)).Store(&id); err != nil {
+		// Resident: a server that honours it keeps the notification after an action, so an early click can be asked
+		// again in place
+		hints := map[string]dbus.Variant{"urgency": dbus.MakeVariant(byte(2)), "resident": dbus.MakeVariant(true)}
+		var posted uint32
+		if err := server.CallWithContext(ctx, notifyIface+".Notify", 0, p.Agent+" permissions", id,
+			"security-medium", summary, body, actions, hints, int32(0)).Store(&posted); err != nil {
 			if ctx.Err() != nil {
 				return "deny", nil
 			}
 			return "", fmt.Errorf("Post the notification: %w", err)
 		}
-		shown := time.Now()
+		if posted != id {
+			id, shown = posted, time.Now()
+		}
 		action, err := awaitAction(ctx, signals, owner, id, keys)
 		if err != nil {
 			return "", err
 		}
 		if ctx.Err() != nil {
 			title, text := p.Agent+"'s request timed out", "Not granted: "+escapeMarkup(p.Summary)
-			if errors.Is(context.Cause(ctx), ErrAnswered) {
+			switch cause := context.Cause(ctx); {
+			case errors.Is(cause, ErrAnswered):
 				title, text = "Answered in the Permissions window", escapeMarkup(p.Summary)
+			case errors.Is(cause, ErrGone):
+				title = p.Agent + " stopped waiting for the answer"
 			}
 			_ = server.Call(notifyIface+".Notify", 0, p.Agent+" permissions", id, "security-medium", title, text,
 				[]string{}, map[string]dbus.Variant{}, int32(10000)).Err
 			return "deny", nil
 		}
 		if action != "" && time.Since(shown) < notifyMature {
+			slog.Info("Ignored an answer within a second of the notification appearing: asking again", "action", action)
+			early = true
+			// A server that closes it on the action anyway: ask in a new one, whose clicks wait from its own appearance
+			if closedSoon(signals, owner, id) {
+				id = 0
+			}
 			continue
 		}
+		if action != "" {
+			// Resident: it stays up after the action unless taken down
+			_ = server.Call(notifyIface+".CloseNotification", 0, id).Err
+		}
 		return action, nil
+	}
+}
+
+// What a notification asked again after an early click says, ahead of the rest of its body
+const tooSoon = "That answer came too soon after this appeared, so it didn't count: answer again."
+
+// How long a server that closes notifications on an action takes to say so
+var closeWait = 200 * time.Millisecond
+
+// closedSoon reports whether the server closes notification id within closeWait. Other signals meanwhile are dropped:
+// a second click of the same early answer
+func closedSoon(signals <-chan *dbus.Signal, owner string, id uint32) bool {
+	deadline := time.After(closeWait)
+	for {
+		select {
+		case <-deadline:
+			return false
+		case s, ok := <-signals:
+			if !ok {
+				return false
+			}
+			if s.Sender != owner || s.Name != notifyIface+".NotificationClosed" || len(s.Body) < 1 {
+				continue
+			}
+			if got, ok := s.Body[0].(uint32); ok && got == id {
+				return true
+			}
+		}
 	}
 }
 
@@ -158,7 +222,7 @@ func bodyClick(ctx context.Context, server dbus.BusObject, p Prompt) (string, st
 		Store(&name, &vendor, &version, &spec); err == nil && name == cosmicServer && p.Options {
 		return "options", "Options…", "Click to answer in the Permissions window."
 	}
-	return "deny", "Deny", ""
+	return Body, "Deny", ""
 }
 
 // awaitAction waits for the server's answer to notification id: the action of the key clicked, deny for a key that
@@ -185,7 +249,7 @@ func awaitAction(ctx context.Context, signals <-chan *dbus.Signal, owner string,
 				if action, ok := keys[key]; ok {
 					return action, nil
 				}
-				return "deny", nil
+				return Foreign, nil
 			case notifyIface + ".NotificationClosed":
 				return "", nil
 			}

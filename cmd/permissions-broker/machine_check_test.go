@@ -63,7 +63,7 @@ func (mc *machine) Check(t *rapid.T) {
 	// P14: one question per capability, and the refusal block
 	for _, c := range slices.Sorted(maps.Keys(mc.caps)) {
 		g, r := gates[c], m.gate(c)
-		if g.asking != r.asking || g.refused != r.refused || !g.blockedUntil.Equal(r.blockedUntil) {
+		if !maps.Equal(g.asking, r.asking) && len(g.asking)+len(r.asking) > 0 || g.refused != r.refused || !g.blockedUntil.Equal(r.blockedUntil) {
 			mc.fatalf(t, "Gate of %s: %+v, want %+v", c, g, *r)
 		}
 	}

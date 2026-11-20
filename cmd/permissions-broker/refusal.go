@@ -3,6 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/wire"
 )
 
 // Why the broker refuses a request or a call: one category per check of docs/permissions.md (Declared host commands,
@@ -34,8 +37,10 @@ const (
 	refAsking refusal = "asking"
 	// Three refusals in a row: no requests for the capability for a while
 	refBlocked refusal = "blocked"
-	// The user said no, or didn't answer in time
+	// The user said no
 	refDenied refusal = "denied"
+	// The user didn't answer in time, or closed the notification without answering
+	refUnanswered refusal = "unanswered"
 	// Making the grant live failed: a mount, an address
 	refFailed refusal = "failed"
 	// release or revoke of a grant there isn't
@@ -77,4 +82,26 @@ func refusalOf(err error) refusal {
 		return r.why
 	}
 	return ""
+}
+
+// Refusals whose message is the broker's own words alone: the others may repeat what the sandbox sent (a name, a
+// value, a lease), which stays out of the journal
+var ownWords = map[refusal]bool{refAsking: true, refBlocked: true, refDenied: true, refUnanswered: true, refGone: true,
+	refFailed: true, refUnshared: true, refHeld: true, refNoGrant: true}
+
+// logRefusal puts a refused request or call into the journal: its operation, its capability and command when they're
+// declared, and the category, with the message where it's the broker's own words
+func (b *broker) logRefusal(req wire.Request, err error) {
+	why := refusalOf(err)
+	attrs := []any{"op", req.Op, "refused", string(why)}
+	if c, ok := b.caps[req.Capability]; ok {
+		attrs = append(attrs, "capability", c.id())
+		if _, ok := c.Commands[req.Command]; ok {
+			attrs = append(attrs, "command", req.Command)
+		}
+	}
+	if ownWords[why] {
+		attrs = append(attrs, "err", err.Error())
+	}
+	slog.Info("Refused", attrs...)
 }

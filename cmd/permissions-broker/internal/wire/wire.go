@@ -3,6 +3,7 @@
 package wire
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,11 +43,26 @@ var ErrNotRunning = errors.New("The permissions broker isn't running")
 // Call sends one request and decodes the answer into res, or returns the error it carries. A request waits for the
 // user: two minutes, or ten with the window open
 func Call(socket string, req Request, res any) error {
+	return CallContext(context.Background(), socket, req, res)
+}
+
+// CallContext is Call that hangs up when ctx ends, which withdraws a request the user is asked about
+func CallContext(ctx context.Context, socket string, req Request, res any) error {
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrNotRunning, err)
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	err = exchange(conn, req, res)
+	if ctx.Err() != nil {
+		return fmt.Errorf("Stopped waiting for the broker: %w", context.Cause(ctx))
+	}
+	return err
+}
+
+func exchange(conn net.Conn, req Request, res any) error {
 	_ = conn.SetDeadline(time.Now().Add(AskTimeout + OptionsTimeout + time.Minute))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return err

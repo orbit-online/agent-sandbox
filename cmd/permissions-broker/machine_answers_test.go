@@ -41,7 +41,7 @@ func (mc *machine) NotifyAllow(t *rapid.T) {
 func (mc *machine) NotifyDeny(t *rapid.T) {
 	p := mc.drawPending(t, true)
 	p.call.answer <- "deny"
-	mc.refused(t, p, mc.waitDone(t, p))
+	mc.refused(t, p, mc.waitDone(t, p), refDenied)
 }
 
 // NotifyOptions: Options on the notification hands the request to the window, which waits 10 minutes at most
@@ -77,17 +77,18 @@ func (mc *machine) WindowAnswer(t *rapid.T) {
 	}
 	res := mc.waitDone(t, p)
 	if !ans.Allow {
-		mc.refused(t, p, res)
+		mc.refused(t, p, res, refDenied)
 		return
 	}
 	mc.allowed(t, p, ans.Lease, ans.Params, res, before)
 }
 
-// refused: a request denied, or not answered in time. The third in a row blocks the capability (P14)
-func (mc *machine) refused(t *rapid.T, p *refPending, res response) {
+// refused: a request denied (want refDenied), or not answered in time (refUnanswered). The third in a row blocks the
+// capability (P14)
+func (mc *machine) refused(t *rapid.T, p *refPending, res response, want refusal) {
 	mc.m.dropPending(p)
-	mc.m.closeGate(p.cap, false)
-	if res.Refused != refDenied {
+	mc.m.closeGate(p, false)
+	if res.Refused != want {
 		mc.fatalf(t, "Request %s %s on a refusal: %+v", p.cap, p.params, res)
 	}
 }
@@ -98,7 +99,7 @@ func (mc *machine) allowed(t *rapid.T, p *refPending, lease string, params json.
 	m := mc.m
 	v := m.answered(p, lease, params)
 	m.dropPending(p)
-	m.closeGate(p.cap, true)
+	m.closeGate(p, true)
 	made := mc.grantedSince(before)
 	if v.refused() {
 		if !refusedAs(res, v) || len(made) > 0 {

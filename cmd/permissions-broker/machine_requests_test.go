@@ -196,5 +196,5 @@ func (mc *machine) asked(t *rapid.T, call *askCall, req wire.Request, v verdict,
 	}
 	mc.b.mu.Unlock()
 	mc.m.pending = append(mc.m.pending, p)
-	mc.m.gate(req.Capability).asking = true
+	mc.m.gate(req.Capability).asking[v.params] = true
 }

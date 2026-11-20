@@ -53,13 +53,32 @@ func (b *broker) serveOn(ln *net.UnixListener, handle func(*net.UnixConn, peer, 
 			b.streamEvents(conn)
 			return
 		}
+		if req.Op == "request" || req.Op == "call" {
+			p.hungUp = watchHangUp(conn)
+		}
 		_ = json.NewEncoder(conn).Encode(handle(conn, p, req))
 	})
 }
 
 // A client: its pid in our pid namespace and a pidfd for it (SO_PEERPIDFD), which tells whether the pid still names
-// that process. What is read from /proc/<pid> counts only if the process is still alive after the read
-type peer struct{ pid, pidfd int }
+// that process. What is read from /proc/<pid> counts only if the process is still alive after the read. hungUp, for a
+// request or a call on request.sock, closes once the client hangs up: nil (never) elsewhere
+type peer struct {
+	pid, pidfd int
+	hungUp     <-chan struct{}
+}
+
+// watchHangUp closes its channel once the client hangs up, or sends more: a client sends one request, then only
+// waits for the answer. The read ends when the connection is closed after the answer
+func watchHangUp(conn *net.UnixConn) <-chan struct{} {
+	gone := make(chan struct{})
+	go func() {
+		var buf [1]byte
+		_, _ = conn.Read(buf[:])
+		close(gone)
+	}()
+	return gone
+}
 
 func (p peer) gone() bool { return !proc.Alive(p.pidfd) }
 
@@ -110,6 +129,7 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req wire.Request) respon
 	}
 	if err != nil {
 		res.Error, res.Refused = err.Error(), refusalOf(err)
+		b.logRefusal(req, err)
 	}
 	return res
 }

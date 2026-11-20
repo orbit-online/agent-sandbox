@@ -24,7 +24,7 @@ one sig LOnce, LLock, LDuration, LStanding extends Lease {}
 sig Launcher {
   standing: Capability -> Param,
   var ended: Capability -> Param,
-  var asking: set Capability,
+  var asking: Capability -> Param,
   var refused: Capability -> lone Int,
   var blocked: set Capability
 }
@@ -176,9 +176,12 @@ pred covers[g: Grant, l: Launcher, c: Capability, p: Param] {
   g in Live and g.gl = l and g.gcap = c and g.gparams = p and g.glease != LOnce
 }
 
-// openGate (consent.go): one open request per capability, none while
-// blocked.
-pred gateOpen[l: Launcher, c: Capability] { c not in l.asking + l.blocked }
+// openGate (consent.go): one open request per capability and parameters,
+// none while the capability is blocked. Its cap of 4 open per capability
+// is counting, left to the Go tests.
+pred gateOpen[l: Launcher, c: Capability, p: Param] {
+  p not in c.(l.asking) and c not in l.blocked
+}
 
 // control.sock answers only peers in the daemon's user namespace
 // (handleControl, sockets.go).

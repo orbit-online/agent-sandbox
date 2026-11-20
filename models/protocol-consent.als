@@ -154,21 +154,29 @@ check P7noAllowOnForged for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 
   2 Grant, 2 Req, 0 Conn, 2 Text, 3 Int, 1..7 steps expect 0
 
 // P14. The sandbox can't keep the user from answering: at most one
-// pending request per capability and launcher (openGate, consent.go),
-// and none while a capability is blocked after three refusals.
-// The connection budgets (64 per socket and per host socket address,
-// 10 s, 1 MiB) are counting, left to the Go tests.
-// Revert: gateOpen true: two pending requests for one capability.
-assert P14onePendingPerCapability {
-  always all l: Launcher, c: Capability | lone r: Pending | r.rl = l and r.rcap = c
+// pending request per capability, parameters and launcher (openGate,
+// consent.go), none while a capability is blocked after three refusals,
+// and a withdrawn request no refusal. The connection budgets (64 per
+// socket and per host socket address, 10 s, 1 MiB) and the cap of 4 open
+// per capability are counting, left to the Go tests.
+// Revert: gateOpen true: two pending requests for one capability and
+// parameters.
+assert P14onePendingPerParams {
+  always all l: Launcher, c: Capability, p: Param | lone r: Pending | r.rl = l and r.rcap = c and r.rparams = p
+  always all r: Req | withdraw[r] implies r.rl.refused' = r.rl.refused
   always all r: Req | ask[r] implies r.rcap not in r.rl.blocked
   always all r: Req | (refuse[r] and nref[r.rl, r.rcap] = 2) implies after r.rcap in r.rl.blocked
 }
-check P14onePendingPerCapability for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
+check P14onePendingPerParams for 3 but 0 Process, 2 Launcher, 2 Capability, 2 Param, 2 Instance, 2 Dir,
   3 Grant, 4 Req, 0 Conn, 2 Text, 3 Int, 1..8 steps expect 0
-// P14's premise: a capability blocked after three refusals, and two
-// capabilities pending at once.
+// P14's premise: a capability blocked after three refusals.
 run P14blocks {
   eventually some l: Launcher | some l.blocked
 } for 3 but 0 Process, 1 Launcher, 1 Capability, 1 Param, 1 Instance, 1 Dir,
   1 Grant, 3 Req, 0 Conn, 1 Text, 3 Int, 1..8 steps expect 1
+// And two requests of one capability pending at once, on other parameters.
+run P14twoParams {
+  eventually some l: Launcher, c: Capability, disj r, q: Pending |
+    r.rl = l and q.rl = l and r.rcap = c and q.rcap = c
+} for 3 but 0 Process, 1 Launcher, 1 Capability, 2 Param, 1 Instance, 1 Dir,
+  1 Grant, 2 Req, 0 Conn, 1 Text, 3 Int, 1..4 steps expect 1

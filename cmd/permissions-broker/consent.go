@@ -100,16 +100,27 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 		return g, nil
 	}
 
-	unlockGate, err := b.openGate(c.id())
+	unlockGate, err := b.openGate(c, params)
 	if err != nil {
 		return nil, err
 	}
-	answer, err := b.consent(c, params, summary, reason, lease, call)
-	unlockGate(answer.Allow)
+	answer, err := b.consent(p, c, params, summary, reason, lease, call)
+	// A caller that stopped waiting withdrew its request: no refusal of the user's
+	unlockGate(answer.Allow, answer.How != howGone)
 	if err != nil {
 		return nil, refuse(refDenied, fmt.Errorf("Asking the user: %w", err))
 	}
-	if !answer.Allow {
+	switch {
+	case answer.How == howGone:
+		b.logDecision(summary, reason, "withdrawn: the caller stopped waiting")
+		return nil, refusef(refGone, "The caller stopped waiting before the user answered")
+	case answer.How == howTimeout:
+		b.logDecision(summary, reason, "denied: no answer in time")
+		return nil, refusef(refUnanswered, "The user didn't answer in time")
+	case answer.How == howClosed:
+		b.logDecision(summary, reason, "denied: closed without an answer")
+		return nil, refusef(refUnanswered, "The user closed the notification without answering")
+	case !answer.Allow:
 		b.logDecision(summary, reason, "denied")
 		return nil, refusef(refDenied, "The user didn't allow it")
 	}
@@ -184,65 +195,72 @@ func (b *broker) matching(c *capability, params json.RawMessage) *grant {
 	return nil
 }
 
-// openGate allows one open request per capability, and none for a while after maxRefusals in a row. The returned
-// function closes it with the user's decision
-func (b *broker) openGate(id string) (func(allowed bool), error) {
+// openGate allows one open request per capability and parameters, maxAsking per capability, and none for a while
+// after maxRefusals in a row of the capability. The returned function closes it with the user's decision, a refusal
+// counted only when counts
+func (b *broker) openGate(c *capability, params json.RawMessage) (func(allowed, counts bool), error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	g := b.gates[id]
+	g := b.gates[c.id()]
 	if g == nil {
-		g = &gate{}
-		b.gates[id] = g
+		g = &gate{asking: map[string]bool{}}
+		b.gates[c.id()] = g
 	}
+	key := string(params)
 	switch {
-	case g.asking:
+	case g.asking[key]:
 		return nil, refusef(refAsking, "The user hasn't answered your last request for this yet")
+	case len(g.asking) >= maxAsking:
+		return nil, refusef(refAsking, "The user hasn't answered %d requests for %s yet", len(g.asking), c.id())
 	case b.now().Before(g.blockedUntil):
 		return nil, refusef(refBlocked, "The user turned down %d requests in a row: ask again after %s", maxRefusals,
 			g.blockedUntil.Format(time.TimeOnly))
 	}
-	g.asking = true
-	return func(allowed bool) {
+	g.asking[key] = true
+	return func(allowed, counts bool) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		g.asking = false
-		if allowed {
+		delete(g.asking, key)
+		switch {
+		case allowed:
 			g.refused = 0
-			return
-		}
-		if g.refused++; g.refused >= maxRefusals {
-			g.refused = 0
-			g.blockedUntil = b.now().Add(blockFor)
+		case !counts:
+		default:
+			if g.refused++; g.refused >= maxRefusals {
+				g.refused = 0
+				g.blockedUntil = b.now().Add(blockFor)
+			}
 		}
 	}, nil
 }
 
-type decision struct {
-	Allow  bool
-	Lease  string
-	Params json.RawMessage
-}
-
-// consent asks with a notification. Options hands the request to the window, which answers through control.sock
-func (b *broker) consent(c *capability, params json.RawMessage, summary, reason, lease string, call *askingCall) (decision, error) {
+// consent asks with a notification. Options hands the request to the window, which answers through control.sock.
+// A caller that hangs up takes the question down with it. Each question, answer and timeout goes to the journal by
+// the request's id, with the daemon's summary (opaque values by digest), never the reason
+func (b *broker) consent(caller peer, c *capability, params json.RawMessage, summary, reason, lease string, call *askingCall) (d decision, err error) {
 	p := &pending{ID: randomID(), Capability: c.id(), Params: params, Summary: summary, Reason: reason, Lease: lease,
 		answer: make(chan wire.Request, 1)}
 	scope, bounds := c.kind().scope(c, params)
 	p.Bounds = bounds
+	attrs := []any{"pending", p.ID, "capability", c.id(), "summary", summary, "lease", lease}
 	if call != nil {
 		p.Command, p.Arguments = call.Command, call.Arguments
+		attrs = append(attrs, "command", call.Command)
 	}
 	b.mu.Lock()
 	b.pendingSeq++
 	p.seq = b.pendingSeq
 	b.pending[p.ID] = p
 	b.mu.Unlock()
+	slog.Info("Asking", attrs...)
 	b.event("pending", p.ID)
 	defer func() {
 		b.mu.Lock()
 		delete(b.pending, p.ID)
+		options := p.Options
 		b.mu.Unlock()
 		b.event("answered", p.ID)
+		logAnswer(p, options, d, err)
 	}()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -270,10 +288,17 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 		switch {
 		case r.err != nil:
 			return decision{}, r.err
+		case errors.Is(context.Cause(ctx), context.DeadlineExceeded):
+			// Taken down for the timeout: whatever the notification answered then
+			return decision{How: howTimeout}, nil
 		case r.action == "allow":
-			return decision{Allow: true, Lease: lease}, nil
+			return decision{Allow: true, Lease: lease, How: howButton}, nil
+		case r.action == "":
+			return decision{How: howClosed}, nil
+		case r.action == notify.Body || r.action == notify.Foreign:
+			return decision{How: r.action}, nil
 		case r.action != "options":
-			return decision{}, nil
+			return decision{How: howButton}, nil
 		}
 		_ = b.markOptions(p.ID)
 		if err := b.openWindow(); err != nil {
@@ -283,12 +308,17 @@ func (b *broker) consent(c *capability, params json.RawMessage, summary, reason,
 		// Answered in the window while the notification was up
 		cancel(notify.ErrAnswered)
 		return windowDecision(a, lease), nil
+	case <-caller.hungUp:
+		cancel(notify.ErrGone)
+		return decision{How: howGone}, nil
 	}
 	select {
 	case a := <-p.answer:
 		return windowDecision(a, lease), nil
 	case <-b.clock.after(wire.OptionsTimeout):
-		return decision{}, nil
+		return decision{How: howTimeout}, nil
+	case <-caller.hungUp:
+		return decision{How: howGone}, nil
 	}
 }
 
@@ -296,7 +326,7 @@ func windowDecision(a wire.Request, lease string) decision {
 	if a.Lease == "" {
 		a.Lease = lease
 	}
-	return decision{Allow: a.Allow, Lease: a.Lease, Params: a.Params}
+	return decision{Allow: a.Allow, Lease: a.Lease, Params: a.Params, How: howWindow}
 }
 
 func (b *broker) markOptions(id string) error {
@@ -307,6 +337,7 @@ func (b *broker) markOptions(id string) error {
 		return fmt.Errorf("No pending request %q", id)
 	}
 	p.Options = true
+	slog.Info("Answering in the window", "pending", id)
 	return nil
 }
 

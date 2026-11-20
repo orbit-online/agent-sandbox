@@ -19,8 +19,10 @@ const (
 	// Requests the user may turn down in a row before the broker stops asking about the capability for a while
 	maxRefusals = 3
 	blockFor    = 2 * time.Minute
-	maxReason   = 300
-	maxLog      = 200
+	// Open requests per capability, each with other parameters
+	maxAsking = 4
+	maxReason = 300
+	maxLog    = 200
 	// Bounds on what a client can hold or send: open connections per socket (watch streams and spliced connections
 	// included), and a request's size
 	maxConns   = 64
@@ -126,8 +128,9 @@ type logEntry struct {
 
 type asker func(ctx context.Context, p notify.Prompt) (string, error)
 
+// A capability's requests: the parameters of the open ones, and the refusals in a row
 type gate struct {
-	asking       bool
+	asking       map[string]bool
 	refused      int
 	blockedUntil time.Time
 }

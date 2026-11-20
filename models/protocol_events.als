@@ -27,13 +27,13 @@ pred ask[r: Req] {
     reqOK[r]
     no g: Grant | covers[g, l, c, p]
     not standingNow[l, c, p]
-    gateOpen[l, c]
+    gateOpen[l, c, p]
     Pending' = Pending + r and Asked' = Asked + r
     Mature' = Mature and Opened' = Opened and Forged' = Forged
     r.shownDir' = p.resolves and r.shows' = r.summary
     all q: Req - r | q.shownDir' = q.shownDir and q.shows' = q.shows
     by' = by
-    asking' = asking + l -> c and refused' = refused and blocked' = blocked
+    asking' = asking + l -> c -> p and refused' = refused and blocked' = blocked
     keepDaemons and keepEnv and keepGrants and ended' = ended
   }
 }
@@ -130,7 +130,7 @@ pred notifAllow[r: Req, g: Grant] {
     calls[r, g, none, none]
     ended' = ended
     settle[r, NotifierP]
-    asking' = asking - l -> c and refused' = refused - l -> c -> Int and blocked' = blocked
+    asking' = asking - l -> c -> r.rparams and refused' = refused - l -> c -> Int and blocked' = blocked
     keepDaemons and keepEnv
   }
 }
@@ -155,7 +155,7 @@ pred windowAllow[r: Req, w: Principal, ls: Lease, p: Param, g: Grant] {
     calls[r, g, none, none]
     ended' = ended
     settle[r, w]
-    asking' = asking - l -> c and refused' = refused - l -> c -> Int and blocked' = blocked
+    asking' = asking - l -> c -> r.rparams and refused' = refused - l -> c -> Int and blocked' = blocked
     keepDaemons and keepEnv
   }
 }
@@ -166,11 +166,20 @@ pred refuse[r: Req] {
   let l = r.rl, c = r.rcap, n = plus[nref[l, c], 1] {
     r in Pending
     settle[r, none]
-    asking' = asking - l -> c
+    asking' = asking - l -> c -> r.rparams
     n >= 3 implies (blocked' = blocked + l -> c and refused' = refused - l -> c -> Int)
     else (blocked' = blocked and refused' = refused - l -> c -> Int + l -> c -> n)
     keepDaemons and keepEnv and keepGrants and ended' = ended
   }
+}
+
+// The caller hung up while the user was asked (consent.go): the request is
+// withdrawn, and counts as no refusal.
+pred withdraw[r: Req] {
+  r in Pending
+  settle[r, none]
+  asking' = asking - r.rl -> r.rcap -> r.rparams and refused' = refused and blocked' = blocked
+  keepDaemons and keepEnv and keepGrants and ended' = ended
 }
 
 // Allowed, but grant() failed (a lock held, the mount refused, a host
@@ -178,7 +187,7 @@ pred refuse[r: Req] {
 pred drop[r: Req] {
   r in Pending
   settle[r, none]
-  asking' = asking - r.rl -> r.rcap and refused' = refused - r.rl -> r.rcap -> Int and blocked' = blocked
+  asking' = asking - r.rl -> r.rcap -> r.rparams and refused' = refused - r.rl -> r.rcap -> Int and blocked' = blocked
   keepDaemons and keepEnv and keepGrants and ended' = ended
 }
 
@@ -191,7 +200,7 @@ pred dropPort[r: Req, g: Grant] {
   g not in Live + Ended + Forwarded
   g.gl = r.rl and g.gcap = r.rcap and g.gparams = r.rparams
   settle[r, none]
-  asking' = asking - r.rl -> r.rcap and refused' = refused - r.rl -> r.rcap -> Int and blocked' = blocked
+  asking' = asking - r.rl -> r.rcap -> r.rparams and refused' = refused - r.rl -> r.rcap -> Int and blocked' = blocked
   some samePort[g] & Live implies (Forwarded' = Forwarded and Closing' = Closing)
   else r.rl in Failing implies (Forwarded' = Forwarded + g and Closing' = Closing + g)
   else (Forwarded' = Forwarded - (Closing & samePort[g]) and Closing' = Closing - samePort[g])

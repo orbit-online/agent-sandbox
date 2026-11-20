@@ -121,11 +121,11 @@ func commandHandler(socket string, n *nudger, cc Commands, name string) mcp.Tool
 		args, _ := json.Marshal(in)
 		call := wire.Request{Op: "call", Capability: cc.Name, Command: name, Params: params, Arguments: args,
 			Reason: reason, Lease: lease}
-		res, err := callBroker(socket, call)
+		res, err := callBroker(ctx, socket, call)
 		// The app starts its MCP servers at once, maybe before the daemon found the sandbox and listens
-		for wait := time.Now().Add(brokerWait); errors.Is(err, wire.ErrNotRunning) && time.Now().Before(wait); {
+		for wait := time.Now().Add(brokerWait); errors.Is(err, wire.ErrNotRunning) && time.Now().Before(wait) && ctx.Err() == nil; {
 			time.Sleep(500 * time.Millisecond)
-			res, err = callBroker(socket, call)
+			res, err = callBroker(ctx, socket, call)
 		}
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil

@@ -191,7 +191,7 @@ func (mc *liveMachine) asked(t *rapid.T, q *pending, req wire.Request, v verdict
 	}
 	mc.m.pending = append(mc.m.pending, &refPending{tag: tag, cap: req.Capability, params: v.params, vals: v.vals,
 		lease: v.lease, asked: time.Now(), done: done, id: q.ID, isCall: req.Op == "call", args: req.Arguments})
-	mc.m.gate(req.Capability).asking = true
+	mc.m.gate(req.Capability).asking[v.params] = true
 }
 
 // drawGrant picks a live grant's id, one that ended, or garbage

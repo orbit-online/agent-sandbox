@@ -77,7 +77,7 @@ func (mc *machine) Advance(t *rapid.T) {
 	mc.waitEnded(t, m.endWhere(func(g *refGrant) bool { return !g.expires.IsZero() && !g.expires.After(m.now) })...)
 	for _, p := range slices.Clone(m.pending) {
 		if !p.options && !p.asked.Add(wire.AskTimeout).After(m.now) || p.options && !p.optionsAt.Add(wire.OptionsTimeout).After(m.now) {
-			mc.refused(t, p, mc.waitDone(t, p))
+			mc.refused(t, p, mc.waitDone(t, p), refUnanswered)
 		}
 	}
 }

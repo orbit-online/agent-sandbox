@@ -771,12 +771,13 @@ for people, and `refused`, its category, for clients and tests to go by instead 
 | `ceiling`  | a folder no ceiling source covers, one it allows read-only only, or a denied one                       |
 | `instance` | no instance with these bounding values                                                                 |
 | `held`     | an exclusive instance another launcher holds                                                           |
-| `asking`   | the user hasn't answered the last request for the capability                                           |
+| `asking`   | the user hasn't answered the last request for the capability with these parameters, or 4 open ones of the capability |
 | `blocked`  | three refusals in a row: no requests for the capability for a while                                    |
-| `denied`   | the user said no, or didn't answer in time                                                             |
+| `denied`   | the user said no: Deny, a click on the notification's body, or a button that isn't the daemon's      |
+| `unanswered` | no answer in time, or the notification closed without one                                            |
 | `failed`   | making the grant live failed: a mount, an address                                                      |
 | `nogrant`  | a release or revoke of a grant there isn't                                                             |
-| `gone`     | the caller ended before it was answered                                                                |
+| `gone`     | the caller ended, or hung up, before it was answered                                                   |
 
 Other errors (an unknown op, a peer refused by the socket) carry no `refused`.
 
@@ -846,7 +847,13 @@ servers may cut them, so nothing the user must see goes only there.
 The sandbox can post notifications too, through the notification portal (`org.freedesktop.portal.Notification`; the
 proxy doesn't let it reach `org.freedesktop.Notifications`), with any title, body and buttons. A look-alike's
 buttons only reach the sandbox, so it can't grant anything, but it can be timed to sit where the user is about to
-click. The daemon ignores an action that arrives within a second of its notification appearing, and asks again. The
+click. The daemon ignores an action that arrives within a second of its notification appearing, and asks again in the
+same notification, replaced in place with a first line saying the answer came too soon. The second counts from when
+that notification first appeared, not from each time it's asked again: one that comes back under the pointer would
+otherwise turn every quick click into another early one, Allow after Allow ignored (seen 2026-11-20, about ten times,
+until a click on the body denied). The notification carries the `resident` hint, so a server that honours it (GNOME,
+Plasma) keeps it after an action; the daemon closes it once answered. A server that closes it anyway, within 200 ms of
+the action, gets a new notification, whose second counts from its own appearance. The
 window turns Allow and Deny off for a second whenever another request takes a row's place: one moving up, one in
 the place of one that ended ([A] turning [B]), or one where there was no row, as the sandbox can time when its
 requests end and arrive. The portal keys notifications by app ID, so the sandbox can't replace or close the daemon's,
@@ -859,7 +866,22 @@ Limits on asking:
 
 - No answer in 2 minutes denies, and the notification is replaced by one without buttons. Once the user clicks
   Options, the window owns the request: the timeout pauses while it's open, for 10 minutes at most.
-- One open request per capability; three refusals in a row stop requests for that capability for 2 minutes.
+- One open request per capability and parameters, and at most 4 open per capability: requests for the same host
+  command capability on other bounding values (a capability bound by `origin`, one per origin) are questions of their
+  own, answered one by one, each answer applying to its request alone. Three refusals in a row of a capability (Deny,
+  a body click, no answer in time) stop requests for it for 2 minutes; a withdrawn request doesn't count.
+- A caller that hangs up while the user is asked withdraws its request: the notification is replaced by one saying
+  Claude stopped waiting, the request leaves the window, and the same request asks again at once. The MCP server hangs
+  up when its client cancels the tool call (`notifications/cancelled`). Before 2026-11-20 the daemon went on
+  asking for up to 12 minutes, and every retry meanwhile was refused as `asking`.
+
+Each question goes to the journal of the host side as `Asking` (the request's id, the capability, the daemon's summary
+with opaque values by digest, the lease, a call's command), and how it ended by that id: `Answered` (allowed or not,
+`via` the notification's buttons, its body, a foreign button or the window, and an allowed one's lease and whether the
+window narrowed it), `Timed out` (waiting on the notification or the window), `Closed unanswered` or `Caller stopped
+waiting`; an early click as `Ignored an answer within a second`, and Options as `Answering in the window`. Every
+refused request or call is logged as `Refused` with its operation, its capability and command when declared, and its
+category; the message only where it's the daemon's own words. Claude's reason never goes there.
 
 A live grant answers later requests with exactly the same parameters without asking, as does a standing grant
 (below); a host command grant answers every call of its capability with the same bounding values. A read-only grant

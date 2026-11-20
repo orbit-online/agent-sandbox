@@ -411,8 +411,10 @@ process whose principal is in the Sandbox domain, at any time.
   restart brings back the ones the user ended, and nothing else survives.
 - P13. An exclusive instance is granted to at most one launcher at a time.
 - P14. The sandbox can't keep the user from answering: one pending request
-  per capability, three refusals in a row block it for 2 minutes, and a
-  full `request.sock` leaves `control.sock` its own budget.
+  per capability and parameters (4 per capability at most), three refusals
+  in a row block it for 2 minutes, a request its caller withdrew by hanging
+  up is no refusal, and a full `request.sock` leaves `control.sock` its own
+  budget.
 - P15. Retired with session leases (acbceda): a release from inside ends
   the grant.
 - P16. A host command call runs only under a grant that covers it: one of
@@ -728,7 +730,8 @@ against a fake `netns-netkit`. Model actions without a machine action: `startCal
 a call waiting for its slot or running across a revoke is left to
 `TestCallEndedBeforeStart`, `TestNoOutputAfterEnd` and `TestCallUnit`),
 `instanceGone` (the machines set `instanceEvery` to 1000 h;
-`TestInstanceGone`), `mature` and `forge` (`cmd/permissions-broker/internal/notify/notify_test.go`), `env`'s
+`TestInstanceGone`), `mature` and `forge` (`cmd/permissions-broker/internal/notify/notify_test.go`), `withdraw`
+(`TestCallerHangUp`, `TestMCPCancelWithdraws`), `env`'s
 renames (`attach_test.go`, `swap_test.go`), `stopPost` on its own
 (`Restart` runs the start's cleanup instead) and `sandboxEnd`. The live
 machine also has no `Advance` (`tick`, `expire`, `unblock`), `Instances`
