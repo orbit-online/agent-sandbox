@@ -1,6 +1,7 @@
-# The launcher's general options: the app, nixpak's extra config, binds, files, environment variables, devices and
-# PATH. The features' own options are in their modules
+# The launcher's general options: the app, nixpak's extra config, binds, files, environment variables, devices,
+# PATH and units of the sandbox's systemd --user. The features' own options are in their modules
 {
+  config,
   lib,
   pkgs,
   inputs,
@@ -170,5 +171,31 @@ in
       ];
       description = "Packages on PATH for the app, its Code tab shells and the local MCP servers.";
     };
+    units = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          "renew.service" = "[Service]\nType=oneshot\nExecStart=''${lib.getExe renew}";
+          "renew.timer" = "[Timer]\nOnActiveSec=0\nOnUnitActiveSec=20min";
+        }
+      '';
+      description = ''
+        Units of the sandbox's systemd --user, by file name, each its text. A timer or path unit is wanted by
+        timers.target or paths.target, so it runs while the sandbox does; a service starts from one of them. The
+        names starting with `claude-desktop-` are the module's own.
+      '';
+    };
+  };
+  config.build = {
+    userUnits = config.units;
+    assertions = [
+      {
+        assertion = !lib.any (lib.hasPrefix "claude-desktop-") (lib.attrNames config.units);
+        message = "agent-sandbox.claude-desktop: units starting with claude-desktop- are the module's own: ${
+          lib.concatStringsSep ", " (lib.filter (lib.hasPrefix "claude-desktop-") (lib.attrNames config.units))
+        }";
+      }
+    ];
   };
 }

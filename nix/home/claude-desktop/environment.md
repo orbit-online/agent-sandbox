@@ -27,7 +27,8 @@ reaches it over its private socket. It has no D-Bus, so `systemd-run`'s
 session bus. Its timers run `claude-desktop-store-gc` weekly and when the
 launcher moved the store's GC root (see Nix), and
 `claude-desktop-scratchpad-prune` daily (see Home), catching up after a time
-the sandbox wasn't running. Units of your own go in `~/.config/systemd/user`.
+the sandbox wasn't running, and the launcher's `units` (from the user's
+config). Units of your own go in `~/.config/systemd/user`.
 Without the manager (see Tools, `nsdelegate`) none of this runs.
 
 The launcher logs to two journald namespaces, `claude-desktop` for the

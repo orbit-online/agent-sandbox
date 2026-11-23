@@ -70,7 +70,7 @@ Other options: `extraPath` (directories ahead of the PATH packages),
 (off: a netns with `lo` alone, for local models), `network.mdns` (`.local` names; on with the network),
 `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
-(appended to it), `env`, `path`, `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
+(appended to it), `env`, `path`, `units` (of the sandbox's `systemd --user`), `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in
 [`nix/home/claude-desktop/`](nix/home/claude-desktop/), the general ones in
 [`options.nix`](nix/home/claude-desktop/options.nix).
