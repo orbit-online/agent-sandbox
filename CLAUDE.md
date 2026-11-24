@@ -701,8 +701,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   answered by its own answer, the same parameters again refused as `asking`, and `maxAsking` open per capability; a
   caller hanging up on `request.sock` taking its notification down (`ErrGone`) and its request out of the window,
   counting no refusal, the same request asked again at once, and a tool call the MCP client cancels doing the same
-  (`mcp_test.go`); no answer in time and a notification closed unanswered refused as `unanswered`, a body click or a
-  foreign key as `denied`; and the journal: `Asking`, `Answered` (`via` the button, the body), `Timed out` and
+  (`mcp_test.go`), while whitespace after the request, such as the newline the decoder left unread, is no hang-up
+  and more than whitespace is (`sockets_test.go`); no answer in time and a notification closed unanswered refused as
+  `unanswered`, a body click or a foreign key as `denied`; and the journal: `Asking`, `Answered` (`via` the button, the body), `Timed out` and
   `Refused` with its category by the request's id, an opaque value by digest alone and the reason never. Ports (`ports_test.go`, against a fake `netns-netkit`): a grant running `grant` and `addr` with
   the name of the launcher and carrying the addresses, its release, lease, revoke and the end of the daemon running
   `revoke`, `grant` or `addr` of the helper failing leaving no grant and no port, a port, protocol or other key refused

@@ -97,25 +97,9 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, req wire.Request, copi
 	for i := range dones {
 		dones[i] = who.send(req)
 	}
-	var asked *pending
-	if v.kind == "ask" {
-		mc.waitFor(t, "the question for "+about, func() bool {
-			for _, q := range mc.lv.control(wire.Request{Op: "state"}).Pending {
-				if !known[q.ID] {
-					asked = q
-				}
-			}
-			return asked != nil
-		})
-	}
-	// The answers there are: all of them, or all but the one waiting for the user
 	var results []response
 	answered := make([]bool, copies)
-	want := copies
-	if v.kind == "ask" {
-		want--
-	}
-	mc.waitFor(t, fmt.Sprintf("%d answers to %s (%s %v)", want, about, v.kind, v.broken), func() bool {
+	collect := func() {
 		for i, d := range dones {
 			select {
 			case res := <-d:
@@ -124,6 +108,29 @@ func (mc *liveMachine) request(t *rapid.T, who *liveProc, req wire.Request, copi
 			default:
 			}
 		}
+	}
+	var asked *pending
+	if v.kind == "ask" {
+		// What the broker answered instead, if it did
+		for deadline := time.Now().Add(liveSettle); asked == nil; time.Sleep(20 * time.Millisecond) {
+			for _, q := range mc.lv.control(wire.Request{Op: "state"}).Pending {
+				if !known[q.ID] {
+					asked = q
+				}
+			}
+			collect()
+			if asked == nil && time.Now().After(deadline) {
+				mc.fatalf(t, "Waited for the question for %s, answered %+v", about, results)
+			}
+		}
+	}
+	// The answers there are: all of them, or all but the one waiting for the user
+	want := copies
+	if v.kind == "ask" {
+		want--
+	}
+	mc.waitFor(t, fmt.Sprintf("%d answers to %s (%s %v)", want, about, v.kind, v.broken), func() bool {
+		collect()
 		return len(results) >= want
 	})
 	if len(results) > want {

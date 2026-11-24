@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -69,13 +70,19 @@ type peer struct {
 }
 
 // watchHangUp closes its channel once the client hangs up, or sends more: a client sends one request, then only
-// waits for the answer. The read ends when the connection is closed after the answer
+// waits for the answer. The read ends when the connection is closed after the answer. Whitespace isn't more: the
+// newline json.Encoder ends the request with is still unread when the request ends where the decoder's buffer did
 func watchHangUp(conn *net.UnixConn) <-chan struct{} {
 	gone := make(chan struct{})
 	go func() {
-		var buf [1]byte
-		_, _ = conn.Read(buf[:])
-		close(gone)
+		defer close(gone)
+		var buf [512]byte
+		for {
+			n, err := conn.Read(buf[:])
+			if err != nil || len(bytes.TrimLeft(buf[:n], " \t\r\n")) > 0 {
+				return
+			}
+		}
 	}()
 	return gone
 }

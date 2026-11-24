@@ -213,3 +213,55 @@ func TestStateOverview(t *testing.T) {
 		t.Errorf("State %s", data)
 	}
 }
+
+// watchHangUp: the newline after a request isn't a hang-up, whatever the decoder left of it; more than whitespace is,
+// as is closing
+func TestWatchHangUp(t *testing.T) {
+	pair := func() (*net.UnixConn, *net.UnixConn) {
+		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn := func(fd int) *net.UnixConn {
+			f := os.NewFile(uintptr(fd), "pair")
+			defer f.Close()
+			c, err := net.FileConn(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { c.Close() })
+			return c.(*net.UnixConn)
+		}
+		return conn(fds[0]), conn(fds[1])
+	}
+	closes := func(gone <-chan struct{}, d time.Duration) bool {
+		select {
+		case <-gone:
+			return true
+		case <-time.After(d):
+			return false
+		}
+	}
+	for _, tc := range []struct {
+		name, send string
+		close, gone bool
+	}{
+		{"newline", "\n", false, false},
+		{"whitespace", " \t\r\n\n", false, false},
+		{"whitespace, then closed", "\n", true, true},
+		{"more", "\n{}", false, true},
+		{"closed", "", true, true},
+	} {
+		client, server := pair()
+		gone := watchHangUp(server)
+		if _, err := client.Write([]byte(tc.send)); err != nil {
+			t.Fatal(err)
+		}
+		if tc.close {
+			client.Close()
+		}
+		if got := closes(gone, 200*time.Millisecond); got != tc.gone {
+			t.Errorf("%s: hung up %v, want %v", tc.name, got, tc.gone)
+		}
+	}
+}
