@@ -887,7 +887,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox sources kept off the LAN with einat stopped. A second machine, `bridged`, has its uplink NIC in `br0`: the
   einat config and the programs on `br0`, and the sandbox leaving from the bridge address. A third, `late`, boots
   without a NIC: einat skips, a hot-plugged NIC (renamed `up0` by a `.link` file) restarts it with that uplink
-  and the programs on it, and another add event of the same NIC leaves einat running.
+  and the programs on it, and another add event of the same NIC leaves einat running. The workstation and `late` run
+  on q35 (as nixpkgs runs its test VMs once OVMF requires SMM), their NICs hot-plugged into a PCIe root port, QEMU's
+  errors failing the test.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
 - `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`: the NixOS VM test
   (`nix/checks/vm/`, needs KVM), in six parts that Nix runs in parallel;

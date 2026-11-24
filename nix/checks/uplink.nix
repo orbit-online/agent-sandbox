@@ -15,6 +15,12 @@ let
       lib.optionalString (family == "6") ",ipv6only=1"
     } \"SYSTEM:echo $$SOCAT_PEERADDR $$SOCAT_PEERPORT\"";
   };
+  # A port to hot-plug a NIC into: q35's root bus takes none, and nixpkgs runs its test VMs on q35 when OVMF requires
+  # SMM, as its default OVMF does in newer nixpkgs; q35 here either way, so the test plugs the same on each
+  hotplugPort = [
+    "-machine q35"
+    "-device pcie-root-port,id=hotport,chassis=1"
+  ];
   tools = with pkgs; [
     bpftools
     curl
@@ -83,6 +89,7 @@ pkgs.testers.runNixOSTest {
         nftables.enable = true;
       };
       environment.systemPackages = tools ++ [ pkgs.nftables ];
+      virtualisation.qemu.options = hotplugPort;
     };
   # Its uplink NIC enslaved to br0, which holds the address
   nodes.bridged =
@@ -114,6 +121,7 @@ pkgs.testers.runNixOSTest {
     virtualisation.vlans = [ ];
     # QEMU adds a NIC of its own without one
     virtualisation.qemu.networkingOptions = lib.mkForce [ "-nic none" ];
+    virtualisation.qemu.options = hotplugPort;
     environment.etc."systemd/network/10-up0.link".text = ''
       [Match]
       MACAddress=52:54:00:12:99:01
@@ -148,6 +156,12 @@ pkgs.testers.runNixOSTest {
 
       def in_order(dev, node=ws):
           return order(dev, "ingress", node) == ["pre", "ingress_rev_snat", "post"] and order(dev, "egress", node) == ["egress_snat", "egress"]
+
+      # A NIC plugged into the node's hotplugPort; QEMU answers an error on the monitor alone
+      def hotplug(node, opts=""):
+          for cmd in ["netdev_add user,id=hot", f"device_add virtio-net-pci,netdev=hot,id=hotnic,bus=hotport{opts}"]:
+              out = node.send_monitor_command(cmd)
+              assert "Error" not in out, f"{cmd}: {out}"
 
       def wait_in_order(dev, node=ws, check=in_order):
           try:
@@ -200,8 +214,7 @@ pkgs.testers.runNixOSTest {
       with subtest("no NIC at boot: einat skips, a NIC that comes brings it up, the same NIC again doesn't restart it"):
           late.wait_until_succeeds("journalctl -b -u sandbox-einat | grep -q exec-condition")
           assert late.succeed("systemctl show -P ActiveState sandbox-einat").strip() == "inactive"
-          late.send_monitor_command("netdev_add user,id=hot")
-          late.send_monitor_command("device_add virtio-net-pci,netdev=hot,id=hotnic,mac=52:54:00:12:99:01")
+          hotplug(late, ",mac=52:54:00:12:99:01")
           late.wait_until_succeeds("grep -q 'if_name = \"up0\"' /run/sandbox-einat/einat.toml", timeout=30)
           late.succeed("ip link set up0 up")
           wait_in_order("up0", late)
@@ -462,8 +475,7 @@ pkgs.testers.runNixOSTest {
 
       with subtest("a new physical NIC: a new einat config, and the programs on it"):
           before = ws.succeed("systemctl show -P MainPID sandbox-einat").strip()
-          ws.send_monitor_command("netdev_add user,id=hot")
-          ws.send_monitor_command("device_add virtio-net-pci,netdev=hot,id=hotnic")
+          hotplug(ws)
           ws.wait_until_succeeds("grep -q 'if_name = \"eth2\"' /run/sandbox-einat/einat.toml", timeout=30)
           ws.succeed("ip link set eth2 up")
           wait_in_order("eth2")
