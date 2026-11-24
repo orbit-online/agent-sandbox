@@ -1,10 +1,10 @@
 # shellcheck shell=bash
 # The app only persists its sign-in when safeStorage.isEncryptionAvailable(), which is false under
 # --password-store=basic. Opting into Chromium's fixed v10 key makes it true.
-# On Linux the app picks its white tray icon in dark mode, and before 5.1231 on GNOME always. Without the GNOME case it
-# follows the colour scheme the sandbox's GTK theme tracks (gtk-theme.sh), live, so it suits a panel that changes with
-# it. Apps from 5.1231 have no GNOME case (the picker's argument is a retry flag), so nothing to patch, as long as one
-# file picks the icon by the colour scheme.
+# On Linux the app picks its white tray icon in dark mode, and on GNOME always (except 5.x, which had no GNOME case).
+# Without the GNOME case it follows the colour scheme the sandbox's GTK theme tracks (gtk-theme.sh), live, so it suits a
+# panel that changes with it. Apps from 6.x take nativeTheme as a parameter, so the match ends at .shouldUseDarkColors.
+# Without a GNOME case there's nothing to patch, as long as one file picks the icon by the colour scheme.
 # The app's own notification backend (a native module, behind a gate that's on by default) talks to
 # org.freedesktop.Notifications on the session bus, which the proxy doesn't let through: there the sandbox could replace
 # or close any notification, the permissions broker's included. With its gate-and-probe condition false, the app keeps
@@ -29,14 +29,14 @@ ready="(()=>{let d=!1;const o=process.stdout.write.bind(process.stdout),r=w=>{d|
 # Its JS holds no # or &, which sed would take as the delimiter or the match
 sed -i "1s#^\"use strict\";#&$ready#" "$main"
 grep -qF "$ready" "$main"
-gnome='\|\|[A-Za-z0-9_$]+\(\)==="gnome"(\|\|[A-Za-z0-9_$.]+\.nativeTheme\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png")'
+gnome='\|\|[A-Za-z0-9_$]+\(\)==="gnome"(\|\|[A-Za-z0-9_$.]+\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png")'
 mapfile -t files < <(grep -rlE --include='*.js' "$gnome" app)
 if ((${#files[@]} > 0)); then
   ((${#files[@]} == 1)) || { echo "patch-asar: ${#files[@]} files pick the tray icon by GNOME, want 1" >&2; exit 1; }
   sed -i -E "s/$gnome/\1/" "${files[0]}"
   ! grep -qE "$gnome" "${files[0]}" || exit 1
 else
-  dark='[A-Za-z0-9_$.]+\.nativeTheme\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png"'
+  dark='[A-Za-z0-9_$.]+\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png"'
   mapfile -t files < <(grep -rlE --include='*.js' "$dark" app)
   ((${#files[@]} == 1)) || { echo "patch-asar: ${#files[@]} files pick the tray icon by colour scheme, want 1" >&2; exit 1; }
 fi

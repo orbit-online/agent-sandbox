@@ -1492,9 +1492,9 @@ in
 
           # The tray icon by the colour scheme, also on GNOME (an asar stores its files as they are)
           asar=$(grep -- '-claude-desktop-app\.asar$' "$paths")
-          ! grep -qaE '\(\)==="gnome"\|\|[A-Za-z0-9_$.]+\.nativeTheme\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png"' "$asar" ||
+          ! grep -qaE '\(\)==="gnome"\|\|[A-Za-z0-9_$.]+\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png"' "$asar" ||
             { echo "the asar picks the white tray icon on GNOME" >&2; exit 1; }
-          grep -qaF 'nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"' "$asar" ||
+          grep -qaE '[A-Za-z0-9_$]\.shouldUseDarkColors\?"TrayIconLinux-Dark\.png":"TrayIconLinux\.png"' "$asar" ||
             { echo "the asar lost the tray icon's colour scheme check" >&2; exit 1; }
 
           # app-pid.sh drops the FHS env's ambient capabilities on the way to the app, also when it can't set the pid:
