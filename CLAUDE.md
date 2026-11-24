@@ -17,7 +17,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's JSON config (`cmd/launcher`), the
   `.desktop` actions, assertions): `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
   launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
-  `/run/current-system/sw`), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
+  `/run/current-system/sw`, the store again at `/nix-root` as a chroot store's root, without the tmpfs buildFHSEnv puts on
+  `etc/` of its glibc), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
   `mcp.nix` (with `channels.js`, which `patch-asar.sh` hooks into the app for `mcpChannels`), `dbus.nix` (and the tray), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
   `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
   `agent-sandbox.launcherModules` join them on every launcher, for a plugin's own options. The app ID,
@@ -893,7 +894,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
   network (and the launcher `offline`, without one), `store` its store dir swapped or without a record, `--shell`
-  starting the app, and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
+  starting the app, the chroot store at `/nix-root` (the FHS env's glibc failing `--verify-path` in the default store and
+  passing in it, a build with that glibc as input seeing its `etc/rpc` alone), and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
   sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one (its start hook failing: started without `mesh-1000`, the other
   hook run, the failure and the warning in its host side journal) with
   its permissions broker and mDNS (work has `network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each

@@ -233,6 +233,18 @@ closure in and roots it
 top. When it moves the root it leaves `/nix/var/claude-desktop/gc-pending`,
 which starts `claude-desktop-store-gc` (see Services and logs).
 
+The app runs in a buildFHSEnv, which mounts a tmpfs on `etc/` of the glibc
+it uses (for `ld.so.cache`), and every process here inherits that mount. To
+the default store that glibc looks modified, so a build or check whose
+closure holds it fails: `hash of path ... has changed` from a VM test
+sharing the store, `path ... was modified` from a verify. Run those against
+the chroot store at `/nix-root`, the same store bound again without the
+mount: `nix flake check --store 'local?root=/nix-root' ...`, likewise
+`nix build` and `nix-store`. Results are the same paths in `/nix/store`.
+Not for `nix run`, `nix shell` or `nix develop`: with a chroot store they
+go through a helper that can't mount the store over the closure's
+read-only binds, and fail.
+
 ## Self-check
 <!-- memo: activity=self-diagnostic environment=bwrap -->
 

@@ -1,5 +1,6 @@
 # The default launcher's store dir: one the sandbox swapped for its own refused, and without a record of it, nix/ deleted
-# and the closure synced afresh. Then --shell starting the app
+# and the closure synced afresh. Then --shell starting the app, and the chroot store at /nix-root seeing the FHS env's
+# glibc without its tmpfs
 {
   stateDir,
   sandboxHome,
@@ -59,6 +60,30 @@
       cg = workstation.succeed("systemctl --user -M alice@ show -P ControlGroup claude-desktop-app").strip()
       assert cg.endswith("/claude\\x2ddesktop.slice/claude-desktop-app.service"), cg
       assert workstation.succeed(f"cat '/sys/fs/cgroup{cg}/sandbox/app/cgroup.procs'").split(), f"nothing in {cg}/sandbox/app"
+
+  with subtest("the chroot store at /nix-root sees the FHS env's glibc as it is, the default store its tmpfs"):
+      import re
+      # buildFHSEnv's tmpfs on its glibc's etc/, for ld.so.cache
+      etcs = [l.split()[4] for l in in_sandbox("cat /proc/self/mountinfo").splitlines()
+              if re.fullmatch(r"/nix/store/[0-9a-z]{32}-glibc-[^/]+/etc", l.split()[4])]
+      assert etcs, "no tmpfs on a glibc's etc/"
+      glibc = etcs[0].removesuffix("/etc")
+      assert "ld.so.cache" in in_sandbox(f"ls {glibc}/etc").split()
+      # The host's nix, in the sandbox's closure for claude-desktop-store-gc
+      nix = workstation.succeed("readlink -f /run/current-system/sw/bin/nix").strip().removesuffix("/nix")
+      root = "--store 'local?root=/nix-root'"
+      status, out = workstation.execute(sandbox_cmd(f"{nix}/nix-store --verify-path {glibc}") + " 2>&1")
+      assert status != 0 and "modified" in out, out
+      in_sandbox(f"{nix}/nix-store {root} --verify-path {glibc}")
+      # A build with it as an input, as a VM test's share sees it: the store's etc/ alone. $g, not an interpolation:
+      # systemd-run expands ''${...} within a word
+      bash = in_sandbox("readlink -f /run/current-system/sw/bin/bash").strip()
+      expr = (f'derivation {{ name = "glibc-etc"; system = builtins.currentSystem; builder = builtins.storePath "{bash}";'
+              f' g = builtins.storePath "{glibc}"; args = [ "-c" "echo $g/etc/* >$out" ]; }}')
+      out = in_sandbox(f"{nix}/nix {root} build --impure --no-link --print-out-paths --option substituters '''"
+                       f" --expr {shlex.quote(expr)}").strip()
+      etc = in_sandbox(f"cat {out}").strip()
+      assert etc == f"{glibc}/etc/rpc", etc
 
   with subtest("Without nsdelegate, the sandbox's cgroup is read-only and there's no systemd --user, which the launch says"):
       def cgroup2_flags():

@@ -157,6 +157,12 @@ in
       # Written by the launcher's bwrap, mode parent
       "--ro-bind-data 22 /etc/subuid"
       "--ro-bind-data 23 /etc/subgid"
+      # The store again, as a chroot store's root: buildFHSEnv puts a tmpfs on its glibc's etc/ (for ld.so.cache), which
+      # every process in the sandbox inherits, so with the default store a closure holding that glibc fails to verify,
+      # export or reach a build sandbox (a VM test's share) as it is. bwrap binds from the outer /nix, where the tmpfs
+      # isn't. Opt-in (environment.md, Nix): run, shell and develop need a store without a root, as a chroot store's
+      # helper can't bind or overlay /nix/store over the closure's locked mounts
+      "--bind /nix ${sl.nixRoot}/nix"
     ];
 
     # nixpak binds /nix/store after all bind.ro entries, so the overlay and environment.md go into the FHS env's own

@@ -130,6 +130,8 @@ rec {
   ];
   # A launcher's resolv.conf (see network.nix) as the sandbox sees it, where its home directory is bound
   sandboxResolvConf = "${hm.home.homeDirectory}/.config/resolv.conf";
+  # The root of the same store without the FHS env's mounts in it (fhs.nix), for `--store local?root=` builds
+  nixRoot = "/nix-root";
   # The sandbox's own single-user Nix store, stateDir/nix bound rw at /nix. The host store isn't visible: nixpak binds
   # only storeRoots' closure (ro, over the store's copies of the same paths) and there is no daemon socket.
   # Paths have to be valid in the store before the binds land on them, or bwrap mkdirs unregistered
