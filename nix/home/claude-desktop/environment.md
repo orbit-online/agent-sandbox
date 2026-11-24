@@ -108,9 +108,9 @@ unless you ask otherwise); release it when you're done.
   host default route (by default an Ethernet or Wi-Fi NIC), NATed there;
   the subnets of other NICs are out of reach. Only replies come back in:
   the addresses of the host (its `127.0.0.1` and LAN address included),
-  host-only networks (VPN mesh, container bridges, auth proxies) and other
-  sandboxes are out of reach, and so are link-local addresses
-  (`169.254.0.0/16`, `fe80::/10`) and cloud metadata services
+  host-only networks (VPN mesh of the host, container bridges, auth
+  proxies) and other sandboxes are out of reach, and so are link-local
+  addresses (`169.254.0.0/16`, `fe80::/10`) and cloud metadata services
   (link-local, and the known ULA and CGNAT addresses of AWS, GCP, OCI
   and Alibaba). The LAN sees you at the address of the
   host, so a LAN service that trusts the host trusts you too. Behind a full-tunnel VPN you still leave through the
