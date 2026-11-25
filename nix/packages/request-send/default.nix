@@ -1,5 +1,5 @@
 # The host commands of the request-send and request-send-write capabilities (nix/home/claude-desktop/request-send.nix):
-# one HTTP request per call, sent with the user's users CA certificate and its TPM key
+# one HTTP request per call, sent through the user's authenticating proxy
 {
   buildGoModule,
   lib,
@@ -22,7 +22,7 @@ buildGoModule {
   vendorHash = "sha256-tqIS/tLBIRH2lP6eDk0roGiAoaeKrM9AdcBgehBc9tg=";
   env.CGO_ENABLED = 0;
   meta = {
-    description = "Send HTTP requests for a sandboxed Claude with your users CA certificate and its TPM key";
+    description = "Send HTTP requests for a sandboxed Claude through your authenticating proxy";
     mainProgram = "request-send";
     platforms = lib.platforms.linux;
   };

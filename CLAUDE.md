@@ -366,12 +366,12 @@ single-user Nix store, and an environment doc for the Claude running inside.
   module. `consent.title` and each command's `consent` are the user's words in the notification and the
   window: plain, for someone who isn't technical, without ranges (the window's Details show those from the schemas).
   The binary (`request-send --help`) sends one HTTP request per call: it reads the call, checks every argument again
-  (the origin against the `--origin`s the module passes, each with its `--env` and `--ca`, the method against the
-  scope's, the path, that origin and path make a URL on that origin, and the body), reads the origin's certificate at
-  each call and checks it's the TPM key's and valid now, and sends over TLS 1.3 trusting only the origin's `--ca`, the
-  TPM key as a `crypto.Signer` that has `step kms sign` sign the handshake's digest (retrying the TPM's intermittent
-  "structure is the wrong size", checking the signature). No redirects followed, no proxy; the answer is refused over
-  8 MiB or when it isn't UTF-8. Exits 2 on what it refuses, 1 when sending fails.
+  (the origin against the `--origin`s the module passes, each with its `--proxy` and `--ca`, the method against the
+  scope's, the path, that origin and path make a URL on that origin, and the body), and sends through the origin's
+  `--proxy` (CONNECT), TLS 1.3 to the proxy and to the origin, trusting only the origin's `--ca` for both: the proxy
+  authenticates the request (kmsproxy presents the user's client certificate), so request-send holds no key and knows
+  no CA layout. No redirects followed; the answer is refused over 8 MiB or when it isn't UTF-8. Exits 2 on what it
+  refuses, 1 when sending fails.
 - `nix/checks/`: the flake checks, see Testing.
 - `docs/permissions.md`: design of the permissions broker, rewritten for
   the broker as gateway (declared host tools, host sockets at stable
@@ -845,21 +845,19 @@ modules and a user alice (the `home-manager` input exists only for it).
   splash (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
   refusal (`hooks_test.go`).
 - `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
-  broker runs the binary, with the test binary as a fake `step` (its key standing in for the TPM's, every run
-  recorded) against an httptest TLS server that requires a client certificate from the test users CA: a read and
-  writes arriving as sent, the client certificate seen by the server, the TPM signing the handshake, the staging key
-  and certificate, the answer as it came (an error status, a redirect not followed), the TPM's intermittent error
-  retried and given up on, and exit 1 for an answer over 8 MiB or not UTF-8, a server from another CA, a certificate
-  of another key, an expired or missing one and step failing. Refusals with exit 2 before step runs: methods outside
-  the scope's, a GET with a body, paths that aren't from / or printable ASCII, too long, with a fragment or leaving
-  the origin, bodies too long or with control characters, missing, extra or mistyped arguments, origins not in the
-  list, bad flags.
+  broker runs the binary, against an httptest TLS server behind an httptest TLS proxy that tunnels CONNECTs, both
+  on httptest's certificate: a read and writes arriving as sent through one CONNECT to the origin, the answer as it
+  came (an error status, a redirect not followed), and exit 1 for an answer over 8 MiB or not UTF-8, certificates
+  from another CA, a CA file without certificates and no proxy listening. Refusals with exit 2 before the proxy hears
+  of them: methods outside the scope's, a GET with a body, paths that aren't from / or printable ASCII, too long,
+  with a fragment or leaving the origin, bodies too long or with control characters, missing, extra or mistyped
+  arguments, origins not in the list, proxies that aren't `https://host[:port]`, bad flags.
 - `request-send-module` (`nix/checks/request-send.nix`, its eval tests in `claude-desktop-eval` as
-  `testRequestSend*`): both capabilities on the launchers that enable them with their own origins, CA, env and step,
+  `testRequestSend*`): both capabilities on the launchers that enable them with their own origins, proxies and CAs,
   the origin as the bounding enum and in `run`, their consent title and phrases, the read command's GET only and the
-  write one's GET and POST with a multiline body, the default step finding step-kms-plugin, origins that aren't https
-  origins or none failing to evaluate, the assertion without `permissions.enable`, and `permissions-broker serve`
-  loading the declaration while refusing a broken one. Not covered: the real osTicket API.
+  write one's GET and POST with a multiline body, origins that aren't https origins or none and proxies that aren't
+  `https://host[:port]` failing to evaluate, the assertion without `permissions.enable`, and `permissions-broker
+  serve` loading the declaration while refusing a broken one. Not covered: a real authenticating proxy (kmsproxy).
 - `sandbox-uplink`: the package build runs its Go tests (`uplinks_test.go`: the uplinks found in a fake
   `/sys/class/net`, physical type-1 devices only, named ones replacing the search, names the einat TOML can't take
   refused when named and skipped when found; the einat config word for word; `sandboxes_test.go`: the gateway, the

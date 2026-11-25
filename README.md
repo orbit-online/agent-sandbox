@@ -136,37 +136,31 @@ The design: [`docs/permissions.md`](docs/permissions.md).
 
 ### request-send
 
-Lets Claude make HTTP requests as you to services that take Orbit's users CA client certificates over the mesh, such
-as the osTicket helpdesk's `/api/orbit/v1` on its staff vhost (support.orbit.online's `mcp/` server is the client).
-The sandbox can't reach the mesh; the host sends. It declares two host command capabilities, each bounded by the
+Lets Claude make HTTP requests as you to services the sandbox can't reach or can't authenticate to, through an
+authenticating proxy of yours on the host, such as kmsproxy presenting your client certificate. The host sends. It declares two host command capabilities, each bounded by the
 service (`origin`) and with one command, `send`:
 
 - `request-send` sends GET requests, for reading.
 - `request-send-write` sends GET and POST requests, for writing: what a POST does there is done as you.
 
 Each call runs `request-send send` on the host with the call on stdin: the method, the path and query, and for a
-write the body, sent as `application/json`. Each origin has its `env` and `ca`: after checking that
-`~/.step/certs/cloud-<env>.crt` is the certificate of the TPM key `tpmkms:name=cloud-<env>` and valid now, it connects
-to the origin over TLS 1.3, trusting only the CAs in its `ca`, presents the certificate and has `step kms sign`
-(step-kms-plugin) sign the handshake. It follows no redirects and prints `{"status", "content_type", "body"}`,
-refused when the answer is over 8 MiB or not UTF-8. The call only names the request; the command fixes the origin to
-one of the module's, the headers and the TLS. The key never leaves the TPM and the sandbox never sees it, nor
-anything it could send on its own.
+write the body, sent as `application/json`. Each origin has its `proxy` and `ca`: it tunnels to the origin through
+the proxy (CONNECT), TLS 1.3 to both, trusting only the CAs in its `ca` for both, which behind a TLS-intercepting proxy
+such as kmsproxy is the proxy's CA. It follows no redirects and prints `{"status", "content_type", "body"}`, refused
+when the answer is over 8 MiB or not UTF-8. The call only names the request; the command fixes the origin to one of
+the module's, its proxy, the headers and the TLS. The sandbox never reaches the proxy, nor anything it could send on
+its own.
 
 ```nix
 agent-sandbox.claude-desktop.permissions = {
   enable = true;
   request-send = {
     enable = true;
-    # Each env's staff vhost, with that env's users CA certificate (cloud-<env>) and the machines CA its
-    # certificate is from (nixos-workstation's orbit-cas package)
-    origins = {
-      "https://support-staff.org-production.orbit.dev" = { env = "production"; ca = orbit-cas.production.machines_ca; };
-      "https://support-staff.org-staging.orbit.dev" = { env = "staging"; ca = orbit-cas.staging.machines_ca; };
-    };
+    # Through the host's kmsproxy, which presents your client certificate and re-signs the origin's with its CA
+    origins."https://helpdesk.example.com" = { proxy = "https://localhost:8090"; ca = "/var/lib/local-ca/ca.crt"; };
   };
   # Reads without asking; writes still ask, once or for a lease
-  grants = [ { capability = "request-send"; params.origin = "https://support-staff.org-production.orbit.dev"; } ];
+  grants = [ { capability = "request-send"; params.origin = "https://helpdesk.example.com"; } ];
 };
 ```
 

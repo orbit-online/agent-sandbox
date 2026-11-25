@@ -44,13 +44,13 @@ let
       request-send = {
         enable = true;
         origins = {
-          "https://support-staff.org-production.orbit.dev" = {
-            env = "production";
-            ca = "/etc/ssl/machines-ca-production.crt";
+          "https://helpdesk.example.com" = {
+            proxy = "https://localhost:8090";
+            ca = "/var/lib/local-ca/ca.crt";
           };
-          "https://support-staff.org-staging.orbit.dev" = {
-            env = "staging";
-            ca = "/etc/ssl/machines-ca-staging.crt";
+          "https://wiki.example.com" = {
+            proxy = "https://127.0.0.1:8092";
+            ca = "/etc/ssl/proxy-ca.crt";
           };
         };
       };
@@ -60,10 +60,9 @@ let
       request-send = {
         enable = true;
         origins."https://helpdesk.example.com:8443" = {
-          env = "staging";
+          proxy = "https://proxy.example.com:3128";
           ca = "/etc/ssl/helpdesk.crt";
         };
-        step = "/run/current-system/sw/bin/step";
       };
     };
     launchers.plain.permissions.enable = true;
@@ -85,16 +84,29 @@ let
       request-send = {
         enable = true;
         origins = lib.genAttrs origins (_: {
-          env = "production";
+          proxy = "https://localhost:8090";
           ca = "/etc/ssl/ca.crt";
         });
       };
     };
   };
+  withProxy = proxy: {
+    enable = true;
+    permissions = {
+      enable = true;
+      request-send = {
+        enable = true;
+        origins."https://helpdesk.example.com" = {
+          inherit proxy;
+          ca = "/etc/ssl/ca.crt";
+        };
+      };
+    };
+  };
 in
 {
-  # A launcher gets both capabilities when it enables them, each bounded by its origins and run with its env, CA and
-  # step; origins that aren't https origins, or none, don't evaluate
+  # A launcher gets both capabilities when it enables them, each bounded by its origins and run with their proxies and
+  # CAs; origins that aren't https origins, or none, and proxies that aren't https://host[:port] don't evaluate
   tests = {
     testRequestSendAssertionsHold = {
       expr = failed rs;
@@ -129,9 +141,8 @@ in
           (lib.getExe requestSend)
           "send"
           "--scope=write"
-          "--step=/run/current-system/sw/bin/step"
           "--origin=https://helpdesk.example.com:8443"
-          "--env=staging"
+          "--proxy=https://proxy.example.com:3128"
           "--ca=/etc/ssl/helpdesk.crt"
         ];
       };
@@ -141,8 +152,8 @@ in
         enable = true;
         launchers.work.permissions.request-send = {
           enable = true;
-          origins."https://support-staff.org-production.orbit.dev" = {
-            env = "production";
+          origins."https://helpdesk.example.com" = {
+            proxy = "https://localhost:8090";
             ca = "/etc/ssl/ca.crt";
           };
         };
@@ -153,15 +164,29 @@ in
     };
     testRequestSendOrigins = {
       expr = {
-        http = fails (withOrigins [ "http://support-staff.org-production.orbit.dev" ]);
-        withPath = fails (withOrigins [ "https://support-staff.org-production.orbit.dev/api" ]);
+        http = fails (withOrigins [ "http://helpdesk.example.com" ]);
+        withPath = fails (withOrigins [ "https://helpdesk.example.com/api" ]);
         none = fails (withOrigins [ ]);
-        good = fails (withOrigins [ "https://support-staff.org-production.orbit.dev" ]);
+        good = fails (withOrigins [ "https://helpdesk.example.com" ]);
       };
       expected = {
         http = true;
         withPath = true;
         none = true;
+        good = false;
+      };
+    };
+    testRequestSendProxies = {
+      expr = lib.mapAttrs (_: proxy: fails (withProxy proxy)) {
+        http = "http://localhost:8090";
+        withPath = "https://localhost:8090/";
+        withUser = "https://user@localhost:8090";
+        good = "https://localhost:8090";
+      };
+      expected = {
+        http = true;
+        withPath = true;
+        withUser = true;
         good = false;
       };
     };
@@ -180,7 +205,7 @@ in
         jq -e --arg bin "${lib.getExe requestSend}" '(.commands | map(.name)) == ["request-send", "request-send-write"]
           and all(.commands[]; (.exclusive | not) and (.commands | keys) == ["send"]
             and .bounding == {origin: {type: "string", description: "the service the request goes to",
-              enum: ["https://support-staff.org-production.orbit.dev", "https://support-staff.org-staging.orbit.dev"]}}
+              enum: ["https://helpdesk.example.com", "https://wiki.example.com"]}}
             and .commands.send.arguments.path == {type: "string", pattern: "/[!-~]*", maxLength: 2048,
               description: "the request'"'"'s path and query, any on that service"})
           and ((.commands | map({title: .consent.title, send: .commands.send.consent})) == [
@@ -193,14 +218,10 @@ in
           and (.commands[1].commands.send | (.arguments | keys) == ["body", "method", "path"]
             and .arguments.method.enum == ["GET", "POST"] and .arguments.body.multiline
             and .run[:3] == [$bin, "send", "--scope=write"])
-          and all(.commands[].commands.send.run; (.[3] | test("^--step=/nix/store/.*-step$"))
-            and .[4:] == ["--origin=https://support-staff.org-production.orbit.dev", "--env=production",
-              "--ca=/etc/ssl/machines-ca-production.crt", "--origin=https://support-staff.org-staging.orbit.dev",
-              "--env=staging", "--ca=/etc/ssl/machines-ca-staging.crt"])' \
+          and all(.commands[].commands.send.run; .[3:] == ["--origin=https://helpdesk.example.com",
+              "--proxy=https://localhost:8090", "--ca=/var/lib/local-ca/ca.crt", "--origin=https://wiki.example.com",
+              "--proxy=https://127.0.0.1:8092", "--ca=/etc/ssl/proxy-ca.crt"])' \
           "$cfg" >/dev/null || { echo "The broker's config: $(<"$cfg")" >&2; exit 1; }
-        # The default step finds step-kms-plugin
-        step=$(jq -r '.commands[0].commands.send.run[3] | ltrimstr("--step=")' "$cfg")
-        grep -q '${pkgs.step-kms-plugin}/bin' "$step" || { echo "$step has no step-kms-plugin: $(<"$step")" >&2; exit 1; }
         # The broker loads the declaration and goes on to look for its sandbox, which isn't there
         export XDG_RUNTIME_DIR=$TMPDIR HOME=$TMPDIR
         ! permissions-broker serve "$cfg" 2>err

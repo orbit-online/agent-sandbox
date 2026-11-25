@@ -1,10 +1,9 @@
 # request-send as host commands of the permissions broker: `permissions.request-send` on every launcher. Enabled, it declares the capabilities request-send, which sends GET requests, and
 # request-send-write, which sends GET and POST requests, in that launcher's `permissions.commands`, each to the
-# configured origins
+# configured origins through their proxies
 {
   config,
   lib,
-  pkgs,
   sl,
   launcherName,
   ...
@@ -12,44 +11,30 @@
 let
   inherit (lib) mkOption types;
   bin = lib.getExe sl.packages.request-send;
-  # step finds its plugins on PATH
-  stepWithKms = pkgs.writeShellScript "step" ''
-    PATH=${pkgs.step-kms-plugin}/bin''${PATH:+:$PATH} exec ${lib.getExe pkgs.step-cli} "$@"
-  '';
 
   options = {
-    enable = lib.mkEnableOption "the host commands request-send and request-send-write, which send HTTP requests for Claude with your users CA certificate and its TPM key";
+    enable = lib.mkEnableOption "the host commands request-send and request-send-write, which send HTTP requests for Claude through a proxy that authenticates them as you";
     origins = mkOption {
       type = types.attrsOf (
         types.submodule {
           options = {
-            env = mkOption {
-              type = types.enum [
-                "production"
-                "staging"
-              ];
-              description = "Which users CA certificate requests to the origin present: `~/.step/certs/cloud-<env>.crt`, with the TPM key `tpmkms:name=cloud-<env>`.";
+            proxy = mkOption {
+              type = types.strMatching "https://[^/?#@]+";
+              description = "The HTTPS proxy (`https://host[:port]`) requests to the origin go through, which authenticates them as you, such as kmsproxy presenting your client certificate.";
             };
             ca = mkOption {
               type = types.strMatching "/.+";
-              description = "A PEM file of the CAs the origin's server certificate must chain to, and the only ones its requests trust.";
+              description = "A PEM file of the CAs the proxy's certificate and the origin's, as the proxy presents it, must chain to, and the only ones its requests trust.";
             };
           };
         }
       );
       example = lib.literalExpression ''
         {
-          "https://support-staff.org-production.orbit.dev" = { env = "production"; ca = orbit-cas.production.machines_ca; };
-          "https://support-staff.org-staging.orbit.dev" = { env = "staging"; ca = orbit-cas.staging.machines_ca; };
+          "https://helpdesk.example.com" = { proxy = "https://localhost:8090"; ca = "/var/lib/local-ca/ca.crt"; };
         }
       '';
-      description = "Where Claude may have requests sent, by origin (`https://host[:port]`), and nowhere else, each with the certificate it presents and the CAs it trusts.";
-    };
-    step = mkOption {
-      type = types.strMatching "/.+";
-      default = "${stepWithKms}";
-      defaultText = lib.literalMD "step from `pkgs.step-cli`, with `pkgs.step-kms-plugin` on its PATH";
-      description = "The step binary the calls run, which must find step-kms-plugin.";
+      description = "Where Claude may have requests sent, by origin (`https://host[:port]`), and nowhere else, each with the proxy it goes through and the CAs it trusts.";
     };
   };
 
@@ -77,7 +62,7 @@ let
     maxLength = 2048;
     description = "the request's path and query, any on that service";
   };
-  oneRequest = "It goes out as the user, with their certificate, and Claude gets the answer";
+  oneRequest = "It goes out as the user, through their proxy, and Claude gets the answer";
 
   run =
     o: scope:
@@ -85,17 +70,16 @@ let
       bin
       "send"
       "--scope=${scope}"
-      "--step=${o.step}"
     ]
     ++ lib.concatMap (u: [
       "--origin=${u}"
-      "--env=${o.origins.${u}.env}"
+      "--proxy=${o.origins.${u}.proxy}"
       "--ca=${o.origins.${u}.ca}"
     ]) (originsOf o);
 
   capabilities = o: {
     request-send = {
-      description = "Send GET requests to ${lib.concatStringsSep ", " (originsOf o)} as you, with your users CA certificate, for reading";
+      description = "Send GET requests to ${lib.concatStringsSep ", " (originsOf o)} as you, through your authenticating proxy, for reading";
       # The consent's words, for the user
       consent.title = "read from a service as you";
       bounding.origin = origin o;
@@ -114,7 +98,7 @@ let
       };
     };
     request-send-write = {
-      description = "Send GET and POST requests to ${lib.concatStringsSep ", " (originsOf o)} as you, with your users CA certificate, for writing: what a POST does there is done as you";
+      description = "Send GET and POST requests to ${lib.concatStringsSep ", " (originsOf o)} as you, through your authenticating proxy, for writing: what a POST does there is done as you";
       consent.title = "read and write at a service as you";
       bounding.origin = origin o;
       commands.send = {
