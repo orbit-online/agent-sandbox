@@ -220,6 +220,9 @@ remove it.
   those `--max-jobs` and `--cores`, and tell the user (the launcher's
   warning in the host side's journal namespace, see Services and logs, says
   how to fix the host: `journalctl --namespace=<it> -p warning`).
+- Your cgroup's controllers are in `/sys/fs/cgroup/cgroup.controllers`:
+  pids, memory and cpu, and cpuset where the host's NixOS module has
+  `agent-sandbox.claude-desktop.delegateCpuset` (k3s and kubelet need it).
 
 ## Nix
 <!-- memo: topic={nix,sandbox} -->

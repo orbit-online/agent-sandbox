@@ -266,6 +266,7 @@ let
         slice-gone.configuration.home-manager.users.alice.systemd.user.slices = lib.mkForce { };
       };
       users.users.bob.isNormalUser = true;
+      agent-sandbox.claude-desktop.delegateCpuset = true;
       agent-sandbox.hooks = {
         start = [
           {

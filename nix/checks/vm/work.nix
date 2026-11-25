@@ -179,6 +179,15 @@
       # The caps on the sandbox's cgroups on the unit's: 64 below sandbox/, 4 deep, which the sandbox has no path to
       caps = [workstation.succeed(f"cat '{unit_root}/cgroup.max.{f}'").strip() for f in ["descendants", "depth"]]
       assert caps == ["66", "5"], caps
+      # delegateCpuset: the sandbox gets cpuset beside pids, memory and cpu, and a scope of its own narrows its CPUs, but
+      # can't make itself a valid partition, which would take CPUs from outside
+      controllers = in_work("cat /sys/fs/cgroup/cgroup.controllers").split()
+      assert sorted(controllers) == ["cpu", "cpuset", "memory", "pids"], controllers
+      out = in_work("systemd-run --user --scope --quiet -p AllowedCPUs=0 -- sh -c"
+                    " 'cd /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup) && cat cpuset.cpus.effective"
+                    " && { echo root >cpuset.cpus.partition; cat cpuset.cpus.partition; } 2>&1'")
+      effective, partition = out.split("\n", 1)
+      assert effective == "0" and partition.strip() != "root", out
 
   with subtest("systemd-run --scope runs a job in a cgroup of its own, killed past its memory limit while the app runs on"):
       job = "systemd-run --user --scope --quiet -p MemoryMax=64M -p MemorySwapMax=0 -p CPUWeight=50 -p OOMPolicy=kill"

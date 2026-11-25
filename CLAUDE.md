@@ -45,7 +45,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `sandbox/user/` (with the host's systemd, its units from `build.userUnits` in a curated dir, `fhs.nix`; no bus, its
   units get the session bus): timers for the store GC and the scratchpad prune, and the scopes the sandbox runs heavy
   jobs in with a memory limit and a CPU weight (50 against `app/`'s 100: `sandbox/` gets the `cpu` controller where the
-  unit has it, which systemd's `user@.service` delegates). Each launcher's slice has `CPUWeight=50`, between
+  unit has it, which systemd's `user@.service` delegates, and `cpuset` with the NixOS module's `delegateCpuset`). Each launcher's slice has `CPUWeight=50`, between
   `app.slice`'s 100 and `background.slice`'s 30 (`default.nix`), with `X-SwitchMethod=keep-old` and
   `RefuseManualStop=true` so a switch never stops it and the app with it. The broker and its host command calls are units in
   the slice too, as is subid-broker (`hostUnits` in `helper.go`). Logs go to two journald namespaces per

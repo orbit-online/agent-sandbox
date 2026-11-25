@@ -302,12 +302,13 @@ func layOutCgroups(spec *helperSpec) (string, error) {
 		return "", err
 	}
 	// The controllers the unit got, for sandbox/ and below: cpu for its scopes' weights (systemd's user@.service
-	// delegates pids, memory and cpu to the user's manager)
+	// delegates pids, memory and cpu to the user's manager), cpuset where the host delegates it too (the NixOS module's
+	// delegateCpuset), which k3s and kubelet need
 	have, err := os.ReadFile(spec.CgRoot + "/cgroup.controllers")
 	if err != nil {
 		return "", err
 	}
-	for _, c := range []string{"memory", "pids", "cpu"} {
+	for _, c := range []string{"memory", "pids", "cpu", "cpuset"} {
 		for _, h := range strings.Fields(string(have)) {
 			if h == c {
 				spec.Ctl = append(spec.Ctl, "+"+c)

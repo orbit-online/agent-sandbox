@@ -53,7 +53,23 @@ in
     (import ./hooks.nix { inherit self; })
   ];
 
+  options.agent-sandbox.claude-desktop.delegateCpuset = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = ''
+      Delegate the cpuset controller to every user's manager, and so to the sandboxes, next to the pids, memory and cpu
+      that systemd's user@.service delegates. k3s and kubelet refuse to start without it. Inside its own subtree a
+      sandbox can then only narrow the CPUs and memory nodes its processes run on to a subset of its parent's. A
+      partition, which would take CPUs from the rest of the machine, needs a partition root as parent or
+      cpuset.cpus.exclusive set in every ancestor below the root cgroup, which the sandbox can't write (the kernel's
+      cgroup-v2.rst, Cpuset).
+    '';
+  };
+
   config = lib.mkIf (users != [ ]) {
+    # A drop-in: a list of controllers adds to user@.service's (systemd.resource-control(5), Delegate=)
+    systemd.services."user@".serviceConfig.Delegate =
+      lib.mkIf config.agent-sandbox.claude-desktop.delegateCpuset "cpuset";
     agent-sandbox.network.enable = true;
     # Connects a claude-desktop sandbox to the network through a netkit pair, see netns-netkit --help: cap_net_admin and
     # cap_bpf for the pair and its programs, setgid sandbox-uplink for the maps pinned in the bpffs of network.nix.
