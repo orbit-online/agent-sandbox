@@ -106,6 +106,14 @@ let
         lib.mapAttrsToList (n: text: "cp ${pkgs.writeText n text} $out/${n}
 ") config.build.userUnits
       )}
+      # The module's timers take their OnCalendar= from options (store.nix): refuse one systemd wouldn't parse
+      for t in $out/claude-desktop-*.timer; do
+        [[ -e $t ]] || continue
+        while read -r spec; do
+          ${osConfig.systemd.package}/bin/systemd-analyze calendar "$spec" >/dev/null ||
+            { echo "''${t##*/}: OnCalendar=$spec isn't a calendar spec systemd parses" >&2; exit 1; }
+        done < <(sed -n 's/^OnCalendar=//p' "$t")
+      done
       ${lib.concatMapStrings (n: "ln -s ../${n} $out/timers.target.wants/
 ") (wants ".timer")}
       ${lib.concatMapStrings (n: "ln -s ../${n} $out/paths.target.wants/
@@ -126,6 +134,7 @@ in
 {
   config = {
     build.etcEntries = etcEntries;
+    build.userUnitsDir = userUnits;
     env.PATH = "${sl.xdgOpen}/bin:${sl.searchPathOf config}";
     build.sw = [
       pkgs.bashInteractive

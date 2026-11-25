@@ -498,7 +498,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   overrides `bubblewrap.network` or `pasta`, the `nameservers` assertion on what isn't an IPv4 or IPv6 address (an
   octet past 255, a newline, a prefix length), a launcher with `network.enable` off (no `--net` for its bwrap, `network`
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
-  `extraPath` at the front of PATH, the launchers' packages, the launcher
+  `extraPath` at the front of PATH, the GC and prune timers' frequencies (the defaults, a launcher's own
+  calendar spec, `null` leaving the timer out, a value of two lines refused), the launchers' packages, the launcher
   name assertions (its characters, and its length at and past the cap, the
   `launcherNameMax` at which `cmd/permissions-broker/socketpath_test.go` binds
   the broker's sockets), the per-launcher netns assertion, a tray on two launchers at once,
@@ -560,6 +561,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   default launcher's `.desktop` file keeps the `claude://` handler and
   upstream's actions, and lacks the Permissions action. For `work`, the
   Permissions window's `--app-id` in its broker's config.
+- `timer-calendar`: the sandbox's user units building with a calendar spec of the user's in the GC timer, and
+  refusing `weakly` with the timer and spec named (`systemd-analyze calendar`, `fhs.nix`).
 - `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
   or last of the block, a full block refused, and the names of primaries; `main_test.go`, launcher names and ports
   refused, the sandbox dirs and primaries of a uid counted, the lock of a uid exclusive, and neither the lock of another

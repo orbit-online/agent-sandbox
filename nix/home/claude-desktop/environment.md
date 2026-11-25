@@ -24,10 +24,11 @@ A `systemd --user` runs in the sandbox, started right after the app in the
 cgroup `user/` beside the app's `app/`, and gone with it. `systemctl --user`
 reaches it over its private socket. It has no D-Bus, so `systemd-run`'s
 `--wait`, `--pipe`, `--pty` and `--shell` don't work; its units get the
-session bus. Its timers run `claude-desktop-store-gc` weekly and when the
-launcher moved the store's GC root (see Nix), and
-`claude-desktop-scratchpad-prune` daily (see Home), catching up after a time
-the sandbox wasn't running, and the launcher's `units` (from the user's
+session bus. Its timers run `claude-desktop-store-gc` at the launcher's
+`storeGc.frequency` (weekly by default) and when the launcher moved the
+store's GC root (see Nix), and `claude-desktop-scratchpad-prune` at its
+`scratchpadPrune.frequency` (daily by default; see Home), catching up after
+a time the sandbox wasn't running, and the launcher's `units` (from the user's
 config). Units of your own go in `~/.config/systemd/user`.
 Without the manager (see Tools, `nsdelegate`) none of this runs.
 
@@ -259,7 +260,8 @@ The sandbox:
 - `/nix/var/nix/gcroots/claude-desktop` resolves.
 - `systemctl --user is-system-running` says `running`, and
   `systemctl --user list-timers` shows `claude-desktop-store-gc.timer` and
-  `claude-desktop-scratchpad-prune.timer`.
+  `claude-desktop-scratchpad-prune.timer`, unless the config left one out
+  (a `null` frequency).
 - `journalctl -n 1` and `journalctl --namespace=<the host side's> -n 1`
   each show an entry, and `systemd-cat --namespace=<the host side's> true`
   fails.

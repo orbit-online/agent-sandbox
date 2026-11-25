@@ -742,6 +742,51 @@ let
         "agent-sandbox.claude-desktop: units starting with claude-desktop- are the module's own: claude-desktop-store-gc.timer"
       ];
     };
+    # The timers' frequencies: the defaults on the default launcher, on work a calendar spec of its own and the prune's
+    # timer left out (the GC's path unit and both services stay), a value of two lines refused
+    testTimerFrequencies =
+      let
+        c =
+          (nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work = {
+                storeGc.frequency = "Mon *-*-* 04:00";
+                scratchpadPrune.frequency = null;
+              };
+            }
+          )).config.home-manager.users.alice.agent-sandbox.claude-desktop;
+        of = l: lib.filterAttrs (n: _: lib.hasPrefix "claude-desktop-" n) l.build.userUnits;
+        timer = spec: "[Timer]\nOnCalendar=${spec}\nPersistent=true\n";
+      in
+      {
+        expr = {
+          default = lib.mapAttrs (n: v: if lib.hasSuffix ".timer" n then v else true) (of c);
+          work = lib.mapAttrs (n: v: if lib.hasSuffix ".timer" n then v else true) (of c.launchers.work);
+          twoLines =
+            (builtins.tryEval (
+              builtins.deepSeq
+                (nixos (enabled // { storeGc.frequency = "weekly\nOnCalendar=minutely"; }))
+                .config.home-manager.users.alice.agent-sandbox.claude-desktop.build.userUnits
+                true
+            )).success;
+        };
+        expected = {
+          default = {
+            "claude-desktop-store-gc.service" = true;
+            "claude-desktop-store-gc.path" = true;
+            "claude-desktop-store-gc.timer" = timer "weekly";
+            "claude-desktop-scratchpad-prune.service" = true;
+            "claude-desktop-scratchpad-prune.timer" = timer "daily";
+          };
+          work = {
+            "claude-desktop-store-gc.service" = true;
+            "claude-desktop-store-gc.path" = true;
+            "claude-desktop-store-gc.timer" = timer "Mon *-*-* 04:00";
+            "claude-desktop-scratchpad-prune.service" = true;
+          };
+          twoLines = false;
+        };
+      };
     testLauncherName = {
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
       expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
@@ -1410,6 +1455,28 @@ in
       permissions-window
       request-send
       ;
+
+    # The user units' build taking a calendar spec of the user's and refusing one systemd can't parse, by the timer and
+    # the spec
+    timer-calendar =
+      let
+        units =
+          frequency:
+          (nixos (enabled // { storeGc.frequency = frequency; }))
+          .config.home-manager.users.alice.agent-sandbox.claude-desktop.build.userUnitsDir;
+      in
+      pkgs.runCommand "timer-calendar-check"
+        {
+          good = units "Mon *-*-* 04:00";
+          failed = pkgs.testers.testBuildFailure (units "weakly");
+        }
+        ''
+          grep -qxF "OnCalendar=Mon *-*-* 04:00" "$good/claude-desktop-store-gc.timer" ||
+            { echo "the GC timer: $(<"$good/claude-desktop-store-gc.timer")" >&2; exit 1; }
+          grep -qF "claude-desktop-store-gc.timer: OnCalendar=weakly isn't a calendar spec systemd parses" "$failed/testBuildFailure.log" ||
+            { echo "the user units built with OnCalendar=weakly: $(<"$failed/testBuildFailure.log")" >&2; exit 1; }
+          touch $out
+        '';
 
     # nix-unit evaluates this flake again inside the build, which can't fetch, so every input (theirs too) comes from
     # the store

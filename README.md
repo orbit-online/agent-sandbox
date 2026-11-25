@@ -196,9 +196,13 @@ caught up at the next start when the sandbox wasn't running:
 
 - `claude-desktop-store-gc` collects the sandbox's store after the launcher
   has moved its GC root (on every rebuild that changes the sandbox), and
-  otherwise once a week. It refuses to run outside the sandbox.
+  otherwise at `storeGc.frequency`, weekly by default. It refuses to run
+  outside the sandbox.
 - `claude-desktop-scratchpad-prune` removes session scratchpads with nothing
-  changed in 30 days.
+  changed in 30 days, at `scratchpadPrune.frequency`, daily by default.
+
+Both options take an `OnCalendar=` spec (systemd.time(7)), which the build
+checks, or `null` to leave the timer out; the GC still runs after a rebuild.
 
 Each launcher logs to two journald namespaces:
 `journalctl --namespace=claude-desktop[-<name>]` for the launcher, the

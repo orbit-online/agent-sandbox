@@ -44,61 +44,84 @@ let
         done <"$closure/store-paths"
         printf '%s\n' ${lib.escapeShellArgs roots} >$out
       '';
+  # A timer unit, Persistent so a run missed while the sandbox wasn't running comes at its next start; none for null
+  timer =
+    name: frequency:
+    lib.optionalAttrs (frequency != null) {
+      "${name}.timer" = ''
+        [Timer]
+        OnCalendar=${frequency}
+        Persistent=true
+      '';
+    };
+  frequency =
+    default: what:
+    lib.mkOption {
+      # One line: the value goes into the unit's text as it is
+      type = lib.types.nullOr (lib.types.strMatching "[^\n]+");
+      inherit default;
+      example = "Mon *-*-* 04:00";
+      description = ''
+        ${what}, as `OnCalendar=` of its timer in the sandbox's systemd --user (systemd.time(7)), which the build
+        checks with `systemd-analyze calendar`. A run missed while the sandbox wasn't running comes at its next start.
+        `null` leaves the timer out.
+      '';
+    };
 in
 {
-  env.NIX_CONF_DIR = "${sl.nixConf}";
-  binds = {
-    "/nix" = sys // {
-      src = "${ids.stateDir}/nix";
-      rw = true;
+  options.storeGc.frequency = frequency "weekly" (
+    "How often to collect the sandbox's Nix store (the launcher moving the GC root starts a collection "
+    + "whatever this says)"
+  );
+  options.scratchpadPrune.frequency = frequency "daily" "How often to prune Claude Code's session scratchpads";
+  config = {
+    env.NIX_CONF_DIR = "${sl.nixConf}";
+    binds = {
+      "/nix" = sys // {
+        src = "${ids.stateDir}/nix";
+        rw = true;
+      };
+      # On its own, so the sandbox can't rename it: host-side processes that join its mount namespace run binaries
+      # from the closure's binds in it
+      "/nix/store" = sys // {
+        src = "${ids.stateDir}/nix/store";
+        rw = true;
+      };
     };
-    # On its own, so the sandbox can't rename it: host-side processes that join its mount namespace run binaries
-    # from the closure's binds in it
-    "/nix/store" = sys // {
-      src = "${ids.stateDir}/nix/store";
-      rw = true;
+    build.storeRoots = [ sl.nixConf ];
+    build.sw = [
+      storeGc
+      scratchpadPrune
+    ];
+    build.nixpak = [ { bubblewrap.extraStorePaths = [ storeRoots ]; } ];
+    # The GC at storeGc.frequency and when the launcher moved the GC root (gc-pending, which the script removes), the
+    # prune at scratchpadPrune.frequency
+    build.userUnits =
+      timer "claude-desktop-store-gc" config.storeGc.frequency
+      // timer "claude-desktop-scratchpad-prune" config.scratchpadPrune.frequency
+      // {
+        "claude-desktop-store-gc.service" = ''
+          [Unit]
+          Description=Collect the sandbox's Nix store
+          [Service]
+          Type=oneshot
+          ExecStart=${lib.getExe storeGc}
+        '';
+        "claude-desktop-store-gc.path" = ''
+          [Path]
+          PathExists=/nix/var/claude-desktop/gc-pending
+        '';
+        "claude-desktop-scratchpad-prune.service" = ''
+          [Unit]
+          Description=Prune Claude Code's session scratchpads
+          [Service]
+          Type=oneshot
+          ExecStart=${lib.getExe scratchpadPrune}
+        '';
+      };
+    build.launcherConfig = {
+      storeRoots = "${storeRoots}";
+      storeRootsLink = "store-roots${ids.suffix}";
     };
-  };
-  build.storeRoots = [ sl.nixConf ];
-  build.sw = [
-    storeGc
-    scratchpadPrune
-  ];
-  build.nixpak = [ { bubblewrap.extraStorePaths = [ storeRoots ]; } ];
-  # Weekly and when the launcher moved the GC root (gc-pending, which the script removes), and the prune daily, each
-  # caught up at the next start when the sandbox wasn't running
-  build.userUnits = {
-    "claude-desktop-store-gc.service" = ''
-      [Unit]
-      Description=Collect the sandbox's Nix store
-      [Service]
-      Type=oneshot
-      ExecStart=${lib.getExe storeGc}
-    '';
-    "claude-desktop-store-gc.timer" = ''
-      [Timer]
-      OnCalendar=weekly
-      Persistent=true
-    '';
-    "claude-desktop-store-gc.path" = ''
-      [Path]
-      PathExists=/nix/var/claude-desktop/gc-pending
-    '';
-    "claude-desktop-scratchpad-prune.service" = ''
-      [Unit]
-      Description=Prune Claude Code's session scratchpads
-      [Service]
-      Type=oneshot
-      ExecStart=${lib.getExe scratchpadPrune}
-    '';
-    "claude-desktop-scratchpad-prune.timer" = ''
-      [Timer]
-      OnCalendar=daily
-      Persistent=true
-    '';
-  };
-  build.launcherConfig = {
-    storeRoots = "${storeRoots}";
-    storeRootsLink = "store-roots${ids.suffix}";
   };
 }
