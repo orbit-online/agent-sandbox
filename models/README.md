@@ -204,7 +204,7 @@ joining needs CAP_SYS_ADMIN in init).
 | grant directory entries | broker creates on the host | sandbox reads through the ro bind | `O_NOFOLLOW` dirfd, random names; daemon refuses a grant dir that isn't its own directory; in M1 the helpers open it with `RESOLVE_NO_SYMLINKS`, check it's the host's directory (device and inode) and a mount root, and act on single entries beneath it |
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling and denied directories (lexical, then `openat2` without links or mount crossings beneath the root), no submounts, ro/nodev/nosuid |
 | the daemon's config (ceilings, standing grants) | the Home Manager module, a read-only path in the host's Nix store | host only (the host's store isn't bound) | nothing writes it at runtime; what the user ends lives in the daemon's memory |
-| helper binaries | nsenter, setpriv, ip, the launcher's scripts | resolved on the host's mounts | never in M1 or M2, where the sandbox can swap a directory (S12) |
+| helper binaries | nsenter, setpriv, ip, the launcher's scripts | resolved on the host's mounts | never in M1 or M2, where the sandbox can swap a directory (S12; `nix/checks/execsites` keeps later ones to it) |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
 | journal sockets: `socket`, `stdout`, `dev-log` of the launcher's sandbox journald namespace (`_sandbox`) at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; supervise's pump too; the host side's namespace's sockets aren't bound | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates only the sandbox's own namespace |
 | journal storage: `/var/log/journal/<machine-id>.claude-desktop[-<name>]_sandbox` ro at `/var/log/journal/<machine-id>`, and the host side's `.claude-desktop[-<name>]` ro under its own name | journald writes | the sandbox reads both | none: the helpers' messages (the proxy's refusals, which is why it's bound), command lines, executables and host pids, which the pid namespace hides otherwise |
@@ -761,12 +761,16 @@ by dropping the owner rule's parent condition).
 Found while reading the code for this inventory; each should come out of
 a model as a counterexample (`expect 1` until triaged in step 5).
 
-1. Re-entries are not descendants of the sandbox's pid. `--shell` (and
-   anything it starts) runs below a host `nsenter`, so `grantMounts`,
-   `holdersAfter`, `descendants` and `sandbox.isDescendant`
-   (`mounts.go:457-617`) don't see it: a revoke lists no holder for a
-   `--shell` process with its cwd on the grant or with a re-bind in a
-   nested mount namespace, and the window can't end it. Against P5.
+1. Gone with the members' scan by namespace
+   (`cmd/permissions-broker/members.go`): re-entries are not descendants
+   of the sandbox's pid, as `--shell` (and anything it starts) runs below
+   a host `nsenter`, so a scan by ancestry listed no holder for a
+   `--shell` process with its cwd on a grant, against P5. The scan now
+   takes every process whose user namespace, or the one owning its mount
+   namespace, is U1 or below it, whoever its parent is, so a re-entry is
+   listed and ended like any other (`TestHoldersReentry`). The launcher
+   still finds the app by ancestry (`internal/sandbox`, `AppPid`), which
+   is right there: a re-entry is never the app.
 2. Gone with session leases (acbceda): `sessionOf` walked past the
    sandbox into the host for a re-entry. Fixed before that by stopping
    at the first process outside the sandbox's user namespaces.
@@ -776,6 +780,18 @@ a model as a counterexample (`expect 1` until triaged in step 5).
    holds only because of that.
 4. `share` is accepted from any process in M1. Harmless (idempotent),
    noted for S9.
-5. S12 holds because each host-side exec resolves its binary on the
-   host's mounts. Nothing asserts that; a helper added later that execs
-   after joining M1 runs the sandbox's code with full capabilities in U1.
+5. Settled with `nix/checks/execsites` (the flake check `host-execs`):
+   S12 holds because each host-side exec with capabilities resolves its
+   binary on the host's mounts, which nothing asserted; a helper added
+   later that execs after joining M1 would run the sandbox's code with
+   full capabilities in U1. The check reads the Go sources of every
+   binary. A function that names nsenter must be listed with what it does:
+   one that keeps capabilities through nsenter's exec joins only the
+   user, net and uts namespaces, each by a pinned fd; the re-entry, which
+   does join the app's mount namespace and execs a path there, keeps
+   none (`--preserve-credentials` without `--keep-caps`, under
+   `--no-new-privs`); `setns` is called by `enterM1` alone, and what
+   calls that (`make-shared`, `move-tree`, `detach`) reaches no exec
+   through its package. It reads syntax, so an exec behind an interface
+   or in another package's function isn't seen
+   (`S12anyHelperFromHost`, `S12laterUnchecked` in `structure.als`).

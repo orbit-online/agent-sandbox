@@ -365,14 +365,27 @@ assert S12resolvedInM1 {
 }
 check S12resolvedInM1 for 4 but 11 OwnedNS, 12 StorePath, 1 steps expect 1
 
-// S12 as a design property (README lead 5): nothing in the build
-// checks that a host-side exec with capabilities resolves its binary on
-// the host's mounts. A later helper exec'd after joining M1 runs the
-// sandbox's code with every capability in U1. Known.
+// S12 for a later helper (README lead 5): a host-side exec with
+// capabilities added after today's resolves its binary on the host's
+// mounts too. Not the kernel's doing: nix/checks/execsites (the flake
+// check host-execs) reads the Go sources and fails on a function that
+// runs nsenter with capabilities and the mount namespace, a target or a
+// root, on an unlisted setns, and on a helper that reaches an exec after
+// joining M1. Holds with it. Revert: S12laterUnchecked.
+pred laterOnHost { LaterExec.resolvesIn = HostMnt }
 assert S12anyHelperFromHost {
+  (world and sbPinned and resolvedOnHost and laterOnHost) implies
+    all e: Exec | some e.keeps implies not replaceable[e]
+}
+check S12anyHelperFromHost for 4 but 11 OwnedNS, 12 StorePath, 5 Exec, 1 steps expect 0
+
+// S12, revert: without the source check nothing keeps a later helper
+// from an exec after joining M1, where it runs the sandbox's code with
+// every capability in U1 (counterexample found).
+assert S12laterUnchecked {
   (world and sbPinned and resolvedOnHost) implies all e: Exec | some e.keeps implies not replaceable[e]
 }
-check S12anyHelperFromHost for 4 but 11 OwnedNS, 12 StorePath, 5 Exec, 1 steps expect 1
+check S12laterUnchecked for 4 but 11 OwnedNS, 12 StorePath, 5 Exec, 1 steps expect 1
 
 // S12 under the README's attacker, which counts bwrap's init in: it may
 // move the sandbox's pid into a user and mount namespace of its own

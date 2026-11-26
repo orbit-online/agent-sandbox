@@ -1995,6 +1995,31 @@ in
       request-send
       ;
 
+    # S12 over the Go sources of every binary (nix/checks/execsites), which no package's own build holds together: no
+    # exec with capabilities in a sandbox namespace resolves where the sandbox swaps directories
+    host-execs =
+      pkgs.runCommand "host-execs-check"
+        {
+          nativeBuildInputs = [ pkgs.go ];
+          src = lib.fileset.toSource {
+            root = ../..;
+            fileset = lib.fileset.unions [
+              ../../go.mod
+              ../../go.sum
+              ../../cmd
+              ../../internal
+              ./execsites
+            ];
+          };
+        }
+        ''
+          export HOME=$TMPDIR GOPROXY=off GOTOOLCHAIN=local
+          cd $src
+          # The standard library alone: no module to fetch
+          go test ./nix/checks/execsites/
+          touch $out
+        '';
+
     # The user units' build taking a calendar spec of the user's and refusing one systemd can't parse, by the timer and
     # the spec
     timer-calendar =

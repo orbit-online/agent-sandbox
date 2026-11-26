@@ -372,7 +372,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   authenticates the request (kmsproxy presents the user's client certificate), so request-send holds no key and knows
   no CA layout. No redirects followed; the answer is refused over 8 MiB or when it isn't UTF-8. Exits 2 on what it
   refuses, 1 when sending fails.
-- `nix/checks/`: the flake checks, see Testing.
+- `nix/checks/`: the flake checks, see Testing. `execsites/` is a Go test package over the sources of every binary.
 - `docs/permissions.md`: design of the permissions broker, rewritten for
   the broker as gateway (declared host tools, host sockets at stable
   addresses, the Go D-Bus proxy). Its Status says which Steps have landed.
@@ -911,6 +911,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   on q35 (as nixpkgs runs its test VMs once OVMF requires SMM), their NICs hot-plugged into a PCIe root port, QEMU's
   errors failing the test.
 - `scripts`: shellcheck on `scripts/` and the module's scripts.
+- `host-execs` (`nix/checks/execsites`, run by hand with `go test ./nix/checks/execsites/`): S12 over the Go sources
+  of every binary in `cmd/` and `internal/`, which no package's own build holds together (`models/README.md`, lead 5).
+  Every function that names nsenter is listed with what it does: one keeping capabilities through nsenter's exec joins
+  the user, net and uts namespaces alone, each by a pinned fd, so its binary resolves on the host's mounts; the
+  re-entry joins the app's mount namespace under `--no-new-privs` and `--preserve-credentials`, with nothing that keeps
+  capabilities; `setns` is called by `enterM1` alone, and its listed callers reach no exec through their package.
+  `rules_test.go` runs the rules on sources that break each. It reads syntax: an exec behind an interface or in
+  another package isn't seen. A new helper goes into its lists (`sites`, `joins`) with the class it must keep to.
 - `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`: the NixOS VM test
   (`nix/checks/vm/`, needs KVM), in six parts that Nix runs in parallel;
   `vm` builds them all. Each boots the same two machines (built once) and
@@ -1082,7 +1090,7 @@ modules and a user alice (the `home-manager` input exists only for it).
 
 CI runs on pushes to `main` and on pull requests, split by what changed
 (`.github/workflows/test-*.yaml`, each with its own `paths:`): `test-go`
-builds the Go packages with their tests, `test-module` the eval tests, the
+builds the Go packages with their tests and `host-execs`, `test-module` the eval tests, the
 app's closure and shellcheck, `test-vm` the VM test's parts (one job,
 in parallel, the loop at 100 launches), and `test-models`
 runs `models/check`. A change to docs alone runs none.
