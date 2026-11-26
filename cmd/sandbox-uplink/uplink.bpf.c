@@ -131,13 +131,16 @@ static __always_inline int sandbox_end(struct __sk_buff *skb)
 	return 0;
 }
 
-// Whether skb is an mDNS response to the group, 224.0.0.251 or ff02::fb, from and to port 5353: QR set in the DNS
-// header after a fixed IP header
-static __always_inline int mdns_response(struct __sk_buff *skb)
+// The length of a frame up to the DNS ID and flags, after a fixed IP header and UDP
+#define DNS_FLAGS4 (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + 3)
+#define DNS_FLAGS6 (ETH_HLEN + sizeof(struct ipv6hdr) + sizeof(struct udphdr) + 3)
+
+// Whether skb is UDP to the mDNS group, 224.0.0.251 or ff02::fb, right after a fixed IP header, by the IP header pull
+// made readable: 4 or 6 for its family, 0 otherwise
+static __always_inline int mdns_group(struct __sk_buff *skb)
 {
 	void *data = (void *)(long)skb->data, *end = (void *)(long)skb->data_end;
 	struct ethhdr *eth = data;
-	struct udphdr *udp;
 	if ((void *)(eth + 1) > end)
 		return 0;
 	if (eth->h_proto == bpf_htons(ETH_P_IP)) {
@@ -145,22 +148,51 @@ static __always_inline int mdns_response(struct __sk_buff *skb)
 		if ((void *)(ip + 1) > end || ip->ihl != 5 || ip->frag_off & bpf_htons(0x3fff) ||
 		    ip->protocol != IPPROTO_UDP || ip->daddr != bpf_htonl(0xe00000fb))
 			return 0;
-		udp = (void *)(ip + 1);
-	} else if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
+		return 4;
+	}
+	if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
 		struct ipv6hdr *ip6 = (void *)(eth + 1);
 		if ((void *)(ip6 + 1) > end || ip6->nexthdr != IPPROTO_UDP ||
 		    ip6->daddr.s6_addr32[0] != bpf_htonl(0xff020000) || ip6->daddr.s6_addr32[1] ||
 		    ip6->daddr.s6_addr32[2] || ip6->daddr.s6_addr32[3] != bpf_htonl(0xfb))
 			return 0;
-		udp = (void *)(ip6 + 1);
-	} else {
-		return 0;
+		return 6;
 	}
-	// The UDP header and the DNS ID and flags
+	return 0;
+}
+
+// Whether the UDP header at l4, in a frame of len bytes up to its DNS flags, is from and to port 5353 with QR set.
+// Pulls those bytes into the linear part where they aren't: a driver may leave all past the headers it parsed in a
+// fragment (GRO pulls no further than the IP header of UDP; iwlwifi keeps a frame past its 128-byte head there but
+// for the 802.11 header), and the `primary` program reads the ports of the copy in place too (parse of netkit.bpf.c)
+static __always_inline int response_at(struct __sk_buff *skb, const __u32 l4, const __u32 len)
+{
+	void *data = (void *)(long)skb->data, *end = (void *)(long)skb->data_end;
+	if (data + len > end) {
+		if (bpf_skb_pull_data(skb, len))
+			return 0;
+		data = (void *)(long)skb->data;
+		end = (void *)(long)skb->data_end;
+		if (data + len > end)
+			return 0;
+	}
+	struct udphdr *udp = data + l4;
 	__u8 *dns = (void *)(udp + 1);
-	if ((void *)(dns + 3) > end)
-		return 0;
 	return udp->source == bpf_htons(MDNS_PORT) && udp->dest == bpf_htons(MDNS_PORT) && dns[2] & 0x80;
+}
+
+// Whether skb is an mDNS response to the group, 224.0.0.251 or ff02::fb, from and to port 5353: QR set in the DNS
+// header after a fixed IP header. Each family apart: a variable offset is pointer arithmetic the verifier refuses
+// without CAP_PERFMON
+static __always_inline int mdns_response(struct __sk_buff *skb)
+{
+	switch (mdns_group(skb)) {
+	case 4:
+		return response_at(skb, ETH_HLEN + sizeof(struct iphdr), DNS_FLAGS4);
+	case 6:
+		return response_at(skb, ETH_HLEN + sizeof(struct ipv6hdr), DNS_FLAGS6);
+	}
+	return 0;
 }
 
 struct copy {

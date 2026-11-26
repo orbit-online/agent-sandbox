@@ -44,12 +44,15 @@ let
         EOF
         clang -O2 -target bpf -I${lib.getDev pkgs.libbpf}/include -I${pkgs.linuxHeaders}/include -c s.c -o $out
       '';
-  # Sends a UDP frame of 5000 bytes from src to dst on dev through AF_PACKET with a vnet header whose hdr_len is 0: past
-  # a page, the kernel puts nothing but the Ethernet header in the linear part (af_packet.c packet_snd, packet_alloc_skb)
+  # nonlinear DEV SRC DST [SPORT DPORT PAYLOAD]: sends a UDP frame of 5000 bytes from src to dst on dev (ports 5555 to
+  # 9, or the given ones, its payload starting with the given hex bytes) through AF_PACKET with a vnet header whose
+  # hdr_len is 0: past a page, the kernel puts nothing but the Ethernet header in the linear part (af_packet.c packet_snd,
+  # packet_alloc_skb)
   nonlinear = pkgs.writeText "nonlinear.py" ''
     import socket, struct, sys
-    dev, src, dst = sys.argv[1:]
-    udp = struct.pack("!4H", 5555, 9, 5008, 0) + bytes(5000)
+    dev, src, dst = sys.argv[1:4]
+    sport, dport, head = (sys.argv[4:] + ["5555", "9", ""])[:3]
+    udp = struct.pack("!4H", int(sport), int(dport), 5008, 0) + bytes.fromhex(head).ljust(5000, b"\0")
     if ":" in src:
         fam, proto = socket.AF_INET6, 0x86dd
         ip = struct.pack("!IHBB", 6 << 28, len(udp), 17, 64)
@@ -176,10 +179,10 @@ pkgs.testers.runNixOSTest {
                        f" tcpdump -U -ni {iface} -w /tmp/{unit}.pcap '{filt}'")
           node.wait_until_succeeds(f"grep -q 'listening on' /tmp/{unit}.err", timeout=30)
 
-      def captured(node, unit="cap"):
+      def captured(node, unit="cap", flags=""):
           time.sleep(1)
           node.succeed(f"systemctl stop {unit}")
-          return node.succeed(f"tcpdump -nr /tmp/{unit}.pcap 2>/dev/null; rm /tmp/{unit}.pcap")
+          return node.succeed(f"tcpdump {flags} -nr /tmp/{unit}.pcap 2>/dev/null; rm /tmp/{unit}.pcap")
 
       # As a non-root user in the given group with CAP_BPF alone, as the per-launcher helper runs
       def as_helper(gid, cmd, caps="+bpf"):
@@ -361,6 +364,36 @@ pkgs.testers.runNixOSTest {
           wait_in_order("eth1")
           ws.succeed(sb(f"curl -sf -m5 http://{lan4}/ -o /dev/null"))
           ws.succeed("nft delete table inet t")
+
+      with subtest("mDNS responses from the LAN copied to the primaries of the mdns map, also with the UDP header outside the linear part; queries not"):
+          key = hexbytes(struct.pack("=I", primary))
+          ws.succeed(f"bpftool map update pinned {pins}/mdns key hex {key} value hex 01")
+          # A response claiming an A record for name, or a query for it
+          def dns(name, response):
+              qname = b"".join(bytes([len(l)]) + l.encode() for l in name.split(".")) + b"\0"
+              if response:
+                  return struct.pack("!6H", 0, 0x8400, 0, 1, 0, 0) + qname + struct.pack("!HHIH4B", 1, 0x8001, 120, 4, 10, 9, 9, 9)
+              return struct.pack("!6H", 0, 0, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
+          def lan_mdns(name, response):
+              lan.succeed("python3 -c \"from scapy.all import *; sendp(Ether(dst='01:00:5e:00:00:fb')/IP(dst='224.0.0.251', ttl=255)"
+                          f"/UDP(sport=5353, dport=5353)/bytes.fromhex('{dns(name, response).hex()}'), iface='eth1')\"")
+          # What the LAN sends arrives linear here (virtio), so the non-linear frame comes in at the ingress of eth1
+          # from a dummy device, as a driver that leaves only the headers it parsed in the linear part delivers it. The
+          # frame is past a page, so the stand-in pair carries it with its MTU raised
+          ws.succeed("ip link add inj type dummy", "ip link set inj mtu 9000 up", "tc qdisc add dev inj clsact",
+                     "tc filter add dev inj egress matchall action mirred ingress redirect dev eth1",
+                     "ip link set sbx-t mtu 9000", sb("ip link set nkp mtu 9000"))
+          capture(ws, "udp port 5353", iface="nkp", unit="sbcap", props="-p NetworkNamespacePath=/run/netns/sb")
+          lan_mdns("copied.local", True)
+          lan_mdns("asked.local", False)
+          ws.succeed(f"${pkgs.python3}/bin/python3 ${nonlinear} inj {lan4} 224.0.0.251 5353 5353 {dns('fragged.local', True).hex()}")
+          out = captured(ws, "sbcap", flags="-A")
+          print("mDNS in the sandbox:", out)
+          assert "copied" in out, "the response of the LAN wasn't copied in"
+          assert "asked" not in out, "a query of the LAN was copied in"
+          assert "fragged" in out, "the response with its UDP header outside the linear part wasn't copied in"
+          ws.succeed("ip link del inj", "ip link set sbx-t mtu 1500", sb("ip link set nkp mtu 1500"),
+                     f"bpftool map delete pinned {pins}/mdns key hex {key}")
 
       lan.succeed(f"ip route add {sb4}/32 via {ws4}", f"ip -6 route add {sb6}/128 via {ws6}")
       mac = ws.succeed("cat /sys/class/net/eth1/address").strip()

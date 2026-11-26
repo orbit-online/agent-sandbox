@@ -102,7 +102,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `cmd/sandbox-uplink/`: the uplink programs and their loader (`sandbox-uplink --help`). `uplink.bpf.c` (dual
   MIT/GPL, built by the package with clang, its store path linked in as `main.object`): on the tcx ingress of each uplink
   `pre` ahead of einat (drops sources and destinations in the sandbox blocks; copies mDNS responses without a VLAN
-  tag, QR set from and to port 5353, to the egress of each primary in the pinned `mdns` map, `skb->mark` 0x5a6d0002
+  tag, QR set from and to port 5353 (the UDP header and the DNS flags pulled into the linear part where a driver left
+  them in a fragment, `bpf_skb_pull_data`), to the egress of each primary in the pinned `mdns` map, `skb->mark` 0x5a6d0002
   for the copies and back to what it was after, with `bpf_for_each_map_elem`; marks what passes in `skb->cb[0..1]`,
   which einat leaves alone) and
   `post` right after einat (a marked packet to a registered sandbox address goes to its netkit peer with
@@ -903,6 +904,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   maps (0640, eth0 and eth1, per family the default route of the lowest metric, its gateway, the source of mDNS
   queries and the MAC; one of another value size, as an earlier sandbox-uplink pinned it, replaced; an uplink whose `egress` fails to attach
   left out until it attaches), a registration of a gone primary removed and an `mdns` entry of a device that isn't a primary,
+  an mDNS response of the LAN copied to the primary in the `mdns` map, also one whose UDP header lies outside the
+  linear part (sent in at the ingress of eth1 from a dummy device), and a query of the LAN not,
   sandbox UDP over IPv4 and IPv6 SNATed to the workstation address
   on ports 61000-63999 and HTTP, replies arriving with forwarding to the sandbox blocks dropped in nftables (and not
   without `post`), LAN packets from the sandbox addresses dropped ahead of the host stack (and not without `pre`), LAN
