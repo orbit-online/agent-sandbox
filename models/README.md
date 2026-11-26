@@ -391,7 +391,8 @@ process whose principal is in the Sandbox domain, at any time.
   Best effort: an fd queued in
   an `SCM_RIGHTS` message or registered with io_uring, a detached mount
   attached in a namespace no process is in, a mapping whose path can't be
-  looked up beneath the grant, and what the 10 s scan doesn't reach hold it
+  looked up beneath the grant, a process started after the scan listed
+  the sandbox's processes, and what the 10 s scan doesn't reach hold it
   unseen, until the sandbox ends. Linux has no general `revoke()` and an
   open file keeps its mount alive, so ending the holders, at worst the
   sandbox, is the only way to take access back (`docs/permissions.md`).
