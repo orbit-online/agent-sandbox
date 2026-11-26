@@ -147,3 +147,21 @@ func TestLockLostWhileAsking(t *testing.T) {
 		t.Errorf("grant made a lock lease nothing watches: %+v", g)
 	}
 }
+
+// P9: the screen locking after the user's answer, while the grant is being made live (a folder's mount takes a few
+// helpers), ends the lock lease: here as the broker looks for the host socket's instances for its address
+func TestLockWhileGranting(t *testing.T) {
+	b, _ := testBroker(t, "allow")
+	b.lockOK = true
+	c := testSocket(t, b, "a")
+	b.syncSockets(c)
+	globbed = func() { b.lockEvent("the screen locked") }
+	t.Cleanup(func() { globbed = func() {} })
+	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"vm": "a"}`, "lock"))
+	if err == nil || refusalOf(err) != refLease {
+		t.Errorf("A lock lease granted across a screen lock: %+v, %v", g, err)
+	}
+	if gs := b.liveGrants(); len(gs) != 0 {
+		t.Errorf("Live after the screen locked: %+v", gs)
+	}
+}

@@ -101,13 +101,24 @@ func (b *broker) lease(g *grant, expiry <-chan time.Time) {
 	}
 }
 
-// lockEvent ends every lock lease: the screen locked or the machine went to sleep
+// lockEvent ends every lock lease: the screen locked or the machine went to sleep. Counted first, for the lock leases
+// whose grants aren't recorded yet: obtain ends one it made across a lock
 func (b *broker) lockEvent(why string) {
+	b.mu.Lock()
+	b.locks++
+	b.mu.Unlock()
 	for _, g := range b.liveGrants() {
 		if g.Lease == "lock" {
 			g.end(why)
 		}
 	}
+}
+
+// lockCount is how many times lock leases ended so far
+func (b *broker) lockCount() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.locks
 }
 
 // revoke ends a grant for the user and returns what still held files on it (attach grants). A standing grant stays

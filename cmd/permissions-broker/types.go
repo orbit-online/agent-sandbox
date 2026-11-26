@@ -154,7 +154,9 @@ type broker struct {
 	// share was asked for, or an earlier daemon's found: it's done once per sandbox
 	shareAsked bool
 	lockOK     bool
-	watches    map[chan []byte]bool
+	// The lock events so far
+	locks   uint64
+	watches map[chan []byte]bool
 	// What still held attach grants when they ended
 	heldGrants []held
 	// Held while a folder is attached, and while the holders of an ended one are listed: the scan takes what the

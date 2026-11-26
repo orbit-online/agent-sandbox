@@ -675,7 +675,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   calls without asking, told `maxValidity`; revoked or released, asked for until the
   daemon starts again), duration, lock (granted right after the watch is set up, which
   happens before the daemon serves; none granted when the lock stops being
-  watched while the user is asked) leases, call units in systemd (faked), exclusive instances across
+  watched while the user is asked, nor when the screen locks while the grant is made live) leases, call units in systemd (faked), exclusive instances across
   launchers (locked by the instance, whatever other parameters
   a request carries; the default launcher's cleanup leaving a lock without content alone), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace, a second time, and once a process of

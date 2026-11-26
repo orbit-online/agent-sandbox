@@ -105,6 +105,7 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 		return nil, err
 	}
 	answer, err := b.consent(p, c, params, summary, reason, lease, call)
+	locks := b.lockCount()
 	// A caller that stopped waiting withdrew its request: no refusal of the user's
 	unlockGate(answer.Allow, answer.How != howGone)
 	if err != nil {
@@ -159,6 +160,13 @@ func (b *broker) obtain(p peer, c *capability, params json.RawMessage, reason, l
 		if g, err = b.grant(c, params, summary, reason, lease); err != nil {
 			c.covered.Unlock()
 			return nil, err
+		}
+		// The screen may have locked since the answer, while the grant was made live: lockEvent ended the lock leases
+		// recorded by then, and counted before it looked
+		if lease == "lock" && b.lockCount() != locks {
+			c.covered.Unlock()
+			g.end("the screen locked")
+			return nil, refusef(refLease, "The screen locked before the grant was made: ask again")
 		}
 	}
 	c.covered.Unlock()

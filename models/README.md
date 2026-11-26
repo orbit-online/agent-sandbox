@@ -404,8 +404,9 @@ process whose principal is in the Sandbox domain, at any time.
   ones only as a digest.
 - P8. Retired with session leases (acbceda): a grant is the sandbox's,
   and no lease ends with a process.
-- P9. A lock lease ends on Lock, LockedHint or PrepareForSleep, and none is
-  granted while the lock isn't watched.
+- P9. A lock lease ends on Lock, LockedHint or PrepareForSleep, one whose
+  grant is still being made live when the event comes included, and none
+  is granted while the lock isn't watched.
 - P10. The validity a call is given is at most the command's
   `maxValidity` and at most what's left of a duration lease.
 - P11. Every grant ends with the daemon (call units by `BindsTo=`,

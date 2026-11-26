@@ -922,7 +922,9 @@ watches logind on the system bus from the host, where it has access. It runs in 
 so `session/self` doesn't resolve for it, and logind sends no signals on that alias anyway: it reads the `Display`
 property of `user/self` for the graphical session's object path and watches that one. It sets that watch up before it
 serves requests, so a lock lease asked for right after it starts isn't refused for a watch still being set up. The
-`Lock` signal, a request to lock, also ends `lock` leases.
+`Lock` signal, a request to lock, also ends `lock` leases. A screen that locks after the user's answer, while the
+grant is still being made live (a folder's mount takes a few helpers), ends that grant too, and the request is refused
+(`lease`).
 
 Releasing voluntarily: the MCP server appends a line to its tool results listing the grants older than 15 minutes and
 asking Claude to release what it no longer needs, at most every 10 minutes. By age, not idleness: the daemon can't
