@@ -140,6 +140,32 @@ let
       null;
   refusedBinds = lib.filterAttrs (_: b: b.enable && sourceRefusal b.src != null) config.binds;
   refusedDevices = lib.filter (d: sourceRefusal d != null) devices;
+  # The source of a read-write bind, the scratchpad's included, that holds a bind's or a device's source, null for
+  # none: the sandbox writes the directory that holds the source, so it can put a link in its place, even while it is
+  # a mountpoint (from a nested mount namespace, models/README.md, Attacker 6), and bwrap follows a link at a bind's
+  # source: the next launch would mount what the link names, anything the user reaches (CVE-2024-42472 was this in
+  # Flatpak). A read-only bind there protects nothing either: moved aside, its directory is the read-write bind's
+  # under another name. Compared as written, so only of sources the checks above let through, which are clean. The
+  # store beneath /nix aside, which the launcher checks itself before every launch (cmd/launcher store.go)
+  holder =
+    let
+      clean = src: if src == "/" then "/" else lib.removeSuffix "/" src;
+      writable =
+        lib.mapAttrsToList (_: b: clean b.src) (lib.filterAttrs (_: b: b.enable && b.rw) config.binds)
+        ++ [ ids.scratchpad ];
+    in
+    written:
+    let
+      src = clean written;
+    in
+    if sourceRefusal written != null || src == "${ids.stateDir}/nix/store" then
+      null
+    else
+      lib.findFirst (w: w != src && sl.holds w src) null writable;
+  nestedBinds = lib.mapAttrs (_: b: b // { holder = holder b.src; }) (
+    lib.filterAttrs (_: b: b.enable && holder b.src != null) config.binds
+  );
+  nestedDevices = lib.filter (d: holder d != null) devices;
 in
 {
   config = {
@@ -228,7 +254,15 @@ in
       ++ map (d: {
         assertion = false;
         message = "${ids.opt}devices binds ${d}, ${sourceRefusal d}";
-      }) refusedDevices;
+      }) refusedDevices
+      ++ lib.mapAttrsToList (path: b: {
+        assertion = false;
+        message = "${ids.opt}binds.\"${path}\" binds ${b.src}, which lies beneath ${b.holder}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it";
+      }) nestedBinds
+      ++ map (d: {
+        assertion = false;
+        message = "${ids.opt}devices binds ${d}, which lies beneath ${holder d}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it";
+      }) nestedDevices;
 
     build.sandboxed =
       inputs.nixpak.lib.nixpak

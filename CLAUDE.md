@@ -460,6 +460,9 @@ sandbox ends (`internal/uplink`):
   ships the scripts, the user's hooks run them.
 - Anything that widens the sandbox (binds, D-Bus rules, sockets, env,
   devices) needs the user's go.
+- A bind's source never lies where the sandbox writes the directory that holds it: bwrap follows a link at a source,
+  so the next launch would mount what the sandbox put there. The module asserts it for `binds` and `devices`; a bind added
+  elsewhere (nixpak's config, a feature module) needs the same look, as `/nix/store` beneath `/nix` got in `store.go`.
 - Claude doesn't push. Commit locally; a human reviews and pushes.
 - A Go file stays under about 400 lines, tests included, and holds one
   concern: longer files can't be audited.
@@ -536,8 +539,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   `network.hooks` in its `--net` alone (`testLauncherHooks`),
   and the assertions on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR` (`testStateBinds`), by another spelling of the path (an empty, `.` or `..`
-  segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), and the same on `devices`
-  (`testStateDevices`). The test system imports both modules twice and has a launcher
+  segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `devices`
+  (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
+  its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
+  at the same source, beneath a disabled or another launcher's bind). The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks

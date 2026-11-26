@@ -205,6 +205,7 @@ joining needs CAP_SYS_ADMIN in init).
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling and denied directories (lexical, then `openat2` without links or mount crossings beneath the root), no submounts, ro/nodev/nosuid |
 | the daemon's config (ceilings, standing grants) | the Home Manager module, a read-only path in the host's Nix store | host only (the host's store isn't bound) | nothing writes it at runtime; what the user ends lives in the daemon's memory |
 | helper binaries | nsenter, setpriv, ip, the launcher's scripts | resolved on the host's mounts | never in M1 or M2, where the sandbox can swap a directory (S12; `nix/checks/execsites` keeps later ones to it) |
+| a bind's source | nixpak's bwrap, at every launch, following a link there | the sandbox, where it writes the directory that holds the source: beneath a read-write bind's source, its home or its scratchpad | the module refuses such a bind (`core.nix`, `nestedBinds`), so no source lies where the sandbox can put a link; the store beneath `/nix` aside, which the launch checks itself (`store.go`). Not covered: a source beneath a folder the broker's ceiling lets the user grant read-write |
 | the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, by the script's own exec into `app-run.sh`, which forks the app and refuses to run with a capability; or before the app's exec when the pid can't be set |
 | journal sockets: `socket`, `stdout`, `dev-log` of the launcher's sandbox journald namespace (`_sandbox`) at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; supervise's pump too; the host side's namespace's sockets aren't bound | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates only the sandbox's own namespace |
 | journal storage: `/var/log/journal/<machine-id>.claude-desktop[-<name>]_sandbox` ro at `/var/log/journal/<machine-id>`, and the host side's `.claude-desktop[-<name>]` ro under its own name | journald writes | the sandbox reads both | none: the helpers' messages (the proxy's refusals, which is why it's bound), command lines, executables and host pids, which the pid namespace hides otherwise |
@@ -482,7 +483,12 @@ process whose principal is in the Sandbox domain, at any time.
   goes on without attach (which the broker then refuses, P3).
 - L10. No host-side step reads a host file into the sandbox, or writes
   one, through a path the sandbox can write: its home, its store, the
-  binds of `~/.claude` and `~/.config/Claude` (`launch-host.als`).
+  binds of `~/.claude` and `~/.config/Claude` (`launch-host.als`). Nor
+  does a bind's source lie on such a path: bwrap follows a link at a
+  source, so a bind beneath a read-write bind's source would mount, at
+  the next launch, whatever the sandbox linked there (CVE-2024-42472 in
+  Flatpak). The module's assertion refuses those (not modelled;
+  `testNestedBinds`).
 - L11 (`launch-pid.als`): when `app-pid.sh`'s write to
   `ns_last_pid` succeeds, the app runs at `APP_PID` in P2 and keeps it,
   with the systemd --user manager (18) in P2: nothing else forks there

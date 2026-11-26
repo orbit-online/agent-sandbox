@@ -722,8 +722,6 @@ let
               binds."/srv/sock".src = "/run/user/1000/claude-desktop/permissions-control.sock";
               # Another socket there is the user's call
               binds."/srv/agent".src = "/run/user/1000/ssh-agent.sock";
-              # Its own state dir's parts it holds anyway, a scratchpad's subdir included
-              binds."/srv/own".src = "/home/alice/.local/share/claude-desktop/tmp-scratchpad/x";
               launchers.work.binds."/srv/other".src = "/home/alice/.local/share/claude-desktop/home";
               launchers.work.binds."/srv/store".src = "/home/alice/.local/share/claude-desktop-work/nix-store.id";
             }
@@ -743,6 +741,53 @@ let
             ''launchers.work.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
             ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
           ];
+    };
+    # L10: no bind's source lies where the sandbox can put a link, which bwrap would follow at the next launch
+    testNestedBinds = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              # Beneath a read-write bind, under its own path and under another, read-only or not
+              binds."/srv/project/vendor" = { };
+              binds."/srv/elsewhere" = {
+                src = "/srv/project/secrets/";
+                rw = true;
+              };
+              # Beneath the sandbox's home and its scratchpad, which it writes as well
+              binds."/srv/own".src = "/home/alice/.local/share/claude-desktop/home/notes";
+              binds."/srv/scratch".src = "/home/alice/.local/share/claude-desktop/tmp-scratchpad/x";
+              # A device beneath a read-write bind, and one that isn't
+              devices = [
+                "/srv/project/dev/node"
+                "/dev/fuse"
+              ];
+              # Fine: beneath a read-only bind, the same source as a read-write one, one that merely starts like it,
+              # beneath one that is off, and beneath another launcher's read-write bind
+              binds."/srv/docs/api" = { };
+              binds."/srv/again".src = "/srv/project";
+              binds."/srv/project-old" = { };
+              binds."/srv/off" = {
+                enable = false;
+                rw = true;
+              };
+              binds."/srv/off/inner" = { };
+              binds."/srv/work/inner" = { };
+              launchers.work.binds."/srv/project/inner" = { };
+            }
+          )
+        )
+      );
+      expected = map (
+        b:
+        "agent-sandbox.claude-desktop: ${b}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it"
+      ) [
+        ''binds."/srv/elsewhere" binds /srv/project/secrets/, which lies beneath /srv/project''
+        ''binds."/srv/own" binds /home/alice/.local/share/claude-desktop/home/notes, which lies beneath /home/alice/.local/share/claude-desktop/home''
+        ''binds."/srv/project/vendor" binds /srv/project/vendor, which lies beneath /srv/project''
+        ''binds."/srv/scratch" binds /home/alice/.local/share/claude-desktop/tmp-scratchpad/x, which lies beneath /home/alice/.local/share/claude-desktop/tmp-scratchpad''
+        "devices binds /srv/project/dev/node, which lies beneath /srv/project"
+      ];
     };
     testUnitsOwnNames = {
       expr = map (a: a.message) (
