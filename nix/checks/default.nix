@@ -2145,6 +2145,13 @@ in
           appPid=$(grep -- '-claude-desktop-app-pid$' "$paths")/bin/claude-desktop-app-pid
           caps=$(unshare --user --map-user=1000 --keep-caps "$appPid" grep -E '^Cap(Eff|Amb):' /proc/self/status)
           [[ $(grep -c ':\s*0*$' <<<"$caps") == 2 ]] || { echo "the app keeps capabilities: $caps" >&2; exit 1; }
+          # And when it can, in a pid ns that user namespace owns: the app at its pid, and neither it nor the shell
+          # that started it and waits for it (app-run.sh, its parent) with a capability left (L4)
+          got=$(unshare --user --map-user=1000 --keep-caps --pid --fork --mount --mount-proc "$appPid" \
+            bash -c 'echo "pid $$"; grep -HE "^Cap(Inh|Prm|Eff|Amb):" /proc/self/status "/proc/$PPID/status"' 2>/dev/null)
+          [[ $(head -n1 <<<"$got") == "pid 100" ]] || { echo "the app isn't at its pid: $got" >&2; exit 1; }
+          [[ $(grep -c "^/proc/1/status:Cap" <<<"$got") == 4 && $(grep -c ':\s*0*$' <<<"$got") == 8 ]] ||
+            { echo "the app or the script that waits for it keeps capabilities: $got" >&2; exit 1; }
 
           args=$(grep -- '-bwrap-args\.json$' "$paths")
           # The args as consecutive elements of bwrap's argv

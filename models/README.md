@@ -145,7 +145,7 @@ with the netkit network (19, 20):
     `$XDG_RUNTIME_DIR/systemd/private` (the sandbox's own `/run` tmpfs).
     Runs the store GC and scratchpad prune timers, the `.path` unit on
     `/nix/var/claude-desktop/gc-pending` and `systemd-run --user --scope`
-    jobs. Started by `app-pid.sh` after the app's fork (L11). Its units
+    jobs. Started by `app-run.sh` after the app's fork (L11). Its units
     come from the sandbox's home, so it is the attacker's. It adds no
     crossing beyond the journal's: everything it reaches (its socket, the
     delegated cgroup subtree, the store, the home) the sandbox reaches
@@ -177,7 +177,7 @@ with the netkit network (19, 20):
 | M1 | mnt | U1 | nixpak's bwrap | as U1 |
 | P | pid | U1 | nixpak's bwrap | as U1; bwrap's init is pid 1 here, the broker's `sandbox.pid` |
 | ipc, uts, cgroup | | U1 | nixpak's bwrap | as U1 |
-| U2 | user | U1, owner uid 1000 | the FHS env's bwrap (identity map of U1's ids) | every process of uid 1000 in U1 or init (owner rule); app-pid.sh with CAP_CHECKPOINT_RESTORE until it drops it |
+| U2 | user | U1, owner uid 1000 | the FHS env's bwrap (identity map of U1's ids) | every process of uid 1000 in U1 or init (owner rule); app-pid.sh with CAP_CHECKPOINT_RESTORE until it execs into app-run.sh without it |
 | M2 | mnt | U2 | the FHS env's bwrap; copy of M1, `/run/permissions` a slave of M1's | as U2 |
 | P2 | pid | U2 | the FHS env's bwrap | as U2 |
 | U3... | user | U2 or below, owner the creator's euid | the sandbox (`unshare`, bwrap, podman) | the sandbox, fully: it is their owner |
@@ -205,7 +205,7 @@ joining needs CAP_SYS_ADMIN in init).
 | attach mounts | broker's helpers | appear in M1, propagate to M2 and slaves | source ceiling and denied directories (lexical, then `openat2` without links or mount crossings beneath the root), no submounts, ro/nodev/nosuid |
 | the daemon's config (ceilings, standing grants) | the Home Manager module, a read-only path in the host's Nix store | host only (the host's store isn't bound) | nothing writes it at runtime; what the user ends lives in the daemon's memory |
 | helper binaries | nsenter, setpriv, ip, the launcher's scripts | resolved on the host's mounts | never in M1 or M2, where the sandbox can swap a directory (S12; `nix/checks/execsites` keeps later ones to it) |
-| the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, or before its exec when the pid can't be set |
+| the app's pid (`app-pid.sh`) | FHS env's init with CAP_CHECKPOINT_RESTORE | P2 | dropped before the app's fork, by the script's own exec into `app-run.sh`, which forks the app and refuses to run with a capability; or before the app's exec when the pid can't be set |
 | journal sockets: `socket`, `stdout`, `dev-log` of the launcher's sandbox journald namespace (`_sandbox`) at `/run/systemd/journal/{socket,stdout}` and `/dev/log` (0666, root's on the host) | journald@claude-desktop (17), root | M1, M2 and copies; supervise's pump too; the host side's namespace's sockets aren't bound | trusted fields only from the kernel's credentials and `/proc/<pid>`, read by pid when an entry is flushed (a stream's line when its newline or EOF comes), so a recycled pid lends a host process's cgroup (S15); fields with a leading `_`, a stream's unit id and `OBJECT_PID` refused from uid 1000; the namespace's own size cap and rate limits. New host attack surface: the first root daemon the sandbox feeds directly, with journald's parsers (native, syslog, stream, memfds) on input the sandbox chooses (systemd fuzzes them; journald@'s unit is sandboxed); a flood rotates only the sandbox's own namespace |
 | journal storage: `/var/log/journal/<machine-id>.claude-desktop[-<name>]_sandbox` ro at `/var/log/journal/<machine-id>`, and the host side's `.claude-desktop[-<name>]` ro under its own name | journald writes | the sandbox reads both | none: the helpers' messages (the proxy's refusals, which is why it's bound), command lines, executables and host pids, which the pid namespace hides otherwise |
 | the sandbox's home, store and the binds of `~/.claude` and `~/.config/Claude` | the launcher writes (config merge, `user-dirs.dirs`, `resolv.conf`, the GTK keyfile while it runs, the store sync) | the sandbox writes them, links included | `state.sh` in a bwrap holding only its closure and those directories; files replaced by rename; a store dir that's a link stops the launch |
@@ -459,7 +459,9 @@ process whose principal is in the Sandbox domain, at any time.
   (S2).
 - L4. The app and everything it starts hold no capability in U2:
   CAP_CHECKPOINT_RESTORE is dropped before the app runs, whether or not
-  the pid could be set.
+  the pid could be set. Nor does the shell that starts the app and waits
+  for it (`app-run.sh`), nor the systemd --user manager: once
+  `app-pid.sh` set the pid, nothing in the sandbox holds a capability.
 - L5. A re-entry joins U2, M2, P2, N, ipc, uts and cgroup of the app's pid,
   never U1 or M1, and holds no capability after its exec; both run with
   no_new_privs, set on the host before nsenter. The app's pid is the only process at `APP_PID`

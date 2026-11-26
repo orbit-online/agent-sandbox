@@ -117,7 +117,7 @@ pred hostPlaced {
 
 // Where the sandbox's processes start (hm/default.nix's diagram):
 // bwrap's init and the FHS env script in U1 without capabilities, the
-// app, sessions and re-entries in U2 without any (hm/app-pid.sh:9,
+// app, sessions and re-entries in U2 without any (hm/app-pid.sh,
 // cmd/launcher enter.go:111).
 pred sandboxStart {
   all p: sandboxProcs {

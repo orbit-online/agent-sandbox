@@ -41,7 +41,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `nsdelegate`, bound read-only with a warning in the journal otherwise, which a
   cgroup2 mount of its own in nested namespaces gets around inside its subtree
   (`docs/permissions.md`, Launcher). The re-entries (`claude://`, `--shell`) join `sandbox/app/`;
-  `app-pid.sh`, the FHS env's run script, forks the app at its pid and then starts the sandbox's `systemd --user` in
+  `app-pid.sh`, the FHS env's run script, sets the app's pid with the FHS env's CAP_CHECKPOINT_RESTORE and execs into
+  `app-run.sh` without it, which forks the app at that pid and then starts the sandbox's `systemd --user` in
   `sandbox/user/` (with the host's systemd, its units from `build.userUnits` in a curated dir, `fhs.nix`; no bus, its
   units get the session bus): timers for the store GC and the scratchpad prune, and the scopes the sandbox runs heavy
   jobs in with a memory limit and a CPU weight (50 against `app/`'s 100: `sandbox/` gets the `cpu` controller where the
@@ -554,7 +555,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
   the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
   `homeDirs` in its launcher config and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
-  set the pid, and the `files` in the FHS env's bwrap (a directory's
+  set the pid, and when it can (in a pid namespace of the check's own) the app at its pid with neither it nor
+  `app-run.sh`, which waits for it, holding a capability, and the `files` in the FHS env's bwrap (a directory's
   bind before a file's in it, a disabled one left out, what a file
   references in the closure), the sandbox's user units (its timers and path unit wanted, none of systemd's own
   sockets). The launchers' configs, which their wrappers run the Go launcher
@@ -1051,7 +1053,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   past a process at the app's pid in a pid ns of the sandbox's own, `XDG_CURRENT_DESKTOP`
   with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces, with no_new_privs as `claude://` has it,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
-  starting the app when it isn't running, in the app's unit), the wrapper refusing system
+  starting the app when it isn't running, in the app's unit), no process in the sandbox with a
+  capability in any set once the app runs (`app-run.sh` there in `app-pid.sh`'s place, the `systemd --user` too), the wrapper refusing system
   users (the capabilities of the wrapper, setgid `sandbox-uplink`), and
   `netns-netkit up` refusing a second user, bob, alice's namespaces, each of
   its checks on its own, and alice a netns of hers below a user namespace

@@ -2,8 +2,8 @@
  * Step 4, the launch path's second stage (README.md, L1 for U2, L4, L9):
  * the FHS env's script in U1 asks the broker to `share`, its bwrap
  * (the launcher's bwrap, mode parent) copies M1 into M2 and waits for U2's
- * maps, app-pid.sh sets ns_last_pid with CAP_CHECKPOINT_RESTORE and starts
- * the app. It starts where launch.als's outer stage ends; the signatures,
+ * maps, app-pid.sh sets ns_last_pid with CAP_CHECKPOINT_RESTORE, drops it
+ * and starts the app (app-run.sh). It starts where launch.als's outer stage ends; the signatures,
  * frames and l1 are launch.als's.
  */
 // SLOW: about 4 minutes for the file with SAT4J, mostly the checks that hold.
@@ -52,17 +52,31 @@ pred appPidStart {
   keepMaps and keepWaits and On' = On
 }
 
-// app-pid.sh:8-12. When the write succeeds, setpriv clears the ambient
-// set before setsid forks the app. When it fails, the same setpriv runs
-// the app in app-pid.sh's place (modelled as a child, since a principal
-// never changes)
+// app-pid.sh, once its write succeeded: it execs into app-run.sh through
+// setpriv, which clears the ambient set. The same process, without the
+// capability from here on
+pred appPidDrop[g: set Guard] {
+  DropCapsBeforeFork in g
+  no principal.AppP
+  some a: AppPidS | some a.caps and {
+    sameNs[a] and a.uid' = a.uid and no a.caps'
+    only[none, a]
+  }
+  tags[none, none, none, none]
+  keepMaps and keepWaits and On' = On
+}
+
+// app-run.sh forks the app, which holds what the script still does:
+// nothing after appPidDrop. When the write failed, app-pid.sh's setpriv
+// runs the app in its place instead (modelled as a child, since a
+// principal never changes)
 pred appStart[g: set Guard] {
   no principal.AppP
   some a: AppPidS, n: Process' - Process {
     {
       On' = On
-      born[n, AppP, a, a.userns, a.mnt, a.net, a.pidns, a.uid,
-        (DropCapsBeforeFork in g implies none else a.caps)]
+      DropCapsBeforeFork in g implies no a.caps
+      born[n, AppP, a, a.userns, a.mnt, a.net, a.pidns, a.uid, a.caps]
     } or {
       On' = On + LastPidFail
       born[n, AppP, a, a.userns, a.mnt, a.net, a.pidns, a.uid,
@@ -103,7 +117,7 @@ pred fhsInit {
 pred fhs[g: set Guard] {
   fhsInit
   always (fhsShare or fhsCopy[g] or writeMap or mapFail[g] or unblock[g]
-    or appPidStart or appStart[g] or sessionFork or skip)
+    or appPidStart or appPidDrop[g] or appStart[g] or sessionFork or skip)
 }
 
 
@@ -144,6 +158,21 @@ check L4writeOk for 7 but 9 OwnedNS, 1..9 steps expect 0
 // L4, revert: without DropCapsBeforeFork the app keeps it either way.
 assert L4revert { (fhs[Guard - DropCapsBeforeFork] and always LastPidFail not in On) implies l4 }
 check L4revert for 7 but 9 OwnedNS, 1..9 steps expect 1
+
+// L4 for the script itself: once the app runs at its pid, the shell that
+// forked it and waits for it (app-run.sh) holds no capability either, so
+// nothing of the sandbox's does. Before the split app-pid.sh waited
+// there itself, with CAP_CHECKPOINT_RESTORE for as long as the app ran
+// (seen live, 2026-11-26: CapPrm 0000010000000000 on pid 2 of P2).
+pred l4script {
+  always ((some principal.AppP and LastPidFail not in On) implies no AppPidS.caps)
+}
+assert L4script { fhs[Guard] implies l4script }
+check L4script for 7 but 9 OwnedNS, 1..9 steps expect 0
+
+// L4 for the script, revert: without the drop ahead of the fork.
+assert L4scriptRevert { fhs[Guard - DropCapsBeforeFork] implies l4script }
+check L4scriptRevert for 7 but 9 OwnedNS, 1..9 steps expect 1
 
 // L9: once the broker takes attach requests (b.shared), M2's
 // /run/permissions receives what it mounts in M1. Only the FHS env's

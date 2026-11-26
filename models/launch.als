@@ -85,8 +85,8 @@ var sig Root, Fhs, FhsChild, AppPidS in Process {}
 abstract sig Guard {}
 one sig
   KillOnMapFail,      // helper.go:55-59 kills the child and bwrap, and fd 21 written only after (:88)
-  DropCapsBeforeFork, // app-pid.sh:9-10 setpriv --inh-caps=-all --ambient-caps=-all, then setsid
-  DropCapsOnFail,     // app-pid.sh:12 the same setpriv when the ns_last_pid write fails
+  DropCapsBeforeFork, // app-pid.sh execs app-run.sh through setpriv --inh-caps=-all --ambient-caps=-all, which forks the app
+  DropCapsOnFail,     // app-pid.sh: the same setpriv ahead of the app when the ns_last_pid write fails
   ShareBeforeCopy     // bwrap.go:119-123 share before line 177's exec of bwrap
   extends Guard {}
 

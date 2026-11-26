@@ -119,15 +119,22 @@ let
       ${lib.concatMapStrings (n: "ln -s ../${n} $out/paths.target.wants/
 ") (wants ".path")}
     '';
-  # The FHS env's runScript, see app-pid.sh
+  # The FHS env's runScript: app-pid.sh sets the app's pid with the FHS env's capability and execs into app-run.sh
+  # without it, which starts the app and the sandbox's systemd --user
+  appRunScript = sl.script "app-run.sh" {
+    name = "claude-desktop-app-run";
+    vars = {
+      SETSID = lib.getExe' pkgs.util-linux "setsid";
+      SYSTEMD = "${osConfig.systemd.package}/lib/systemd/systemd";
+      USER_UNITS = "${userUnits}";
+    };
+  };
   appPidScript = sl.script "app-pid.sh" {
     name = "claude-desktop-app-pid";
     vars = {
       APP_PID = toString ids.appPid;
       SETPRIV = lib.getExe' pkgs.util-linux "setpriv";
-      SETSID = lib.getExe' pkgs.util-linux "setsid";
-      SYSTEMD = "${osConfig.systemd.package}/lib/systemd/systemd";
-      USER_UNITS = "${userUnits}";
+      RUN = lib.getExe appRunScript;
     };
   };
 in
@@ -160,7 +167,7 @@ in
       }
     ];
     build.fhsBwrapArgs = [
-      # For app-pid.sh, which drops it
+      # For app-pid.sh, which drops it before anything else runs
       "--cap-add CAP_CHECKPOINT_RESTORE"
       "--ro-bind ${patchedAsar} ${asar}"
       # Written by the launcher's bwrap, mode parent

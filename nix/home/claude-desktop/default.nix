@@ -20,7 +20,8 @@
 #    │
 #    └─ U2  buildFHSEnv's bwrap (all of U1's ids)
 #          owns: M2 (tmpfs /etc with the rootfs' resolv.conf and hosts links, subuid and subgid, patched app.asar),
-#                P2 (pid ns, where app-pid.sh starts the app at a pid of the launcher's, with CAP_CHECKPOINT_RESTORE)
+#                P2 (pid ns, where app-pid.sh sets the app's pid, one of the launcher's, with CAP_CHECKPOINT_RESTORE,
+#                which it drops before app-run.sh starts the app there)
 #          runs (in N, M2, P2): Claude Desktop, Code tab shells, the local MCP servers, `claude-desktop --shell`,
 #                claude:// re-entry, and the user namespaces they create, whose maps the newuidmap and newgidmap
 #                shims ask subid-broker for

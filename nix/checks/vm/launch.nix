@@ -323,6 +323,17 @@
           out = sandbox_shell('[ -v TERMINFO ] && t=$TERMINFO || t=-; echo "$TERM $t $COLORTERM"', env).strip()
           assert out == want, f"{env}: {out!r}, want {want!r}"
 
+  with subtest("nothing in the sandbox holds a capability once the app runs: not the script that set its pid either"):
+      # app-pid.sh set the app's pid with the FHS env's CAP_CHECKPOINT_RESTORE and is gone: app-run.sh, which it
+      # became without the capability, waits for the app, and the systemd --user it started holds none (L4)
+      held = in_sandbox("sh -c " + shlex.quote(
+          "grep -HE '^Cap(Inh|Prm|Eff|Amb):' /proc/[0-9]*/status | grep -v ':[[:space:]]*0*$' || true"
+      ))
+      assert held.strip() == "", f"capabilities in the sandbox: {held}"
+      scripts = in_sandbox("sh -c " + shlex.quote("cat /proc/[0-9]*/cmdline | tr '\\0' ' '"))
+      assert "claude-desktop-app-run" in scripts and "claude-desktop-app-pid" not in scripts, scripts
+      assert "systemd --user" in scripts, scripts
+
   with subtest("re-entries find the app past a process at its pid in a pid ns of the sandbox's own"):
       # As anything in the sandbox can: a user and pid ns of its own, a process at the app's pid there, the
       # unshare gone, so it hangs off the FHS env's init, nearer to the sandbox's pid 1 than the app. The
