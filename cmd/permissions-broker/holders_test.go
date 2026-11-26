@@ -17,7 +17,8 @@ import (
 // threadHoldMain holds $HOLD on one thread only, as $HOLD_MODE says: cwd (its working directory, in a filesystem
 // context of its own), fd (an open file, in a file table of its own), root (chroot), bind (a bind of it in a mount
 // namespace of its own, at $HOLD_AT) or opentree (a clone of it by open_tree, in no mount table: in a mount namespace
-// of its own, whose copy of the grant at $HOLD_GRANT it unmounts) or map (a shared mapping of it, its fd closed). The process's main thread holds nothing. Writes "ready" or the
+// of its own, whose copy of the grant at $HOLD_GRANT it unmounts), map (a shared mapping of it, its fd closed) or
+// bindlong, maplong and binddeep (holders_long_test.go). The process's main thread holds nothing. Writes "ready" or the
 // error to $READY
 func threadHoldMain() {
 	// The main thread, the thread group leader, stays this goroutine's: the holder is another thread
@@ -50,6 +51,12 @@ func threadHoldMain() {
 				_, err = unix.Mmap(fd, 0, 1, unix.PROT_READ, unix.MAP_SHARED)
 				unix.Close(fd)
 			}
+		case "bindlong":
+			err = holdBindLong(path, os.Getenv("HOLD_AT"))
+		case "maplong":
+			err = holdMapLong(path, os.Getenv("HOLD_AT"))
+		case "binddeep":
+			err = holdBindDeep(path, os.Getenv("HOLD_AT"))
 		case "opentree":
 			if err = unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err == nil {
 				// Private first: an unmount of a peer of M1's would propagate there

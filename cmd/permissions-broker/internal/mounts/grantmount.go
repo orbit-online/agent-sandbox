@@ -40,7 +40,7 @@ func GrantMountOf(s Sandbox, tree *os.File) (*GrantMount, error) {
 		return nil, fmt.Errorf("The sandbox's mounts: %w", err)
 	}
 	for _, l := range lines {
-		if l.ID == stx.Mnt_id {
+		if l.ID == stx.Mnt_id && !l.Cut {
 			m := &GrantMount{id: l.ID, dev: l.Dev, root: l.Root, tree: tree, srcDev: st.Dev, sbDev: parseDev(l.Dev)}
 			for _, o := range l.Optional {
 				if g, ok := strings.CutPrefix(o, "shared:"); ok {

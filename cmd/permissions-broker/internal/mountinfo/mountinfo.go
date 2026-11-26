@@ -11,24 +11,64 @@ import (
 	"strings"
 )
 
-// Line is a line of a mountinfo file: the mount's id, device (major:minor), root, mount point and optional fields
+// Line is a line of a mountinfo file: the mount's id, device (major:minor), root, mount point and optional fields.
+// Cut: the line was longer than a line is read (MaxLine), so only its id and device are known
 type Line struct {
 	ID               uint64
 	Dev, Root, Point string
 	Optional         []string
+	Cut              bool
+}
+
+// MaxLine is how much of a line EachLine reads. A path may be any length (a process walks into a directory deeper
+// than PATH_MAX step by step), so a process picks how long its mounts' lines in mountinfo and its mappings' in maps are
+const MaxLine = 1 << 20
+
+// EachLine calls line for each line of r, a /proc file, until it returns false. A line past MaxLine is cut there and
+// cut says so: what follows such a line is still read
+func EachLine(r io.Reader, line func(text []byte, cut bool) bool) error {
+	br := bufio.NewReaderSize(r, 64<<10)
+	var buf []byte
+	cut := false
+	for {
+		part, err := br.ReadSlice('\n')
+		if err == nil {
+			part = part[:len(part)-1]
+		}
+		if room := MaxLine - len(buf); len(part) > room {
+			part, cut = part[:room], true
+		}
+		buf = append(buf, part...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if len(buf) > 0 && !line(buf, cut) {
+			return nil
+		}
+		buf, cut = buf[:0], false
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // Parse reads a mountinfo file's lines
 func Parse(r io.Reader) ([]Line, error) {
 	var lines []Line
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		f := strings.Fields(sc.Text())
-		if len(f) < 7 {
-			continue
+	err := EachLine(r, func(text []byte, cut bool) bool {
+		f := strings.Fields(string(text))
+		if len(f) < 7 && !(cut && len(f) >= 3) {
+			return true
 		}
 		id, _ := strconv.ParseUint(f[0], 10, 64)
+		if cut {
+			// The id and the device come first; the root or the mount point is where it's cut
+			lines = append(lines, Line{ID: id, Dev: f[2], Cut: true})
+			return true
+		}
 		l := Line{ID: id, Dev: f[2], Root: unescape(f[3]), Point: unescape(f[4])}
 		for _, opt := range f[6:] {
 			if opt == "-" {
@@ -37,8 +77,9 @@ func Parse(r io.Reader) ([]Line, error) {
 			l.Optional = append(l.Optional, opt)
 		}
 		lines = append(lines, l)
-	}
-	return lines, sc.Err()
+		return true
+	})
+	return lines, err
 }
 
 // Read parses a mountinfo file by path, nil when it can't be read

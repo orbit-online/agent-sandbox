@@ -724,7 +724,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   not on the host, its holders listed and
   ended (one ignoring SIGTERM too; one holding it on a thread alone, by that thread's cwd, fd, root,
   mount namespace or an `open_tree` clone in no mount table; a clone of a file of it as a possible
-  holder; a shared mapping with its fd closed, a possible holder once the file is deleted; not a process
+  holder; a shared mapping with its fd closed, a possible holder once the file is deleted; a re-bind
+  and a mapping that mountinfo and maps list after a line past a megabyte, and a mount of the grant's filesystem on
+  such a line as a possible holder (`holders_long_test.go`); not a process
   outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
   record), detached before the holders' scan starts, with its mountpoint

@@ -382,7 +382,10 @@ process whose principal is in the Sandbox domain, at any time.
   and a possible holder otherwise; a mount namespace with a mount of the
   same filesystem and root; a mapping of one of the grant's files, from
   `/proc/<pid>/maps` by device, inode and path (`map_files` takes
-  capabilities in the initial user namespace). Best effort: an fd queued in
+  capabilities in the initial user namespace); a possible holder where the
+  line of a mount or mapping of the grant's filesystem is past a megabyte,
+  its root or path cut short, with the lines after it read all the same.
+  Best effort: an fd queued in
   an `SCM_RIGHTS` message or registered with io_uring, a detached mount
   attached in a namespace no process is in, a mapping whose path can't be
   looked up beneath the grant, and what the 10 s scan doesn't reach hold it

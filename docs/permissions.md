@@ -468,7 +468,11 @@ daemon keeps the tree it attached open, and looks each tail of the path up there
 detached mount makes its process a possible holder: it may hold another file of that filesystem, a file of the
 grant's through a clone of something beneath it, or one deleted since; so does a mapping of a deleted file whose
 directory is still the grant's. Every thread counts: one can have a working directory, file table and mount
-namespace of its own (`unshare` with `CLONE_FS`, `CLONE_FILES` or `CLONE_NEWNS`). It does so however the grant ended
+namespace of its own (`unshare` with `CLONE_FS`, `CLONE_FILES` or `CLONE_NEWNS`). A line of mountinfo or maps is read
+up to a megabyte: a path may be any length (a process walks into a directory deeper than `PATH_MAX` step by step), so
+the sandbox picks how long the line of one of its mounts or mappings is. What follows a longer line is read all the
+same. The line itself keeps its device, and when that is the grant's filesystem, the processes in that mount
+namespace, or the one with that mapping, are possible holders. The daemon lists holders however the grant ended
 (revoked, released from inside, its lease run out) and keeps the last twenty grants' holders for the window, which shows them and offers to
 end them: `SIGKILL`, which a process can't ignore, through a pidfd, only for processes in the sandbox, and only to the
 process recorded (by its start time), not to a later one that got its pid. The daemon doesn't refuse a revoke because

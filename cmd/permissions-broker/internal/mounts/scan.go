@@ -1,7 +1,6 @@
 package mounts
 
 import (
-	"bufio"
 	"fmt"
 	"log/slog"
 	"os"
@@ -64,6 +63,8 @@ type mountView struct {
 	// The grant's mounts, and mounts of its filesystem and root a process made elsewhere; the namespaces (by inode)
 	// holding one of the latter
 	copies, rebinds map[uint64]bool
+	// The namespaces with a mount of the grant's filesystem whose line was too long to read its root from
+	unsure map[uint64]bool
 	// contains' answers, by path and inode
 	tried map[string]bool
 }
@@ -71,7 +72,7 @@ type mountView struct {
 // viewMounts reads the mountinfo of each mount namespace of the processes' threads once
 func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
 	v := &mountView{m: m, deadline: deadline, visible: map[uint64]bool{}, copies: map[uint64]bool{m.id: true},
-		rebinds: map[uint64]bool{}, tried: map[string]bool{}}
+		rebinds: map[uint64]bool{}, unsure: map[uint64]bool{}, tried: map[string]bool{}}
 	for _, l := range mountinfo.Read("/proc/self/mountinfo") {
 		v.visible[l.ID] = true
 	}
@@ -88,9 +89,12 @@ func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
 			seen[ns] = true
 			for _, l := range mountinfo.Read(task + "/mountinfo") {
 				v.visible[l.ID] = true
-				if m.copyOf(l) || mountinfo.MountsOf([]mountinfo.Line{l}, m.dev, m.root) {
+				switch {
+				case m.copyOf(l) || !l.Cut && mountinfo.MountsOf([]mountinfo.Line{l}, m.dev, m.root):
 					v.copies[l.ID] = true
 					v.rebinds[ns] = true
+				case l.Cut && l.Dev == m.dev:
+					v.unsure[ns] = true
 				}
 			}
 		}
@@ -131,12 +135,15 @@ func HoldersAfter(s Sandbox, m *GrantMount) []Holder {
 }
 
 // holds reports whether a thread of pid has a mount of the grant's in its mount namespace, or its working directory,
-// root or an open file on the grant; or possibly, on a detached mount of its filesystem
+// root or an open file on the grant; or possibly: a file on a detached mount of its filesystem, or a mount of its
+// filesystem whose line was too long to read
 func (v *mountView) holds(pid int) (held, possible bool) {
 	for _, task := range tasks(pid) {
-		if ns, ok := mntNs(task); ok && v.rebinds[ns] {
+		ns, ok := mntNs(task)
+		if ok && v.rebinds[ns] {
 			return true, false
 		}
+		possible = possible || ok && v.unsure[ns]
 		paths := []string{task + "/cwd", task + "/root"}
 		entries, _ := os.ReadDir(task + "/fd")
 		for _, e := range entries {
@@ -222,24 +229,29 @@ func (v *mountView) mapped(pid int) (held, possible bool) {
 		return false, false
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() && time.Now().Before(v.deadline) {
-		dev, ino, path, ok := parseMapsLine(sc.Text())
+	_ = mountinfo.EachLine(f, func(text []byte, cut bool) bool {
+		if !time.Now().Before(v.deadline) {
+			return false
+		}
+		dev, ino, path, ok := parseMapsLine(string(text))
 		if !ok || dev != v.m.sbDev || ino == 0 {
-			continue
+			return true
+		}
+		if cut {
+			// A file of the grant's filesystem whose path is too long to read, so not looked up beneath the grant
+			possible = true
+			return true
 		}
 		if p, deleted := strings.CutSuffix(path, " (deleted)"); deleted {
 			if st, ok := v.inTree(strings.TrimPrefix(filepath.Dir(p), "/")); ok && st.Mode&unix.S_IFMT == unix.S_IFDIR {
 				possible = true
 			}
-			continue
+			return true
 		}
-		if v.contains(path, ino) {
-			return true, false
-		}
-	}
-	return false, possible
+		held = v.contains(path, ino)
+		return !held
+	})
+	return held, possible && !held
 }
 
 // parseMapsLine reads a line of /proc/<pid>/maps: address range, permissions, offset, device (major:minor in hex),
