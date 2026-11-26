@@ -238,6 +238,7 @@ permissions.commands.windows-vm = {
   description = "Control a running Windows VM";
   consent.title = "control the Windows VM";
   bounding.vm = {
+    type = "string";
     description = "the VM";
     instances = "$XDG_RUNTIME_DIR/windows-vm/*/qmp-agent.sock";
   };
@@ -277,7 +278,10 @@ permissions.commands.windows-vm = {
   bounding arguments is granted whole.
 - Free arguments belong to the command. A grant covers any value the schema allows, for the grant's lease.
 - The schemas are a subset of JSON Schema the broker validates itself: `string` (`maxLength`, `pattern`, `enum`),
-  `integer` and `number` (`minimum`, `maximum`), `boolean`, and arrays of those (`maxItems`). Strings carry no control
+  `integer` and `number` (`minimum`, `maximum`, `enum`), `boolean`, and arrays of those (`items`, `maxItems`), each
+  with its `type`, which the daemon refuses a schema without. That is all the daemon reads of a schema: it ignores
+  any other keyword (`const`, `minLength`, a misspelt `maxlength`), which then restricts nothing, so the module
+  refuses one at eval. Strings carry no control
   characters unless declared `multiline` (newlines and tabs then). A string marked `opaque` is data the user has nothing
   to read in (a public key, a CSR), shown by its digest (Requests). Every argument needs a description; the consent is
   built from them. A call must give every free argument; a bounding argument it leaves out is a value of its own (the
@@ -302,9 +306,12 @@ permissions.commands.windows-vm = {
   for an instance another launcher holds is refused, naming it.
 
 The module checks at eval time what it can: names fit MCP's tool names (`<capability>_<command>`, at most 64 characters
-of `[A-Za-z0-9_-]`), every argument is described, the capability has `consent.title` and every command `consent`, each
-one line of at most 80 characters, no argument is named `reason` or `lease` (the broker adds those),
-`run` is a list. The daemon checks the rest at start and doesn't start on a config error.
+of `[A-Za-z0-9_-]`), every argument is described and a schema of the daemon's types and keywords alone, the capability
+has `consent.title` and every command `consent`, each one line of at most 80 characters, no argument is named `reason`
+or `lease` (the broker adds those), at most one bounding argument has `instances` (a string, its glob one `*` without
+`?` or `[`) and no free one, and each command has a description and a `run` that isn't empty. The daemon checks the
+rest at start (a `pattern` that compiles, the bounds and enum values against the type, `timeout` and `maxValidity`)
+and doesn't start on a config error.
 
 A plugin is now a Nix module that sets such a declaration with its package's scripts in `run`. Nothing of it runs on
 the host except those scripts, per call.
@@ -361,7 +368,8 @@ keeps one safe:
 ### Instances
 
 A bounding argument with `instances` takes only values the glob matches now: one `*` in one path segment, its match
-being the value (`$XDG_RUNTIME_DIR` and `~` expanded by the broker). For windows-vm, a VM is an instance while its
+being the value (the broker expands the variables of its environment, `$XDG_RUNTIME_DIR` among them, and a leading
+`~/`). For windows-vm, a VM is an instance while its
 runtime directory has `qmp-agent.sock`. The broker globs at each request and call, at the user's answer (an instance
 gone by then isn't granted), and every 30 seconds; a grant whose instance is gone ends. The window and the MCP `list`
 show the instances. Bounding arguments without `instances` take any value their schema allows.
@@ -397,7 +405,11 @@ private bus: a transient unit runs code on the host), `at-spi/`, `.dbus-proxy/`,
 `.flatpak/`, `agent-sandbox-permissions/` and `nixpak-*`; the paths the D-Bus address variables name; and
 `$XDG_RUNTIME_DIR` itself or what holds it. A path must be clean (no `.`, `..` or empty segments). A glob is refused
 when its `*` could fall within one of those: when the segments before it lead to or into one. Without
-`$XDG_RUNTIME_DIR` the daemon refuses every host socket. The broker reaches a socket without following a link anywhere
+`$XDG_RUNTIME_DIR` the daemon refuses every host socket. The daemon expands every variable of its environment and
+refuses a path naming one that isn't set; the module, which can't tell what a variable holds, takes a path from `/`,
+`$XDG_RUNTIME_DIR` or `~/` with no other variable in it, so that what it checked is what the daemon opens. It also
+catches what else the daemon refuses of a declaration: no description, and an `instances` glob that isn't one `*`
+without `?` or `[` on a string. The broker reaches a socket without following a link anywhere
 on its path (`openat2` with `RESOLVE_NO_SYMLINKS`), requires it to be a socket, and connects through that fd, so a link
 planted in a glob's directory or swapped in for a declared socket leads nowhere, and a glob match that is a link isn't
 an instance. This list is a guard against the known buses, not a proof: what any other socket gives the sandbox is the
@@ -673,7 +685,7 @@ each way:
 
 The proxy checks the peer's uid (`SO_PEERCRED`, the proxy's own), and the socket's place does the rest: a 0700
 directory under `$XDG_RUNTIME_DIR/claude-desktop/`, which nothing binds into the sandbox (the module refuses binds
-there, and host sockets beneath it), so a peer is a host process of the user's, which reaches the bus without the proxy
+and devices there, by any spelling of the path though not through a link on the host, and host sockets beneath it), so a peer is a host process of the user's, which reaches the bus without the proxy
 anyway. The proxy can't tell the sandbox's processes apart by more than that: they run as the user's uid too, the
 proxy has no `/proc` in nixpak's wrapper, and the kernel won't give it the peer's namespaces from its pidfd
 (`PIDFD_GET_PID_NAMESPACE` and the like need ptrace access, which commoncap refuses across user namespaces, and both
@@ -944,7 +956,8 @@ config, and taken away by a rebuild. One click in a dialog the sandbox brought u
 
 The module writes them into the daemon's config. At start the daemon checks them against the declarations: a
 capability none has, a folder, bounding values it doesn't take or one listed twice is a config error, and the daemon
-doesn't start. The module catches what it can at eval time. Then it grants each with lease `standing`, under the same
+doesn't start. The module catches these at eval time, but for a value its argument's `pattern` refuses, which only
+the daemon matches. Then it grants each with lease `standing`, under the same
 checks as a request: one whose instance isn't there (a VM not running yet) or another launcher holds is left out with
 a warning, and a later request or call with exactly its bounding values gets it without asking. A host command's calls
 under it are told `maxValidity`.

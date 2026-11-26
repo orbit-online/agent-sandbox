@@ -500,22 +500,32 @@ modules and a user alice (the `home-manager` input exists only for it).
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
   `extraPath` at the front of PATH, the GC and prune timers' frequencies (the defaults, a launcher's own
   calendar spec, `null` leaving the timer out, a value of two lines refused), the launchers' packages, the launcher
-  name assertions (its characters, and its length at and past the cap, the
-  `launcherNameMax` at which `cmd/permissions-broker/socketpath_test.go` binds
-  the broker's sockets), the per-launcher netns assertion, a tray on two launchers at once,
+  name assertions (its characters, and its length at and past the cap, 39: the
+  `launcherNameMax` at which `cmd/launcher/warn_test.go` binds the launcher's warning socket and
+  `cmd/permissions-broker/socketpath_test.go` the broker's, and which `internal/caller` takes no name past; the
+  sockets bound by a path with the name in it, the varlink socket of the sandbox's journald namespace among them,
+  none past 107 bytes at the cap and the longest at them), the per-launcher netns assertion, a tray on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
   `permissions.enable`, the assertions on standing grants (only with the
   broker, of a host command or host socket it has or a port with its protocol and port, none of folders; no host
-  command or socket named `port`), the assertions on host commands (names, described
+  command or socket named `port`; `testStandingGrantParams`: no parameter its capability doesn't take, no value its
+  bounding argument doesn't by type, enum, bounds and length, params an object, none listed twice), the assertions on
+  host commands (names, described
   arguments, results, and the consent's title and each command's phrase: present, one line, at most 80 characters,
-  counted in UTF-8 characters: Danish of 46 and 80, CJK of 80 taken, of 81 refused),
+  counted in UTF-8 characters: Danish of 46 and 80, CJK of 80 taken, of 81 refused; `testCommandAgreement`: instances
+  on one bounding argument at most, a string, its glob one `*` without `?` or `[`, none on a free argument, a
+  description and a `run` that isn't empty), a schema's keywords (`testSchemaKeywords`: one the broker doesn't read,
+  `const` or a misspelt `maxlength`, refused in bounding and free arguments, in `items` and on a host socket, as is a
+  schema without a type of the broker's, while every keyword it has passes),
   the assertions on host sockets (a
   name of their own of 80 characters at most, a path or one instances glob, a clean path, no D-Bus bus, systemd
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
-  glob that could match one), the `dbus` defaults (the portal's, with `tray` the tray item's name at the
+  glob that could match one; `testSocketAgreement`: `~` alone, a variable past the leading `$XDG_RUNTIME_DIR`, no
+  description and a glob that isn't one `*` without `?` or `[`, all of which the daemon refuses or reads as another
+  path), the `dbus` defaults (the portal's, with `tray` the tray item's name at the
   launcher's pid and the watcher's, the user's rules merged in), the assertions on D-Bus rules (`sandbox`
   setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing, a rule it refuses
   and its caps: 64 names, 64 rules a list, 64 KiB of config, each at and past the cap),
@@ -523,8 +533,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   `sandbox-hooks`, none without hooks or without a sandbox user, the group with a sandbox user alone, a path outside the store and an unknown capability
   refused), the launchers' `--hooks` only with start hooks, `hooks` in their config with any, and a launcher's
   `network.hooks` in its `--net` alone (`testLauncherHooks`),
-  and the assertion on binds that reach a launcher's
-  state dir or `$XDG_RUNTIME_DIR`. The test system imports both modules twice and has a launcher
+  and the assertions on binds that reach a launcher's
+  state dir or `$XDG_RUNTIME_DIR` (`testStateBinds`), by another spelling of the path (an empty, `.` or `..`
+  segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), and the same on `devices`
+  (`testStateDevices`). The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
@@ -848,7 +860,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   launcher's; a failing newuidmap killing bwrap before it's unblocked); `internal/sandbox`'s `AppPid` on a real pid
   namespace tree (the app one level below the init, not one further down, two at its level ambiguous); a warning
   holding `acknowledge` until the splash's Continue and clearing it after, and going on at once without a listener or a
-  splash (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
+  splash, and the warning socket bound for a launcher name at the cap with the longest runtime dir and not for one a
+  byte longer (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
   refusal (`hooks_test.go`).
 - `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
   broker runs the binary, against an httptest TLS server behind an httptest TLS proxy that tunnels CONNECTs, both

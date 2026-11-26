@@ -57,7 +57,7 @@ in
         )
       );
       default = { };
-      description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), or holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `claude-desktop` dir, fails an assertion.";
+      description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source is an absolute path in its clean form (no `.`, `..` or empty segments; one trailing slash is fine). One that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `claude-desktop` dir, or is `/proc` or `/var/run` or lies in them fails an assertion. The assertions read the path as written: a source that is a link to one of these on the host gets past them.";
     };
     files = mkOption {
       type = types.attrsOf (
@@ -135,7 +135,8 @@ in
       ];
       description = ''
         Device nodes mounted in the sandbox, each only if it exists on the host at launch. No globs. Exposes the
-        driver's ioctl interface: a driver bug is a way out of the sandbox.
+        driver's ioctl interface: a driver bug is a way out of the sandbox. Each is bound read-write from its own
+        path, so the assertions on a bind's source hold for it too.
       '';
     };
     extraPath = mkOption {

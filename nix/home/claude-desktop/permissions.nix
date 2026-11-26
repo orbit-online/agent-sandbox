@@ -43,7 +43,8 @@ in
                 default = { };
                 description = ''
                   Bounding arguments, every command's, as JSON Schema (`docs/permissions.md`): a grant fixes their
-                  values. One may take `instances`, a glob with one `*` whose matches are its values.
+                  values. One may take `instances`, a glob with one `*` whose matches are its values. Only the
+                  keywords of the broker's subset: it would ignore another, so one fails an assertion.
                 '';
               };
               exclusive = mkOption {
@@ -73,7 +74,7 @@ in
                       arguments = mkOption {
                         type = types.attrsOf (pkgs.formats.json { }).type;
                         default = { };
-                        description = "Free arguments, as JSON Schema, each with a description: a grant covers any value they allow.";
+                        description = "Free arguments, as JSON Schema, each with a description: a grant covers any value they allow. Only the keywords of the broker's subset (`docs/permissions.md`): it would ignore another, so one fails an assertion.";
                       };
                       result = mkOption {
                         type = types.str;
@@ -119,7 +120,7 @@ in
               path = mkOption {
                 type = types.nullOr types.str;
                 default = null;
-                description = "The socket on the host (`$XDG_RUNTIME_DIR` and a leading `~` expanded); null with an instances glob.";
+                description = "The socket on the host, a clean path from `/`, `$XDG_RUNTIME_DIR` or `~/`, which the broker expands, and with no other variable; null with an instances glob.";
               };
               bounding = mkOption {
                 type = types.attrsOf (pkgs.formats.json { }).type;
@@ -152,7 +153,7 @@ in
               params = mkOption {
                 type = (pkgs.formats.json { }).type;
                 default = { };
-                description = "Its bounding arguments' values, as a request names them. A request or call with exactly these gets the grant.";
+                description = "Its bounding arguments' values, as a request names them, each one its schema takes. A request or call with exactly these gets the grant.";
               };
             };
           }
@@ -164,7 +165,8 @@ in
         ]'';
         description = ''
           Standing grants: the broker grants them at every start, without asking, still within the capability's
-          instances (one its capability doesn't take stops the broker). Revoked or released, one stays ended until the
+          instances (one its capability doesn't take, or one listed twice, stops the broker; an assertion catches
+          both but for a value against a `pattern`). Revoked or released, one stays ended until the
           broker starts again. Host command calls under it run without asking, told their `maxValidity`. A `port`
           grant (`protocol` `tcp` or `udp`, `port`) lets the host reach that port of the sandbox (over UDP only from a
           connected socket: an unconnected `sendto` gets no reply). No folders: what should always be there is a bind
