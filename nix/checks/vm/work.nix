@@ -77,6 +77,9 @@
       # length; the same query without them leaves
       workstation.succeed(f"{app_ns} 4 gso gso-segmented-query.local 0", f"{app_ns} 4 rawtrail trailing.local 0",
                           f"{app_ns} 4 raw rawquery.local 0")
+      # A query with a known answer leaves; one with an additional section, an OPT record with an Owner option, stays in
+      workstation.succeed(f"{app_ns} 4 known known.local 0", f"{app_ns} 4 owner owner.local 0",
+                          f"{app_ns} 6 owner owner.local 0")
       # A query from the LAN doesn't come in
       workstation.succeed(f"systemd-run --unit=app-mdns -p StandardOutput=file:/tmp/app-mdns {app_ns} 4 listen x 4",
                           "sleep 1")
@@ -95,11 +98,11 @@
       assert any(re.search(r"fe80::\S+\.5353 > ff02::fb\.5353", l) for l in ws_lines), ws_lines
       assert not any("(QU)" in l for l in ws_lines), ws_lines
       assert any("${workstationIP}.5353 > 224.0.0.251.5353" in l and "oneshot.local" in l for l in lan.splitlines()), lan
-      assert "lan.local" in lan and "rawquery.local" in lan, lan
-      # Nothing of the response and probe, of the GSO datagram or the query with trailing bytes, of work, or from a
-      # sandbox address
-      for leak in ["claim.local", "gso-segmented", "smuggled.local", "trailing.local", "work.local", "work6.local", " 169.254.10",
-                   " fd"]:
+      assert "lan.local" in lan and "rawquery.local" in lan and "known.local" in lan, lan
+      # Nothing of the response and probe, of the query with an additional section, of the GSO datagram or the query
+      # with trailing bytes, of work, or from a sandbox address
+      for leak in ["claim.local", "owner.local", "gso-segmented", "smuggled.local", "trailing.local", "work.local", "work6.local",
+                   " 169.254.10", " fd"]:
           assert leak not in lan, leak
       # Only the default primary takes responses
       mdns = workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/mdns")

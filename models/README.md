@@ -574,9 +574,17 @@ them, and their revert checks are that design.
 - N8. A sandbox sends nothing to the mDNS group out but queries, and only
   with `network.mdns`: `peer` copies a query out of the uplink of the
   `gateways` map from the uplink address and port 5353, so no response,
-  announcement or probe claims a name on the LAN. A query may carry
-  known-answer and additional records (RFC 6762 allows both); known
-  answers only suppress answers (section 7.1). N2 and N5 take these
+  announcement or probe claims a name on the LAN, and none with an
+  additional section: Apple's mDNSResponder reads an EDNS0 Owner option
+  there, in any query, as the host of that MAC being back from sleep, and
+  a sleep proxy then drops the records it answers with in its place
+  (`mDNS.c`, `ProcessQuery` and `ClearProxyRecords`), which withdraws
+  names as a response would. A query may carry known-answer records (RFC
+  6762 section 7.1), which only suppress answers; avahi 0.8
+  (`avahi_response_scheduler_suppress`) and mDNSResponder (`v4Requester`)
+  suppress them toward the address of the querier, which the host and
+  every sandbox share, so one sandbox can keep the others from an answer
+  it names (a limit, not modelled). N2 and N5 take these
   copies as leaving from the uplink address. At most 10 a second leave per
   sandbox, after a burst of 20 (`MDNS_RATE`, `MDNS_BURST`; not modelled).
 - N9. What reaches a sandbox from the mDNS group of the LAN is a response,

@@ -99,8 +99,10 @@ sig Sandbox extends Node {
 abstract sig Addr {}
 sig SbxAddr extends Addr {}
 one sig Loopback, Ext, Mcast, Metadata extends Addr {}
-// To the mDNS group: a query (QR 0, no authority section), a probe (QR 0
-// with one), a response or announcement (QR 1)
+// To the mDNS group: a query (QR 0, neither an authority nor an additional
+// section), a probe (QR 0 with an authority section; a query with an
+// additional section counts as one here, as Apple's mDNSResponder acts on
+// an Owner option in it), a response or announcement (QR 1)
 one sig MdnsQuery, MdnsProbe, MdnsResponse extends Addr {}
 sig Remote extends Addr {}
 
@@ -187,7 +189,8 @@ one sig
   LocalOrigin,   // code: primary (netkit.bpf.c) requires skb->sk, so passes only packets the host itself sent
   Handoff,       // code: post (uplink.bpf.c) redirects only packets pre marked, drops the rest to a sandbox
   RevokeClears,  // code: revoke (netns-netkit bpf.go) deletes the recorded flows of the port
-  QueryOnly,     // code: query_out (netkit.bpf.c) copies out only QR 0, opcode 0 without an authority section
+  QueryOnly,     // code: query_out (netkit.bpf.c) copies out only QR 0, opcode 0 without an authority or
+                 // additional section
   MdnsConst,     // code: peer and primary (netkit.bpf.c) handle mDNS only with the constant mdns, which
                  // netns-netkit up --mdns sets (bpf.go attach)
   ResponseOnly,  // code: pre (uplink.bpf.c, mdns_response) copies in only QR 1 from port 5353

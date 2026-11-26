@@ -216,7 +216,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   dropped (with the constant
   `mdns`, which `up --mdns` sets, an mDNS query copied first by `query_out` out of the uplink in `gateways`: from its
   address and MAC of that uplink in `gateways` and port 5353, the QU bits cleared over at most 128 labels and questions, none copied
-  past that, through `bpf_skb_load_bytes`; no GSO packet, nor one with bytes past its IP length; `MDNS_RATE` (10 a
+  past that, through `bpf_skb_load_bytes`; no GSO packet, nor one with bytes past its IP length, nor one with an
+  authority or additional section; `MDNS_RATE` (10 a
   second) after `MDNS_BURST` (20), a GCRA in the unpinned `limits` map), any source but the
   sandbox addresses dropped, link-local destinations and the ULA and CGNAT metadata addresses of AWS, GCP, OCI and Alibaba dropped,
   `bpf_fib_lookup` with `tot_len` 0; local delivery only
@@ -942,7 +943,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   its permissions broker and mDNS (work has `network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each
   netns, with the QU bit set: the default sandbox resolving `printer.local` of avahi on the router, over IPv4 and IPv6,
   the router seeing the queries from the workstation address and port 5353 without QU (a one-shot query from another
-  port too, and one sent from AF_PACKET) and nothing of a response, a probe, a GSO datagram of a query and a response
+  port too, one sent from AF_PACKET and one with a known answer) and nothing of a response, a probe, a query with
+  an additional section (an OPT record with an Owner option), a GSO datagram of a query and a response
   (`UDP_SEGMENT`), a query with bytes past its IP length or a query of work, a query from the LAN not reaching the default sandbox, work hearing nothing over IPv4 or IPv6, only the
   default primary in the `mdns` map, of 100 queries sent at once 15 to 30 leaving), `live` the broker's state machine tests, `loop` the
   default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which

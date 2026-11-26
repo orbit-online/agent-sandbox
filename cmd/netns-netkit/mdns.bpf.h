@@ -25,12 +25,16 @@ struct dnshdr {
 // one: from the uplink address and port 5353, which einat leaves alone (an external source, a port outside its range),
 // so responders answer to the group (RFC 6762 section 6); from another port it is a legacy unicast query, whose answer
 // goes to the port alone. Not a response, nor a probe (an authority section, section 8.2): the sandbox claims no name
-// on the LAN; known-answer and additional records may come along, and known answers only keep responders from repeating
-// them (section 7.1). The questions lose the unicast-response bit (QU, section 5.4), so the answer comes by multicast,
-// which pre copies in. At most MDNS_RATE a second, MDNS_BURST at once. Only a single datagram that ends where its IP header says: a GSO packet (UDP_SEGMENT) would
-// leave as several, the first a query and the rest anything, a response too. Packet data is read through helpers: a
-// variable offset into it is pointer arithmetic the verifier refuses without CAP_PERFMON. Rewrites the packet, which
-// peer drops after
+// on the LAN. Nor with an additional section, which RFC 6762 gives a query no use for: Apple's mDNSResponder reads an
+// EDNS0 Owner option there as the host of that MAC being back from sleep, and a sleep proxy then drops the records it
+// answers with for it (mDNS.c, ProcessQuery and ClearProxyRecords). Known-answer records may come along, and only keep
+// responders from repeating them (section 7.1); avahi and mDNSResponder hold an answer back from the address that
+// knows it, which the host and every sandbox share here, so one sandbox can keep an answer from the others. The
+// questions lose the unicast-response bit (QU, section 5.4), so the answer comes by multicast, which pre copies in. At
+// most MDNS_RATE a second, MDNS_BURST at once. Only a single datagram that ends where its IP header says: a GSO packet
+// (UDP_SEGMENT) would leave as several, the first a query and the rest anything, a response too. Packet data is read
+// through helpers: a variable offset into it is pointer arithmetic the verifier refuses without CAP_PERFMON. Rewrites
+// the packet, which peer drops after
 static __always_inline void query_out(struct __sk_buff *skb, const struct pkt *p)
 {
 	__u32 fam = p->family == AF_INET6;
@@ -50,8 +54,8 @@ static __always_inline void query_out(struct __sk_buff *skb, const struct pkt *p
 	struct dnshdr h;
 	if (bpf_skb_load_bytes(skb, off, &h, sizeof(h)))
 		return;
-	// QR 0 and opcode 0: a standard query
-	if (h.flags[0] & 0xf8 || h.ns || !h.qd)
+	// QR 0 and opcode 0: a standard query, with questions and neither an authority nor an additional section
+	if (h.flags[0] & 0xf8 || h.ns || h.ar || !h.qd)
 		return;
 	off += sizeof(h);
 	__u16 left = bpf_ntohs(h.qd);

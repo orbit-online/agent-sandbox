@@ -164,9 +164,10 @@ unless you ask otherwise); release it when you're done.
   socket on 5353 that joined the group; a one-shot query from another
   port, as `dig -p 5353` sends, gets no answer). Your responses, probes
   and announcements stay in: you can't publish a name on the LAN. So does
-  a query sent with `UDP_SEGMENT` or with bytes past its IP length. A
-  query may carry known answers and additional records; known answers
-  only keep responders from repeating them. Queries leave at 10 a second
+  a query sent with `UDP_SEGMENT`, with bytes past its IP length or with
+  an additional section (an EDNS0 OPT record). A query may carry known
+  answers, which only keep responders from repeating them, to the host
+  and the other sandboxes too. Queries leave at 10 a second
   after a burst of 20, and over IPv6 only while the host has an IPv6
   default route.
   Other devices in `ip link` come from network hooks the user configured

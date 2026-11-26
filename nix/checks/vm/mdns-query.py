@@ -1,7 +1,9 @@
 # mdns-query FAMILY MODE NAME SECONDS [IFACE [PORT]]: an mDNS querier on port 5353 (or PORT, 0 for any) of IFACE
 # (eth0), as avahi is one. MODE query asks for the A
 # (FAMILY 4) or AAAA (6) records of NAME with the unicast-response bit set, respond sends a response claiming NAME,
-# probe a probe for it, listen only listens. gso sends the query and a response claiming smuggled.local as one UDP
+# probe a probe for it, known the query with its record as a known answer, owner the query with an EDNS0 OPT record in
+# its additional section whose Owner option names a MAC, as a host back from sleep sends it (Apple's mDNSResponder; a
+# sleep proxy then drops the records it holds for that MAC), listen only listens. gso sends the query and a response claiming smuggled.local as one UDP
 # GSO datagram (UDP_SEGMENT) of two segments, raw (IPv4) the query from AF_PACKET, as an IP packet followed by 8 bytes
 # past its total length with rawtrail. Then, for SECONDS, prints the addresses in each response it gets and
 # "query" for each query from elsewhere
@@ -50,6 +52,14 @@ elif mode == "respond":
     s.sendto(struct.pack("!6H", 0, 0x8400, 0, 1, 0, 0) + record, dest)
 elif mode == "probe":
     s.sendto(struct.pack("!6H", 0, 0, 1, 0, 1, 0) + qname + struct.pack("!HH", 255, 0x8001) + record, dest)
+elif mode == "known":
+    s.sendto(struct.pack("!6H", 0, 0, 1, 1, 0, 0) + qname + struct.pack("!HH", qtype, 1) + record, dest)
+elif mode == "owner":
+    # The Owner option (code 4): version 0, a sequence number, the primary MAC
+    option = struct.pack("!HHBB6s", 4, 8, 0, 1, bytes.fromhex("02005e0000aa"))
+    # OPT: the root name, type 41, the payload size as its class, no extended flags
+    opt = b"\0" + struct.pack("!HHIH", 41, 1440, 0, len(option)) + option
+    s.sendto(struct.pack("!6H", 0, 0, 1, 0, 0, 1) + qname + struct.pack("!HH", qtype, 1) + opt, dest)
 elif mode == "gso":
     q = struct.pack("!6H", 0, 0, 1, 0, 0, 0) + qname + struct.pack("!HH", qtype, 1)
     smuggled = b"\x08smuggled\x05local\0"
