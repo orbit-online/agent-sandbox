@@ -575,7 +575,10 @@ addressed to it: `BecomeMonitor`, and match rules with `eavesdrop=true`. Those a
 Overview lists.
 
 Each message it refuses a client is logged as a warning (`msg=Refused`) with its type, destination, path, interface,
-member and the error the client got, never its body; a refused message that wants no reply is dropped and logged too.
+member and the error the client got; a refused message that wants no reply is dropped and logged too. Of its body
+only the name a bus call asked about is logged (`name=`), when the name's policy refused the call. That covers the
+answers the proxy makes up for a hidden name: `GetNameOwner`'s error, and `NameHasOwner`'s false (`answer=false` in
+place of the error), after which a client such as Chromium gives up on the service without calling it.
 A kind of refusal is logged the first time and at its 10th, 100th and so on, with the count. The client picks what it
 sends, so past 1024 kinds the rest share one count (`kind=other`), and each field is cut at 256 bytes.
 

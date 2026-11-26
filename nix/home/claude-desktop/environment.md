@@ -44,7 +44,9 @@ default launcher and `claude-desktop-<name>` for a named one
   subid-broker and the D-Bus proxy. When something on the session bus
   doesn't work, look for the proxy's refusals there
   (`-t dbus-proxy -p warning`, `msg=Refused` with the call's destination,
-  path, interface and member).
+  path, interface and member). A bus call about a name the rules hide
+  carries the name (`name=`): an app that asks `NameHasOwner` first gets
+  false (`answer=false`) and never calls the service.
 
 On the host they're `journalctl --namespace=claude-desktop[-<name>]` and
 `--namespace=claude-desktop[-<name>]_sandbox`.

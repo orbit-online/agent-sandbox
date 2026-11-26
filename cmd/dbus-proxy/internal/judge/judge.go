@@ -30,7 +30,11 @@ type Action struct {
 	Message []byte
 	Calls   [][]byte
 	Refused string // The error a refused message from the client gets, also when it's dropped for wanting no reply
+	Name    string // The name a refused bus call asked about, when the name's policy refused it
 }
+
+// Action.Refused of a NameHasOwner of a hidden name: no error, a reply of false
+const AnsweredFalse = "false"
 
 var (
 	forwarded = Action{}

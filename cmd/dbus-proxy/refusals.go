@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/judge"
 	"github.com/orbit-online/agent-sandbox/cmd/dbus-proxy/internal/wire"
 )
 
@@ -15,8 +16,9 @@ const (
 	maxRefusalField = 256
 )
 
-// What a refusal is logged by: the message's header fields, never its body
-type refusalKey struct{ typ, dest, path, iface, member, err string }
+// What a refusal is logged by: the message's header fields and the name a bus call asked about, nothing else of
+// its body
+type refusalKey struct{ typ, dest, path, iface, member, name, err string }
 
 // refusals logs what the proxy refuses a client: a kind of refusal the first time, then at its 10th, 100th, ...
 type refusals struct {
@@ -37,9 +39,9 @@ func cut(s string) string {
 	return s
 }
 
-func (r *refusals) note(m *wire.Message, errName string) {
+func (r *refusals) note(m *wire.Message, errName, name string) {
 	k := refusalKey{m.Type.String(), cut(m.Header(dbus.FieldDestination)), cut(m.Header(dbus.FieldPath)),
-		cut(m.Header(dbus.FieldInterface)), cut(m.Header(dbus.FieldMember)), errName}
+		cut(m.Header(dbus.FieldInterface)), cut(m.Header(dbus.FieldMember)), cut(name), errName}
 	r.mu.Lock()
 	n, ok := r.counts[k]
 	overflow := !ok && len(r.counts) >= maxRefusalKeys
@@ -58,8 +60,17 @@ func (r *refusals) note(m *wire.Message, errName string) {
 		r.log.Warn("Refused", "kind", "other", "count", n)
 		return
 	}
-	r.log.Warn("Refused", "type", k.typ, "destination", k.dest, "path", k.path, "interface", k.iface,
-		"member", k.member, "error", k.err, "count", n)
+	args := []any{"type", k.typ, "destination", k.dest, "path", k.path, "interface", k.iface, "member", k.member}
+	if k.name != "" {
+		args = append(args, "name", k.name)
+	}
+	if k.err == judge.AnsweredFalse {
+		// NameHasOwner of a hidden name: the client got no error
+		args = append(args, "answer", "false")
+	} else {
+		args = append(args, "error", k.err)
+	}
+	r.log.Warn("Refused", append(args, "count", n)...)
 }
 
 // 1, 10, 100, ...

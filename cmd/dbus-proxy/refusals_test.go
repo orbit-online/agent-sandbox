@@ -78,6 +78,41 @@ func TestRefusalsLogged(t *testing.T) {
 	}
 }
 
+// A bus call about a hidden name is logged with the name, the answers the proxy makes up too: Chromium asks
+// NameHasOwner before it calls a service and gives up on false without a word. One about a visible name isn't
+func TestRefusalsNameHidden(t *testing.T) {
+	bus := startBus(t)
+	startService(t, bus)
+	var lines func() []string
+	c := connect(t, startProxyWith(t, bus, func(p *Proxy) { lines = captureRefusals(p) }, policy("org.test.Seen", "see")))
+	drv := c.BusObject()
+	var has bool
+	for _, name := range []string{svcName, "org.test.Seen"} {
+		if err := drv.Call("org.freedesktop.DBus.NameHasOwner", 0, name).Store(&has); err != nil || has {
+			t.Fatalf("NameHasOwner %s: %v %v", name, has, err)
+		}
+	}
+	wantErr(t, "GetNameOwner", drv.Call("org.freedesktop.DBus.GetNameOwner", 0, svcName).Err, errNameHasNoOwner)
+	drv.Go("org.freedesktop.DBus.NameHasOwner", dbus.FlagNoReplyExpected, nil, "org.test.NoReply")
+	wantErr(t, "StartServiceByName",
+		drv.Call("org.freedesktop.DBus.StartServiceByName", 0, svcName, uint32(0)).Err, errServiceUnknown)
+	got := lines()
+	want := []string{
+		"member=NameHasOwner name=org.test.Svc answer=false count=1",
+		"member=GetNameOwner name=org.test.Svc error=org.freedesktop.DBus.Error.NameHasNoOwner count=1",
+		"member=NameHasOwner name=org.test.NoReply answer=false count=1",
+		"member=StartServiceByName name=org.test.Svc error=org.freedesktop.DBus.Error.ServiceUnknown count=1",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d lines, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
+	}
+	for i, w := range want {
+		if !strings.Contains(got[i], w) || !strings.Contains(got[i], "level=WARN msg=Refused") {
+			t.Errorf("Line %d: %s\nwant it to contain %q", i, got[i], w)
+		}
+	}
+}
+
 // Ten refused calls at the same time, from clients of their own, count up to one 10th line
 func TestRefusalsConcurrent(t *testing.T) {
 	bus := startBus(t)
@@ -126,7 +161,7 @@ func TestRefusalsBounded(t *testing.T) {
 	var buf bytes.Buffer
 	r := newRefusals(slog.New(slog.NewTextHandler(&buf, nil)))
 	for i := range maxRefusalKeys + 10 {
-		r.note(refusedCall(t, fmt.Sprintf("M%d", i)), "e")
+		r.note(refusedCall(t, fmt.Sprintf("M%d", i)), "e", "")
 	}
 	if len(r.counts) != maxRefusalKeys || r.other != 10 {
 		t.Errorf("%d kinds, %d other", len(r.counts), r.other)

@@ -154,14 +154,17 @@ func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 		delete(j.awaitPeer, call)
 		return forwarded, nil
 	}
-	refuse := func(name string) (Action, error) {
+	var asked string // The name in a bus call's first argument, once its policy refuses the call
+	answer := func(refused string, reply *dbus.Message) (Action, error) {
 		a, err := dropped, error(nil)
+		// Without a reply expected, a Ping would await the bus's reply forever
 		if generatesReply(m) {
-			a, err = j.rewrite(m, errorReply(m.Serial(), name))
+			a, err = j.rewrite(m, reply)
 		}
-		a.Refused = name
+		a.Refused, a.Name = refused, asked
 		return a, err
 	}
+	refuse := func(name string) (Action, error) { return answer(name, errorReply(m.Serial(), name)) }
 	if _, ok := m.ReplySerial(); ok {
 		// xdg-dbus-proxy takes any message with a reply serial for a reply, so a call carrying the serial of a
 		// pending call to the client would pass unchecked
@@ -195,20 +198,18 @@ func (j *Judge) judgeClient(m *wire.Message, fakes *[][]byte) (Action, error) {
 	switch v {
 	case filterHasOwner, filterGetOwner:
 		if j.arg0Policy(m) < rules.See {
-			if !generatesReply(m) {
-				// No reply expected: a Ping would await the bus's reply forever
-				return dropped, nil
-			}
+			asked, _ = arg0(m)
 			if v == filterGetOwner {
-				return j.rewrite(m, errorReply(m.Serial(), ErrNameHasNoOwner))
+				return refuse(ErrNameHasNoOwner)
 			}
-			return j.rewrite(m, boolReply(m.Serial(), false))
+			return answer(AnsweredFalse, boolReply(m.Serial(), false))
 		}
 	case validateMatch:
 		// readsOthersTraffic refused eavesdropping already
 	case validateOwn, validateSee, validateTalk:
 		need := map[verdict]rules.Policy{validateOwn: rules.Own, validateSee: rules.See, validateTalk: rules.Talk}[v]
 		if p := j.arg0Policy(m); p < need {
+			asked, _ = arg0(m)
 			if p < rules.See {
 				v = hide
 			} else {

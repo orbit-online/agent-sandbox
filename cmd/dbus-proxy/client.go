@@ -141,7 +141,7 @@ func (c *client) readClient(done chan struct{}) error {
 			var a judge.Action
 			if a, err = c.j.FromClient(m); err == nil {
 				if a.Refused != "" {
-					c.p.refusals.note(m, a.Refused)
+					c.p.refusals.note(m, a.Refused, a.Name)
 				}
 				err = c.act(a, m, c.toBus, c.toBus)
 			}
