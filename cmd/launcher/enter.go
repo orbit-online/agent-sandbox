@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -104,9 +105,18 @@ func runningApp(cfg *config, tries int) (app int, running bool, err error) {
 // child, on its terminal, in the sandbox's cgroup namespace's subtree, so systemd-run --user --scope works there. Not nsenter -a: that also
 // joins the time ns, still the host's, which needs CAP_SYS_ADMIN in the init userns. no_new_privs first, on the host,
 // as bwrap sets it for everything inside: nsenter holds every capability in U2 until it execs a path the sandbox
-// controls, whose file capabilities would otherwise count
+// controls, whose file capabilities would otherwise count. With --preserve-credentials and without --keep-caps that
+// exec leaves it none (nix/checks/execsites keeps the options so).
+// What the sandbox gets of the caller: vars for an environment, its standard streams, and with a terminal there its
+// session, where bwrap gives the app one of its own. A shell with the caller's terminal as its controlling one could
+// push input into it for the caller's shell to read after (TIOCSTI, CVE-2017-5226 in bwrap): the kernel refuses that
+// without CAP_SYS_ADMIN unless dev.tty.legacy_tiocsti is on, and NixOS builds its kernels with it off, which vm-launch
+// checks ("--shell on a terminal"). Nothing else: no other descriptor the caller left open
 func enter(cfg *config, app int, vars, cmd []string) error {
 	if err := joinCgroup(cfg); err != nil {
+		return err
+	}
+	if err := closeInherited(); err != nil {
 		return err
 	}
 	env := append(vars, "DBUS_SESSION_BUS_ADDRESS=unix:path="+os.Getenv("XDG_RUNTIME_DIR")+"/nixpak-bus")
@@ -115,7 +125,19 @@ func enter(cfg *config, app int, vars, cmd []string) error {
 	return syscall.Exec(argv[0], argv, env)
 }
 
-// joinCgroup moves the launcher into the app's cgroup, sandbox/app/ in the app's unit (see bwrap-subid.sh)
+// closeInherited marks every descriptor past the standard streams close-on-exec, ours and what the caller left open
+// (a shell's 3<file, a launcher's leak): none goes on to the sandbox
+func closeInherited() error {
+	if err := unix.CloseRange(3, math.MaxUint32, unix.CLOSE_RANGE_CLOEXEC); err != nil {
+		return fmt.Errorf("Close the caller's descriptors: %w", err)
+	}
+	return nil
+}
+
+// joinCgroup moves the launcher into the app's cgroup, sandbox/app/ in the app's unit (layOutCgroups, bwrap.go), on
+// the host's cgroup2 by the path systemd names: the re-entry then ends with the unit, as everything in the sandbox
+// does. The sandbox writes that cgroup where the host's cgroup2 has nsdelegate, so it can freeze or kill the launcher
+// there, or make the write fail by removing app/: its own re-entry stopped, nothing more
 func joinCgroup(cfg *config) error {
 	out, err := exec.Command(cfg.Tools.Systemctl, "--user", "show", "-P", "ControlGroup", cfg.Unit).Output()
 	cg := strings.TrimSpace(string(out))
@@ -250,7 +272,10 @@ func unitOwnVar(name string) bool {
 }
 
 // resultFile is where supervise leaves why the app didn't start, for startUnit to tell the caller. The runtime dir's
-// claude-desktop/, which no sandbox reaches
+// claude-desktop/, of mode 0700, which no sandbox reaches: the module refuses a bind that holds it or lies in it
+// (core.nix, stateBinds), the broker's ceiling denies it, and vm-launch looks ("the host's runtime dir stays out of
+// the sandbox"). The same goes for the unit's environment (.vars), the activation token (.activate) and the warnings'
+// socket (.warn) next to it
 func resultFile(cfg *config) string {
 	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "claude-desktop", cfg.Unit+".error")
 }

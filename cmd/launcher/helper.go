@@ -318,13 +318,20 @@ func closeNs(ns []*os.File) {
 }
 
 // ipIn runs ip in ns (openNs) as the owner of the user namespace, which owns the netns. --keep-caps: exec would
-// otherwise drop the caps setns granted
+// otherwise drop the caps setns granted. On the host's mounts, so with no environment: see noEnv
 func ipIn(nsenter, ipTool string, ns []*os.File) *exec.Cmd {
 	ip := exec.Command(nsenter, "--user=/proc/self/fd/3", "--net=/proc/self/fd/4", "--preserve-credentials", "--keep-caps",
 		ipTool, "-batch", "-")
 	ip.ExtraFiles = ns
+	ip.Env = noEnv
 	return ip
 }
+
+// The environment of what the helper runs with capabilities in the sandbox's namespaces: none. The helper's own is
+// the sandbox's, which nixpak's launcher hands bwrap, and on the host's mounts its PATH names directories the sandbox
+// may write (extraPath in a read-write bind: ~/.claude/bin), so a hook that runs a command by name would run the
+// sandbox's, as the user on the host. As sandbox-hooks gives its hooks none
+var noEnv = []string{}
 
 // runIn runs a hook of network.hooks in ns (openNs) as the owner of the user namespace, as ipIn runs ip
 func runIn(nsenter, hook string, ns []*os.File) error {
@@ -333,6 +340,7 @@ func runIn(nsenter, hook string, ns []*os.File) error {
 	cmd := exec.CommandContext(ctx, nsenter, "--user=/proc/self/fd/3", "--net=/proc/self/fd/4", "--preserve-credentials",
 		"--keep-caps", hook)
 	cmd.ExtraFiles = ns
+	cmd.Env = noEnv
 	cmd.Stdout, cmd.Stderr = hostOut, hostOut
 	err := cmd.Run()
 	if ctx.Err() != nil {

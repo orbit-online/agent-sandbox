@@ -101,7 +101,8 @@ in
     description = ''
       Executables the launcher runs in the netns of the sandbox, as the owner of its user namespace (all capabilities
       over the netns, none on the host), once `eth0` is up and the NixOS module's `agent-sandbox.hooks.start` ran,
-      before the app starts: addresses and routes for devices such a hook moved in. A hook that fails starts the sandbox
+      before the app starts: addresses and routes for devices such a hook moved in. With an empty environment, so a
+      hook names what it runs by its store path. A hook that fails starts the sandbox
       without what it does, after a warning on the splash. Without `network.enable` none run.
     '';
   };

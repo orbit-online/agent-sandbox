@@ -323,6 +323,40 @@
           out = sandbox_shell('[ -v TERMINFO ] && t=$TERMINFO || t=-; echo "$TERM $t $COLORTERM"', env).strip()
           assert out == want, f"{env}: {out!r}, want {want!r}"
 
+  with subtest("--shell on a terminal: the shell can't type into it for whoever reads it next (TIOCSTI)"):
+      # --shell stays in the caller's session, on its terminal, where bwrap gives the app a session of its own: the
+      # shell could push input into the terminal's queue, which the caller's shell reads once this one ends
+      # (CVE-2017-5226 in bwrap). The launcher doesn't stop that, the kernel does: without CAP_SYS_ADMIN, TIOCSTI
+      # fails unless dev.tty.legacy_tiocsti is on, and NixOS builds its kernels with it off. The control: with it on,
+      # the same call succeeds, so the terminal is the shell's own and nothing else stands in the way
+      def tiocsti():
+          push = "import fcntl, termios; fcntl.ioctl(0, termios.TIOCSTI, b'x')"
+          out = as_alice("/run/current-system/sw/bin/sh -c " + shlex.quote(
+              # exit: the end of script's input doesn't reach a shell that reads its terminal raw
+              f"echo {shlex.quote(f'python3 -c {shlex.quote(push)} 2>/dev/null; echo pushed=$?; exit')}"
+              " | timeout 60 /run/current-system/sw/bin/script -qec"
+              " '/etc/profiles/per-user/alice/bin/claude-desktop --shell' /dev/null"
+          ))
+          assert "pushed=" in out.replace("pushed=$?", ""), f"the shell didn't run on the terminal: {out!r}"
+          return "pushed=0" in out
+      assert workstation.succeed("cat /proc/sys/dev/tty/legacy_tiocsti").strip() == "0"
+      assert not tiocsti(), "the sandbox's shell pushed input into the caller's terminal"
+      workstation.succeed("sysctl -q -w dev.tty.legacy_tiocsti=1")
+      assert tiocsti(), "TIOCSTI failed with dev.tty.legacy_tiocsti on: the control tells nothing"
+      workstation.succeed("sysctl -q -w dev.tty.legacy_tiocsti=0")
+
+  with subtest("the host's runtime dir stays out of the sandbox: the launcher's files, the broker's sockets, nixpak's instance info"):
+      # What the launcher hands itself there (the unit's environment, why it didn't start, the activation token, the
+      # warnings' socket) and what the launcher and the broker take as the sandbox's identity (S14) are the host's
+      workstation.succeed("test -d /run/user/1000/claude-desktop -a -d /run/user/1000/.flatpak -a -S /run/user/1000/bus")
+      inside = in_sandbox("ls -A /run/user/1000").split()
+      assert "nixpak-bus" in inside and not {"claude-desktop", ".flatpak", "bus"} & set(inside), inside
+      owner = workstation.succeed("stat -c '%a %U' /run/user/1000/claude-desktop").strip()
+      assert owner == "700 alice", owner
+      # The unit's environment is gone once supervise read it, and a start that worked leaves no result
+      left = workstation.succeed("ls /run/user/1000/claude-desktop").split()
+      assert not [f for f in left if f.endswith((".vars", ".error", ".activate"))], left
+
   with subtest("nothing in the sandbox holds a capability once the app runs: not the script that set its pid either"):
       # app-pid.sh set the app's pid with the FHS env's CAP_CHECKPOINT_RESTORE and is gone: app-run.sh, which it
       # became without the capability, waits for the app, and the systemd --user it started holds none (L4)

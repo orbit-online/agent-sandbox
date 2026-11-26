@@ -189,7 +189,8 @@ single-user Nix store, and an environment doc for the Claude running inside.
   through `nsenter --keep-caps` and `ip -batch`: `sandboxRoutes`, a default route of each family that
   `netns-netkit uplinks` names an uplink for, the other removed, as the netns of the sandbox is the user's and
   netns-netkit has no CAP_SYS_ADMIN to enter it), then with `--hooks` `sandbox-hooks start` (the NixOS module's start
-  hooks, with or without a network), then the launcher's `network.hooks` in N as its owner, then the warnings,
+  hooks, with or without a network), then the launcher's `network.hooks` in N as its owner (they and `ip` with an
+  empty environment: the helper's own is the sandbox's, whose PATH may name directories the sandbox writes), then the warnings,
   before it passes bwrap's info on to nixpak, whose pasta slot is a
   no-op that only keeps the netns. The unit of the app runs `netns-netkit down` as `ExecStopPost=` (`enter.go`),
   however it ends. With `network.enable` off (`network.nix`) neither: no `--net`, so the netns keeps the `lo` bwrap
@@ -869,7 +870,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   holding `acknowledge` until the splash's Continue and clearing it after, and going on at once without a listener or a
   splash, and the warning socket bound for a launcher name at the cap with the longest runtime dir and not for one a
   byte longer (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
-  refusal (`hooks_test.go`).
+  refusal (`hooks_test.go`); `ip` and a network hook getting nothing of the helper's environment (`helper_test.go`);
+  a descriptor the caller left open across exec reaching a child before `closeInherited`,
+  which a re-entry runs, and none after (`enter_test.go`).
 - `request-send`: the build runs the Go tests (`cmd/request-send/main_test.go`), each call run through `run` as the
   broker runs the binary, against an httptest TLS server behind an httptest TLS proxy that tunnels CONNECTs, both
   on httptest's certificate: a read and writes arriving as sent through one CONNECT to the origin, the answer as it
@@ -1058,7 +1061,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   past a process at the app's pid in a pid ns of the sandbox's own, `XDG_CURRENT_DESKTOP`
   with COSMIC ahead of GNOME (KDE as is), `claude-desktop --shell` (in the app's namespaces, with no_new_privs as `claude://` has it,
   the terminal's `TERM` with the fallback when its `TERMINFO` is missing, and
-  starting the app when it isn't running, in the app's unit), no process in the sandbox with a
+  starting the app when it isn't running, in the app's unit; on a pty of `script`, TIOCSTI from the shell refused
+  while `dev.tty.legacy_tiocsti` is off and taken with it on, the control: the terminal is the shell's controlling
+  one, and only the kernel keeps it from typing into the caller's), the host's runtime dir out of the sandbox
+  (`claude-desktop/` and `.flatpak/` and the session bus there on the host, none of them inside; the dir 0700 and
+  alice's, no `.vars`, `.error` or `.activate` left by a start that worked), no process in the sandbox with a
   capability in any set once the app runs (`app-run.sh` there in `app-pid.sh`'s place, the `systemd --user` too), the wrapper refusing system
   users (the capabilities of the wrapper, setgid `sandbox-uplink`), and
   `netns-netkit up` refusing a second user, bob, alice's namespaces, each of
