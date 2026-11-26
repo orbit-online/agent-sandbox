@@ -185,6 +185,39 @@ rec {
     # As in environmentDoc's frontmatter
     ENVIRONMENT = "bwrap";
   } "source ${./environment-split.sh}";
+  # The options of a feature (features.nix): a switch, its words for the user and for Claude, and its body. The body
+  # is definitions of the launcher's `permissions` options, kept as they were written, mkForce and the like inside
+  # them included, until features.nix merges them into those options while the feature is on
+  feature = {
+    options = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Turn the feature on.";
+      };
+      description = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "What the feature gives the sandbox, in one line, for the user and for Claude: the Permissions window and the sandbox's `/etc/claude/environment.md` show it while the feature is on. Required for a feature that is on.";
+      };
+      note = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "What to know before turning the feature on, in one line: what it exposes, what it changes. Shown with the description.";
+      };
+      permissions = lib.mkOption {
+        type = lib.mkOptionType {
+          name = "permissions";
+          description = "definitions of `permissions` options";
+          descriptionClass = "noun";
+          merge = _: defs: lib.mkMerge (map (d: d.value) defs);
+        };
+        default = { };
+        example = lib.literalExpression ''{ devices."/dev/kvm" = { }; }'';
+        description = "The body: definitions of the launcher's `permissions` options, merged into them while the feature is on, so the assertions on those options hold for what it adds and an entry it adds is overridden like any other.";
+      };
+    };
+  };
   # Whether path a is path b or holds it
   holds = a: b: a == b || lib.hasPrefix "${lib.removeSuffix "/" a}/" b;
   # Whether a string is an absolute path in its clean form: no ., .. or empty segments, so no two spellings of one

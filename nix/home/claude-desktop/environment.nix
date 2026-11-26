@@ -16,9 +16,10 @@ let
   # Home Manager's memo, when imported
   memoCfg = hm.programs.agent-memos or { };
   # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
-  # the closure), the binds (minus the ro system ones) and PATH as configured, then environmentText. claude-env reads
-  # `environment:` from the frontmatter. Claude Code follows imports four hops deep, and ~/.claude reaches this file
-  # in three (CLAUDE.md, the account's, the shared one), so environmentFile is the last that loads
+  # the closure), the binds (minus the ro system ones), the features that are on and PATH as configured, then
+  # environmentText. claude-env reads `environment:` from the frontmatter. Claude Code follows imports four hops deep,
+  # and ~/.claude reaches this file in three (CLAUDE.md, the account's, the shared one), so environmentFile is the
+  # last that loads
   environmentDoc = pkgs.writeText "claude-environment.md" ''
     ---
     environment: bwrap
@@ -49,7 +50,17 @@ let
         )
     }- `/tmp/claude-<uid>` (rw, from `${ids.scratchpad}`): Claude Code's temp dir with the session scratchpads
     ${lib.concatMapStrings (d: "- `${d}` (dev, if present)\n") config.build.devices}
-    ## PATH
+    ${
+      lib.optionalString (config.build.features != [ ]) ''
+        ## Features
+
+        Turned on in the configuration of the launcher. What each adds is among the binds above and the rest of this file.
+
+        ${lib.concatMapStrings (
+          f: "- `${f.name}`: ${f.description}${lib.optionalString (f.note != "") ". ${f.note}"}\n"
+        ) config.build.features}
+      ''
+    }## PATH
 
     ${lib.concatMapStrings (d: "`${d}`, then ") config.extraPath}the packages
     ${lib.concatMapStringsSep ", " lib.getName (sl.sandboxPackagesOf config)}.

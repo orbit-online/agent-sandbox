@@ -34,6 +34,16 @@ Item {
         const optional = path => !known ? "optional" : o.absent.indexOf(path) >= 0 ? "optional, missing"
                                                                                   : "optional, present"
         const plain = (list, mono) => list.map(v => ({ value: v, mono: mono, badges: [], rows: [] }))
+        // The features turned on in the configuration, first: each a name for a group of what follows, with its
+        // description and what to know about it
+        const features = o.features || []
+        add("features", "Features", features.map(f => ({
+                value: f.name,
+                mono: true,
+                badges: [],
+                rows: [{ name: "gives", value: f.description, mono: false }]
+                      .concat(f.note ? [{ name: "note", value: f.note, mono: false }] : [])
+            })), features.map(f => f.name + ": " + f.description + (f.note ? " (" + f.note + ")" : "")))
         const binds = o.binds || []
         add("binds", "Binds", binds.map(b => ({
                 value: b.path,
@@ -551,6 +561,7 @@ Item {
                                             Layout.leftMargin: -40
                                             name: modelData.name
                                             value: modelData.value
+                                            mono: modelData.mono !== false
                                         }
                                     }
                                 }

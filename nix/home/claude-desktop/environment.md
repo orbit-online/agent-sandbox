@@ -4,8 +4,8 @@ You run inside Claude Desktop's bubblewrap sandbox, built by the Home Manager
 module `agent-sandbox.claude-desktop` on top of
 [nixpak](https://github.com/nixpak/nixpak): `nix/home/claude-desktop/` in the
 `orbit-online/agent-sandbox` repo, with this file as `environment.md`.
-`/etc/claude/environment.md` imports it and adds the binds and PATH as
-configured. If something here could work better for you, suggest a change to
+`/etc/claude/environment.md` imports it and adds the binds, the features
+turned on and PATH as configured. If something here could work better for you, suggest a change to
 the module.
 
 Never widen the sandbox (binds, D-Bus rules, sockets, env, tokens) without

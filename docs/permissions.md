@@ -12,8 +12,8 @@ system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and remov
 them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). The
 proxy's static rules then moved from its argv to a JSON config the module writes from its `dbus` option (2026-11-04),
 which is `permissions.bus` since 2026-11-26.
-The `port` capability came with the sandbox network on netkit (2026-11-12). Built 2026-11-26: one option root for all a launcher reaches (The options of a launcher); the features on top of it
-are designed and not built yet. Not built yet: device grants. Steps lists the order.
+The `port` capability came with the sandbox network on netkit (2026-11-12). Built 2026-11-26: one option root for all a launcher reaches, with features on top (The options of a launcher). Not
+built yet: device grants. Steps lists the order.
 
 ## Why
 
@@ -218,9 +218,6 @@ only the daemon creates.
 
 ## The options of a launcher
 
-Built 2026-11-26, but for the features: `kvm`, `audio` and `tray` are still bools on the launcher, the options of
-request-send are still `permissions.request-send`, and `keep-awake` is a rule each consumer writes itself.
-
 Everything that lets a launcher reach outside the sandbox is set under one root, `permissions`, on the launcher
 (`agent-sandbox.claude-desktop` or one of `launchers.<name>`). Each option there applies at one of two times. From the
 start: fixed when the sandbox starts, changed by a rebuild, and listed in the window (Overview). On request: what the
@@ -258,20 +255,23 @@ A feature bundles entries of `permissions` behind a switch, with words for the u
 ```nix
 features.<name> = {
   enable = false;
-  # What it gives the sandbox, one line
+  # What it gives the sandbox, one line; required while it is on
   description = "...";
-  # What to know before turning it on; optional
+  # What to know before turning it on, one line; optional
   note = "...";
   # Definitions of the options above, applied while the feature is enabled
   permissions = { ... };
 };
 ```
 
-The body is written in the options of the table, with `mkForce` and the like meaning what they mean there, and is
-merged into the launcher's own `permissions` while the feature is enabled. So every check on those options holds for
-what a feature adds, and an entry a feature adds is overridden like any other. The enabled features show with
-description and note in the overview of the window and in the sandbox's `/etc/claude/environment.md`. Consumers add
-their own beside the module's, which are all off:
+The body is written in the options of the table, with `mkForce` and the like inside it meaning what they mean there.
+It is kept as written (`features.<name>.permissions` has a type of its own, which holds definitions and merges
+nothing) and goes into the launcher's own `permissions` while the feature is enabled, as one more definition of
+them. So every check on those options holds for what a feature adds, with the message naming the `permissions`
+entry, and an entry a feature adds is overridden or turned off like any other
+(`permissions.devices."/dev/kvm".enable = false` beside `features.kvm.enable`). The enabled features show with
+description and note in the overview of the window (`features` there, Overview) and under Features in the sandbox's
+`/etc/claude/environment.md`. Consumers add their own by name beside the module's, which are all off:
 
 | Feature | Body | Note |
 |---|---|---|
@@ -1079,11 +1079,13 @@ they exist at launch), left out when the daemon can't read that mount table. The
 it's present or missing:
 
 - `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
-- `devices`: from `permissions.devices` and `kvm`, each bound if present;
+- `features`: the features that are on, each with its name, description and note. What they add is among the rest;
+- `devices`: from `permissions.devices`, the `kvm` feature's `/dev/kvm` among them, each bound if present;
 - `dbus`: the proxy's config (`permissions.bus`), by name its policy and its call and broadcast rules;
 - `network`: its own network namespace joined to the host by a netkit pair, or with `permissions.network.enable` off
   with `lo` alone;
-- `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
+- `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with the `audio`
+  feature),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
   `files`), `/tmp` with the scratchpad, and `/run/permissions`.
 

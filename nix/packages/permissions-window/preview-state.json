@@ -135,6 +135,18 @@
     }
   ],
   "overview": {
+    "features": [
+      {
+        "name": "keep-awake",
+        "description": "Lets the app keep the machine awake while a session works, through PowerManagement's Inhibit on the session bus",
+        "note": "UnInhibit takes a cookie, and Plasma releases any cookie for any caller: a process in the sandbox can drop the holds of other apps."
+      },
+      {
+        "name": "kvm",
+        "description": "/dev/kvm, for VMs and NixOS tests in the sandbox",
+        "note": "Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox."
+      }
+    ],
     "binds": [
       {
         "path": "/etc/group",

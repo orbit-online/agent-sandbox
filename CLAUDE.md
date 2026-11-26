@@ -23,7 +23,10 @@ single-user Nix store, and an environment doc for the Claude running inside.
   launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
   `/run/current-system/sw`, the store again at `/nix-root` as a chroot store's root, without the tmpfs buildFHSEnv puts on
   `etc/` of its glibc), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
-  `mcp.nix` (with `channels.js`, which `patch-asar.sh` hooks into the app for `mcpChannels`), `dbus.nix` (and the tray), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
+  `mcp.nix` (with `channels.js`, which `patch-asar.sh` hooks into the app for `mcpChannels`), `dbus.nix` (and the tray feature), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
+  `features.nix` (`features.<name>`: an `enable`, a `description` and a `note`, and a body of `permissions`
+  definitions merged in while it is on; the module's `kvm`, `audio`, `tray`, `keep-awake` and `request-send`, all off;
+  the ones that are on listed in the broker's overview and in `claude-environment.md`),
   `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
   `agent-sandbox.launcherModules` join them on every launcher, for a plugin's own options. The app ID,
   `com.anthropic.Claude[.<name>]`, also names the launcher's `.desktop`
@@ -371,7 +374,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   processes`. The module applies it through `nixpakPkgs`, whose `callPackage`
   patches the package nixpak builds from its `launcher/`.
 - `nix/home/claude-desktop/request-send.nix` and `cmd/request-send/`: the host commands `request-send` and
-  `request-send-write` (README, request-send), `permissions.request-send` on each launcher, a launcher
+  `request-send-write` (README, request-send), the feature `features.request-send` on each launcher, with `origins` as its own option, a launcher
   module. `consent.title` and each command's `consent` are the user's words in the notification and the
   window: plain, for someone who isn't technical, without ranges (the window's Details show those from the schemas).
   The binary (`request-send --help`) sends one HTTP request per call: it reads the call, checks every argument again
@@ -516,7 +519,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `launcherNameMax` at which `cmd/launcher/warn_test.go` binds the launcher's warning socket and
   `cmd/permissions-broker/socketpath_test.go` the broker's, and which `internal/caller` takes no name past; the
   sockets bound by a path with the name in it, the varlink socket of the sandbox's journald namespace among them,
-  none past 107 bytes at the cap and the longest at them), the per-launcher netns assertion, a tray on two launchers at once,
+  none past 107 bytes at the cap and the longest at them), the per-launcher netns assertion, the tray feature on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
@@ -541,7 +544,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
   glob that could match one; `testSocketAgreement`: `~` alone, a variable past the leading `$XDG_RUNTIME_DIR`, no
   description and a glob that isn't one `*` without `?` or `[`, all of which the daemon refuses or reads as another
-  path), the `permissions.bus` defaults (the portal's, with `tray` the tray item's name at the
+  path), the `permissions.bus` defaults (the portal's, with the `tray` feature the tray item's name at the
   launcher's pid and the watcher's, the user's rules merged in), the assertions on D-Bus rules (`sandbox`
   setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing, a rule it refuses
   and its caps: 64 names, 64 rules a list, 64 KiB of config, each at and past the cap),
@@ -555,13 +558,18 @@ modules and a user alice (the `home-manager` input exists only for it).
   segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `permissions.devices`
   (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
   its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
-  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither. The test system imports both modules twice and has a launcher
+  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither; the features (`testFeatures`: the module's five, all off, and what `kvm`,
+  `audio`, `tray` and `keep-awake` each add while on, an entry a feature adds turned off like any other;
+  `testOwnFeatures`: a consumer's feature with an entry of every kind merged into the launcher it is on alone, a
+  `mkForce` inside it kept, nothing of it while off, and the broker's overview listing the ones that are on;
+  `testFeatureAssertions`: a feature that is on needs a name of letters, digits and `-`, a description, and both it
+  and the note on one line, one that is off needs none, and a bind a feature adds is refused as the launcher's own). The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure, all
   sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
-  the devices (`/dev/kvm` once, from `kvm` and `permissions.devices`) and PATH in `claude-environment.md`, the patched asar's tray
+  the devices (`/dev/kvm` once, from the `kvm` feature and `permissions.devices`), the features that are on (`kvm` with its description and note; none for `work`) and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
   refused), the channel hook (on a 4.23118-shaped asar: `channels.js` only with `mcpChannels`, hooked into the
@@ -585,7 +593,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-netkit gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, memo's config in the FHS env with the store
   right after the embedded ones, the store in the closure), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants (a folder and a grant that are off left out), `netnsNetkit` and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants (a folder and a grant that are off left out), `netnsNetkit` and the window's overview (no features, binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, no `claude://` handler; both launchers' actions running the launcher by name, no store path). For both launchers, their app
   ID in the launcher config and `/.flatpak-info`, which names their only `.desktop`
@@ -836,7 +844,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   through `qmltestrunner` against a mock broker: an answer narrowed in its
   fields (kept through a refresh that rebuilds the list), deny, revoke then end (the holders of ended grants from the state, a possible one marked),
   a standing grant shown as from the config, the tabs (the requests in front while there are some and when one
-  arrives, the user's pick otherwise), a folder request's resolved folder from the summary, the overview of the configuration (binds, devices, D-Bus, the
+  arrives, the user's pick otherwise), a folder request's resolved folder from the summary, the overview of the configuration (the features that are on with description and note, and no section without any; binds, devices, D-Bus, the
   network, the standing grants live and ended, the implicit lines; an item a row each, its value selectable; an optional bind or a device present or missing by
   the broker's `absent`), a repeated action still a change, Allow and Deny off for a second after a pending row moved up or was
   replaced in place, a grant expanded and collapsed (kept through a refresh), the
@@ -894,7 +902,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   with a fragment or leaving the origin, bodies too long or with control characters, missing, extra or mistyped
   arguments, origins not in the list, proxies that aren't `https://host[:port]`, bad flags.
 - `request-send-module` (`nix/checks/request-send.nix`, its eval tests in `claude-desktop-eval` as
-  `testRequestSend*`): both capabilities on the launchers that enable them with their own origins, proxies and CAs,
+  `testRequestSend*`): both capabilities on the launchers that turn the feature on with their own origins, proxies and CAs,
   the origin as the bounding enum and in `run`, their consent title and phrases, the read command's GET only and the
   write one's GET and POST with a multiline body, origins that aren't https origins or none and proxies that aren't
   `https://host[:port]` failing to evaluate, the assertion without `permissions.broker.enable`, and `permissions-broker

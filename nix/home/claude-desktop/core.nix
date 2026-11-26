@@ -69,7 +69,7 @@ let
       DOT_CLAUDE = hostPath ".claude";
       CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
       MCP_SERVERS = "${pkgs.writeText "mcp-servers.json" (builtins.toJSON config.mcpServers)}";
-      TRAY = lib.boolToString config.tray;
+      TRAY = lib.boolToString config.features.tray.enable;
       SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
     };
   };
@@ -86,11 +86,8 @@ let
           b.path
         ]
     ) (sl.byDepth (lib.filterAttrs (_: b: b.rw == rw) config.permissions.binds));
-  # By path, each once: /dev/kvm with kvm, then the enabled entries of permissions.devices by name
-  devices = lib.unique (
-    lib.optional config.kvm "/dev/kvm"
-    ++ lib.attrNames (lib.filterAttrs (_: d: d.enable) config.permissions.devices)
-  );
+  # By path: the entries of permissions.devices that are on, the features' among them
+  devices = lib.attrNames (lib.filterAttrs (_: d: d.enable) config.permissions.devices);
   # What the checks below say about a bind's or a device's source on the host, null for nothing. They read the path as
   # written, so first it has to be the one spelling of itself: absolute and clean, one trailing slash aside
   # (/run/user//, /run/./user/1000 and <state dir>/home/.. are /run/user, the runtime dir and the state dir to bwrap).
@@ -324,8 +321,9 @@ in
                 tmpfs = [ "/tmp" ];
                 sockets = {
                   wayland = true;
-                  pipewire = config.audio;
-                  pulse = config.audio;
+                  # The audio feature (features.nix), which has no body for them
+                  pipewire = config.features.audio.enable;
+                  pulse = config.features.audio.enable;
                 };
                 newSession = true;
                 dieWithParent = true;

@@ -167,7 +167,7 @@ let
         (aliceModule {
           enable = true;
           package = stub;
-          tray = true;
+          features.tray.enable = true;
           permissions.network.hooks.mesh = meshAddr;
           # Missing until the launch subtest creates it
           permissions.binds."/srv/project" = { };
@@ -185,7 +185,7 @@ let
           };
           launchers.work = {
             package = stub;
-            tray = true;
+            features.tray.enable = true;
             nameservers = [ nodes.router.networking.primaryIPAddress ];
             permissions = {
               # The sandbox without mDNS beside the default one

@@ -62,6 +62,7 @@ let
     ./mcp.nix
     ./dbus.nix
     ./permissions.nix
+    ./features.nix
     ./request-send.nix
     ./launch.nix
   ]

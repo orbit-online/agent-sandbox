@@ -1,5 +1,5 @@
 # What the app reaches on the session bus, through the Go D-Bus proxy that nixpak runs in xdg-dbus-proxy's place
-# (core.nix, nixpakPkgs), and the tray
+# (core.nix, nixpakPkgs), and the tray feature
 {
   lib,
   pkgs,
@@ -56,11 +56,6 @@ let
 in
 {
   options = {
-    tray = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Show a tray icon. Closing the window then hides the app instead of quitting it.";
-    };
     permissions.bus = mkOption {
       type = types.attrsOf (
         types.submodule {
@@ -94,7 +89,7 @@ in
           };
         }
       );
-      defaultText = lib.literalMD "the portal's OpenURI, Settings and Notification, its FileChooser's version as 1, and with `tray` the tray's registration and the tray item's name";
+      defaultText = lib.literalMD "the portal's OpenURI, Settings and Notification, and its FileChooser's version as 1; the features that are on add theirs, `tray` the tray's registration and the tray item's name";
       description = ''
         What the app reaches on the session bus through the D-Bus proxy (`dbus-proxy --help`), by well-known name,
         exact: a policy, call and broadcast rules, versions, or more of them. Any rule or version also makes the name
@@ -123,28 +118,30 @@ in
     # against the rules of every name it holds, so no other name may get talk where one of these owners holds it. No
     # org.freedesktop.Notifications: notifications go through the portal, which keys them by app ID, so the app
     # can't replace or close another's (the permissions broker's), nor reach plasmashell
-    permissions.bus = lib.mkMerge [
-      {
-        "org.freedesktop.portal.Desktop" = {
-          call = [
-            "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
-            "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
-            # libnotify with NOTIFY_FORCE_PORTAL; its GDBusProxy loads the interface's version with GetAll
-            "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
-            "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
-            # Chromium >= 153 reads Settings' color-scheme only once Get of FileChooser's version succeeds; without it,
-            # its GTK fallback lags one switch behind
-            "org.freedesktop.DBus.Properties.Get@/org/freedesktop/portal/desktop"
-          ];
-          # That version also picks Chromium's file chooser (components/dbus/xdg/portal.cc): 3 or more the portal's,
-          # whose FileChooser the rules refuse, below its own GTK one, inside the sandbox. Not 0, which leaves Settings
-          # unread (ui/linux/portal_settings_linux.cc)
-          versions."org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop" = 1;
-          # Chromium follows the color scheme and accent color by it (ui/linux/portal_settings_linux.cc)
-          broadcast = [ "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop" ];
-        };
-      }
-      (lib.mkIf config.tray {
+    permissions.bus = {
+      "org.freedesktop.portal.Desktop" = {
+        call = [
+          "org.freedesktop.portal.OpenURI.OpenURI@/org/freedesktop/portal/desktop"
+          "org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop"
+          # libnotify with NOTIFY_FORCE_PORTAL; its GDBusProxy loads the interface's version with GetAll
+          "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
+          "org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/portal/desktop"
+          # Chromium >= 153 reads Settings' color-scheme only once Get of FileChooser's version succeeds; without it,
+          # its GTK fallback lags one switch behind
+          "org.freedesktop.DBus.Properties.Get@/org/freedesktop/portal/desktop"
+        ];
+        # That version also picks Chromium's file chooser (components/dbus/xdg/portal.cc): 3 or more the portal's,
+        # whose FileChooser the rules refuse, below its own GTK one, inside the sandbox. Not 0, which leaves Settings
+        # unread (ui/linux/portal_settings_linux.cc)
+        versions."org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop" = 1;
+        # Chromium follows the color scheme and accent color by it (ui/linux/portal_settings_linux.cc)
+        broadcast = [ "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop" ];
+      };
+    };
+    features.tray = {
+      description = "A tray icon, which the app registers on the session bus";
+      note = "Closing the window then hides the app instead of quitting it.";
+      permissions.bus = {
         # Chromium names it StatusNotifierItem-<pid>-<n>
         "org.freedesktop.StatusNotifierItem-${toString ids.appPid}-1".policy = "own";
         # What Chromium's StatusIconLinuxDbus calls
@@ -152,8 +149,8 @@ in
           "org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem@/StatusNotifierWatcher"
           "org.freedesktop.DBus.Properties.Get@/StatusNotifierWatcher"
         ];
-      })
-    ];
+      };
+    };
     # The proxy's rules, from permissions.bus; nixpak's dbus.policies and dbus.rules would be its argv rules, which it
     # doesn't take
     build.nixpak = [ { dbus.args = dbusArgs; } ];

@@ -73,11 +73,26 @@ that order). On request, through the broker (see Permissions): `permissions.comm
 `permissions.folders` and `permissions.grants`. Each is an attrset, so one entry can be overridden or turned off
 (`permissions.binds."/srv/x".enable = false`).
 
+Features bundle such entries behind a switch: `features.<name>.enable`, with a `description` and a `note` that the
+Permissions window and the sandbox's `/etc/claude/environment.md` show while it is on, and a body in the same
+`permissions` options. The module's own, all off: `kvm` (`/dev/kvm`, for VMs and NixOS tests inside), `audio` (the
+PipeWire and PulseAudio sockets: microphone, camera and screen-cast streams included), `tray` (a tray icon; closing
+the window then hides the app), `keep-awake` (the app keeping the machine awake while a session works; on Plasma a
+process in the sandbox can then release the holds of other apps too) and `request-send` (below). Add your own:
+
+```nix
+agent-sandbox.claude-desktop.features.notes = {
+  enable = true;
+  description = "The notes folder, read-only";
+  permissions.binds."/home/alice/notes" = { };
+};
+```
+
 Other options: `extraPath` (directories ahead of the PATH packages),
 `nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager),
 `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
-(appended to it), `env`, `path`, `units` (of the sandbox's `systemd --user`), `kvm`, `audio`, `tray`, `splash` (see Launching) and
+(appended to it), `env`, `path`, `units` (of the sandbox's `systemd --user`), `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in
 [`nix/home/claude-desktop/`](nix/home/claude-desktop/), the general ones in
 [`options.nix`](nix/home/claude-desktop/options.nix).
@@ -143,8 +158,9 @@ The design: [`docs/permissions.md`](docs/permissions.md).
 
 ### request-send
 
-Lets Claude make HTTP requests as you to services the sandbox can't reach or can't authenticate to, through an
-authenticating proxy of yours on the host, such as kmsproxy presenting your client certificate. The host sends. It declares two host command capabilities, each bounded by the
+The feature `request-send` lets Claude make HTTP requests as you to services the sandbox can't reach or can't
+authenticate to, through an authenticating proxy of yours on the host, such as kmsproxy presenting your client
+certificate. The host sends. It declares two host command capabilities, each bounded by the
 service (`origin`) and with one command, `send`:
 
 - `request-send` sends GET requests, for reading.
@@ -159,15 +175,15 @@ the module's, its proxy, the headers and the TLS. The sandbox never reaches the 
 its own.
 
 ```nix
-agent-sandbox.claude-desktop.permissions = {
-  broker.enable = true;
-  request-send = {
+agent-sandbox.claude-desktop = {
+  permissions.broker.enable = true;
+  features.request-send = {
     enable = true;
     # Through the host's kmsproxy, which presents your client certificate and re-signs the origin's with its CA
     origins."https://helpdesk.example.com" = { proxy = "https://localhost:8090"; ca = "/var/lib/local-ca/ca.crt"; };
   };
   # Reads without asking; writes still ask, once or for a lease. By name, which is the capability unless it says another
-  grants.request-send.params.origin = "https://helpdesk.example.com";
+  permissions.grants.request-send.params.origin = "https://helpdesk.example.com";
 };
 ```
 

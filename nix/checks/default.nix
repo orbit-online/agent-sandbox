@@ -42,7 +42,7 @@ let
     };
   enabled = {
     enable = true;
-    kvm = true;
+    features.kvm.enable = true;
     # /dev/kvm again, bound once
     permissions.devices = {
       "/dev/nvidiactl" = { };
@@ -961,17 +961,17 @@ let
         "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a netkit pair; launchers.work.sandbox must not change bubblewrap.network or pasta"
       ];
     };
-    # The proxy's rules: the portal's, and with a tray its item's name and the watcher's; a launcher's own pid, and
-    # the user's merged in
+    # The proxy's rules: the portal's, and with the tray feature its item's name and the watcher's; a launcher's own
+    # pid, and the user's merged in
     testDbusDefaults = {
       expr =
         let
           c =
             (nixos (
               lib.recursiveUpdate enabled {
-                tray = true;
+                features.tray.enable = true;
                 permissions.bus."org.freedesktop.portal.Desktop".call = [ "org.freedesktop.portal.Email.*" ];
-                launchers.work.tray = true;
+                launchers.work.features.tray.enable = true;
               }
             )).config.home-manager.users.alice.agent-sandbox.claude-desktop;
         in
@@ -1119,10 +1119,9 @@ let
     testLauncherTrays = {
       expr = failedAssertions (
         nixos (
-          enabled
-          // {
-            tray = true;
-            launchers.work.tray = true;
+          lib.recursiveUpdate enabled {
+            features.tray.enable = true;
+            launchers.work.features.tray.enable = true;
           }
         )
       );
@@ -2067,6 +2066,276 @@ let
         '': port, port-again are the same grant, port {"port":3000,"protocol":"tcp"}, which the broker takes only once''
       ];
     };
+    # The module's features, all off unless turned on, and what each adds while it is on: kvm its device, audio the
+    # two sockets and /etc/alsa, the tray its bus entries, keep-awake its two calls; and what the Permissions window
+    # and environment.md list of them. An entry a feature adds is turned off like any other
+    testFeatures =
+      let
+        of =
+          cfg:
+          let
+            c = (nixos cfg).config.home-manager.users.alice.agent-sandbox.claude-desktop;
+            nixpak = c.build.sandboxed.config;
+          in
+          {
+            on = map (f: f.name) c.build.features;
+            inherit (c.build) devices;
+            alsa = lib.elem "alsa" c.build.etcEntries;
+            sockets = lib.attrNames (lib.filterAttrs (_: v: v == true) nixpak.bubblewrap.sockets);
+            bus = lib.attrNames c.permissions.bus;
+          };
+        every = lib.genAttrs [ "audio" "keep-awake" "kvm" "tray" ] (_: {
+          enable = true;
+        });
+      in
+      {
+        expr = {
+          names = lib.attrNames (nixos { enable = true; })
+          .config.home-manager.users.alice.agent-sandbox.claude-desktop.features;
+          off = of { enable = true; };
+          on = of {
+            enable = true;
+            features = every;
+          };
+          overridden = of {
+            enable = true;
+            features = every;
+            permissions.devices."/dev/kvm".enable = false;
+          };
+          keepAwake =
+            (nixos {
+              enable = true;
+              features.keep-awake.enable = true;
+            }).config.home-manager.users.alice.agent-sandbox.claude-desktop.permissions.bus."org.freedesktop.PowerManagement";
+        };
+        expected = {
+          names = [
+            "audio"
+            "keep-awake"
+            "kvm"
+            "request-send"
+            "tray"
+          ];
+          off = {
+            on = [ ];
+            devices = [ ];
+            alsa = false;
+            sockets = [ "wayland" ];
+            bus = [ "org.freedesktop.portal.Desktop" ];
+          };
+          on = {
+            on = [
+              "audio"
+              "keep-awake"
+              "kvm"
+              "tray"
+            ];
+            devices = [ "/dev/kvm" ];
+            alsa = true;
+            sockets = [
+              "pipewire"
+              "pulse"
+              "wayland"
+            ];
+            bus = [
+              "org.freedesktop.PowerManagement"
+              "org.freedesktop.StatusNotifierItem-100-1"
+              "org.freedesktop.portal.Desktop"
+              "org.kde.StatusNotifierWatcher"
+            ];
+          };
+          overridden = {
+            on = [
+              "audio"
+              "keep-awake"
+              "kvm"
+              "tray"
+            ];
+            devices = [ ];
+            alsa = true;
+            sockets = [
+              "pipewire"
+              "pulse"
+              "wayland"
+            ];
+            bus = [
+              "org.freedesktop.PowerManagement"
+              "org.freedesktop.StatusNotifierItem-100-1"
+              "org.freedesktop.portal.Desktop"
+              "org.kde.StatusNotifierWatcher"
+            ];
+          };
+          keepAwake = {
+            policy = null;
+            call = [
+              "org.freedesktop.PowerManagement.Inhibit.Inhibit@/org/freedesktop/PowerManagement/Inhibit"
+              "org.freedesktop.PowerManagement.Inhibit.UnInhibit@/org/freedesktop/PowerManagement/Inhibit"
+            ];
+            broadcast = [ ];
+            versions = { };
+          };
+        };
+      };
+    # A feature of the consumer's: its body is definitions of the launcher's permissions options, merged in while it
+    # is on (a mkForce inside it kept, an entry of every kind), and nothing of it while it is off; the launcher it is
+    # on alone. The broker's overview lists the ones that are on, by name, with description and note
+    testOwnFeatures =
+      let
+        notes = on: {
+          enable = on;
+          description = "The notes folder";
+          note = "Read-only.";
+          permissions = {
+            binds."/srv/notes" = { };
+            # Over the launcher's own read-write bind of it
+            binds."/srv/project".rw = lib.mkForce false;
+            devices."/dev/fuse" = { };
+            bus."org.test.Notes".policy = "see";
+            network.hooks.notes = lib.getExe pkgs.hello;
+            folders."/srv/more" = { };
+            sockets.notes = {
+              description = "the notes socket";
+              path = "/srv/notes.sock";
+            };
+            grants.notes = { };
+          };
+        };
+        of =
+          on:
+          let
+            c =
+              (nixos (
+                lib.recursiveUpdate enabled {
+                  features.notes = notes on;
+                  permissions.broker.enable = true;
+                  launchers.work.permissions.broker.enable = true;
+                }
+              )).config.home-manager.users.alice.agent-sandbox.claude-desktop;
+            pick = l: {
+              features = l.build.permissionsConfig.overview.features;
+              notes = l.permissions.binds ? "/srv/notes";
+              fuse = lib.elem "/dev/fuse" l.build.devices;
+              bus = l.permissions.bus ? "org.test.Notes";
+              hooks = lib.attrNames l.permissions.network.hooks;
+              folders = map (f: f.path) l.build.permissionsConfig.folders;
+              sockets = map (s: s.name) l.build.permissionsConfig.sockets;
+              grants = map (g: g.capability) l.build.permissionsConfig.grants;
+            };
+          in
+          {
+            default = pick c // {
+              projectRw = c.permissions.binds."/srv/project".rw;
+            };
+            work = pick c.launchers.work;
+          };
+        none = {
+          features = [ ];
+          notes = false;
+          fuse = false;
+          bus = false;
+          hooks = [ ];
+          folders = [ ];
+          sockets = [ ];
+          grants = [ ];
+        };
+        kvm = {
+          name = "kvm";
+          description = "/dev/kvm, for VMs and NixOS tests in the sandbox";
+          note = "Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox.";
+        };
+      in
+      {
+        expr = {
+          on = of true;
+          off = of false;
+        };
+        expected = {
+          on = {
+            default = {
+              features = [
+                kvm
+                {
+                  name = "notes";
+                  description = "The notes folder";
+                  note = "Read-only.";
+                }
+              ];
+              notes = true;
+              fuse = true;
+              bus = true;
+              hooks = [ "notes" ];
+              folders = [ "/srv/more" ];
+              sockets = [ "notes" ];
+              grants = [ "notes" ];
+              projectRw = false;
+            };
+            work = none;
+          };
+          off = {
+            default = none // {
+              features = [ kvm ];
+              projectRw = true;
+            };
+            work = none;
+          };
+        };
+      };
+    # A feature that is on needs a name the window and environment.md can show, a description, and both on one line;
+    # one that is off needs none. What a feature adds is checked as what the launcher sets itself: here a bind of
+    # the runtime dir
+    testFeatureAssertions = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              features = {
+                silent.enable = true;
+                blank = {
+                  enable = true;
+                  description = " ";
+                };
+                "two words" = {
+                  enable = true;
+                  description = "a name with a space";
+                };
+                lines = {
+                  enable = true;
+                  description = "a note of two lines";
+                  note = "one\ntwo";
+                };
+                runtime = {
+                  enable = true;
+                  description = "the runtime dir";
+                  permissions.binds."/srv/run".src = "/run/user/1000";
+                };
+                # Off: nothing of it is checked or added
+                off = {
+                  description = "";
+                  permissions.binds."/srv/off-run".src = "/run/user/1000";
+                };
+              };
+              launchers.work.features.silent.enable = true;
+            }
+          )
+        )
+      );
+      expected =
+        let
+          feature =
+            n:
+            "agent-sandbox.claude-desktop: ${n}: a name of letters, digits and -, a description of one line, and a note of one line or none";
+        in
+        map feature [
+          "features.blank"
+          "features.lines"
+          "features.silent"
+          "features.two words"
+        ]
+        ++ [
+          ''agent-sandbox.claude-desktop: permissions.binds."/srv/run" binds /run/user/1000, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those''
+          (feature "launchers.work.features.silent")
+        ];
+    };
     testMcpServersHmTransform = {
       expr =
         let
@@ -2269,6 +2538,8 @@ in
             '- `/tmp/claude-<uid>` (rw, from `/home/alice/.local/share/claude-desktop/tmp-scratchpad`): Claude Code'"'"'s temp dir with the session scratchpads' \
             '- `/dev/kvm` (dev, if present)' \
             '- `/dev/nvidiactl` (dev, if present)' \
+            '## Features' \
+            '- `kvm`: /dev/kvm, for VMs and NixOS tests in the sandbox. Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox.' \
             '`/srv/bin`, then the packages'; do
             grep -qxF -- "$line" "$doc" || { echo "environment.md lacks: $line" >&2; exit 1; }
           done
@@ -2424,6 +2695,8 @@ in
             grep -qxF -- "$line" "$doc" || { echo "work's environment.md lacks: $line" >&2; exit 1; }
           done
           ! grep -qF -e /srv/project -e /home/alice/.claude "$doc" || { echo "work's environment.md has the default launcher's binds" >&2; exit 1; }
+          # No feature is on for work
+          ! grep -qF '## Features' "$doc" || { echo "work's environment.md lists features" >&2; exit 1; }
           # work has memo: the part every session needs, the rest in the store, memo's config with the store after the
           # embedded ones
           import=$(grep -oxP '@\K/nix/store/[^/]+-claude-desktop-environment/core-environment\.md' "$doc") || { echo "work's environment.md lacks the core import" >&2; exit 1; }
@@ -2470,7 +2743,7 @@ in
               consent: "Take screenshots", arguments: {}, result: "image/png", timeout: "PT1M", run: ["/srv/shot"]}}}]
             and (.overview.network | startswith("Its own network namespace"))
             and any(.overview.binds[]; .path == "/home/alice" and .src == "/home/alice/.local/share/claude-desktop-work/home" and .rw)
-            and .overview.devices == []
+            and .overview.devices == [] and .overview.features == []
             and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 5 and .broadcast == ["org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"]
               and .versions == {"org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop": 1} and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")

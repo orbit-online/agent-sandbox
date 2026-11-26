@@ -1,6 +1,6 @@
-# request-send as host commands of the permissions broker: `permissions.request-send` on every launcher. Enabled, it
-# declares the capabilities request-send, which sends GET requests, and
-# request-send-write, which sends GET and POST requests, in that launcher's `permissions.commands`, each to the
+# request-send as host commands of the permissions broker: the feature `features.request-send` on every launcher,
+# with an option of its own, `origins`. On, its body declares the capabilities request-send, which sends GET requests,
+# and request-send-write, which sends GET and POST requests, in that launcher's `permissions.commands`, each to the
 # configured origins through their proxies
 {
   config,
@@ -13,8 +13,9 @@ let
   inherit (lib) mkOption types;
   bin = lib.getExe sl.packages.request-send;
 
+  cfg = config.features.request-send;
+
   options = {
-    enable = lib.mkEnableOption "the host commands request-send and request-send-write, which send HTTP requests for Claude through a proxy that authenticates them as you";
     origins = mkOption {
       type = types.attrsOf (
         types.submodule {
@@ -47,9 +48,9 @@ let
       bad = lib.filter (n: builtins.match "https://[^/?#@]+" n == null) names;
     in
     if names == [ ] then
-      throw "permissions.request-send.origins: none"
+      throw "features.request-send.origins: none"
     else if bad != [ ] then
-      throw "permissions.request-send.origins: not https origins: ${toString bad}"
+      throw "features.request-send.origins: not https origins: ${toString bad}"
     else
       names;
   origin = o: {
@@ -129,15 +130,29 @@ let
 
 in
 {
-  options.permissions.request-send = options;
+  # Declared, for its own option beside a feature's (features.nix takes every other name as a feature)
+  options.features = mkOption {
+    type = types.submodule {
+      options.request-send = mkOption {
+        type = types.submodule [
+          sl.feature
+          { inherit options; }
+        ];
+        default = { };
+        description = "The host commands request-send and request-send-write, which send HTTP requests for Claude through a proxy that authenticates them as you. Needs the permissions broker.";
+      };
+    };
+  };
   config = {
-    permissions.commands = lib.mkIf config.permissions.request-send.enable (
-      capabilities config.permissions.request-send
-    );
+    features.request-send = {
+      description = "The host commands request-send and request-send-write: HTTP requests sent on the host through a proxy that authenticates them as the user, to the origins the configuration names";
+      note = "Each needs a grant, which the user gives per origin: reading with request-send, reading and writing with request-send-write.";
+      permissions.commands = capabilities cfg;
+    };
     build.assertions = [
       {
-        assertion = !config.permissions.request-send.enable || config.permissions.broker.enable;
-        message = "${(sl.idsOf launcherName).opt}permissions.request-send needs permissions.broker.enable";
+        assertion = !cfg.enable || config.permissions.broker.enable;
+        message = "${(sl.idsOf launcherName).opt}features.request-send needs permissions.broker.enable";
       }
     ];
   };

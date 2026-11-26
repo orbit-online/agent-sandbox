@@ -48,7 +48,7 @@ let
       "ssl/certs"
       "pki"
     ]
-    ++ lib.optional config.audio "alsa";
+    ++ lib.optional config.features.audio.enable "alsa";
   # Those NixOS generates, linked as in /etc/static (a source in /etc links within the tree, localtime to zoneinfo).
   # Bound from here, as the host's /etc binds the generation's store paths, which a host GC empties under a running
   # sandbox

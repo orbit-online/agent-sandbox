@@ -31,6 +31,9 @@ TestCase {
             standing: [{ capability: "echo", params: {}, summary: "the echo", grant: "g2" },
                        { capability: "test-thing", params: {}, summary: "the test thing", ended: true }],
             overview: {
+                features: [{ name: "keep-awake", description: "Keeps the machine awake while a session works",
+                             note: "Any cookie is released for any caller." },
+                           { name: "kvm", description: "/dev/kvm", note: "" }],
                 binds: [{ path: "/home/alice", src: "/srv/home", rw: true, optional: false },
                         { path: "/srv/notes", src: "/srv/notes", rw: false, optional: true }],
                 devices: ["/dev/kvm"],
@@ -342,6 +345,24 @@ TestCase {
         compare(findChild(view, "overview-binds-1").text, "/srv/notes")
         compare(findChild(view, "overview-dbus-0").text, "org.kde.StatusNotifierItem-100-1")
         compare(findChild(view, "overview-standing-1").text, "the test thing")
+    }
+
+    // The features that are on, ahead of what they add: a name each, its description, and its note where it has one
+    function test_overview_features() {
+        compare(findChild(view, "overview-features").text,
+                "keep-awake: Keeps the machine awake while a session works (Any cookie is released for any caller.)\n"
+                + "kvm: /dev/kvm")
+        compare(findChild(view, "overview-features-0").text, "keep-awake")
+        compare(findChild(view, "overview-features-1").text, "kvm")
+        // No section without any, as for a config written before features
+        const before = mock.state
+        const st = JSON.parse(before)
+        delete st.overview.features
+        mock.state = JSON.stringify(st)
+        compare(findChild(view, "overview-features"), null)
+        verify(findChild(view, "overview-binds"))
+        mock.state = before
+        verify(findChild(view, "overview-features"))
     }
 
     // With the broker's list of what the sandbox lacks, an optional bind or a device says whether it's there

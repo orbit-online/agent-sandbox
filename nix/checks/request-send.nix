@@ -39,25 +39,23 @@ let
   # The default launcher for a production and a staging origin, work for its own
   rs = alice {
     enable = true;
-    permissions = {
-      broker.enable = true;
-      request-send = {
-        enable = true;
-        origins = {
-          "https://helpdesk.example.com" = {
-            proxy = "https://localhost:8090";
-            ca = "/var/lib/local-ca/ca.crt";
-          };
-          "https://wiki.example.com" = {
-            proxy = "https://127.0.0.1:8092";
-            ca = "/etc/ssl/proxy-ca.crt";
-          };
+    permissions.broker.enable = true;
+    features.request-send = {
+      enable = true;
+      origins = {
+        "https://helpdesk.example.com" = {
+          proxy = "https://localhost:8090";
+          ca = "/var/lib/local-ca/ca.crt";
+        };
+        "https://wiki.example.com" = {
+          proxy = "https://127.0.0.1:8092";
+          ca = "/etc/ssl/proxy-ca.crt";
         };
       };
     };
-    launchers.work.permissions = {
-      broker.enable = true;
-      request-send = {
+    launchers.work = {
+      permissions.broker.enable = true;
+      features.request-send = {
         enable = true;
         origins."https://helpdesk.example.com:8443" = {
           proxy = "https://proxy.example.com:3128";
@@ -79,27 +77,23 @@ let
     !(builtins.tryEval (builtins.toJSON (alice cfg).agent-sandbox.claude-desktop.permissions.commands)).success;
   withOrigins = origins: {
     enable = true;
-    permissions = {
-      broker.enable = true;
-      request-send = {
-        enable = true;
-        origins = lib.genAttrs origins (_: {
-          proxy = "https://localhost:8090";
-          ca = "/etc/ssl/ca.crt";
-        });
-      };
+    permissions.broker.enable = true;
+    features.request-send = {
+      enable = true;
+      origins = lib.genAttrs origins (_: {
+        proxy = "https://localhost:8090";
+        ca = "/etc/ssl/ca.crt";
+      });
     };
   };
   withProxy = proxy: {
     enable = true;
-    permissions = {
-      broker.enable = true;
-      request-send = {
-        enable = true;
-        origins."https://helpdesk.example.com" = {
-          inherit proxy;
-          ca = "/etc/ssl/ca.crt";
-        };
+    permissions.broker.enable = true;
+    features.request-send = {
+      enable = true;
+      origins."https://helpdesk.example.com" = {
+        inherit proxy;
+        ca = "/etc/ssl/ca.crt";
       };
     };
   };
@@ -150,7 +144,7 @@ in
     testRequestSendAssertion = {
       expr = failed (alice {
         enable = true;
-        launchers.work.permissions.request-send = {
+        launchers.work.features.request-send = {
           enable = true;
           origins."https://helpdesk.example.com" = {
             proxy = "https://localhost:8090";
@@ -159,7 +153,7 @@ in
         };
       });
       expected = [
-        "agent-sandbox.claude-desktop: launchers.work.permissions.request-send needs permissions.broker.enable"
+        "agent-sandbox.claude-desktop: launchers.work.features.request-send needs permissions.broker.enable"
       ];
     };
     testRequestSendOrigins = {

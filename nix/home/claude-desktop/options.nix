@@ -143,16 +143,6 @@ in
       default = { };
       description = "Environment variables in the sandbox, keyed by name. A string is shorthand for `value`.";
     };
-    audio = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Mount the PipeWire and PulseAudio sockets. Unmediated access: microphone, camera and screen-cast streams included.";
-    };
-    kvm = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Mount `/dev/kvm`, for VMs and NixOS tests in the sandbox. Exposes the host kernel's KVM interface: a KVM bug is a way out of the sandbox.";
-    };
     extraPath = mkOption {
       type = types.listOf types.str;
       default = [ ];

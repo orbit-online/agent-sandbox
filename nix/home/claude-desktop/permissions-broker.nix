@@ -116,6 +116,8 @@ let
               )
             );
         inherit (config.build) devices;
+        # The features that are on, each with its description and note: what they add is among the rest
+        inherit (config.build) features;
         dbus = config.build.dbusRules;
         network =
           if config.permissions.network.enable then
