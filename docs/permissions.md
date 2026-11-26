@@ -11,8 +11,9 @@ static rules (step 5) and the sandbox on it in place of xdg-dbus-proxy (step 6, 
 system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and removed 2026-11-04 until a capability needs
 them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). The
 proxy's static rules then moved from its argv to a JSON config the module writes from its `dbus` option (2026-11-04).
-The `port` capability came with the sandbox network on netkit (2026-11-12). Not built yet: device grants. Steps lists
-the order.
+The `port` capability came with the sandbox network on netkit (2026-11-12). Designed 2026-11-26 and not built yet:
+one option root for all a launcher reaches, with features on top (The options of a launcher). Not built yet: device
+grants. Steps lists the order.
 
 ## Why
 
@@ -214,6 +215,76 @@ put one of its own in its place. nsenter joins only the user namespace (and the 
 `setns`), and resolve nothing there but the grant directory: opened with `RESOLVE_NO_SYMLINKS`, and refused unless
 it's a mount root with the device and inode of the host's directory. They act on single entries beneath it, which
 only the daemon creates.
+
+## The options of a launcher
+
+Not built yet (2026-11-26): the options are still `binds`, `devices`, `kvm`, `audio`, `tray`, `dbus`, `network.*` and
+`permissions.{enable,folders,grants,request-send}`, and the rest of this document names them so.
+
+Everything that lets a launcher reach outside the sandbox is set under one root, `permissions`, on the launcher
+(`agent-sandbox.claude-desktop` or one of `launchers.<name>`). Each option there applies at one of two times. From the
+start: fixed when the sandbox starts, changed by a rebuild, and listed in the window (Overview). On request: what the
+broker may grant while the sandbox runs, after asking the user.
+
+| Option | When | What |
+|---|---|---|
+| `permissions.binds.<path>` | from the start | A host path mounted at `<path>`: `src`, `rw`, `optional`, `mcp`, `enable` |
+| `permissions.devices.<path>` | from the start | A device node, bound where it exists on the host: `enable` |
+| `permissions.bus.<name>` | from the start | What the app reaches of a well-known name on the session bus, through the proxy (D-Bus): `policy`, `call`, `broadcast`, `versions` |
+| `permissions.network.enable`, `.mdns` | from the start | The network of the sandbox, and mDNS in it |
+| `permissions.network.hooks.<name>` | from the start | An executable the launcher runs in the netns of the sandbox before the app starts. They run in the order of their names |
+| `permissions.commands.<capability>` | on request | Host commands (Declared host commands) |
+| `permissions.sockets.<name>` | on request | Host sockets (Host sockets) |
+| `permissions.folders.<path>` | on request | A host folder the sandbox may ask for, it or one beneath it (Mounts): `rw`, `enable` |
+| `permissions.grants.<name>` | on request, given at the start | A standing grant (Standing grants): `capability` (the name, unless set), `params`, `enable` |
+| `permissions.broker.enable` | | Runs the broker, without which nothing is granted on request. With a network it has the `port` capability built in (Ports) |
+
+An entry someone may need to override is an attrset entry, keyed by what it names: `mkForce` can't reach the third
+element of a list. Two lists stay. The rules inside a bus entry: to drop one, turn off the feature that holds it. And
+`mcpChannels`, which modules append to and nobody overrides.
+
+`permissions.binds` and `permissions.folders` stay siblings, with no field merging them. A bind carries settings that
+mean nothing for a folder asked for later, and what is given at the start among the requestable things has its own
+place, `permissions.grants`, apart from its declaration.
+
+Outside `permissions`, as they open nothing or are fine where they are: `files`, `env`, `path`, `extraPath`, `units`,
+`nameservers`, `environmentFile`, `memo.enable`, `splash`, `mcpServers` and `mcpChannels`. `sandbox`, the extra nixpak
+config, stays the way around all of it.
+
+### Features
+
+A feature bundles entries of `permissions` behind a switch, with words for the user and for Claude:
+
+```nix
+features.<name> = {
+  enable = false;
+  # What it gives the sandbox, one line
+  description = "...";
+  # What to know before turning it on; optional
+  note = "...";
+  # Definitions of the options above, applied while the feature is enabled
+  permissions = { ... };
+};
+```
+
+The body is written in the options of the table, with `mkForce` and the like meaning what they mean there, and is
+merged into the launcher's own `permissions` while the feature is enabled. So every check on those options holds for
+what a feature adds, and an entry a feature adds is overridden like any other. The enabled features show with
+description and note in the overview of the window and in the sandbox's `/etc/claude/environment.md`. Consumers add
+their own beside the module's, which are all off:
+
+| Feature | Body | Note |
+|---|---|---|
+| `kvm` | `permissions.devices."/dev/kvm"` | Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox |
+| `audio` | The PipeWire and PulseAudio sockets, and `/etc/alsa`. The sockets sit in `$XDG_RUNTIME_DIR`, which no bind names, so the module binds them itself and the body is empty | Unmediated: microphone, camera and screen-cast streams included |
+| `tray` | Two `permissions.bus` entries: the name of the tray item, to own, and the registration with the watcher | Closing the window then hides the app instead of quitting it |
+| `keep-awake` | `permissions.bus."org.freedesktop.PowerManagement"`: `Inhibit` and `UnInhibit` of its Inhibit interface, which the app calls to keep the machine awake while a session works | The cookie caveat, below |
+| `request-send` | The capabilities `request-send` and `request-send-write` in `permissions.commands`, for the origins in its own option, `features.request-send.origins` | Needs the broker |
+
+The cookie caveat of `keep-awake`: `UnInhibit` takes a cookie, and PowerDevil (Plasma 6.6) releases any cookie for any
+caller, from one counter shared by all. So a process in the sandbox can drop the holds of other apps (a video player
+keeping the screen on) by guessing small numbers. The proxy filters by method and path and doesn't track which
+cookies the sandbox got; a filter on them isn't planned, and the note of the feature says so.
 
 ## What can be granted
 
@@ -1117,6 +1188,18 @@ Decided with Anders, 2026-11-12:
 13. The proxy filters broadcasts by rule as xdg-dbus-proxy 0.1.9 does (D-Bus), rather than keeping 0.1.7's pass-all
     that 0.1.8 fixed as CVE-2026-93676.
 
+Decided with Anders, 2026-11-26:
+
+14. One options structure for all a launcher can be granted (The options of a launcher), cut by time: from the start
+    (`binds`, `devices`, `bus`, `network`), on request (`commands`, `sockets`, `folders`), and `grants` for which of
+    the requestable ones are given at the start. `binds` and `folders` stay siblings.
+15. No lists where an entry may need overriding. The rule lists inside a bus entry stay lists (one turns off the
+    feature that holds a rule), and so does `mcpChannels`.
+16. Features are an attrset of submodules with `enable`, in place of one bool per feature beside the other options.
+17. `env` stays where it is: calling it a permission reads the word too strictly.
+18. Bus rules stay static config. Grants of them at run time were decided against earlier (decision 43 below).
+19. No renamed-option aliases: the module is alpha, and its consumers move in the same go.
+
 ## Decisions made without the user
 
 Each can be revisited.
@@ -1238,3 +1321,10 @@ Each can be revisited.
     has a policy or a rule; the rules' syntax is the proxy's to check, at launch. nixpak's `.flatpak-info` loses its
     `[Session Bus Policy]` (the tray item's `own`), which it filled from `dbus.policies`: the VM test's portal,
     notification and tray checks pass without it.
+45. The options structure of 2026-11-26 (The options of a launcher), where Anders left the details open: the root is
+    named `permissions`, his word for it; "from the start" and "on request" are a property of each option, with no
+    level of their own in the tree; `permissions.network.hooks` run in the order of their names, which the list's
+    order becomes (no use of it had more than one hook); the body of a feature is definitions of the launcher's own
+    `permissions` options, kept as written until the feature is enabled, rather than a second copy of the option set
+    nested in each feature; `origins` stays the own option of `features.request-send`; and `audio` keeps its sockets
+    outside `permissions`, which has no option that names a path in `$XDG_RUNTIME_DIR`.
