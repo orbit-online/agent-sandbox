@@ -2,6 +2,7 @@ package mounts
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -78,16 +79,17 @@ func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
 	}
 	seen := map[uint64]bool{}
 	for _, pid := range pids {
-		if time.Now().After(deadline) {
-			break
-		}
 		for _, task := range tasks(pid) {
+			// Per thread, not per process: each may be in a mount namespace of its own
+			if time.Now().After(deadline) {
+				return v
+			}
 			ns, ok := mntNs(task)
 			if !ok || seen[ns] {
 				continue
 			}
 			seen[ns] = true
-			for _, l := range mountinfo.Read(task + "/mountinfo") {
+			for _, l := range readMounts(task+"/mountinfo", deadline) {
 				v.visible[l.ID] = true
 				switch {
 				case m.copyOf(l) || !l.Cut && mountinfo.MountsOf([]mountinfo.Line{l}, m.dev, m.root):
@@ -100,6 +102,31 @@ func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
 		}
 	}
 	return v
+}
+
+// until reads r up to a deadline, after which it's at its end
+type until struct {
+	r        io.Reader
+	deadline time.Time
+}
+
+func (u until) Read(p []byte) (int, error) {
+	if time.Now().After(u.deadline) {
+		return 0, io.EOF
+	}
+	return u.r.Read(p)
+}
+
+// readMounts reads the mountinfo file at path, as far as it gets by the deadline: a namespace holds as many mounts,
+// with lines as long, as the sandbox likes
+func readMounts(path string, deadline time.Time) []mountinfo.Line {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	lines, _ := mountinfo.Parse(until{f, deadline})
+	return lines
 }
 
 // HoldersAfter lists, after the detach, the processes in the sandbox still holding the grant: a working directory,
@@ -115,7 +142,6 @@ func HoldersAfter(s Sandbox, m *GrantMount) []Holder {
 	var hs []Holder
 	for _, pid := range pids {
 		if time.Now().After(deadline) {
-			slog.Warn("Holders' scan cut short", "after", holdersTimeout)
 			break
 		}
 		held, possible := v.holds(pid)
@@ -130,6 +156,9 @@ func HoldersAfter(s Sandbox, m *GrantMount) []Holder {
 				hs = append(hs, Holder{Pid: pid, Comm: strings.TrimSpace(string(comm)), Start: start, Possible: !held})
 			}
 		}
+	}
+	if time.Now().After(deadline) {
+		slog.Warn("Holders' scan cut short", "after", holdersTimeout)
 	}
 	return hs
 }
@@ -150,6 +179,10 @@ func (v *mountView) holds(pid int) (held, possible bool) {
 			paths = append(paths, task+"/fd/"+e.Name())
 		}
 		for _, p := range paths {
+			// Per file: a process has as many threads, each with as many open files, as the sandbox likes
+			if time.Now().After(v.deadline) {
+				return false, possible
+			}
 			h, maybe := v.file(p)
 			if h {
 				return true, false

@@ -488,7 +488,8 @@ sandbox likes, and the window lists nobody to end. Detached mounts and mappings 
   detached clone of a directory beneath the grant (its path is relative to that directory), of a file renamed out
   of the grant through another mount of the filesystem, of a file deleted along with its directory, or beneath a
   directory the user can't search (the sandbox's subordinate ids own it).
-- Past ten seconds the scan stops, and the processes it didn't get to aren't listed.
+- Past ten seconds the scan stops where it is, between two files of a process or two mounts of a namespace too
+  (the sandbox picks how many threads, open files and mounts there are), and what it didn't get to isn't listed.
 
 That limit comes from Linux itself. An open file description keeps its file and the mount it was opened on alive,
 whatever happens to the mount after: unmounting it, even lazily, only takes it out of the tree. Linux has no general
