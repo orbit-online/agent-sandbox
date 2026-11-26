@@ -1,5 +1,5 @@
-# The launcher's general options: the app, nixpak's extra config, binds, files, environment variables, devices,
-# PATH and units of the sandbox's systemd --user. The features' own options are in their modules
+# The launcher's general options: the app, nixpak's extra config, files, environment variables, PATH and units of the
+# sandbox's systemd --user, and of `permissions` the binds and devices. The features' own options are in their modules
 {
   config,
   lib,
@@ -20,44 +20,72 @@ in
       default = { };
       description = "Extra nixpak configuration.";
     };
-    binds = mkOption {
-      type = types.attrsOf (
-        types.submodule (
-          { name, ... }:
-          {
-            options = {
-              enable = mkOption {
-                type = types.bool;
-                default = true;
-                description = "Mount the path.";
+    # What the sandbox reaches from its start, beside the session bus (dbus.nix) and the network (network.nix); what
+    # it may ask for while it runs is permissions.nix's
+    permissions = {
+      binds = mkOption {
+        type = types.attrsOf (
+          types.submodule (
+            { name, ... }:
+            {
+              options = {
+                enable = mkOption {
+                  type = types.bool;
+                  default = true;
+                  description = "Mount the path.";
+                };
+                optional = mkOption {
+                  type = types.bool;
+                  default = false;
+                  description = "Skip the bind when the host path is missing. Otherwise the launcher refuses to start.";
+                };
+                src = mkOption {
+                  type = types.str;
+                  default = name;
+                  defaultText = lib.literalExpression "<name>";
+                  description = "Host path.";
+                };
+                rw = mkOption {
+                  type = types.bool;
+                  default = false;
+                  description = "Mount read-write.";
+                };
+                mcp = mkOption {
+                  type = types.bool;
+                  default = true;
+                  description = "Expose the path to the filesystem MCP server.";
+                };
               };
-              optional = mkOption {
-                type = types.bool;
-                default = false;
-                description = "Skip the bind when the host path is missing. Otherwise the launcher refuses to start.";
-              };
-              src = mkOption {
-                type = types.str;
-                default = name;
-                defaultText = lib.literalExpression "<name>";
-                description = "Host path.";
-              };
-              rw = mkOption {
-                type = types.bool;
-                default = false;
-                description = "Mount read-write.";
-              };
-              mcp = mkOption {
-                type = types.bool;
-                default = true;
-                description = "Expose the path to the filesystem MCP server.";
-              };
+            }
+          )
+        );
+        default = { };
+        description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source is an absolute path in its clean form (no `.`, `..` or empty segments; one trailing slash is fine). One that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `claude-desktop` dir, or is `/proc` or `/var/run` or lies in them fails an assertion. So does a source beneath the source of a read-write bind, the sandbox's home and scratchpad included: the sandbox could put a link in its place, which the next launch would follow. The assertions read the path as written: a source that is a link to one of these on the host gets past them.";
+      };
+      devices = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options.enable = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Mount the device node.";
             };
           }
-        )
-      );
-      default = { };
-      description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source is an absolute path in its clean form (no `.`, `..` or empty segments; one trailing slash is fine). One that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `claude-desktop` dir, or is `/proc` or `/var/run` or lies in them fails an assertion. So does a source beneath the source of a read-write bind, the sandbox's home and scratchpad included: the sandbox could put a link in its place, which the next launch would follow. The assertions read the path as written: a source that is a link to one of these on the host gets past them.";
+        );
+        default = { };
+        example = lib.literalExpression ''
+          {
+            "/dev/nvidiactl" = { };
+            "/dev/nvidia0" = { };
+            "/dev/nvidia-modeset" = { };
+          }
+        '';
+        description = ''
+          Device nodes mounted in the sandbox, keyed by their path, each only if it exists on the host at launch. No
+          globs. Exposes the driver's ioctl interface: a driver bug is a way out of the sandbox. Each is bound
+          read-write from its own path, so the assertions on a bind's source hold for it too.
+        '';
+      };
     };
     files = mkOption {
       type = types.attrsOf (
@@ -124,20 +152,6 @@ in
       type = types.bool;
       default = false;
       description = "Mount `/dev/kvm`, for VMs and NixOS tests in the sandbox. Exposes the host kernel's KVM interface: a KVM bug is a way out of the sandbox.";
-    };
-    devices = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      example = [
-        "/dev/nvidiactl"
-        "/dev/nvidia0"
-        "/dev/nvidia-modeset"
-      ];
-      description = ''
-        Device nodes mounted in the sandbox, each only if it exists on the host at launch. No globs. Exposes the
-        driver's ioctl interface: a driver bug is a way out of the sandbox. Each is bound read-write from its own
-        path, so the assertions on a bind's source hold for it too.
-      '';
     };
     extraPath = mkOption {
       type = types.listOf types.str;

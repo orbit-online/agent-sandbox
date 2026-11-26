@@ -33,12 +33,12 @@ type netSetup struct {
 	Nsenter     string `json:"nsenter"`
 	IP          string `json:"ip"`
 	Name        string `json:"name,omitempty"` // The launcher's, which its addresses derive from; empty for the default one
-	Mdns        bool   `json:"mdns,omitempty"` // mDNS queries out and responses in (network.mdns)
-	// network.hooks: run in the netns as its owner, once eth0 is up
+	Mdns        bool   `json:"mdns,omitempty"` // mDNS queries out and responses in (permissions.network.mdns)
+	// permissions.network.hooks, in the order of their names: run in the netns as its owner, once eth0 is up
 	Hooks []string `json:"hooks,omitempty"`
 }
 
-// A hook of network.hooks gets this long
+// A hook of permissions.network.hooks gets this long
 var netHookTimeout = 30 * time.Second
 
 // The host's units for the sandbox's daemons, in the launcher's slice and bound to the app's unit, so they stop with
@@ -210,7 +210,7 @@ func (n *netSetup) run(pid int) error {
 	return sandboxRoutes(n.NetnsNetkit, n.Nsenter, n.IP, ns)
 }
 
-// hooks runs network.hooks in the netns of pid as its owner, and says which failed
+// hooks runs permissions.network.hooks in the netns of pid as its owner, and says which failed
 func (n *netSetup) hooks(pid int) []string {
 	if len(n.Hooks) == 0 {
 		return nil
@@ -333,7 +333,7 @@ func ipIn(nsenter, ipTool string, ns []*os.File) *exec.Cmd {
 // sandbox's, as the user on the host. As sandbox-hooks gives its hooks none
 var noEnv = []string{}
 
-// runIn runs a hook of network.hooks in ns (openNs) as the owner of the user namespace, as ipIn runs ip
+// runIn runs a hook of permissions.network.hooks in ns (openNs) as the owner of the user namespace, as ipIn runs ip
 func runIn(nsenter, hook string, ns []*os.File) error {
 	ctx, cancel := context.WithTimeout(context.Background(), netHookTimeout)
 	defer cancel()

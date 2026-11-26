@@ -89,7 +89,7 @@ let
 in
 {
   options.agent-sandbox.hooks = {
-    start = phase "once the network namespace of the sandbox is set up (its netkit pair and addresses), before the app starts and before the launcher's network.hooks, with that network namespace on fd 3 (`ip link set <dev> netns /proc/self/fd/3`)" "start <uid> <launcher name>";
+    start = phase "once the network namespace of the sandbox is set up (its netkit pair and addresses), before the app starts and before the launcher's permissions.network.hooks, with that network namespace on fd 3 (`ip link set <dev> netns /proc/self/fd/3`)" "start <uid> <launcher name>";
     stop = phase "after the sandbox ended" "stop <uid> <launcher name>";
   };
 

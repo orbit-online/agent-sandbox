@@ -97,8 +97,8 @@ one sig FsRoot, RuntimeDir, GrantDir, FlatpakDir, StateDir,
   SandboxHome, SandboxNix, Scratch extends File {}
 // tmpfs and other filesystems made in a namespace: no host file in them
 sig Anon extends File {}
-// The host directories a launcher's `binds` name, and those an attach
-// ceiling allows
+// The host directories a launcher's `permissions.binds` name, and those an
+// attach ceiling allows
 sig UserBind in File {}
 sig CeilingRoot in File {}
 // Files the attacker can plant a symlink at: those under its rw binds
@@ -150,9 +150,9 @@ fact m1 {
   }
 }
 
-// The module's assertion on `binds` (hm/default.nix stateBinds): no bind
-// holds the runtime dir or a state dir, or lies in the grant or .flatpak
-// dirs, or in a state dir outside the sandbox's home, store and
+// The module's assertion on `permissions.binds` (hm/default.nix stateBinds):
+// no bind holds the runtime dir or a state dir, or lies in the grant or
+// .flatpak dirs, or in a state dir outside the sandbox's home, store and
 // scratchpad.
 pred defaultBinds {
   no UserBind & (RuntimeDir + StateDir).*up
@@ -282,8 +282,8 @@ assert S14identityNotWritable {
 }
 check S14identityNotWritable for 3 but 5 UserNS, 11 OwnedNS, 10 File, 5 Mount, 2 Grant, 8 StorePath, 0 LaterExec, 1 steps expect 0
 
-// S10 and S14 with any `binds` the module accepts: its assertion refuses
-// the paths the ceiling's denied list refuses as grant sources. Holds.
+// S10 and S14 with any `permissions.binds` the module accepts: its assertion
+// refuses the paths the ceiling's denied list refuses as grant sources. Holds.
 assert S14anyBinds {
   (world and guarded) implies
     no p: sandboxProcs | writes[p, GrantDir] or writes[p, FlatpakDir]

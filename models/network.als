@@ -44,7 +44,7 @@
  * the flows of its own sandbox. IPv6 link-local sources, DNS and ICMP
  * errors are the VM checks'.
  *
- * mDNS (N8, N9): a launcher with network.mdns loads its programs with
+ * mDNS (N8, N9): a launcher with permissions.network.mdns loads its programs with
  * the constant mdns set (netns-netkit up --mdns, bpf.go attach), and
  * registers its primary in the mdns map of sandbox-uplink. peer copies a
  * query of the sandbox out of the gateway uplink from the uplink address
@@ -114,7 +114,7 @@ fact prefixes { all a: SbxAddr | one addr.a }
 fun mdns: set Addr { MdnsQuery + MdnsProbe + MdnsResponse }
 fun group: set Addr { Mcast + mdns }
 
-// Launchers with network.mdns, their programs loaded with the constant
+// Launchers with permissions.network.mdns, their programs loaded with the constant
 // mdns (netns-netkit main.go, bpf.go attach)
 sig Mdns in Sandbox {}
 

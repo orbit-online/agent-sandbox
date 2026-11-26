@@ -73,11 +73,11 @@ let
   mdnsQuery = pkgs.writers.writePython3 "mdns-query" { flakeIgnore = [ "E501" ]; } (
     builtins.readFile ./mdns-query.py
   );
-  # The hooks (agent-sandbox.hooks of the NixOS module, network.hooks of the launcher). meshUp, a start hook with
-  # CAP_NET_ADMIN, moves a dummy mesh-<uid> into the sandbox after writing down what it got (no PATH: absolute paths),
-  # held while /tmp/hook-hold exists; it fails for the launcher work and leaves offline alone. noCaps, a start hook
-  # without capabilities, and stopHook write down what they got. meshAddr, the default launcher's network hook,
-  # addresses and routes mesh-1000
+  # The hooks (agent-sandbox.hooks of the NixOS module, permissions.network.hooks of the launcher). meshUp, a start
+  # hook with CAP_NET_ADMIN, moves a dummy mesh-<uid> into the sandbox after writing down what it got (no PATH:
+  # absolute paths), held while /tmp/hook-hold exists; it fails for the launcher work and leaves offline alone. noCaps,
+  # a start hook without capabilities, and stopHook write down what they got. meshAddr, the default launcher's network
+  # hook, addresses and routes mesh-1000
   hookRecord = ''
     {
       echo "args=$*"
@@ -168,9 +168,9 @@ let
           enable = true;
           package = stub;
           tray = true;
-          network.hooks = [ meshAddr ];
+          permissions.network.hooks.mesh = meshAddr;
           # Missing until the launch subtest creates it
-          binds."/srv/project" = { };
+          permissions.binds."/srv/project" = { };
           # Under /etc, which the FHS env doesn't take from nixpak's binds, and in the sandbox's home. Each references what
           # the sandbox lacks otherwise
           files =
@@ -181,21 +181,21 @@ let
           # Without a network, launched by the launch part
           launchers.offline = {
             package = stub;
-            network.enable = false;
+            permissions.network.enable = false;
           };
           launchers.work = {
             package = stub;
             tray = true;
-            # The sandbox without mDNS beside the default one
-            network.mdns = false;
             nameservers = [ nodes.router.networking.primaryIPAddress ];
             permissions = {
-              enable = true;
+              # The sandbox without mDNS beside the default one
+              network.mdns = false;
+              broker.enable = true;
               # Made by the test script, before the daemon's restart
-              folders = [
-                { path = "/srv/notes"; }
-                { path = "/srv/mounted"; }
-              ];
+              folders = {
+                "/srv/notes" = { };
+                "/srv/mounted" = { };
+              };
               # The host's echo socket, which the test starts as a unit of alice's
               sockets.echo = {
                 description = "a test socket";
@@ -218,18 +218,16 @@ let
                   maxValidity = "PT8H";
                 };
               };
-              grants = [
-                { capability = "test"; }
-                { capability = "echo"; }
+              # By name, which is the capability
+              grants = {
+                test = { };
+                echo = { };
                 # A port of the sandbox the host reaches from the start
-                {
-                  capability = "port";
-                  params = {
-                    protocol = "tcp";
-                    port = 8081;
-                  };
-                }
-              ];
+                port.params = {
+                  protocol = "tcp";
+                  port = 8081;
+                };
+              };
             };
           };
         })

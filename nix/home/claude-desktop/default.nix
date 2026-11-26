@@ -11,8 +11,8 @@
 # │        nix/nixos/network.nix)
 # │
 # └─ U1  bwrap's userns (0-999 → start+0-999, 1000 → 1000, 1001-65535 → start+1001-65535)
-#    │  owns: N (netns: lo + eth0, the netkit peer; lo alone with network.enable off), M1 (sandbox mount tree),
-#    │        P (pid ns), ipc, uts, cgroup (rooted at sandbox/ in the app's unit's delegated cgroup, see
+#    │  owns: N (netns: lo + eth0, the netkit peer; lo alone with permissions.network.enable off), M1 (sandbox mount
+#    │        tree), P (pid ns), ipc, uts, cgroup (rooted at sandbox/ in the app's unit's delegated cgroup, see
 #    │        cmd/launcher bwrap.go)
 #    │  runs (in N, M1, P): bwrap's init and the FHS env script as uid 1000 without capabilities
 #    │       (in N and the host's mount ns): the bwrap helper's ip call; the permissions broker's helpers, which join M1
@@ -111,7 +111,7 @@ in
                   }
                 );
                 default = { };
-                example = lib.literalExpression ''{ work.binds."''${config.home.homeDirectory}/Workspace/work".rw = true; }'';
+                example = lib.literalExpression ''{ work.permissions.binds."''${config.home.homeDirectory}/Workspace/work".rw = true; }'';
                 description = ''
                   More sandboxes next to the default one, which is always there. Each has the same options, starts from the
                   module's defaults rather than the default launcher's settings, and keeps its state in

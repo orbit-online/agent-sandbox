@@ -572,7 +572,7 @@ them, and their revert checks are that design.
   reaches the host (as P4). `revoke` deletes its flows, and `peer` passes
   a reply only while the port is in the `ports` map.
 - N8. A sandbox sends nothing to the mDNS group out but queries, and only
-  with `network.mdns`: `peer` copies a query out of the uplink of the
+  with `permissions.network.mdns`: `peer` copies a query out of the uplink of the
   `gateways` map from the uplink address and port 5353, so no response,
   announcement or probe claims a name on the LAN, and none with an
   additional section: Apple's mDNSResponder reads an EDNS0 Owner option
@@ -591,7 +591,7 @@ them, and their revert checks are that design.
   on the uplink of the `gateways` map, where its queries leave (per
   family; as N2, nothing of the subnet of another NIC, whose names and
   services it would hear otherwise), and only a sandbox with
-  `network.mdns` gets it: pre copies responses to
+  `permissions.network.mdns` gets it: pre copies responses to
   the primaries of the `mdns` map, marked, and `primary` passes them only
   when loaded with the constant `mdns`, which also covers a stale entry
   of the map whose ifindex another primary got (sandbox-uplink removes an

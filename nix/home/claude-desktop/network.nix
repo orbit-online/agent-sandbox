@@ -1,6 +1,6 @@
 # The netns of the sandbox, connected through a netkit pair whose programs let it reach the network through the einat
 # uplinks alone (netns-netkit --help, nix/nixos/network.nix), so host services, routes and abstract sockets stay out of
-# reach. With network.enable off, lo alone. Always its own netns: there is no option to share the host's
+# reach. With permissions.network.enable off, lo alone. Always its own netns: there is no option to share the host's
 {
   lib,
   pkgs,
@@ -12,6 +12,7 @@
 }:
 let
   ids = sl.idsOf launcherName;
+  net = config.permissions.network;
   # The NixOS module's hooks (nix/nixos/hooks.nix), which its sandbox-hooks wrapper runs for every launcher
   osHooks = osConfig.agent-sandbox.hooks or {
     start = [ ];
@@ -52,13 +53,15 @@ let
       )
     }"
     # Without it the netns keeps what bwrap gives it: lo, up
-    ++ lib.optional config.network.enable "--net=${
+    ++ lib.optional net.enable "--net=${
       builtins.toJSON (
         {
           netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
           nsenter = lib.getExe' pkgs.util-linux "nsenter";
           ip = lib.getExe' pkgs.iproute2 "ip";
-          inherit (config.network) mdns hooks;
+          inherit (net) mdns;
+          # In the order of their names
+          hooks = lib.attrValues net.hooks;
         }
         // lib.optionalAttrs (launcherName != null) { name = launcherName; }
       )
@@ -73,7 +76,7 @@ let
   nixpak = config.build.sandboxed.config;
 in
 {
-  options.network.enable = lib.mkOption {
+  options.permissions.network.enable = lib.mkOption {
     type = lib.types.bool;
     default = true;
     description = ''
@@ -83,10 +86,10 @@ in
     '';
   };
 
-  options.network.mdns = lib.mkOption {
+  options.permissions.network.mdns = lib.mkOption {
     type = lib.types.bool;
-    default = config.network.enable;
-    defaultText = lib.literalExpression "network.enable";
+    default = net.enable;
+    defaultText = lib.literalExpression "permissions.network.enable";
     description = ''
       mDNS (`.local` names) in the sandbox: queries go out of the uplink with the default route, from the address
       of the host and port 5353, and the responses on the LAN come in, to a querier on port 5353 in the sandbox (avahi,
@@ -95,15 +98,17 @@ in
     '';
   };
 
-  options.network.hooks = lib.mkOption {
-    type = lib.types.listOf lib.types.pathInStore;
-    default = [ ];
+  options.permissions.network.hooks = lib.mkOption {
+    type = lib.types.attrsOf lib.types.pathInStore;
+    default = { };
+    example = lib.literalExpression ''{ mesh = "''${meshAddr}"; }'';
     description = ''
-      Executables the launcher runs in the netns of the sandbox, as the owner of its user namespace (all capabilities
-      over the netns, none on the host), once `eth0` is up and the NixOS module's `agent-sandbox.hooks.start` ran,
-      before the app starts: addresses and routes for devices such a hook moved in. With an empty environment, so a
-      hook names what it runs by its store path. A hook that fails starts the sandbox
-      without what it does, after a warning on the splash. Without `network.enable` none run.
+      Executables the launcher runs in the netns of the sandbox, by a name of your choosing, as the owner of its user
+      namespace (all capabilities over the netns, none on the host), once `eth0` is up and the NixOS module's
+      `agent-sandbox.hooks.start` ran, before the app starts: addresses and routes for devices such a hook moved in.
+      They run one after the other in the order of their names (`10-mesh` before `20-routes`). With an empty
+      environment, so a hook names what it runs by its store path. A hook that fails starts the sandbox without what
+      it does, after a warning on the splash. Without `permissions.network.enable` none run.
     '';
   };
 
@@ -123,7 +128,7 @@ in
     build.storeRoots = [ bwrapHost ];
     build.launcherConfig = {
       inherit (config) nameservers;
-      network = config.network.enable;
+      network = net.enable;
       hooks = osHooks.start ++ osHooks.stop != [ ];
     };
     # Hardcoded, see netSetup. transparent: bind the host's /etc/hosts and resolv.conf (both covered in fhs.nix), no

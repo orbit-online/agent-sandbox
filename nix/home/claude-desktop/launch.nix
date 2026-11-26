@@ -49,7 +49,7 @@ let
         inherit (ids) journal sandboxJournal;
         inherit (config.build) homeDirs;
         requiredBinds = lib.mapAttrsToList (_: b: b.src) (
-          lib.filterAttrs (_: b: b.enable && !b.optional) config.binds
+          lib.filterAttrs (_: b: b.enable && !b.optional) config.permissions.binds
         );
         state = lib.getExe config.build.state;
         nixpakLauncher = lib.getExe sandboxed.config.script;

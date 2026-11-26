@@ -1,5 +1,6 @@
-# The permissions broker (docs/permissions.md): its options. permissions-broker.nix runs it, permissions-checks.nix
-# checks its declarations at eval
+# The permissions broker (docs/permissions.md): its switch and what it may grant while the sandbox runs, of the
+# launcher's `permissions` options (those that apply from the start are options.nix's, dbus.nix's and network.nix's).
+# permissions-broker.nix runs it, permissions-checks.nix checks its declarations at eval
 { lib, pkgs, ... }:
 let
   inherit (lib) mkOption types;
@@ -12,7 +13,7 @@ in
 
   options = {
     permissions = {
-      enable = mkOption {
+      broker.enable = mkOption {
         type = types.bool;
         default = false;
         description = ''
@@ -143,43 +144,57 @@ in
         '';
       };
       grants = mkOption {
-        type = types.listOf (
-          types.submodule {
-            options = {
-              capability = mkOption {
-                type = types.str;
-                description = "A capability of `permissions.commands` or `permissions.sockets`, or `port`.";
+        type = types.attrsOf (
+          types.submodule (
+            { name, ... }:
+            {
+              options = {
+                enable = mkOption {
+                  type = types.bool;
+                  default = true;
+                  description = "Give the grant.";
+                };
+                capability = mkOption {
+                  type = types.str;
+                  default = name;
+                  defaultText = lib.literalExpression "<name>";
+                  description = "A capability of `permissions.commands` or `permissions.sockets`, or `port`.";
+                };
+                params = mkOption {
+                  type = (pkgs.formats.json { }).type;
+                  default = { };
+                  description = "Its bounding arguments' values, as a request names them, each one its schema takes. A request or call with exactly these gets the grant.";
+                };
               };
-              params = mkOption {
-                type = (pkgs.formats.json { }).type;
-                default = { };
-                description = "Its bounding arguments' values, as a request names them, each one its schema takes. A request or call with exactly these gets the grant.";
-              };
-            };
-          }
+            }
+          )
         );
-        default = [ ];
-        example = lib.literalExpression ''[
-          { capability = "windows-vm"; params.vm = "win11"; }
-          { capability = "port"; params = { protocol = "tcp"; port = 3000; }; }
-        ]'';
+        default = { };
+        example = lib.literalExpression ''
+          {
+            windows-vm.params.vm = "win11";
+            dev-server = { capability = "port"; params = { protocol = "tcp"; port = 3000; }; };
+          }
+        '';
         description = ''
-          Standing grants: the broker grants them at every start, without asking, still within the capability's
-          instances (one its capability doesn't take, or one listed twice, stops the broker; an assertion catches
-          both but for a value against a `pattern`). Revoked or released, one stays ended until the
-          broker starts again. Host command calls under it run without asking, told their `maxValidity`. A `port`
-          grant (`protocol` `tcp` or `udp`, `port`) lets the host reach that port of the sandbox (over UDP only from a
-          connected socket: an unconnected `sendto` gets no reply). No folders: what should always be there is a bind
-          (`binds`).
+          Standing grants, by a name of your choosing, which is the capability unless `capability` says another: the
+          broker grants them at every start, without asking, in the order of their names, still within the
+          capability's instances (one its capability doesn't take, or two of the same capability and params, stops
+          the broker; an assertion catches both but for a value against a `pattern`). Revoked or released, one stays
+          ended until the broker starts again. Host command calls under it run without asking, told their
+          `maxValidity`. A `port` grant (`protocol` `tcp` or `udp`, `port`) lets the host reach that port of the
+          sandbox (over UDP only from a connected socket: an unconnected `sendto` gets no reply). No folders: what
+          should always be there is a bind (`permissions.binds`).
         '';
       };
       folders = mkOption {
-        type = types.listOf (
+        type = types.attrsOf (
           types.submodule {
             options = {
-              path = mkOption {
-                type = types.str;
-                description = "A host folder the sandbox may ask for, it or a folder beneath it.";
+              enable = mkOption {
+                type = types.bool;
+                default = true;
+                description = "Let the sandbox ask for the folder.";
               };
               rw = mkOption {
                 type = types.bool;
@@ -189,11 +204,12 @@ in
             };
           }
         );
-        default = [ ];
+        default = { };
+        example = lib.literalExpression ''{ "/home/alice/notes".rw = true; }'';
         description = ''
-          Host folders the sandbox may ask for while it runs, as the broker's `folders/folder` capability: each is
-          mounted under `/run/permissions` once the user allows it. Never the launchers' state directories or
-          `$XDG_RUNTIME_DIR`, nor a folder holding one.
+          Host folders the sandbox may ask for while it runs, keyed by their path, each it or a folder beneath it, as
+          the broker's `folders/folder` capability: one is mounted under `/run/permissions` once the user allows it.
+          Never the launchers' state directories or `$XDG_RUNTIME_DIR`, nor a folder holding one.
         '';
       };
     };

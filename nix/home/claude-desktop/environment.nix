@@ -43,7 +43,7 @@ let
         (
           lib.sortOn (b: b.path) (
             lib.mapAttrsToList (path: b: b // { inherit path; }) (
-              lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) config.binds
+              lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) config.permissions.binds
             )
           )
         )

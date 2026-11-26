@@ -49,7 +49,7 @@ let
   hostBind =
     rel:
     let
-      b = config.binds."${hm.home.homeDirectory}/${rel}" or null;
+      b = config.permissions.binds."${hm.home.homeDirectory}/${rel}" or null;
     in
     if b != null && b.enable then b.src else null;
   hostPath = rel: if hostBind rel != null then hostBind rel else "${ids.home}/${rel}";
@@ -85,8 +85,12 @@ let
           b.src
           b.path
         ]
-    ) (sl.byDepth (lib.filterAttrs (_: b: b.rw == rw) config.binds));
-  devices = lib.unique (lib.optional config.kvm "/dev/kvm" ++ config.devices);
+    ) (sl.byDepth (lib.filterAttrs (_: b: b.rw == rw) config.permissions.binds));
+  # By path, each once: /dev/kvm with kvm, then the enabled entries of permissions.devices by name
+  devices = lib.unique (
+    lib.optional config.kvm "/dev/kvm"
+    ++ lib.attrNames (lib.filterAttrs (_: d: d.enable) config.permissions.devices)
+  );
   # What the checks below say about a bind's or a device's source on the host, null for nothing. They read the path as
   # written, so first it has to be the one spelling of itself: absolute and clean, one trailing slash aside
   # (/run/user//, /run/./user/1000 and <state dir>/home/.. are /run/user, the runtime dir and the state dir to bwrap).
@@ -138,7 +142,9 @@ let
       "which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
     else
       null;
-  refusedBinds = lib.filterAttrs (_: b: b.enable && sourceRefusal b.src != null) config.binds;
+  refusedBinds = lib.filterAttrs (
+    _: b: b.enable && sourceRefusal b.src != null
+  ) config.permissions.binds;
   refusedDevices = lib.filter (d: sourceRefusal d != null) devices;
   # The source of a read-write bind, the scratchpad's included, that holds a bind's or a device's source, null for
   # none: the sandbox writes the directory that holds the source, so it can put a link in its place, even while it is
@@ -151,7 +157,9 @@ let
     let
       clean = src: if src == "/" then "/" else lib.removeSuffix "/" src;
       writable =
-        lib.mapAttrsToList (_: b: clean b.src) (lib.filterAttrs (_: b: b.enable && b.rw) config.binds)
+        lib.mapAttrsToList (_: b: clean b.src) (
+          lib.filterAttrs (_: b: b.enable && b.rw) config.permissions.binds
+        )
         ++ [ ids.scratchpad ];
     in
     written:
@@ -163,7 +171,7 @@ let
     else
       lib.findFirst (w: w != src && sl.holds w src) null writable;
   nestedBinds = lib.mapAttrs (_: b: b // { holder = holder b.src; }) (
-    lib.filterAttrs (_: b: b.enable && holder b.src != null) config.binds
+    lib.filterAttrs (_: b: b.enable && holder b.src != null) config.permissions.binds
   );
   nestedDevices = lib.filter (d: holder d != null) devices;
 in
@@ -195,7 +203,7 @@ in
         # the app's own checks still find GNOME in the list. Empty when the host's is unset
         XDG_CURRENT_DESKTOP = "\${XDG_CURRENT_DESKTOP:+\${XDG_CURRENT_DESKTOP/GNOME/COSMIC:GNOME}}";
       };
-    binds = {
+    permissions.binds = {
       "/sys" = sys;
       ${hm.home.homeDirectory} = sys // {
         src = ids.home;
@@ -248,20 +256,20 @@ in
       ]
       ++ lib.mapAttrsToList (path: b: {
         assertion = false;
-        message = "${ids.opt}binds.\"${path}\" binds ${b.src}, ${sourceRefusal b.src}";
+        message = "${ids.opt}permissions.binds.\"${path}\" binds ${b.src}, ${sourceRefusal b.src}";
       }) refusedBinds
       # A device is bound read-write from its own path
       ++ map (d: {
         assertion = false;
-        message = "${ids.opt}devices binds ${d}, ${sourceRefusal d}";
+        message = "${ids.opt}permissions.devices.\"${d}\", ${sourceRefusal d}";
       }) refusedDevices
       ++ lib.mapAttrsToList (path: b: {
         assertion = false;
-        message = "${ids.opt}binds.\"${path}\" binds ${b.src}, which lies beneath ${b.holder}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it";
+        message = "${ids.opt}permissions.binds.\"${path}\" binds ${b.src}, which lies beneath ${b.holder}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it";
       }) nestedBinds
       ++ map (d: {
         assertion = false;
-        message = "${ids.opt}devices binds ${d}, which lies beneath ${holder d}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it";
+        message = "${ids.opt}permissions.devices.\"${d}\", which lies beneath ${holder d}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it";
       }) nestedDevices;
 
     build.sandboxed =

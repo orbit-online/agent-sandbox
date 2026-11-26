@@ -39,8 +39,8 @@ in
     };
     # Set by fhs.nix: those units as the directory the sandbox's systemd --user loads them from
     userUnitsDir = internal types.package;
-    # Set by core.nix, fhs.nix and launch.nix: the devices bound (/dev/kvm with kvm, each once), the app in its FHS
-    # env, nixpak's build, the confined state script and the launcher's package
+    # Set by core.nix, fhs.nix and launch.nix: the devices bound (permissions.devices and /dev/kvm with kvm, each
+    # once), the app in its FHS env, nixpak's build, the confined state script and the launcher's package
     devices = internal (types.listOf types.str);
     # Where claude-desktop-state works (see core.nix)
     homeDirs = internal (types.listOf types.str);

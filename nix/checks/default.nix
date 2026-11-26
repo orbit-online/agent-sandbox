@@ -43,13 +43,13 @@ let
   enabled = {
     enable = true;
     kvm = true;
-    # /dev/kvm again, listed and bound once
-    devices = [
-      "/dev/nvidiactl"
-      "/dev/kvm"
-    ];
+    # /dev/kvm again, bound once
+    permissions.devices = {
+      "/dev/nvidiactl" = { };
+      "/dev/kvm" = { };
+    };
     extraPath = [ "/srv/bin" ];
-    binds = {
+    permissions.binds = {
       "/srv/project".rw = true;
       "/srv/docs" = { };
       "/srv/hidden".mcp = false;
@@ -68,7 +68,7 @@ let
       "agent-sandbox-test.service" = "[Service]\nType=oneshot\nExecStart=${lib.getExe pkgs.hello}";
       "agent-sandbox-test.timer" = "[Timer]\nOnActiveSec=0";
     };
-    launchers.work.binds."/srv/work".rw = true;
+    launchers.work.permissions.binds."/srv/work".rw = true;
   };
   system = nixos enabled;
   launcherNameMax = lib.toInt (
@@ -232,8 +232,10 @@ let
             agent-sandbox.claude-desktop.launchers.work = {
               memo.enable = true;
               permissions = {
-                enable = true;
-                folders = [ { path = "/srv/notes"; } ];
+                broker.enable = true;
+                folders."/srv/notes" = { };
+                # Off: not in the broker's config
+                folders."/srv/off".enable = false;
                 sockets.agent = {
                   description = "an agent";
                   path = "$XDG_RUNTIME_DIR/agent.sock";
@@ -252,20 +254,23 @@ let
                     run = [ "/srv/shot" ];
                   };
                 };
-                grants = [
-                  { capability = "agent"; }
-                  {
-                    capability = "vm";
-                    params.vm = "win11";
-                  }
-                  {
+                # By name, the capability unless it says another
+                grants = {
+                  agent = { };
+                  vm.params.vm = "win11";
+                  web = {
                     capability = "port";
                     params = {
                       protocol = "tcp";
                       port = 8081;
                     };
-                  }
-                ];
+                  };
+                  off = {
+                    enable = false;
+                    capability = "vm";
+                    params.vm = "win10";
+                  };
+                };
               };
             };
           };
@@ -490,13 +495,13 @@ let
         };
       };
     # The launchers get --hooks only with start hooks, and run the stop hooks when any hooks are there; a launcher's
-    # network.hooks reach its helper's --net, of that launcher alone
+    # permissions.network.hooks reach its helper's --net, of that launcher alone
     testLauncherHooks =
       let
         hook = lib.getExe pkgs.hello;
         sys =
           hooks:
-          (nixos (lib.recursiveUpdate enabled { network.hooks = [ hook ]; })).extendModules {
+          (nixos (lib.recursiveUpdate enabled { permissions.network.hooks.test = hook; })).extendModules {
             modules = [ { agent-sandbox.hooks = hooks; } ];
           };
         of =
@@ -542,6 +547,28 @@ let
             stop = both false true;
             start = both true true;
           };
+      };
+    # permissions.network.hooks reach the helper in the order of their names, whatever order they were written in
+    testNetworkHooksOrder =
+      let
+        first = lib.getExe pkgs.hello;
+        second = "${pkgs.coreutils}/bin/true";
+        c =
+          (nixos (
+            lib.recursiveUpdate enabled {
+              permissions.network.hooks = {
+                "20-routes" = second;
+                "10-addresses" = first;
+              };
+            }
+          )).config.home-manager.users.alice.agent-sandbox.claude-desktop;
+      in
+      {
+        expr = lib.any (
+          r:
+          lib.hasInfix (builtins.unsafeDiscardStringContext ''"hooks":["${first}","${second}"]'') (r.text or "")
+        ) c.build.storeRoots;
+        expected = true;
       };
     # systemd-networkd leaves the netkit primaries alone
     testNetworkd = {
@@ -640,11 +667,11 @@ let
         ''agent-sandbox.claude-desktop: launchers.work.nameservers must be IP addresses: "9.9.9.9", "256.1.1.1", "10.0.0.1\nsearch evil", "fd00::/64"''
       ];
     };
-    # A launcher with network.enable off: its netns without a netkit pair (no --net for the bwrap of nixpak) and no DNS
+    # A launcher with permissions.network.enable off: its netns without a netkit pair (no --net for the bwrap of nixpak) and no DNS
     # followed (the launcher config), the default launcher with both, the assertions holding
     testNetworkOff =
       let
-        sys = nixos (lib.recursiveUpdate enabled { launchers.work.network.enable = false; });
+        sys = nixos (lib.recursiveUpdate enabled { launchers.work.permissions.network.enable = false; });
         c = sys.config.home-manager.users.alice.agent-sandbox.claude-desktop;
         of = l: {
           net = lib.any (r: lib.hasInfix "'--net=" (r.text or "")) l.build.storeRoots;
@@ -675,19 +702,15 @@ let
         failedAssertions (
           nixos (
             lib.recursiveUpdate enabled {
-              launchers.work = {
+              launchers.work.permissions = {
                 network.enable = false;
-                permissions = {
-                  enable = true;
-                  grants = [
-                    {
-                      capability = "port";
-                      params = {
-                        protocol = "tcp";
-                        port = 8080;
-                      };
-                    }
-                  ];
+                broker.enable = true;
+                grants.web = {
+                  capability = "port";
+                  params = {
+                    protocol = "tcp";
+                    port = 8080;
+                  };
                 };
               };
             }
@@ -695,7 +718,7 @@ let
         )
       );
       expected = [
-        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no port grants with network.enable off, the sandbox has no network"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants.web: no port grants with permissions.network.enable off, the sandbox has no network"
       ];
     };
     testExtraPath = {
@@ -717,13 +740,14 @@ let
         failedAssertions (
           nixos (
             lib.recursiveUpdate enabled {
-              binds."/srv/local".src = "/home/alice/.local/";
-              binds."/srv/run".src = "/run/user/1000";
-              binds."/srv/sock".src = "/run/user/1000/claude-desktop/permissions-control.sock";
+              permissions.binds."/srv/local".src = "/home/alice/.local/";
+              permissions.binds."/srv/run".src = "/run/user/1000";
+              permissions.binds."/srv/sock".src = "/run/user/1000/claude-desktop/permissions-control.sock";
               # Another socket there is the user's call
-              binds."/srv/agent".src = "/run/user/1000/ssh-agent.sock";
-              launchers.work.binds."/srv/other".src = "/home/alice/.local/share/claude-desktop/home";
-              launchers.work.binds."/srv/store".src = "/home/alice/.local/share/claude-desktop-work/nix-store.id";
+              permissions.binds."/srv/agent".src = "/run/user/1000/ssh-agent.sock";
+              launchers.work.permissions.binds."/srv/other".src = "/home/alice/.local/share/claude-desktop/home";
+              launchers.work.permissions.binds."/srv/store".src =
+                "/home/alice/.local/share/claude-desktop-work/nix-store.id";
             }
           )
         )
@@ -735,11 +759,11 @@ let
             "agent-sandbox.claude-desktop: ${b}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
           )
           [
-            ''binds."/srv/local" binds /home/alice/.local/''
-            ''binds."/srv/run" binds /run/user/1000''
-            ''binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
-            ''launchers.work.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
-            ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
+            ''permissions.binds."/srv/local" binds /home/alice/.local/''
+            ''permissions.binds."/srv/run" binds /run/user/1000''
+            ''permissions.binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
+            ''launchers.work.permissions.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
+            ''launchers.work.permissions.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
           ];
     };
     # L10: no bind's source lies where the sandbox can put a link, which bwrap would follow at the next launch
@@ -749,31 +773,33 @@ let
           nixos (
             lib.recursiveUpdate enabled {
               # Beneath a read-write bind, under its own path and under another, read-only or not
-              binds."/srv/project/vendor" = { };
-              binds."/srv/elsewhere" = {
+              permissions.binds."/srv/project/vendor" = { };
+              permissions.binds."/srv/elsewhere" = {
                 src = "/srv/project/secrets/";
                 rw = true;
               };
               # Beneath the sandbox's home and its scratchpad, which it writes as well
-              binds."/srv/own".src = "/home/alice/.local/share/claude-desktop/home/notes";
-              binds."/srv/scratch".src = "/home/alice/.local/share/claude-desktop/tmp-scratchpad/x";
+              permissions.binds."/srv/own".src = "/home/alice/.local/share/claude-desktop/home/notes";
+              permissions.binds."/srv/scratch".src = "/home/alice/.local/share/claude-desktop/tmp-scratchpad/x";
               # A device beneath a read-write bind, and one that isn't
-              devices = [
-                "/srv/project/dev/node"
-                "/dev/fuse"
-              ];
+              permissions.devices = {
+                "/srv/project/dev/node" = { };
+                "/dev/fuse" = { };
+                # Not bound
+                "/srv/project/dev/off".enable = false;
+              };
               # Fine: beneath a read-only bind, the same source as a read-write one, one that merely starts like it,
               # beneath one that is off, and beneath another launcher's read-write bind
-              binds."/srv/docs/api" = { };
-              binds."/srv/again".src = "/srv/project";
-              binds."/srv/project-old" = { };
-              binds."/srv/off" = {
+              permissions.binds."/srv/docs/api" = { };
+              permissions.binds."/srv/again".src = "/srv/project";
+              permissions.binds."/srv/project-old" = { };
+              permissions.binds."/srv/off" = {
                 enable = false;
                 rw = true;
               };
-              binds."/srv/off/inner" = { };
-              binds."/srv/work/inner" = { };
-              launchers.work.binds."/srv/project/inner" = { };
+              permissions.binds."/srv/off/inner" = { };
+              permissions.binds."/srv/work/inner" = { };
+              launchers.work.permissions.binds."/srv/project/inner" = { };
             }
           )
         )
@@ -782,11 +808,11 @@ let
         b:
         "agent-sandbox.claude-desktop: ${b}, a directory the sandbox writes: it can put a link in its place, which the next launch would follow to anything you reach. Bind it from somewhere the sandbox can't write, or leave it to the bind that holds it"
       ) [
-        ''binds."/srv/elsewhere" binds /srv/project/secrets/, which lies beneath /srv/project''
-        ''binds."/srv/own" binds /home/alice/.local/share/claude-desktop/home/notes, which lies beneath /home/alice/.local/share/claude-desktop/home''
-        ''binds."/srv/project/vendor" binds /srv/project/vendor, which lies beneath /srv/project''
-        ''binds."/srv/scratch" binds /home/alice/.local/share/claude-desktop/tmp-scratchpad/x, which lies beneath /home/alice/.local/share/claude-desktop/tmp-scratchpad''
-        "devices binds /srv/project/dev/node, which lies beneath /srv/project"
+        ''permissions.binds."/srv/elsewhere" binds /srv/project/secrets/, which lies beneath /srv/project''
+        ''permissions.binds."/srv/own" binds /home/alice/.local/share/claude-desktop/home/notes, which lies beneath /home/alice/.local/share/claude-desktop/home''
+        ''permissions.binds."/srv/project/vendor" binds /srv/project/vendor, which lies beneath /srv/project''
+        ''permissions.binds."/srv/scratch" binds /home/alice/.local/share/claude-desktop/tmp-scratchpad/x, which lies beneath /home/alice/.local/share/claude-desktop/tmp-scratchpad''
+        ''permissions.devices."/srv/project/dev/node", which lies beneath /srv/project''
       ];
     };
     testUnitsOwnNames = {
@@ -870,7 +896,7 @@ let
     testLauncherNameSockets =
       let
         name = lib.fixedWidthString launcherNameMax "a" "w";
-        sys = nixos (enabled // { launchers.${name}.permissions.enable = true; });
+        sys = nixos (enabled // { launchers.${name}.permissions.broker.enable = true; });
         cfg =
           sys.config.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.${name}.build.launcherConfig;
         runtime = "/run/user/4294967294/claude-desktop";
@@ -942,19 +968,18 @@ let
         let
           c =
             (nixos (
-              enabled
-              // {
+              lib.recursiveUpdate enabled {
                 tray = true;
-                dbus."org.freedesktop.portal.Desktop".call = [ "org.freedesktop.portal.Email.*" ];
+                permissions.bus."org.freedesktop.portal.Desktop".call = [ "org.freedesktop.portal.Email.*" ];
                 launchers.work.tray = true;
               }
             )).config.home-manager.users.alice.agent-sandbox.claude-desktop;
         in
         {
-          default = lib.attrNames c.dbus;
-          work = lib.attrNames c.launchers.work.dbus;
-          portal = lib.length c.dbus."org.freedesktop.portal.Desktop".call;
-          workPortal = lib.length c.launchers.work.dbus."org.freedesktop.portal.Desktop".call;
+          default = lib.attrNames c.permissions.bus;
+          work = lib.attrNames c.launchers.work.permissions.bus;
+          portal = lib.length c.permissions.bus."org.freedesktop.portal.Desktop".call;
+          workPortal = lib.length c.launchers.work.permissions.bus."org.freedesktop.portal.Desktop".call;
         };
       expected = {
         default = [
@@ -976,10 +1001,9 @@ let
       expr = map (a: a.message) (
         failedAssertions (
           nixos (
-            enabled
-            // {
+            lib.recursiveUpdate enabled {
               sandbox.dbus.policies."org.test.A" = "talk";
-              dbus = {
+              permissions.bus = {
                 "org.test.*".policy = "see";
                 "org.freedesktop.DBus".policy = "talk";
                 "org.test.Empty" = { };
@@ -991,13 +1015,13 @@ let
         )
       );
       expected = [
-        "agent-sandbox.claude-desktop: sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in dbus"
+        "agent-sandbox.claude-desktop: sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in permissions.bus"
       ]
       ++
         map
           (
             n:
-            "agent-sandbox.claude-desktop: dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version"
+            "agent-sandbox.claude-desktop: permissions.bus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version"
           )
           [
             "org.freedesktop.DBus"
@@ -1005,7 +1029,7 @@ let
             "org.test.Empty"
           ]
       ++ [
-        "agent-sandbox.claude-desktop: launchers.work.sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in launchers.work.dbus"
+        "agent-sandbox.claude-desktop: launchers.work.sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in launchers.work.permissions.bus"
       ];
     };
     # The proxy's rule syntax and caps, at eval: a rule it refuses or a config past its caps fails here, not at launch.
@@ -1014,9 +1038,8 @@ let
       expr = map (a: lib.head (lib.splitString "; it has" a.message)) (
         failedAssertions (
           nixos (
-            enabled
-            // {
-              dbus = {
+            lib.recursiveUpdate enabled {
+              permissions.bus = {
                 "org.test.Good" = {
                   call = [
                     "*"
@@ -1073,9 +1096,9 @@ let
                 "org.test.Big".call = [ "@/${lib.strings.replicate (64 * 1024) "a"}" ];
               };
               # With the portal's, 65 names; the default launcher's 64 above and its own
-              launchers.work.dbus = lib.genAttrs (map (i: "org.test.N${toString i}") (lib.range 1 64)) (_: {
-                policy = "see";
-              });
+              launchers.work.permissions.bus = lib.genAttrs (map (i: "org.test.N${toString i}") (lib.range 1 64)) (
+                _: { policy = "see"; }
+              );
             }
           )
         )
@@ -1085,11 +1108,11 @@ let
           rules = "at most 64 call and 64 broadcast rules, each [METHOD][@PATH], and 64 versions, each IFACE@PATH, as dbus-proxy --help says";
         in
         [
-          ''agent-sandbox.claude-desktop: dbus."org.test.Bad": ${rules}, not "", "@", "org.test.I.M@", "@//*", "@/a/", "@/a/*/b", "org.test.I.M@/a@/b", "Iface.*", "org.test..M", "org.test.I.9M", "org.test.I.M-x", " *", "org.test.I.${lib.strings.replicate 256 "m"}", "*.Get", "I@/a", "org.test.I", "org.test.I.*@/a", "org.test.I@", "org.test.I@/a/", "org.test.I@/a/*"''
-          ''agent-sandbox.claude-desktop: dbus."org.test.Many": ${rules}''
-          ''agent-sandbox.claude-desktop: dbus."org.test.ManyVersions": ${rules}''
-          "agent-sandbox.claude-desktop: dbus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
-          "agent-sandbox.claude-desktop: launchers.work.dbus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
+          ''agent-sandbox.claude-desktop: permissions.bus."org.test.Bad": ${rules}, not "", "@", "org.test.I.M@", "@//*", "@/a/", "@/a/*/b", "org.test.I.M@/a@/b", "Iface.*", "org.test..M", "org.test.I.9M", "org.test.I.M-x", " *", "org.test.I.${lib.strings.replicate 256 "m"}", "*.Get", "I@/a", "org.test.I", "org.test.I.*@/a", "org.test.I@", "org.test.I@/a/", "org.test.I@/a/*"''
+          ''agent-sandbox.claude-desktop: permissions.bus."org.test.Many": ${rules}''
+          ''agent-sandbox.claude-desktop: permissions.bus."org.test.ManyVersions": ${rules}''
+          "agent-sandbox.claude-desktop: permissions.bus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
+          "agent-sandbox.claude-desktop: launchers.work.permissions.bus: at most 64 names and 65536 bytes of JSON, the D-Bus proxy's caps"
         ];
     };
     # Each app gets a pid of its own, so their tray items don't clash on the session bus
@@ -1159,16 +1182,17 @@ let
       ];
     };
     # Standing grants only with the broker, of a host command or host socket it has or a port, never of folders; a port's
-    # params as the broker takes them, and no host socket or command named after the port capability
+    # params as the broker takes them, and no host socket or command named after the port capability. Each names its
+    # entry; one that is off is left alone
     testStandingGrants = {
       expr = map (a: a.message) (
         failedAssertions (
           nixos (
             lib.recursiveUpdate enabled {
-              permissions.grants = [ { capability = "vm"; } ];
+              permissions.grants.vm = { };
               launchers.work.permissions = {
-                enable = true;
-                folders = [ { path = "/srv/notes"; } ];
+                broker.enable = true;
+                folders."/srv/notes" = { };
                 sockets.agent = {
                   description = "an agent";
                   path = "/srv/agent.sock";
@@ -1177,69 +1201,152 @@ let
                   description = "a socket named port";
                   path = "/srv/port.sock";
                 };
-                grants = [
-                  {
+                grants = {
+                  folder = {
                     capability = "folders/folder";
                     params.path = "/srv/notes";
-                  }
-                  { capability = "none"; }
-                  { capability = "agent"; }
-                  {
+                  };
+                  none = { };
+                  agent = { };
+                  # Not given: nothing of it is checked
+                  off = {
+                    enable = false;
+                    capability = "nothing";
+                  };
+                  port-max = {
                     capability = "port";
                     params = {
                       protocol = "tcp";
                       port = 65535;
                     };
-                  }
-                  {
+                  };
+                  port-sctp = {
                     capability = "port";
                     params = {
                       protocol = "sctp";
                       port = 80;
                     };
-                  }
-                  {
+                  };
+                  port-zero = {
                     capability = "port";
                     params = {
                       protocol = "udp";
                       port = 0;
                     };
-                  }
-                  {
+                  };
+                  port-over = {
                     capability = "port";
                     params = {
                       protocol = "udp";
                       port = 65536;
                     };
-                  }
-                  {
+                  };
+                  port-missing = {
                     capability = "port";
                     params.protocol = "tcp";
-                  }
-                  {
+                  };
+                  port-string = {
                     capability = "port";
                     params = {
                       protocol = "tcp";
                       port = "80";
                     };
-                  }
-                ];
+                  };
+                };
               };
             }
           )
         )
       );
       expected = [
-        "agent-sandbox.claude-desktop: permissions.grants needs permissions.enable"
-        "agent-sandbox.claude-desktop: permissions.grants: no capability vm in permissions.commands or permissions.sockets"
-        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: folders get no standing grants, a folder that should always be there is a bind (binds)"
-        "agent-sandbox.claude-desktop: launchers.work.permissions.grants: no capability none in permissions.commands or permissions.sockets"
+        "agent-sandbox.claude-desktop: permissions.grants needs permissions.broker.enable"
+        "agent-sandbox.claude-desktop: permissions.grants.vm: no capability vm in permissions.commands or permissions.sockets"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants.folder: folders get no standing grants, a folder that should always be there is a bind (permissions.binds)"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.grants.none: no capability none in permissions.commands or permissions.sockets"
       ]
-      ++ lib.replicate 5 "agent-sandbox.claude-desktop: launchers.work.permissions.grants: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)"
+      ++
+        map
+          (
+            n:
+            "agent-sandbox.claude-desktop: launchers.work.permissions.grants.${n}: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)"
+          )
+          [
+            "port-missing"
+            "port-over"
+            "port-sctp"
+            "port-string"
+            "port-zero"
+          ]
       ++ [
         "agent-sandbox.claude-desktop: launchers.work.permissions: port is a capability built into the broker, not a host command or host socket name"
       ];
     };
+    # What the broker's config gets of the attrsets: the folders by path and the standing grants by name, in that order
+    # and without the ones that are off, a grant's capability its name unless it says another
+    testBrokerConfig =
+      let
+        c =
+          (nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                broker.enable = true;
+                folders = {
+                  "/srv/notes" = { };
+                  "/srv/more".rw = true;
+                  "/srv/off".enable = false;
+                };
+                sockets.agent = {
+                  description = "an agent";
+                  path = "/srv/agent.sock";
+                };
+                grants = {
+                  web = {
+                    capability = "port";
+                    params = {
+                      protocol = "tcp";
+                      port = 8080;
+                    };
+                  };
+                  agent = { };
+                  off = {
+                    enable = false;
+                    capability = "agent";
+                  };
+                };
+              };
+            }
+          )).config.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.work.build.permissionsConfig;
+      in
+      {
+        expr = {
+          inherit (c) folders grants;
+        };
+        expected = {
+          folders = [
+            {
+              path = "/srv/more";
+              rw = true;
+            }
+            {
+              path = "/srv/notes";
+              rw = false;
+            }
+          ];
+          grants = [
+            {
+              capability = "agent";
+              params = { };
+            }
+            {
+              capability = "port";
+              params = {
+                protocol = "tcp";
+                port = 8080;
+              };
+            }
+          ];
+        };
+      };
     # Host sockets the broker would refuse, caught at eval: a bad name or one host commands have, neither or both of a
     # path and an instances glob, a D-Bus bus, $XDG_RUNTIME_DIR as a whole and the launchers' own sockets
     testSocketAssertions = {
@@ -1248,7 +1355,7 @@ let
           nixos (
             lib.recursiveUpdate enabled {
               launchers.work.permissions = {
-                enable = true;
+                broker.enable = true;
                 commands.vm = {
                   description = "a VM";
                   consent.title = "use the VM";
@@ -1396,7 +1503,7 @@ let
           nixos (
             lib.recursiveUpdate enabled {
               launchers.work.permissions = {
-                enable = true;
+                broker.enable = true;
                 commands.a_b = {
                   description = "bad name";
                   consent.title = "use it";
@@ -1501,19 +1608,19 @@ let
         failedAssertions (
           nixos (
             lib.recursiveUpdate enabled {
-              binds."/srv/a".src = "/run/user//";
-              binds."/srv/b".src = "/run/./user/1000";
-              binds."/srv/c".src = "//run/user/1000";
-              binds."/srv/d".src = "/home/alice/.local/share/claude-desktop/home/..";
-              binds."/srv/e".src = "/home/alice/.local//share/claude-desktop-work";
-              binds."/srv/f".src = ".local/share/claude-desktop-work";
-              binds."/srv/g".src = "/var/run/user/1000";
-              binds."/srv/h".src = "/proc/self/root/run/user/1000";
-              binds."/srv/i".src = "/proc";
+              permissions.binds."/srv/a".src = "/run/user//";
+              permissions.binds."/srv/b".src = "/run/./user/1000";
+              permissions.binds."/srv/c".src = "//run/user/1000";
+              permissions.binds."/srv/d".src = "/home/alice/.local/share/claude-desktop/home/..";
+              permissions.binds."/srv/e".src = "/home/alice/.local//share/claude-desktop-work";
+              permissions.binds."/srv/f".src = ".local/share/claude-desktop-work";
+              permissions.binds."/srv/g".src = "/var/run/user/1000";
+              permissions.binds."/srv/h".src = "/proc/self/root/run/user/1000";
+              permissions.binds."/srv/i".src = "/proc";
               # Clean but for its slash, and nothing no sandbox may reach
-              binds."/srv/ok".src = "/srv/ok/";
+              permissions.binds."/srv/ok".src = "/srv/ok/";
               # Not bound
-              binds."/srv/off" = {
+              permissions.binds."/srv/off" = {
                 src = "/run/user//";
                 enable = false;
               };
@@ -1525,7 +1632,7 @@ let
         map
           (
             b:
-            "agent-sandbox.claude-desktop: binds.${b}, which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written"
+            "agent-sandbox.claude-desktop: permissions.binds.${b}, which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written"
           )
           [
             ''"/srv/a" binds /run/user//''
@@ -1539,7 +1646,7 @@ let
           map
             (
               b:
-              "agent-sandbox.claude-desktop: binds.${b}, which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
+              "agent-sandbox.claude-desktop: permissions.binds.${b}, which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
             )
             [
               ''"/srv/g" binds /var/run/user/1000''
@@ -1552,24 +1659,25 @@ let
       expr = map (a: a.message) (
         failedAssertions (
           nixos (
-            enabled
-            // {
-              devices = [
-                "/dev/nvidiactl"
-                "/run/user/1000"
-                "/home/alice/.local/share/claude-desktop-work"
-                "/dev/../run/user/1000"
-                "/proc/1/root"
-              ];
+            lib.recursiveUpdate enabled {
+              permissions.devices = {
+                "/dev/nvidiactl" = { };
+                "/run/user/1000" = { };
+                "/home/alice/.local/share/claude-desktop-work" = { };
+                "/dev/../run/user/1000" = { };
+                "/proc/1/root" = { };
+                # Not bound
+                "/run/user/1001".enable = false;
+              };
             }
           )
         )
       );
       expected = [
-        "agent-sandbox.claude-desktop: devices binds /run/user/1000, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
-        "agent-sandbox.claude-desktop: devices binds /home/alice/.local/share/claude-desktop-work, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
-        "agent-sandbox.claude-desktop: devices binds /dev/../run/user/1000, which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written"
-        "agent-sandbox.claude-desktop: devices binds /proc/1/root, which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
+        ''agent-sandbox.claude-desktop: permissions.devices."/dev/../run/user/1000", which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written''
+        ''agent-sandbox.claude-desktop: permissions.devices."/home/alice/.local/share/claude-desktop-work", which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those''
+        ''agent-sandbox.claude-desktop: permissions.devices."/proc/1/root", which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those''
+        ''agent-sandbox.claude-desktop: permissions.devices."/run/user/1000", which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those''
       ];
     };
     # A schema keyword the broker doesn't read (its schema package decodes leniently) would load and restrict nothing:
@@ -1580,7 +1688,7 @@ let
           nixos (
             lib.recursiveUpdate enabled {
               launchers.work.permissions = {
-                enable = true;
+                broker.enable = true;
                 commands.vm = {
                   description = "a VM";
                   consent.title = "use the VM";
@@ -1700,7 +1808,7 @@ let
           nixos (
             lib.recursiveUpdate enabled {
               launchers.work.permissions = {
-                enable = true;
+                broker.enable = true;
                 sockets =
                   lib.mapAttrs
                     (_: instances: {
@@ -1765,7 +1873,7 @@ let
           nixos (
             lib.recursiveUpdate enabled {
               launchers.work.permissions = {
-                enable = true;
+                broker.enable = true;
                 commands =
                   lib.mapAttrs
                     (
@@ -1832,14 +1940,14 @@ let
     };
     # Standing grants the daemon refuses at its start (checkStanding), caught at eval: a parameter the capability
     # doesn't take, a value its bounding argument doesn't (type, enum, bounds, length; a pattern is the daemon's to
-    # match), params that are no object, and one listed twice
+    # match), params that are no object, and one given twice, under two names
     testStandingGrantParams = {
       expr = map (a: a.message) (
         failedAssertions (
           nixos (
             lib.recursiveUpdate enabled {
               launchers.work.permissions = {
-                enable = true;
+                broker.enable = true;
                 commands.vm = {
                   description = "a VM";
                   consent.title = "use the VM";
@@ -1874,80 +1982,89 @@ let
                   description = "an agent";
                   path = "/srv/agent.sock";
                 };
-                grants = [
-                  {
+                grants = {
+                  vm-ok = {
                     capability = "vm";
                     params = {
                       vm = "win11";
                       screen = 3;
                       label = "æøå!";
                     };
-                  }
+                  };
                   # A bounding argument left out is a value of its own
-                  { capability = "vm"; }
-                  { capability = "agent"; }
-                  {
+                  vm = { };
+                  agent = { };
+                  vm-host = {
                     capability = "vm";
                     params.host = "desktop";
-                  }
-                  {
+                  };
+                  vm-range = {
                     capability = "vm";
                     params = {
                       vm = "win7";
                       screen = 4;
                       label = "label";
                     };
-                  }
-                  {
+                  };
+                  vm-types = {
                     capability = "vm";
                     params = {
                       vm = 11;
                       screen = "0";
                       label = "a\nb";
                     };
-                  }
-                  {
+                  };
+                  vm-list = {
                     capability = "vm";
                     params = [ "win11" ];
-                  }
-                  {
+                  };
+                  agent-param = {
                     capability = "agent";
                     params.socket = "other";
-                  }
-                  { capability = "agent"; }
-                  {
+                  };
+                  # The same grant under another name, twice over
+                  agent-again.capability = "agent";
+                  port = {
+                    params = {
+                      protocol = "tcp";
+                      port = 3000;
+                    };
+                  };
+                  port-again = {
+                    capability = "port";
+                    params = {
+                      port = 3000;
+                      protocol = "tcp";
+                    };
+                  };
+                  # Off: the same grant once more, and not counted
+                  port-off = {
+                    enable = false;
                     capability = "port";
                     params = {
                       protocol = "tcp";
                       port = 3000;
                     };
-                  }
-                  {
-                    capability = "port";
-                    params = {
-                      port = 3000;
-                      protocol = "tcp";
-                    };
-                  }
-                  {
+                  };
+                  port-string = {
                     capability = "port";
                     params = "tcp/3000";
-                  }
-                ];
+                  };
+                };
               };
             }
           )
         )
       );
-      expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.grants: ${m}") [
-        "the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not host"
-        "the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not label, screen, vm"
-        "the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not label, screen, vm"
-        ''the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not ["win11"]''
-        "the params of a agent grant are values of its bounding arguments (), each one its schema takes, not socket"
-        "the params of a port grant are protocol (tcp or udp) and port (1 to 65535)"
-        "agent {} is listed 2 times"
-        ''port {"port":3000,"protocol":"tcp"} is listed 2 times''
+      expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.grants${m}") [
+        ".agent-param: the params of a agent grant are values of its bounding arguments (), each one its schema takes, not socket"
+        ".port-string: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)"
+        ".vm-host: the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not host"
+        ''.vm-list: the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not ["win11"]''
+        ".vm-range: the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not label, screen, vm"
+        ".vm-types: the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not label, screen, vm"
+        ": agent, agent-again are the same grant, agent {}, which the broker takes only once"
+        '': port, port-again are the same grant, port {"port":3000,"protocol":"tcp"}, which the broker takes only once''
       ];
     };
     testMcpServersHmTransform = {

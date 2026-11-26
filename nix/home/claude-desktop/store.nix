@@ -76,7 +76,7 @@ in
   options.scratchpadPrune.frequency = frequency "daily" "How often to prune Claude Code's session scratchpads";
   config = {
     env.NIX_CONF_DIR = "${sl.nixConf}";
-    binds = {
+    permissions.binds = {
       "/nix" = sys // {
         src = "${ids.stateDir}/nix";
         rw = true;

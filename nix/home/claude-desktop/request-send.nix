@@ -1,4 +1,5 @@
-# request-send as host commands of the permissions broker: `permissions.request-send` on every launcher. Enabled, it declares the capabilities request-send, which sends GET requests, and
+# request-send as host commands of the permissions broker: `permissions.request-send` on every launcher. Enabled, it
+# declares the capabilities request-send, which sends GET requests, and
 # request-send-write, which sends GET and POST requests, in that launcher's `permissions.commands`, each to the
 # configured origins through their proxies
 {
@@ -135,8 +136,8 @@ in
     );
     build.assertions = [
       {
-        assertion = !config.permissions.request-send.enable || config.permissions.enable;
-        message = "${(sl.idsOf launcherName).opt}permissions.request-send needs permissions.enable";
+        assertion = !config.permissions.request-send.enable || config.permissions.broker.enable;
+        message = "${(sl.idsOf launcherName).opt}permissions.request-send needs permissions.broker.enable";
       }
     ];
   };

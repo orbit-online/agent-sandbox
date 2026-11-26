@@ -86,85 +86,96 @@ let
       -> (a ? minimum -> v >= a.minimum) && (a ? maximum -> v <= a.maximum)
     )
     && (a ? enum -> lib.elem v a.enum);
-  grants = map (g: { inherit (g) capability params; }) config.permissions.grants;
+  # The standing grants that are on, by name
+  grants = lib.filterAttrs (_: g: g.enable) config.permissions.grants;
+  # The names of those with the capability and params of g, which the broker takes for one grant listed twice
+  same =
+    g:
+    lib.attrNames (lib.filterAttrs (_: o: o.capability == g.capability && o.params == g.params) grants);
 in
 {
   build.assertions =
-    lib.optional (config.permissions.grants != [ ]) {
-      assertion = config.permissions.enable;
-      message = "${opt} needs permissions.enable";
+    lib.optional (grants != { }) {
+      assertion = config.permissions.broker.enable;
+      message = "${opt} needs permissions.broker.enable";
     }
-    ++ lib.concatMap (
-      g:
-      let
-        declared =
-          config.permissions.commands.${g.capability} or config.permissions.sockets.${g.capability} or null;
-        bounding = if declared == null then { } else declared.bounding;
-        params = if lib.isAttrs g.params then g.params else { };
-        undeclared = lib.filter (k: !(bounding ? ${k})) (lib.attrNames params);
-        badValues = lib.filter (k: bounding ? ${k} && !valueOk bounding.${k} params.${k}) (
-          lib.attrNames params
-        );
-      in
-      if g.capability == "folders/folder" then
-        [
-          {
-            assertion = false;
-            message = "${opt}: folders get no standing grants, a folder that should always be there is a bind (binds)";
-          }
-        ]
-      else if g.capability == "port" && !config.network.enable then
-        [
-          {
-            assertion = false;
-            message = "${opt}: no port grants with network.enable off, the sandbox has no network";
-          }
-        ]
-      else if g.capability == "port" then
-        [
-          {
-            # As the schema of the port capability in the broker (ports.go)
-            assertion =
-              lib.isAttrs g.params
-              &&
-                lib.attrNames g.params == [
-                  "port"
-                  "protocol"
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        name: g:
+        let
+          gopt = "${opt}.${name}";
+          declared =
+            config.permissions.commands.${g.capability} or config.permissions.sockets.${g.capability} or null;
+          bounding = if declared == null then { } else declared.bounding;
+          params = if lib.isAttrs g.params then g.params else { };
+          undeclared = lib.filter (k: !(bounding ? ${k})) (lib.attrNames params);
+          badValues = lib.filter (k: bounding ? ${k} && !valueOk bounding.${k} params.${k}) (
+            lib.attrNames params
+          );
+        in
+        if g.capability == "folders/folder" then
+          [
+            {
+              assertion = false;
+              message = "${gopt}: folders get no standing grants, a folder that should always be there is a bind (permissions.binds)";
+            }
+          ]
+        else if g.capability == "port" && !config.permissions.network.enable then
+          [
+            {
+              assertion = false;
+              message = "${gopt}: no port grants with permissions.network.enable off, the sandbox has no network";
+            }
+          ]
+        else if g.capability == "port" then
+          [
+            {
+              # As the schema of the port capability in the broker (ports.go)
+              assertion =
+                lib.isAttrs g.params
+                &&
+                  lib.attrNames g.params == [
+                    "port"
+                    "protocol"
+                  ]
+                && lib.elem g.params.protocol [
+                  "tcp"
+                  "udp"
                 ]
-              && lib.elem g.params.protocol [
-                "tcp"
-                "udp"
-              ]
-              && lib.isInt g.params.port
-              && g.params.port >= 1
-              && g.params.port <= 65535;
-            message = "${opt}: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)";
-          }
-        ]
-      else
-        [
-          {
-            assertion = declared != null;
-            message = "${opt}: no capability ${g.capability} in permissions.commands or permissions.sockets";
-          }
-          {
-            # As the broker's checkStanding: bounding values it doesn't take are a config error, and it doesn't start
-            assertion = declared == null || lib.isAttrs g.params && undeclared == [ ] && badValues == [ ];
-            message = "${opt}: the params of a ${g.capability} grant are values of its bounding arguments (${lib.concatStringsSep ", " (lib.attrNames bounding)}), each one its schema takes, not ${
-              lib.concatStringsSep ", " (
-                if lib.isAttrs g.params then undeclared ++ badValues else [ (builtins.toJSON g.params) ]
-              )
-            }";
-          }
-        ]
-    ) config.permissions.grants
-    # One listed twice stops the broker too
-    ++ map (g: {
-      assertion = lib.count (o: o == g) grants == 1;
-      message = "${opt}: ${g.capability} ${builtins.toJSON g.params} is listed ${
-        toString (lib.count (o: o == g) grants)
-      } times";
-    }) (lib.unique grants)
+                && lib.isInt g.params.port
+                && g.params.port >= 1
+                && g.params.port <= 65535;
+              message = "${gopt}: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)";
+            }
+          ]
+        else
+          [
+            {
+              assertion = declared != null;
+              message = "${gopt}: no capability ${g.capability} in permissions.commands or permissions.sockets";
+            }
+            {
+              # As the broker's checkStanding: bounding values it doesn't take are a config error, and it doesn't start
+              assertion = declared == null || lib.isAttrs g.params && undeclared == [ ] && badValues == [ ];
+              message = "${gopt}: the params of a ${g.capability} grant are values of its bounding arguments (${lib.concatStringsSep ", " (lib.attrNames bounding)}), each one its schema takes, not ${
+                lib.concatStringsSep ", " (
+                  if lib.isAttrs g.params then undeclared ++ badValues else [ (builtins.toJSON g.params) ]
+                )
+              }";
+            }
+          ]
+      ) grants
+    )
+    # Two of the same capability and params stop the broker too: once for each such group, at its first name
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        name: g:
+        lib.optional (lib.length (same g) > 1 && lib.head (same g) == name) {
+          assertion = false;
+          message = "${opt}: ${lib.concatStringsSep ", " (same g)} are the same grant, ${g.capability} ${builtins.toJSON g.params}, which the broker takes only once";
+        }
+      ) grants
+    )
     # The capability of that name built into the broker
     ++ [
       {

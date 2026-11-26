@@ -48,7 +48,7 @@ Import both modules and enable the Home Manager one per user:
   home-manager.users.alice.agent-sandbox.claude-desktop = {
     enable = true;
     # Keyed by the path in the sandbox, `src` is the host path (default: the same)
-    binds."/home/alice/src/project".rw = true;
+    permissions.binds."/home/alice/src/project".rw = true;
   };
 }
 ```
@@ -65,12 +65,19 @@ them yourself:
 agent-sandbox.network.uplinks = [ "enp3s0" "wlan0" ];
 ```
 
+What a launcher reaches outside the sandbox is set under `permissions`. From the start: `permissions.binds`,
+`permissions.devices` (device nodes, by path), `permissions.bus` (names on the session bus, through the D-Bus proxy),
+`permissions.network.enable` (off: a netns with `lo` alone, for local models), `permissions.network.mdns` (`.local`
+names; on with the network) and `permissions.network.hooks` (executables run in the netns at launch, by name and in
+that order). On request, through the broker (see Permissions): `permissions.commands`, `permissions.sockets`,
+`permissions.folders` and `permissions.grants`. Each is an attrset, so one entry can be overridden or turned off
+(`permissions.binds."/srv/x".enable = false`).
+
 Other options: `extraPath` (directories ahead of the PATH packages),
-`nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager), `network.enable`
-(off: a netns with `lo` alone, for local models), `network.mdns` (`.local` names; on with the network),
+`nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager),
 `environmentFile` (your own version of
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
-(appended to it), `env`, `path`, `units` (of the sandbox's `systemd --user`), `kvm`, `devices`, `audio`, `tray`, `splash` (see Launching) and
+(appended to it), `env`, `path`, `units` (of the sandbox's `systemd --user`), `kvm`, `audio`, `tray`, `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in
 [`nix/home/claude-desktop/`](nix/home/claude-desktop/), the general ones in
 [`options.nix`](nix/home/claude-desktop/options.nix).
@@ -105,7 +112,7 @@ The app gets the sandbox's own two (`filesystem` for the binds with `mcp`, and
 [`programs.mcp.servers`](https://nix-community.github.io/home-manager/options.xhtml#opt-programs.mcp.servers)
 when `programs.mcp.enable` is on, in every launcher. They run inside the
 sandbox, so what a server needs from the host (a socket directory, its config
-file) goes in `binds` or `files`. Only local servers (`command`) work.
+file) goes in `permissions.binds` or `files`. Only local servers (`command`) work.
 
 ## Shell in the sandbox
 
@@ -118,7 +125,7 @@ starts it first.
 
 ## Permissions
 
-With `permissions.enable`, a launcher runs a broker on the host that grants
+With `permissions.broker.enable`, a launcher runs a broker on the host that grants
 the sandbox more while it runs: a folder (`permissions.folders`), a host
 socket at a stable address (`permissions.sockets`), declared commands run on
 the host (`permissions.commands`) or, with a network, a port of the sandbox
@@ -153,14 +160,14 @@ its own.
 
 ```nix
 agent-sandbox.claude-desktop.permissions = {
-  enable = true;
+  broker.enable = true;
   request-send = {
     enable = true;
     # Through the host's kmsproxy, which presents your client certificate and re-signs the origin's with its CA
     origins."https://helpdesk.example.com" = { proxy = "https://localhost:8090"; ca = "/var/lib/local-ca/ca.crt"; };
   };
-  # Reads without asking; writes still ask, once or for a lease
-  grants = [ { capability = "request-send"; params.origin = "https://helpdesk.example.com"; } ];
+  # Reads without asking; writes still ask, once or for a lease. By name, which is the capability unless it says another
+  grants.request-send.params.origin = "https://helpdesk.example.com";
 };
 ```
 

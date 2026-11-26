@@ -40,7 +40,7 @@ let
   rs = alice {
     enable = true;
     permissions = {
-      enable = true;
+      broker.enable = true;
       request-send = {
         enable = true;
         origins = {
@@ -56,7 +56,7 @@ let
       };
     };
     launchers.work.permissions = {
-      enable = true;
+      broker.enable = true;
       request-send = {
         enable = true;
         origins."https://helpdesk.example.com:8443" = {
@@ -65,7 +65,7 @@ let
         };
       };
     };
-    launchers.plain.permissions.enable = true;
+    launchers.plain.permissions.broker.enable = true;
   };
   cd = rs.agent-sandbox.claude-desktop;
   broken = brokerConfig (
@@ -80,7 +80,7 @@ let
   withOrigins = origins: {
     enable = true;
     permissions = {
-      enable = true;
+      broker.enable = true;
       request-send = {
         enable = true;
         origins = lib.genAttrs origins (_: {
@@ -93,7 +93,7 @@ let
   withProxy = proxy: {
     enable = true;
     permissions = {
-      enable = true;
+      broker.enable = true;
       request-send = {
         enable = true;
         origins."https://helpdesk.example.com" = {
@@ -159,7 +159,7 @@ in
         };
       });
       expected = [
-        "agent-sandbox.claude-desktop: launchers.work.permissions.request-send needs permissions.enable"
+        "agent-sandbox.claude-desktop: launchers.work.permissions.request-send needs permissions.broker.enable"
       ];
     };
     testRequestSendOrigins = {

@@ -15,7 +15,11 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `submoduleWith` of the same feature modules, which take `launcherName` (null for the default one), Home Manager's
   config as `hm` and the shared helpers of `lib.nix` as `sl`, and meet in the internal `build` options
   (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's JSON config (`cmd/launcher`), the
-  `.desktop` actions, assertions): `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
+  `.desktop` actions, assertions). What lets a launcher reach outside the sandbox is set under its `permissions`
+  options (`docs/permissions.md`, The options of a launcher), each an attrset where an entry may need overriding:
+  from the start `binds` and `devices` (`options.nix`), `bus` (`dbus.nix`) and `network` (`network.nix`), on request
+  `commands`, `sockets`, `folders` and `grants` with `broker.enable` (`permissions.nix`). The modules:
+  `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
   launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
   `/run/current-system/sw`, the store again at `/nix-root` as a chroot store's root, without the tmpfs buildFHSEnv puts on
   `etc/` of its glibc), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
@@ -165,7 +169,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   `PropertiesChanged`: `Domains` and `DefaultRoute` of a link are `EmitsChangedSignal("false")`, so a change to those
   alone waits for the next change of the servers, route event or launch); a read that fails other than with the
   service absent keeps the file and is tried again after 5 s, the system bus and the route subscription are subscribed
-  to again when they close; a warning in the namespace of the host side when empty; with `network.enable` off
+  to again when they close; a warning in the namespace of the host side when empty; with `permissions.network.enable` off
   an empty file, nothing followed and no warning; on the same changes the default routes of the running sandbox,
   `sandboxRoutes` of `helper.go`), `resolvconf.go` (what
   the sandbox gets: servers on port 53 of those uplinks, global ones the host routes through them or that are public,
@@ -191,15 +195,15 @@ single-user Nix store, and an environment doc for the Claude running inside.
   through `nsenter --keep-caps` and `ip -batch`: `sandboxRoutes`, a default route of each family that
   `netns-netkit uplinks` names an uplink for, the other removed, as the netns of the sandbox is the user's and
   netns-netkit has no CAP_SYS_ADMIN to enter it), then with `--hooks` `sandbox-hooks start` (the NixOS module's start
-  hooks, with or without a network), then the launcher's `network.hooks` in N as its owner (they and `ip` with an
+  hooks, with or without a network), then the launcher's `permissions.network.hooks` in N as its owner, in the order of their names (they and `ip` with an
   empty environment: the helper's own is the sandbox's, whose PATH may name directories the sandbox writes), then the warnings,
   before it passes bwrap's info on to nixpak, whose pasta slot is a
   no-op that only keeps the netns. The unit of the app runs `netns-netkit down` as `ExecStopPost=` (`enter.go`),
-  however it ends. With `network.enable` off (`network.nix`) neither: no `--net`, so the netns keeps the `lo` bwrap
+  however it ends. With `permissions.network.enable` off (`network.nix`) neither: no `--net`, so the netns keeps the `lo` bwrap
   brings up, and `network` false in the launcher config.
   The unit of the app runs `sandbox-hooks stop` as `ExecStopPost=` too when the NixOS module has hooks (`hooks` in
   the launcher config). `warn.go`: what the sandbox starts without (`sandbox-hooks start` exiting 3 or refusing, a
-  `network.hooks` hook failing) goes from bwrap's helper to supervise over
+  `permissions.network.hooks` hook failing) goes from bwrap's helper to supervise over
   `$XDG_RUNTIME_DIR/claude-desktop/<unit>.warn` on the host, and the helper holds the start until supervise answers:
   once the user chose Continue on the splash, at once without a splash or when nothing listens.
   `TimeoutStartSec=infinity` lets the start wait.
@@ -261,7 +265,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   with `BindsTo=` the app's unit (`hostUnits` in `helper.go`), so it logs as a unit of its own and stops with the app.
 - `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
   (`docs/permissions.md`, D-Bus), taking nixpak's argv and its rules from a
-  JSON config, the module's `dbus` option, which the module passes as
+  JSON config, the module's `permissions.bus` option, which the module passes as
   `--config` through nixpak's `dbus.args` (`dbus-proxy --help`). The module hands it to nixpak as
   `pkgs.xdg-dbus-proxy` (the package links `bin/xdg-dbus-proxy` to it), so
   nixpak's launcher starts it as the session-bus proxy. Its packages in
@@ -284,7 +288,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `cmd/permissions-broker/`: the Go daemon that grants the sandbox
   outside access while it runs, per `docs/permissions.md`, and the sandbox's
   `permissions` MCP server (`permissions-broker --help`). A launcher runs it
-  with `permissions.enable`, off by default: the launcher's supervise starts it as a
+  with `permissions.broker.enable`, off by default: the launcher's supervise starts it as a
   user unit, nixpak binds its grant directory read-only at `/run/permissions`,
   and the launcher's bwrap (mode parent) asks it to share that mount before the FHS env's bwrap.
   Its own packages are in `cmd/permissions-broker/internal/`, each auditable on
@@ -309,7 +313,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   until the sandbox ends), `sockets.go` (listening, peer checks, the request and
   control handlers), `consent.go` (and the log of decisions), `leases.go` (and
   logind), `standing.go` (the standing grants from the config), `ports.go` (the port capability, through
-  `netns-netkit`, which the module leaves out of the config with `network.enable` off: no port capability, a request
+  `netns-netkit`, which the module leaves out of the config with `permissions.network.enable` off: no port capability, a request
   for it refused as without a network), `views.go` (and
   opening the window), `overview.go` (the config's overview, with what the sandbox's mount table lacks), `types.go`, `clock.go` (the time and timers of leases and
   answers, which tests fake), `capability.go` (a capability, its parameters and
@@ -416,7 +420,7 @@ sandbox ends (`internal/uplink`):
   over the app ID of the package). A destination in these blocks that isn't registered is dropped.
 - The name of the primary starts with `uplink.PrimaryPrefix` (`sbx-`), which `nix/nixos/network.nix` keeps dhcpcd and
   NetworkManager off.
-- With `--mdns` (`network.mdns`, on by default with `network.enable`), the ifindex of the primary also goes in
+- With `--mdns` (`permissions.network.mdns`, on by default with `permissions.network.enable`), the ifindex of the primary also goes in
   `uplink.MdnsMap`, `/run/sandbox-uplink/mdns` (key the ifindex, value 1, 0660 like the registration map), and the
   programs load with the constant `mdns`: pre copies mDNS responses to the primaries listed there, and only a
   `primary` with `mdns` passes them.
@@ -441,7 +445,7 @@ sandbox ends (`internal/uplink`):
 - Module defaults only hold what the module can't work without (the Claude
   paths, the `/etc` entries, the Nix store). Machine- and user-dependent
   settings, such as extra binds, go in the consumer's config.
-- The sandbox always gets its own netns, with a netkit pair unless `network.enable` is off (`lo` alone). There is no
+- The sandbox always gets its own netns, with a netkit pair unless `permissions.network.enable` is off (`lo` alone). There is no
   option to share the host's; the module asserts it.
 - The eBPF checks on the pair assume the sandbox holds no CAP_NET_RAW or CAP_NET_ADMIN over its netns (bwrap drops
   them; a nested user namespace owns no netns `eth0` is in): no AF_PACKET socket on `eth0`, whose `PACKET_VNET_HDR`
@@ -465,7 +469,7 @@ sandbox ends (`internal/uplink`):
 - Anything that widens the sandbox (binds, D-Bus rules, sockets, env,
   devices) needs the user's go.
 - A bind's source never lies where the sandbox writes the directory that holds it: bwrap follows a link at a source,
-  so the next launch would mount what the sandbox put there. The module asserts it for `binds` and `devices`; a bind added
+  so the next launch would mount what the sandbox put there. The module asserts it for `permissions.binds` and `permissions.devices`; a bind added
   elsewhere (nixpak's config, a feature module) needs the same look, as `/nix/store` beneath `/nix` got in `store.go`.
 - Claude doesn't push. Commit locally; a human reviews and pushes.
 - A Go file stays under about 400 lines, tests included, and holds one
@@ -504,7 +508,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
   graphics assertions fire, the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the `nameservers` assertion on what isn't an IPv4 or IPv6 address (an
-  octet past 255, a newline, a prefix length), a launcher with `network.enable` off (no `--net` for its bwrap, `network`
+  octet past 255, a newline, a prefix length), a launcher with `permissions.network.enable` off (no `--net` for its bwrap, `network`
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
   `extraPath` at the front of PATH, the GC and prune timers' frequencies (the defaults, a launcher's own
   calendar spec, `null` leaving the timer out, a value of two lines refused), the launchers' packages, the launcher
@@ -517,10 +521,14 @@ modules and a user alice (the `home-manager` input exists only for it).
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
   sandbox's names), the `permissions` MCP server only with
-  `permissions.enable`, the assertions on standing grants (only with the
-  broker, of a host command or host socket it has or a port with its protocol and port, none of folders; no host
+  `permissions.broker.enable`, the assertions on standing grants (only with the
+  broker, of a host command or host socket it has or a port with its protocol and port, none of folders, each naming
+  its entry of `permissions.grants` and none for one that is off; no host
   command or socket named `port`; `testStandingGrantParams`: no parameter its capability doesn't take, no value its
-  bounding argument doesn't by type, enum, bounds and length, params an object, none listed twice), the assertions on
+  bounding argument doesn't by type, enum, bounds and length, params an object, no two entries of one capability and
+  params, a capability its entry's name unless set), what the broker's config gets of the attrsets
+  (`testBrokerConfig`, through the internal `build.permissionsConfig`: the folders by path and the standing grants by
+  name, in that order, without the ones that are off), the assertions on
   host commands (names, described
   arguments, results, and the consent's title and each command's phrase: present, one line, at most 80 characters,
   counted in UTF-8 characters: Danish of 46 and 80, CJK of 80 taken, of 81 refused; `testCommandAgreement`: instances
@@ -533,26 +541,27 @@ modules and a user alice (the `home-manager` input exists only for it).
   user manager, accessibility bus, `/proc` or `/var/run` path, `$XDG_RUNTIME_DIR` as a whole or launcher socket, nor a
   glob that could match one; `testSocketAgreement`: `~` alone, a variable past the leading `$XDG_RUNTIME_DIR`, no
   description and a glob that isn't one `*` without `?` or `[`, all of which the daemon refuses or reads as another
-  path), the `dbus` defaults (the portal's, with `tray` the tray item's name at the
+  path), the `permissions.bus` defaults (the portal's, with `tray` the tray item's name at the
   launcher's pid and the watcher's, the user's rules merged in), the assertions on D-Bus rules (`sandbox`
   setting nixpak's `dbus.policies` or `dbus.rules`, a name the proxy refuses or one giving nothing, a rule it refuses
   and its caps: 64 names, 64 rules a list, 64 KiB of config, each at and past the cap),
   `agent-sandbox.hooks` (`testHooks`: the config and the wrapper with the union of capabilities, setgid
   `sandbox-hooks`, none without hooks or without a sandbox user, the group with a sandbox user alone, a path outside the store and an unknown capability
   refused), the launchers' `--hooks` only with start hooks, `hooks` in their config with any, and a launcher's
-  `network.hooks` in its `--net` alone (`testLauncherHooks`),
+  `permissions.network.hooks` in its `--net` alone (`testLauncherHooks`), in the order of their names
+  (`testNetworkHooksOrder`),
   and the assertions on binds that reach a launcher's
   state dir or `$XDG_RUNTIME_DIR` (`testStateBinds`), by another spelling of the path (an empty, `.` or `..`
-  segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `devices`
+  segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `permissions.devices`
   (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
   its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
-  at the same source, beneath a disabled or another launcher's bind). The test system imports both modules twice and has a launcher
+  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither. The test system imports both modules twice and has a launcher
   `work`.
 - `claude-desktop`: builds alice's sandboxed app (the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure, all
   sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
-  the devices (`/dev/kvm` once, from `kvm` and `devices`) and PATH in `claude-environment.md`, the patched asar's tray
+  the devices (`/dev/kvm` once, from `kvm` and `permissions.devices`) and PATH in `claude-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
   refused), the channel hook (on a 4.23118-shaped asar: `channels.js` only with `mcpChannels`, hooked into the
@@ -576,7 +585,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   netns-netkit gets, its `claude-environment.md` (with memo: the core
   import, its pointer to memo, memo's config in the FHS env with the store
   right after the embedded ones, the store in the closure), its permissions broker (the
-  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants, `netnsNetkit` and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
+  read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants (a folder and a grant that are off left out), `netnsNetkit` and the window's overview (binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
   `/run/dbus` or D-Bus capabilities for either launcher), and its `.desktop` file (name, Exec, the
   Permissions action, no `claude://` handler; both launchers' actions running the launcher by name, no store path). For both launchers, their app
   ID in the launcher config and `/.flatpak-info`, which names their only `.desktop`
@@ -888,7 +897,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `testRequestSend*`): both capabilities on the launchers that enable them with their own origins, proxies and CAs,
   the origin as the bounding enum and in `run`, their consent title and phrases, the read command's GET only and the
   write one's GET and POST with a multiline body, origins that aren't https origins or none and proxies that aren't
-  `https://host[:port]` failing to evaluate, the assertion without `permissions.enable`, and `permissions-broker
+  `https://host[:port]` failing to evaluate, the assertion without `permissions.broker.enable`, and `permissions-broker
   serve` loading the declaration while refusing a broken one. Not covered: a real authenticating proxy (kmsproxy).
 - `sandbox-uplink`: the package build runs its Go tests (`uplinks_test.go`: the uplinks found in a fake
   `/sys/class/net`, physical type-1 devices only, named ones replacing the search, names the einat TOML can't take
@@ -945,7 +954,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   passing in it, a build with that glibc as input seeing its `etc/rpc` alone), and a launch without `nsdelegate` (cleared by a second cgroup2 mount, as Cilium's does: the
   sandbox journal's warning, the cgroup read-only, a cgroup2 mount of its own still writing its subtree and nothing above it, no `systemd --user` and no scopes, the warning's remount restoring the options), `work` the launcher `work` next to the default one (its start hook failing: started without `mesh-1000`, the other
   hook run, the failure and the warning in its host side journal) with
-  its permissions broker and mDNS (work has `network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each
+  its permissions broker and mDNS (work has `permissions.network.mdns` off; `vm/mdns-query.py` queries from port 5353 in each
   netns, with the QU bit set: the default sandbox resolving `printer.local` of avahi on the router, over IPv4 and IPv6,
   the router seeing the queries from the workstation address and port 5353 without QU (a one-shot query from another
   port too, one sent from AF_PACKET and one with a known answer) and nothing of a response, a probe, a query with
@@ -1081,7 +1090,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   sandbox-uplink past its grace, then taken and its
   pins and registration removed by sandbox-uplink
   once it is gone; the pins, primary and registration of the sandbox gone with the unit of the app (sandbox-uplink
-  stopped, so `ExecStopPost=` of the unit did it); then the launcher `offline` with `network.enable` off: inside `lo`
+  stopped, so `ExecStopPost=` of the unit did it); then the launcher `offline` with `permissions.network.enable` off: inside `lo`
   alone and up, no IPv4 route nor default route, the router and the internet stand-in unreachable, an empty resolv.conf;
   on the host no `sbx-*` primary, no pins and no `ExecStopPost=` of netns-netkit (one of `sandbox-hooks stop`), the
   start hooks run all the same, no DNS warning in its journal namespace.

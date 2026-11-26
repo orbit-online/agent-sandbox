@@ -3,17 +3,17 @@
 Status: written 2026-10-31, rewritten 2026-11-03 for the broker as gateway. Built before the rewrite: the daemon
 (`cmd/permissions-broker/`) with consent, leases, standing grants from the Nix config and the MCP server, the
 Permissions window (`nix/packages/permissions-window/`) and folder mounts (`permissions.folders`), behind a launcher's
-`permissions.enable`. Built since: declared host commands (`permissions.commands`), with a consent that names what a
+`permissions.broker.enable`. Built since: declared host commands (`permissions.commands`), with a consent that names what a
 grant covers and the window's redesign; the first half of step 3 (2026-11-03): plugins, their service units and tools
 and session leases removed, folders built into the broker, and host sockets at stable addresses
 (`permissions.sockets`). The Alloy models (`models/`) still describe what step 3 removed. Then the Go D-Bus proxy with
 static rules (step 5) and the sandbox on it in place of xdg-dbus-proxy (step 6, 2026-11-03). Live rules with the
 system-bus instance (step 7, `permissions.dbus`) were built 2026-11-03 and removed 2026-11-04 until a capability needs
 them: nothing declared one, and the proxy, broker and module are smaller without them (D-Bus keeps the design). The
-proxy's static rules then moved from its argv to a JSON config the module writes from its `dbus` option (2026-11-04).
-The `port` capability came with the sandbox network on netkit (2026-11-12). Designed 2026-11-26 and not built yet:
-one option root for all a launcher reaches, with features on top (The options of a launcher). Not built yet: device
-grants. Steps lists the order.
+proxy's static rules then moved from its argv to a JSON config the module writes from its `dbus` option (2026-11-04),
+which is `permissions.bus` since 2026-11-26.
+The `port` capability came with the sandbox network on netkit (2026-11-12). Built 2026-11-26: one option root for all a launcher reaches (The options of a launcher); the features on top of it
+are designed and not built yet. Not built yet: device grants. Steps lists the order.
 
 ## Why
 
@@ -218,8 +218,8 @@ only the daemon creates.
 
 ## The options of a launcher
 
-Not built yet (2026-11-26): the options are still `binds`, `devices`, `kvm`, `audio`, `tray`, `dbus`, `network.*` and
-`permissions.{enable,folders,grants,request-send}`, and the rest of this document names them so.
+Built 2026-11-26, but for the features: `kvm`, `audio` and `tray` are still bools on the launcher, the options of
+request-send are still `permissions.request-send`, and `keep-awake` is a rule each consumer writes itself.
 
 Everything that lets a launcher reach outside the sandbox is set under one root, `permissions`, on the launcher
 (`agent-sandbox.claude-desktop` or one of `launchers.<name>`). Each option there applies at one of two times. From the
@@ -489,8 +489,8 @@ config's responsibility, as with host commands.
 ### Ports
 
 The capability `port` lets the host reach one TCP or UDP port of the sandbox: `{"protocol": "tcp", "port": 8080}`,
-both required, the protocol `tcp` or `udp`, the port 1 to 65535. Every launcher with the broker and `network.enable`
-has it (without a network the module leaves the helper out of the config, and a request is refused as `unknown`); the
+both required, the protocol `tcp` or `udp`, the port 1 to 65535. Every launcher with the broker and
+`permissions.network.enable` has it (without a network the module leaves the helper out of the config, and a request is refused as `unknown`); the
 network of the sandbox (`netns-netkit --help`) drops everything the host sends it otherwise, and the LAN reaches no
 port. Over UDP the sandbox answers only a host client with a connected socket: a datagram from an unconnected
 `sendto` starts no flow, so the reply is dropped. The consent reads "Claude asks for TCP port 8080 of the sandbox,
@@ -640,7 +640,8 @@ writes its config at build time.
 The proxy takes the bus address and the path to listen on, `--fd` and `--filter` as nixpak passes them, and its rules
 from `--config=<file>`, which the module passes through nixpak's `dbus.args` and nothing else; nixpak's own
 `dbus.policies` and `dbus.rules` stay empty (the module asserts it), so xdg-dbus-proxy's rule flags never reach the
-proxy, which refuses them. The config is the module's `dbus` option without what's unset, an object of well-known names:
+proxy, which refuses them. The config is the module's `permissions.bus` option without what's unset, an object of
+well-known names:
 
 ```json
 {
@@ -1019,16 +1020,17 @@ tell whether a folder or a host socket is still in use. Claude Code's channels c
 
 ## Standing grants
 
-A launcher's `permissions.grants` lists grants the daemon makes whenever it starts, without asking: each a capability
-and the values of its bounding arguments, of host commands, host sockets and ports (`{ capability = "port"; params =
-{ protocol = "tcp"; port = 3000; }; }`). Folders get none: what should always
-be there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
+A launcher's `permissions.grants` holds grants the daemon makes whenever it starts, without asking, each under a name:
+a capability (the name, unless the entry says another) and the values of its bounding arguments, of host commands,
+host sockets and ports (`permissions.grants.dev-server = { capability = "port"; params = { protocol = "tcp"; port =
+3000; }; }`). The daemon gets them in the order of their names, without the ones whose `enable` is off. Folders get
+none: what should always be there is a bind, and the module asserts it. What stays granted is declared in Nix, reviewed with the rest of the
 config, and taken away by a rebuild. One click in a dialog the sandbox brought up never widens access for good.
 
 The module writes them into the daemon's config. At start the daemon checks them against the declarations: a
 capability none has, a folder, bounding values it doesn't take or one listed twice is a config error, and the daemon
-doesn't start. The module catches these at eval time, but for a value its argument's `pattern` refuses, which only
-the daemon matches. Then it grants each with lease `standing`, under the same
+doesn't start. The module catches these at eval time (listed twice there is two entries of one capability and the
+same values), but for a value its argument's `pattern` refuses, which only the daemon matches. Then it grants each with lease `standing`, under the same
 checks as a request: one whose instance isn't there (a VM not running yet) or another launcher holds is left out with
 a warning, and a later request or call with exactly its bounding values gets it without asking. A host command's calls
 under it are told `maxValidity`.
@@ -1077,10 +1079,10 @@ they exist at launch), left out when the daemon can't read that mount table. The
 it's present or missing:
 
 - `binds`: path, source, read-only or read-write, and whether it's skipped when the source is missing;
-- `devices`: from `devices` and `kvm`, each bound if present;
-- `dbus`: the proxy's config, by name its policy and its call and broadcast rules;
-- `network`: its own network namespace joined to the host by a netkit pair, or with `network.enable` off with `lo`
-  alone;
+- `devices`: from `permissions.devices` and `kvm`, each bound if present;
+- `dbus`: the proxy's config (`permissions.bus`), by name its policy and its call and broadcast rules;
+- `network`: its own network namespace joined to the host by a netkit pair, or with `permissions.network.enable` off
+  with `lo` alone;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with `audio`),
   the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
   `files`), `/tmp` with the scratchpad, and `/run/permissions`.

@@ -157,7 +157,8 @@ unless you ask otherwise); release it when you're done.
   servers is reachable from here; the launcher logs
   a warning in the journal namespace of the host side then (see Services
   and logs).
-  mDNS (`.local` names), unless the launcher has `network.mdns` off: your
+  mDNS (`.local` names), unless the launcher has `permissions.network.mdns`
+  off: your
   queries to `224.0.0.251` or `ff02::fb` port 5353 leave from the host
   address and port 5353, and the responses on the LAN of that uplink
   come back to the group here, so only a querier on port 5353 gets them (avahi, or a
@@ -175,7 +176,8 @@ unless you ask otherwise); release it when you're done.
   since their traffic never crosses `eth0`. You can't change them. A hook
   that failed at launch was shown as a warning, and the sandbox runs
   without what it sets up.
-  A launcher with `network.enable` off (for local models) leaves you a
+  A launcher with `permissions.network.enable` off (for local models) leaves
+  you a
   network namespace with `lo` alone (`ip link` shows no `eth0`): no
   routes, an empty `/etc/resolv.conf` and no `port` capability. A model
   server on the host is then reachable only through a host socket of the
@@ -276,8 +278,8 @@ The sandbox:
   the internet aren't: with a checkout of orbit-online/agent-sandbox
   bound, run its `scripts/nettest.sh`, with HOST:PORT pairs only when the
   user names services of the host. `/etc/resolv.conf` lists a server
-  unless the launcher has no DNS (see DNS under What you can see). With `network.enable`
-  off, `/sys/class/net` holds `lo` alone.
+  unless the launcher has no DNS (see DNS under What you can see). With
+  `permissions.network.enable` off, `/sys/class/net` holds `lo` alone.
 
 ## Permissions self-check
 <!-- memo: activity=self-diagnostic environment=bwrap -->

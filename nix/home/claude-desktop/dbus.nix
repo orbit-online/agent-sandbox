@@ -11,8 +11,10 @@
 let
   inherit (lib) mkOption types;
   ids = sl.idsOf launcherName;
-  # The D-Bus proxy's config (dbus-proxy --help): dbus without what's unset
-  dbusRules = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null && v != [ ] && v != { })) config.dbus;
+  # The D-Bus proxy's config (dbus-proxy --help): permissions.bus without what's unset
+  dbusRules = lib.mapAttrs (
+    _: lib.filterAttrs (_: v: v != null && v != [ ] && v != { })
+  ) config.permissions.bus;
   dbusArgs = [
     "--config=${pkgs.writeText "dbus-proxy${ids.suffix}.json" (builtins.toJSON dbusRules)}"
   ];
@@ -59,7 +61,7 @@ in
       default = false;
       description = "Show a tray icon. Closing the window then hides the app instead of quitting it.";
     };
-    dbus = mkOption {
+    permissions.bus = mkOption {
       type = types.attrsOf (
         types.submodule {
           options = {
@@ -121,7 +123,7 @@ in
     # against the rules of every name it holds, so no other name may get talk where one of these owners holds it. No
     # org.freedesktop.Notifications: notifications go through the portal, which keys them by app ID, so the app
     # can't replace or close another's (the permissions broker's), nor reach plasmashell
-    dbus = lib.mkMerge [
+    permissions.bus = lib.mkMerge [
       {
         "org.freedesktop.portal.Desktop" = {
           call = [
@@ -152,7 +154,8 @@ in
         ];
       })
     ];
-    # The proxy's rules, from dbus; nixpak's dbus.policies and dbus.rules would be its argv rules, which it doesn't take
+    # The proxy's rules, from permissions.bus; nixpak's dbus.policies and dbus.rules would be its argv rules, which it
+    # doesn't take
     build.nixpak = [ { dbus.args = dbusArgs; } ];
     build.assertions = [
       {
@@ -163,7 +166,7 @@ in
           && nixpakDbus.args == dbusArgs;
         message = "${ids.opt}sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in ${
           lib.optionalString (launcherName != null) "launchers.${launcherName}."
-        }dbus";
+        }permissions.bus";
       }
     ]
     ++ lib.mapAttrsToList (n: r: {
@@ -173,8 +176,8 @@ in
         && n != "org.freedesktop.DBus"
         && builtins.match "[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)+" n != null
         && (r.policy != null || r.call != [ ] || r.broadcast != [ ] || r.versions != { });
-      message = "${ids.opt}dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version";
-    }) config.dbus
+      message = "${ids.opt}permissions.bus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version";
+    }) config.permissions.bus
     ++ lib.mapAttrsToList (
       n: r:
       let
@@ -188,17 +191,17 @@ in
           && lib.length r.call <= maxRules
           && lib.length r.broadcast <= maxRules
           && lib.length (lib.attrNames r.versions) <= maxRules;
-        message = "${ids.opt}dbus.\"${n}\": at most ${toString maxRules} call and ${toString maxRules} broadcast rules, each [METHOD][@PATH], and ${toString maxRules} versions, each IFACE@PATH, as dbus-proxy --help says${
+        message = "${ids.opt}permissions.bus.\"${n}\": at most ${toString maxRules} call and ${toString maxRules} broadcast rules, each [METHOD][@PATH], and ${toString maxRules} versions, each IFACE@PATH, as dbus-proxy --help says${
           lib.optionalString (bad ++ badKeys != [ ]) ", not ${lib.concatMapStringsSep ", " builtins.toJSON (bad ++ badKeys)}"
         }";
       }
-    ) config.dbus
+    ) config.permissions.bus
     ++ [
       {
         assertion =
           lib.length (lib.attrNames dbusRules) <= maxNames
           && lib.stringLength (builtins.toJSON dbusRules) <= maxConfig;
-        message = "${ids.opt}dbus: at most ${toString maxNames} names and ${toString maxConfig} bytes of JSON, the D-Bus proxy's caps; it has ${toString (lib.length (lib.attrNames dbusRules))} and ${toString (lib.stringLength (builtins.toJSON dbusRules))}";
+        message = "${ids.opt}permissions.bus: at most ${toString maxNames} names and ${toString maxConfig} bytes of JSON, the D-Bus proxy's caps; it has ${toString (lib.length (lib.attrNames dbusRules))} and ${toString (lib.stringLength (builtins.toJSON dbusRules))}";
       }
     ];
   };

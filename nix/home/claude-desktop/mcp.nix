@@ -61,7 +61,7 @@ in
             '';
           }
         );
-        args = lib.attrNames (lib.filterAttrs (_: b: b.enable && b.mcp) config.binds);
+        args = lib.attrNames (lib.filterAttrs (_: b: b.enable && b.mcp) config.permissions.binds);
       };
       claude-code = {
         command = lib.getExe inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system}.claude-code;
