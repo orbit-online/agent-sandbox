@@ -105,6 +105,8 @@ func (b *broker) attachGrant(g *grant) error {
 		return err
 	}
 	g.Path = filepath.Join(b.cfg.SandboxGrantDir, g.ID)
+	b.attachMu.Lock()
+	defer b.attachMu.Unlock()
 	tree, source, err := mounts.Attach(b.sb, src.root, src.rel, src.ro, dir, g.ID)
 	if err != nil {
 		removeMountpoint(b.cfg.GrantDir, g.ID)
@@ -145,7 +147,9 @@ func (b *broker) detachGrant(g *grant) {
 		slog.Warn("Detach", "grant", g.ID, "err", err)
 	}
 	removeMountpoint(b.cfg.GrantDir, g.ID)
+	b.attachMu.Lock()
 	g.Holders = mounts.HoldersAfter(b.sb, g.mnt)
+	b.attachMu.Unlock()
 	if len(g.Holders) > 0 {
 		slog.Info("Still held", "grant", g.ID, "holders", g.Holders)
 	}

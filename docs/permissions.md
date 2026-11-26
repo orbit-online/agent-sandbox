@@ -462,6 +462,15 @@ re-entries included):
   links takes `CAP_SYS_ADMIN` or `CAP_CHECKPOINT_RESTORE` in the initial user namespace, which the daemon lacks;
 - processes with a thread whose mount namespace has a mount of the grant's filesystem and root.
 
+What the sandbox reaches anyway is no copy of the ended grant: a mount with the root of one in the sandbox's own
+mount table (M1, read once the grant is detached), which is another live grant's mount or a bind the sandbox started
+with, and what propagated from those or was bound from them. A read-only one there covers only read-only mounts, so
+a read-write re-bind of an ended read-write grant counts though a read-only grant of the same folder is live. No
+folder is attached while holders are listed, so a new grant's mount isn't taken for a copy. A mount counts as
+propagated from the grant's by its peer group only when it is of the grant's filesystem: the group's id is free once
+the grant is unmounted, and the next shared mount made anywhere on the machine gets it. A mapping names no mount, so
+one made through another mount of the same file (another grant, a bind beneath the folder) still counts.
+
 A file on a detached mount, or a mapping on the grant's filesystem, is the grant's when the path `/proc` gives for it
 (relative to a detached mount's root, or below a copy's mount point) names the same inode beneath the grant: the
 daemon keeps the tree it attached open, and looks each tail of the path up there without links. Otherwise a file on a

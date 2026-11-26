@@ -727,7 +727,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   holder; a shared mapping with its fd closed, a possible holder once the file is deleted; a re-bind
   and a mapping that mountinfo and maps list after a line past a megabyte, and a mount of the grant's filesystem on
   such a line as a possible holder (`holders_long_test.go`); the scan's ten seconds holding inside one process
-  and one mountinfo file (`internal/mounts/scan_test.go`); not a process
+  and one mountinfo file (`internal/mounts/scan_test.go`); no holder for what the sandbox reaches anyway
+  (`holders_reach_test.go`: the mounts of another live grant of the same folder or one beneath it, a bind the
+  stand-in started with, a mount of another filesystem that got the grant's freed peer group, while a read-write
+  re-bind beside a live read-only grant still counts, and no folder attached while holders are listed); not a process
   outside the sandbox; a re-entry's too, found by user
   namespace; on a release from inside too, and not a process by a stale
   record), detached before the holders' scan starts, with its mountpoint

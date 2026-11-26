@@ -66,17 +66,29 @@ type mountView struct {
 	copies, rebinds map[uint64]bool
 	// The namespaces with a mount of the grant's filesystem whose line was too long to read its root from
 	unsure map[uint64]bool
+	// What the sandbox's own mount table has of the grant's filesystem once the grant is detached, by root: another
+	// live grant's mount, a bind the sandbox started with. Read-write, or read-only alone
+	reachRW, reachRO map[string]bool
 	// contains' answers, by path and inode
 	tried map[string]bool
 }
 
-// viewMounts reads the mountinfo of each mount namespace of the processes' threads once
-func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
+// viewMounts reads the mountinfo of each mount namespace of the processes' threads once, keeping no line: the sandbox
+// picks how many there are. m1 is the sandbox's own mount table, read after the detach
+func viewMounts(pids []int, m *GrantMount, m1 []mountinfo.Line, deadline time.Time) *mountView {
 	v := &mountView{m: m, deadline: deadline, visible: map[uint64]bool{}, copies: map[uint64]bool{m.id: true},
-		rebinds: map[uint64]bool{}, unsure: map[uint64]bool{}, tried: map[string]bool{}}
-	for _, l := range mountinfo.Read("/proc/self/mountinfo") {
-		v.visible[l.ID] = true
+		rebinds: map[uint64]bool{}, unsure: map[uint64]bool{}, reachRW: map[string]bool{}, reachRO: map[string]bool{},
+		tried: map[string]bool{}}
+	for _, l := range m1 {
+		switch {
+		case l.ID == m.id || l.Dev != m.dev || l.Cut:
+		case l.RO:
+			v.reachRO[l.Root] = true
+		default:
+			v.reachRW[l.Root] = true
+		}
 	}
+	eachMount("/proc/self/mountinfo", deadline, func(l mountinfo.Line) { v.visible[l.ID] = true })
 	seen := map[uint64]bool{}
 	for _, pid := range pids {
 		for _, task := range tasks(pid) {
@@ -89,16 +101,22 @@ func viewMounts(pids []int, m *GrantMount, deadline time.Time) *mountView {
 				continue
 			}
 			seen[ns] = true
-			for _, l := range readMounts(task+"/mountinfo", deadline) {
+			eachMount(task+"/mountinfo", deadline, func(l mountinfo.Line) {
 				v.visible[l.ID] = true
 				switch {
-				case m.copyOf(l) || !l.Cut && mountinfo.MountsOf([]mountinfo.Line{l}, m.dev, m.root):
+				case l.ID == m.id:
+					v.rebinds[ns] = true
+				case l.Dev != m.dev:
+					// Not the grant's filesystem, so not propagated from its mount, whatever its peer group
+				case l.Cut:
+					v.unsure[ns] = true
+				case v.reachRW[l.Root] || l.RO && v.reachRO[l.Root]:
+					// No more than the sandbox's own mount table gives it: not the ended grant's
+				case m.copyOf(l) || mountinfo.MountsOf([]mountinfo.Line{l}, m.dev, m.root):
 					v.copies[l.ID] = true
 					v.rebinds[ns] = true
-				case l.Cut && l.Dev == m.dev:
-					v.unsure[ns] = true
 				}
-			}
+			})
 		}
 	}
 	return v
@@ -117,16 +135,18 @@ func (u until) Read(p []byte) (int, error) {
 	return u.r.Read(p)
 }
 
-// readMounts reads the mountinfo file at path, as far as it gets by the deadline: a namespace holds as many mounts,
-// with lines as long, as the sandbox likes
-func readMounts(path string, deadline time.Time) []mountinfo.Line {
+// eachMount calls mount for each mount of the mountinfo file at path, as far as it gets by the deadline: a namespace
+// holds as many mounts, with lines as long, as the sandbox likes
+func eachMount(path string, deadline time.Time, mount func(mountinfo.Line)) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return
 	}
 	defer f.Close()
-	lines, _ := mountinfo.Parse(until{f, deadline})
-	return lines
+	_ = mountinfo.Each(until{f, deadline}, func(l mountinfo.Line) bool {
+		mount(l)
+		return true
+	})
 }
 
 // HoldersAfter lists, after the detach, the processes in the sandbox still holding the grant: a working directory,
@@ -138,7 +158,9 @@ func HoldersAfter(s Sandbox, m *GrantMount) []Holder {
 	ScanStarts()
 	deadline := time.Now().Add(holdersTimeout)
 	pids := s.Members()
-	v := viewMounts(pids, m, deadline)
+	// Without the sandbox's mount table, everything of the grant's filesystem and root counts
+	m1, _ := s.Mountinfo()
+	v := viewMounts(pids, m, m1, deadline)
 	var hs []Holder
 	for _, pid := range pids {
 		if time.Now().After(deadline) {

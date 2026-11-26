@@ -56,7 +56,9 @@ func GrantMountOf(s Sandbox, tree *os.File) (*GrantMount, error) {
 // Close closes the tree, once the grant is detached
 func (m *GrantMount) Close() error { return m.tree.Close() }
 
-// copyOf reports whether l is the grant's mount, or one propagated from it: in its peer group or its slave
+// copyOf reports whether l is the grant's mount, or one propagated from it: in its peer group or its slave. Only for
+// a mount of the grant's filesystem, as one propagated from it is: the peer group's id is free once the grant is
+// unmounted, and the next shared mount made anywhere gets it
 func (m *GrantMount) copyOf(l mountinfo.Line) bool {
 	if l.ID == m.id {
 		return true

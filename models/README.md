@@ -380,7 +380,10 @@ process whose principal is in the Sandbox domain, at any time.
   mount of the grant's filesystem (an `open_tree` clone, a lazy unmount),
   a holder when its path names the grant's inode beneath the grant's tree
   and a possible holder otherwise; a mount namespace with a mount of the
-  same filesystem and root; a mapping of one of the grant's files, from
+  same filesystem and root, other than what the sandbox's own mount table
+  has with that root once the grant is detached (another live grant's
+  mount, a bind it started with; a read-only one covering read-only mounts
+  alone); a mapping of one of the grant's files, from
   `/proc/<pid>/maps` by device, inode and path (`map_files` takes
   capabilities in the initial user namespace); a possible holder where the
   line of a mount or mapping of the grant's filesystem is past a megabyte,

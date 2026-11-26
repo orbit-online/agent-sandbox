@@ -157,6 +157,9 @@ type broker struct {
 	watches    map[chan []byte]bool
 	// What still held attach grants when they ended
 	heldGrants []held
+	// Held while a folder is attached, and while the holders of an ended one are listed: the scan takes what the
+	// sandbox's mount table has for what the sandbox reaches anyway, so no mount joins it meanwhile
+	attachMu sync.Mutex
 	// The last maxCalls host command calls, for the window
 	calls []callRecord
 	// The ports this daemon switched, by protocol and port (tcp-8080)

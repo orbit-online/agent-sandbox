@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/mountinfo"
 	"golang.org/x/sys/unix"
 )
 
@@ -23,6 +24,7 @@ func TestScanDeadline(t *testing.T) {
 	view := func(deadline time.Time) *mountView {
 		return &mountView{m: &GrantMount{}, deadline: deadline, visible: map[uint64]bool{},
 			copies: map[uint64]bool{stx.Mnt_id: true}, rebinds: map[uint64]bool{}, unsure: map[uint64]bool{},
+			reachRW: map[string]bool{}, reachRO: map[string]bool{},
 			tried: map[string]bool{}}
 	}
 	if held, _ := view(time.Now().Add(time.Hour)).holds(os.Getpid()); !held {
@@ -31,11 +33,15 @@ func TestScanDeadline(t *testing.T) {
 	if held, possible := view(time.Now().Add(-time.Second)).holds(os.Getpid()); held || possible {
 		t.Errorf("Past the deadline the scan still looked at the process's files: held %v, possible %v", held, possible)
 	}
-	if lines := readMounts("/proc/self/mountinfo", time.Now().Add(time.Hour)); len(lines) == 0 {
+	read := func(deadline time.Time) (n int) {
+		eachMount("/proc/self/mountinfo", deadline, func(mountinfo.Line) { n++ })
+		return n
+	}
+	if read(time.Now().Add(time.Hour)) == 0 {
 		t.Fatal("No mounts read")
 	}
-	if lines := readMounts("/proc/self/mountinfo", time.Now().Add(-time.Second)); len(lines) != 0 {
-		t.Errorf("Past the deadline %d mounts were still read", len(lines))
+	if n := read(time.Now().Add(-time.Second)); n != 0 {
+		t.Errorf("Past the deadline %d mounts were still read", n)
 	}
 }
 

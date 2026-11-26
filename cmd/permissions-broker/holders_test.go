@@ -18,7 +18,8 @@ import (
 // context of its own), fd (an open file, in a file table of its own), root (chroot), bind (a bind of it in a mount
 // namespace of its own, at $HOLD_AT) or opentree (a clone of it by open_tree, in no mount table: in a mount namespace
 // of its own, whose copy of the grant at $HOLD_GRANT it unmounts), map (a shared mapping of it, its fd closed) or
-// bindlong, maplong and binddeep (holders_long_test.go). The process's main thread holds nothing. Writes "ready" or the
+// bindprivate (a bind as bind, made private, the namespace's copy of the grant unmounted), bindlong, maplong and
+// binddeep (holders_long_test.go). The process's main thread holds nothing. Writes "ready" or the
 // error to $READY
 func threadHoldMain() {
 	// The main thread, the thread group leader, stays this goroutine's: the holder is another thread
@@ -50,6 +51,17 @@ func threadHoldMain() {
 			if fd, err = unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC, 0); err == nil {
 				_, err = unix.Mmap(fd, 0, 1, unix.PROT_READ, unix.MAP_SHARED)
 				unix.Close(fd)
+			}
+		case "bindprivate":
+			// A bind the detach doesn't reach, read-write as the grant is
+			if err = unix.Unshare(unix.CLONE_FS | unix.CLONE_NEWNS); err == nil {
+				err = unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "")
+			}
+			if err == nil {
+				err = unix.Mount(path, os.Getenv("HOLD_AT"), "", unix.MS_BIND, "")
+			}
+			if err == nil {
+				err = unix.Unmount(os.Getenv("HOLD_GRANT"), unix.MNT_DETACH)
 			}
 		case "bindlong":
 			err = holdBindLong(path, os.Getenv("HOLD_AT"))
