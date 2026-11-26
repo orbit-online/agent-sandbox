@@ -37,9 +37,9 @@ type sandboxes struct {
 // creating the pair to pinning, so only one whose up was killed (or stopped by its user) in between
 const orphanGrace = 30 * time.Second
 
-// openSandboxes pins the uplinks and gateways maps in dir (netkit.bpf.c has their shapes), or takes over the ones
-// pinned there, readable by the group
-func openSandboxes(dir string, reg, mdns *ebpf.Map) (*sandboxes, error) {
+// openSandboxes pins the uplinks and gateways maps in dir (netkit.bpf.c and uplink.bpf.h have their shapes), or takes
+// over the ones pinned there, readable by the group. load adds the registration maps of the programs
+func openSandboxes(dir string) (*sandboxes, error) {
 	ups, err := pinMap(dir, &ebpf.MapSpec{
 		Name: filepath.Base(uplink.UplinksMap), Type: ebpf.Hash, KeySize: 4, ValueSize: 1, MaxEntries: uplink.MaxUplinks,
 	})
@@ -53,7 +53,7 @@ func openSandboxes(dir string, reg, mdns *ebpf.Map) (*sandboxes, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sandboxes{dir, ups, gws, reg, mdns, map[uint32]time.Time{}}, nil
+	return &sandboxes{dir: dir, uplinks: ups, gateways: gws, orphans: map[uint32]time.Time{}}, nil
 }
 
 func pinMap(dir string, spec *ebpf.MapSpec) (*ebpf.Map, error) {

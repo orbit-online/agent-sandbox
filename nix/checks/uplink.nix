@@ -365,9 +365,14 @@ pkgs.testers.runNixOSTest {
           ws.succeed(sb(f"curl -sf -m5 http://{lan4}/ -o /dev/null"))
           ws.succeed("nft delete table inet t")
 
-      with subtest("mDNS responses from the LAN copied to the primaries of the mdns map, also with the UDP header outside the linear part; queries not"):
+      with subtest("mDNS responses copied to the primaries of the mdns map from the gateway uplink of their family alone, also with the UDP header outside the linear part; queries not"):
           key = hexbytes(struct.pack("=I", primary))
           ws.succeed(f"bpftool map update pinned {pins}/mdns key hex {key} value hex 01")
+          # The uplink of each family in the gateways map, where its queries leave, and the other one
+          names = {i: d for d, i in ifindex.items()}
+          gw = {int.from_bytes(e["key"], "little"): names[int.from_bytes(e["value"][:4], "little")] for e in dump("gateways")}
+          other = {fam: next(d for d in ifindex if d != dev) for fam, dev in gw.items()}
+          assert gw[0] == "eth1", f"the LAN isn't behind the IPv4 gateway uplink: {gw}"
           # A response claiming an A record for name, or a query for it
           def dns(name, response):
               qname = b"".join(bytes([len(l)]) + l.encode() for l in name.split(".")) + b"\0"
@@ -377,22 +382,32 @@ pkgs.testers.runNixOSTest {
           def lan_mdns(name, response):
               lan.succeed("python3 -c \"from scapy.all import *; sendp(Ether(dst='01:00:5e:00:00:fb')/IP(dst='224.0.0.251', ttl=255)"
                           f"/UDP(sport=5353, dport=5353)/bytes.fromhex('{dns(name, response).hex()}'), iface='eth1')\"")
-          # What the LAN sends arrives linear here (virtio), so the non-linear frame comes in at the ingress of eth1
-          # from a dummy device, as a driver that leaves only the headers it parsed in the linear part delivers it. The
-          # frame is past a page, so the stand-in pair carries it with its MTU raised
-          ws.succeed("ip link add inj type dummy", "ip link set inj mtu 9000 up", "tc qdisc add dev inj clsact",
-                     "tc filter add dev inj egress matchall action mirred ingress redirect dev eth1",
-                     "ip link set sbx-t mtu 9000", sb("ip link set nkp mtu 9000"))
+          # A response sent in at the ingress of dev from a dummy device: on an uplink without a LAN host here, and
+          # non-linear, as a driver that leaves only the headers it parsed in the linear part delivers it (what the
+          # LAN sends arrives linear, virtio). The frame is past a page, so the stand-in pair carries it with its MTU
+          # raised
+          def inject_at(dev, name, src, group):
+              ws.succeed(f"${pkgs.python3}/bin/python3 ${nonlinear} inj-{dev} {src} {group} 5353 5353 {dns(name, True).hex()}")
+          for dev in ifindex:
+              ws.succeed(f"ip link add inj-{dev} type dummy", f"ip link set inj-{dev} mtu 9000 up", f"tc qdisc add dev inj-{dev} clsact",
+                         f"tc filter add dev inj-{dev} egress matchall action mirred ingress redirect dev {dev}")
+          ws.succeed("ip link set sbx-t mtu 9000", sb("ip link set nkp mtu 9000"))
           capture(ws, "udp port 5353", iface="nkp", unit="sbcap", props="-p NetworkNamespacePath=/run/netns/sb")
           lan_mdns("copied.local", True)
           lan_mdns("asked.local", False)
-          ws.succeed(f"${pkgs.python3}/bin/python3 ${nonlinear} inj {lan4} 224.0.0.251 5353 5353 {dns('fragged.local', True).hex()}")
+          inject_at(gw[0], "fragged.local", lan4, "224.0.0.251")
+          inject_at(other[0], "othernic.local", lan4, "224.0.0.251")
+          inject_at(gw[1], "sixgw.local", lan6, "ff02::fb")
+          inject_at(other[1], "sixother.local", lan6, "ff02::fb")
           out = captured(ws, "sbcap", flags="-A")
           print("mDNS in the sandbox:", out)
           assert "copied" in out, "the response of the LAN wasn't copied in"
           assert "asked" not in out, "a query of the LAN was copied in"
           assert "fragged" in out, "the response with its UDP header outside the linear part wasn't copied in"
-          ws.succeed("ip link del inj", "ip link set sbx-t mtu 1500", sb("ip link set nkp mtu 1500"),
+          assert "sixgw" in out, f"the IPv6 response on {gw[1]}, the IPv6 gateway uplink, wasn't copied in"
+          assert "othernic" not in out, f"a response on {other[0]}, not the IPv4 gateway uplink, was copied in"
+          assert "sixother" not in out, f"an IPv6 response on {other[1]}, not the IPv6 gateway uplink, was copied in"
+          ws.succeed(*[f"ip link del inj-{dev}" for dev in ifindex], "ip link set sbx-t mtu 1500", sb("ip link set nkp mtu 1500"),
                      f"bpftool map delete pinned {pins}/mdns key hex {key}")
 
       lan.succeed(f"ip route add {sb4}/32 via {ws4}", f"ip -6 route add {sb6}/128 via {ws6}")

@@ -66,13 +66,7 @@ struct {
 } uplinks SEC(".maps");
 
 // Per family (0 IPv4, 1 IPv6) the einat uplink with the default route and its gateway, kept by sandbox-uplink like
-// uplinks (internal/uplink.GatewaysMap). Ifindex 0: none. src and mac are what mDNS queries leave the uplink with:
-// the first IPv4 address of the uplink or its IPv6 link-local one (zero: none), and the MAC
-struct gateway {
-	__u32 ifindex;
-	struct addr gw, src;
-	__u8 mac[6], pad[2];
-};
+// uplinks (internal/uplink.GatewaysMap; struct gateway of uplink.bpf.h)
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, 2);

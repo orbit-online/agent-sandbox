@@ -195,6 +195,8 @@ one sig
                  // netns-netkit up --mdns sets (bpf.go attach)
   ResponseOnly,  // code: pre (uplink.bpf.c, mdns_response) copies in only QR 1 from port 5353
   RegOnly,       // code: pre (uplink.bpf.c) copies only to the primaries of the mdns map
+  GatewayIn,     // code: pre (uplink.bpf.c, mdns_response) copies only on the uplink of the gateways map, where
+                 // the queries leave
   VlanDrop,      // code: peer and primary (netkit.bpf.c) drop skb->vlan_present, post (uplink.bpf.c) drops it to
                  // a sandbox, pre copies no mDNS response with it
   IdleCheck,     // code: peer (netkit.bpf.c) passes a reply only on a flow primary renewed within IDLE_TCP or
@@ -359,10 +361,12 @@ pred lanSend[g: set Guard, u: Uplink, a, d: Addr, f: Flow] {
       d2 = rev.nat[f] + { x: d | no rev } {
     // pre: a sandbox source dropped first
     (PreSrcDrop in g and u in PreOn and a in SbxAddr) implies drop
-    // pre: copies of an mDNS response to the registered primaries, whose
-    // program (or policy) decides; the response itself goes to the host
+    // pre: copies of an mDNS response on the gateway uplink to the registered
+    // primaries, whose program (or policy) decides; the response itself
+    // goes to the host
     else (d in mdns and u in PreOn) implies land[
       { x: Sandbox | (ResponseOnly in g implies d = MdnsResponse) and (RegOnly in g implies x in MdnsReg)
+        and (GatewayIn in g implies u = K.gw)
         and (VlanDrop in g implies no Tagged')
         and (x in PrimOn implies (MdnsConst in g implies x in Mdns) else PolicyDrop not in g) },
       none, none, none -> none, none -> none, none -> none, none -> none -> none]
@@ -747,19 +751,24 @@ assert M1revertConst { system[Guard - MdnsConst] implies always mdnsOut }
 check M1revertConst for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
 
 // N9. What reaches a sandbox from the mDNS group of the LAN is a
-// response, and only a sandbox with mDNS gets it, a stale mdns map entry
-// included (code: ResponseOnly; MdnsConst, which holds alone; RegOnly).
+// response on the uplink of the gateways map, where its queries leave (as
+// N2: nothing of the subnet of another NIC), and only a sandbox with mDNS
+// gets it, a stale mdns map entry included (code: ResponseOnly;
+// GatewayIn; MdnsConst, which holds alone; RegOnly).
 pred mdnsIn {
   all s: Sandbox | (Pkt.from in Device and s in Pkt.to and Pkt.dst in mdns) implies
-    (Pkt.dst = MdnsResponse and s in Mdns)
+    (Pkt.dst = MdnsResponse and s in Mdns and Pkt.from = K.gw)
 }
 assert M2mdnsIn { system[Guard] implies always mdnsIn }
 check M2mdnsIn for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 0
 
 // N9, reverts: without ResponseOnly LAN queries come in; without
+// GatewayIn the responses on another uplink do (2026-11-26); without
 // MdnsConst a stale entry of the mdns map copies into a sandbox without
 // mDNS; without RegOnly and MdnsConst every sandbox gets the copies;
 // without PolicyDrop a primary with its program detached passes them.
+assert M2revertGateway { system[Guard - GatewayIn] implies always mdnsIn }
+check M2revertGateway for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
 assert M2revertResponse { system[Guard - ResponseOnly] implies always mdnsIn }
 check M2revertResponse for 3 but 2 Sandbox, 2 SbxAddr, 2 Uplink, 1 Tunnel, 1 Remote, 2 Port, 2 Flow, 1..6 steps expect 1
 assert M2revertConst { system[Guard - MdnsConst] implies always mdnsIn }

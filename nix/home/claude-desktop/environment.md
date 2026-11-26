@@ -159,8 +159,8 @@ unless you ask otherwise); release it when you're done.
   and logs).
   mDNS (`.local` names), unless the launcher has `network.mdns` off: your
   queries to `224.0.0.251` or `ff02::fb` port 5353 leave from the host
-  address and port 5353, and the responses on the LAN come back to the
-  group here, so only a querier on port 5353 gets them (avahi, or a
+  address and port 5353, and the responses on the LAN of that uplink
+  come back to the group here, so only a querier on port 5353 gets them (avahi, or a
   socket on 5353 that joined the group; a one-shot query from another
   port, as `dig -p 5353` sends, gets no answer). Your responses, probes
   and announcements stay in: you can't publish a name on the LAN. So does

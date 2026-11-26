@@ -587,8 +587,11 @@ them, and their revert checks are that design.
   it names (a limit, not modelled). N2 and N5 take these
   copies as leaving from the uplink address. At most 10 a second leave per
   sandbox, after a burst of 20 (`MDNS_RATE`, `MDNS_BURST`; not modelled).
-- N9. What reaches a sandbox from the mDNS group of the LAN is a response,
-  and only a sandbox with `network.mdns` gets it: pre copies responses to
+- N9. What reaches a sandbox from the mDNS group of the LAN is a response
+  on the uplink of the `gateways` map, where its queries leave (per
+  family; as N2, nothing of the subnet of another NIC, whose names and
+  services it would hear otherwise), and only a sandbox with
+  `network.mdns` gets it: pre copies responses to
   the primaries of the `mdns` map, marked, and `primary` passes them only
   when loaded with the constant `mdns`, which also covers a stale entry
   of the map whose ifindex another primary got (sandbox-uplink removes an

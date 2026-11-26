@@ -44,6 +44,16 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } mdns SEC(".maps");
 
+// Per family (0 IPv4, 1 IPv6) the uplink with the default route, where the mDNS queries of the sandboxes leave
+// (internal/uplink.GatewaysMap, struct gateway of uplink.bpf.h). sandbox-uplink pins it before it loads the programs
+// and puts it in place of this one
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 2);
+	__type(key, __u32);
+	__type(value, struct gateway);
+} gateways SEC(".maps");
+
 // What pre leaves for post in skb->cb[0] and cb[1] (the qdisc control block, which einat leaves alone), so the mark of
 // the host stays as it came. Two words, as the block comes in with what GRO left in it, not zeroed
 #define PASSED0 0x5a6d0001
@@ -181,18 +191,21 @@ static __always_inline int response_at(struct __sk_buff *skb, const __u32 l4, co
 	return udp->source == bpf_htons(MDNS_PORT) && udp->dest == bpf_htons(MDNS_PORT) && dns[2] & 0x80;
 }
 
-// Whether skb is an mDNS response to the group, 224.0.0.251 or ff02::fb, from and to port 5353: QR set in the DNS
-// header after a fixed IP header. Each family apart: a variable offset is pointer arithmetic the verifier refuses
-// without CAP_PERFMON
+// Whether skb is an mDNS response to the group, 224.0.0.251 or ff02::fb, from and to port 5353 (QR set in the DNS
+// header after a fixed IP header), that came in on the uplink the queries of its family leave from: a sandbox hears
+// the LAN it asks, never the names and services on the subnet of another NIC (storage, a BMC), which it can't reach
+// either (the `peer` program, network.als GatewayOnly and GatewayIn). Each family apart: a variable offset is pointer
+// arithmetic the verifier refuses without CAP_PERFMON
 static __always_inline int mdns_response(struct __sk_buff *skb)
 {
-	switch (mdns_group(skb)) {
-	case 4:
+	int fam = mdns_group(skb);
+	__u32 key = fam == 6;
+	struct gateway *gw = fam ? bpf_map_lookup_elem(&gateways, &key) : 0;
+	if (!gw || gw->ifindex != skb->ifindex)
+		return 0;
+	if (fam == 4)
 		return response_at(skb, ETH_HLEN + sizeof(struct iphdr), DNS_FLAGS4);
-	case 6:
-		return response_at(skb, ETH_HLEN + sizeof(struct ipv6hdr), DNS_FLAGS6);
-	}
-	return 0;
+	return response_at(skb, ETH_HLEN + sizeof(struct ipv6hdr), DNS_FLAGS6);
 }
 
 struct copy {

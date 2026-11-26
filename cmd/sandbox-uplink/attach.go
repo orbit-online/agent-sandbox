@@ -64,10 +64,17 @@ func load(object, dir string, v4, v6 netip.Prefix) (*loader, error) {
 			return nil, fmt.Errorf("Set %s: %w", name, err)
 		}
 	}
+	// Before the programs: pre reads the gateways map, and a pin of another shape is replaced first
+	sbx, err := openSandboxes(dir)
+	if err != nil {
+		return nil, err
+	}
 	var colls [2]*ebpf.Collection
 	for i := range colls {
 		// The second instance shares the pinned maps of the first
-		colls[i], err = ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: dir}})
+		colls[i], err = ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+			Maps: ebpf.MapOptions{PinPath: dir}, MapReplacements: map[string]*ebpf.Map{"gateways": sbx.gateways},
+		})
 		if err != nil {
 			var ve *ebpf.VerifierError
 			if errors.As(err, &ve) {
@@ -83,10 +90,7 @@ func load(object, dir string, v4, v6 netip.Prefix) (*loader, error) {
 			return nil, fmt.Errorf("Open the %s map to its group: %w", m, err)
 		}
 	}
-	sbx, err := openSandboxes(dir, coll.Maps["sandboxes"], coll.Maps["mdns"])
-	if err != nil {
-		return nil, err
-	}
+	sbx.reg, sbx.mdns = coll.Maps["sandboxes"], coll.Maps["mdns"]
 	groups, err := openMdnsGroups()
 	if err != nil {
 		return nil, err
