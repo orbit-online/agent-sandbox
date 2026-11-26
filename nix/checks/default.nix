@@ -362,7 +362,8 @@ let
     # The host side of the sandbox network comes with the sandbox, and only then
     testNetwork = {
       expr = {
-        on = system.config.systemd.services ? sandbox-einat && system.config.systemd.services ? sandbox-uplink;
+        on =
+          system.config.systemd.services ? sandbox-einat && system.config.systemd.services ? sandbox-uplink;
         off = (nixos { }).config.systemd.services ? sandbox-einat;
         inherit (system.config.networking.dhcpcd) denyInterfaces;
         inherit (system.config.networking.networkmanager) unmanaged;
@@ -377,7 +378,8 @@ let
     # Named uplinks reach both units and the udev rule
     testUplinks =
       let
-        c = (system.extendModules { modules = [ { agent-sandbox.network.uplinks = [ "eth1" ]; } ]; }).config;
+        c =
+          (system.extendModules { modules = [ { agent-sandbox.network.uplinks = [ "eth1" ]; } ]; }).config;
       in
       {
         expr = {
@@ -396,8 +398,7 @@ let
     testHooks =
       let
         hook = lib.getExe pkgs.hello;
-        with' =
-          sys: hooks: (sys.extendModules { modules = [ { agent-sandbox.hooks = hooks; } ]; }).config;
+        with' = sys: hooks: (sys.extendModules { modules = [ { agent-sandbox.hooks = hooks; } ]; }).config;
         c = with' system {
           start = [
             {
@@ -414,16 +415,21 @@ let
           ];
           stop = [ { path = hook; } ];
         };
-        fails = hooks: !(builtins.tryEval (builtins.deepSeq (with' system hooks).environment.etc true)).success;
+        fails =
+          hooks: !(builtins.tryEval (builtins.deepSeq (with' system hooks).environment.etc true)).success;
       in
       {
         expr = {
-          none = system.config.environment.etc ? "agent-sandbox/hooks.json" || system.config.security.wrappers ? sandbox-hooks;
+          none =
+            system.config.environment.etc ? "agent-sandbox/hooks.json"
+            || system.config.security.wrappers ? sandbox-hooks;
           noUser = (with' (nixos { }) { stop = [ { path = hook; } ]; }).security.wrappers ? sandbox-hooks;
           # The group with the sandbox, hooks or not, for files a hook reads
           group = system.config.users.groups ? sandbox-hooks;
           noUserGroup = (nixos { }).config.users.groups ? sandbox-hooks;
-          config = builtins.fromJSON (builtins.unsafeDiscardStringContext c.environment.etc."agent-sandbox/hooks.json".text);
+          config = builtins.fromJSON (
+            builtins.unsafeDiscardStringContext c.environment.etc."agent-sandbox/hooks.json".text
+          );
           wrapper = {
             inherit (c.security.wrappers.sandbox-hooks)
               source
@@ -433,7 +439,8 @@ let
               permissions
               ;
           };
-          noCaps = (with' system { stop = [ { path = hook; } ]; }).security.wrappers.sandbox-hooks.capabilities;
+          noCaps =
+            (with' system { stop = [ { path = hook; } ]; }).security.wrappers.sandbox-hooks.capabilities;
           outside = fails { start = [ { path = "/usr/local/bin/hook"; } ]; };
           unknownCap = fails {
             start = [
@@ -723,16 +730,19 @@ let
           )
         )
       );
-      expected = map (
-        b:
-        "agent-sandbox.claude-desktop: ${b}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
-      ) [
-        ''binds."/srv/local" binds /home/alice/.local/''
-        ''binds."/srv/run" binds /run/user/1000''
-        ''binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
-        ''launchers.work.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
-        ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
-      ];
+      expected =
+        map
+          (
+            b:
+            "agent-sandbox.claude-desktop: ${b}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+          )
+          [
+            ''binds."/srv/local" binds /home/alice/.local/''
+            ''binds."/srv/run" binds /run/user/1000''
+            ''binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
+            ''launchers.work.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
+            ''launchers.work.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
+          ];
     };
     testUnitsOwnNames = {
       expr = map (a: a.message) (
@@ -791,10 +801,12 @@ let
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
       expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
     };
-    # At the cap on a launcher name's length, and past it. The cap is the Go test's, which binds the broker's sockets
-    # at it, so the module's has to agree
+    # At the cap on a launcher name's length, and past it. The cap is the Go tests', which bind the sockets at it, so
+    # the module's has to agree
     testLauncherNameMax = {
-      expr = failedAssertions (nixos (enabled // { launchers.${lib.fixedWidthString launcherNameMax "a" "w"} = { }; }));
+      expr = failedAssertions (
+        nixos (enabled // { launchers.${lib.fixedWidthString launcherNameMax "a" "w"} = { }; })
+      );
       expected = [ ];
     };
     testLauncherNameTooLong =
@@ -804,9 +816,70 @@ let
       {
         expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.${name} = { }; })));
         expected = [
-          "agent-sandbox.claude-desktop: launcher name ${name} must be at most ${toString launcherNameMax} characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 107 bytes and its NUL"
+          "agent-sandbox.claude-desktop: launcher name ${name} must be at most ${toString launcherNameMax} characters, so the socket paths it goes into fit a socket's 107 bytes and its NUL; the longest is the launcher's warning socket, /run/user/<uid>/claude-desktop/claude-desktop-<name>-app.service.warn"
         ];
       };
+    # The sockets bound by a path the launcher's name is in, for a name at the cap and the longest runtime dir
+    # (/run/user/4294967294): the launcher's warning socket, the broker's two, and the varlink socket of the sandbox's
+    # journald namespace, which the NixOS module starts. None past a socket path's 107 bytes, the longest at them
+    testLauncherNameSockets =
+      let
+        name = lib.fixedWidthString launcherNameMax "a" "w";
+        sys = nixos (enabled // { launchers.${name}.permissions.enable = true; });
+        cfg =
+          sys.config.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.${name}.build.launcherConfig;
+        runtime = "/run/user/4294967294/claude-desktop";
+        journals = lib.filter (lib.hasInfix name) sys.config.systemd.targets.sockets.wants;
+      in
+      {
+        expr = {
+          failed = failedAssertions sys;
+          sockets = lib.sort (a: b: a > b) (
+            map lib.stringLength (
+              [
+                # The app's unit, as the module names it (appUnit in its lib.nix)
+                "${runtime}/claude-desktop-${name}-app.service.warn"
+                "${runtime}/${cfg.permissions.dir}-control.sock"
+                "${runtime}/${cfg.permissions.dir}/request.sock"
+              ]
+              ++ map (
+                j:
+                "/run/systemd/journal.${lib.removePrefix "systemd-journald@" (lib.removeSuffix ".socket" j)}/io.systemd.journal"
+              ) journals
+            )
+          );
+        };
+        expected = {
+          failed = [ ];
+          sockets = [
+            107
+            102
+            100
+            100
+            94
+          ];
+        };
+      };
+    # The cap as the Go side has it: the tests that bind the warning socket and the broker's at it, and the helpers'
+    # check of a launcher name
+    testLauncherNameMaxAgrees = {
+      expr = {
+        warn = lib.toInt (
+          builtins.head (
+            builtins.match ".*\nconst launcherNameMax = ([0-9]+)\n.*" (
+              builtins.readFile ../../cmd/launcher/warn_test.go
+            )
+          )
+        );
+        helpers = builtins.match ".*\nvar LauncherName = [^\n]*a-z0-9-][{]0,([0-9]+)[}][^\n]*\n.*" (
+          builtins.readFile ../../internal/caller/caller.go
+        );
+      };
+      expected = {
+        warn = launcherNameMax;
+        helpers = [ (toString (launcherNameMax - 1)) ];
+      };
+    };
     testLauncherNetnsAssertion = {
       expr = map (a: a.message) (
         failedAssertions (
@@ -875,16 +948,17 @@ let
       expected = [
         "agent-sandbox.claude-desktop: sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in dbus"
       ]
-      ++ map
-        (
-          n:
-          "agent-sandbox.claude-desktop: dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version"
-        )
-        [
-          "org.freedesktop.DBus"
-          "org.test.*"
-          "org.test.Empty"
-        ]
+      ++
+        map
+          (
+            n:
+            "agent-sandbox.claude-desktop: dbus.\"${n}\": a well-known bus name, exact and not the bus driver's, with a policy, a rule or a version"
+          )
+          [
+            "org.freedesktop.DBus"
+            "org.test.*"
+            "org.test.Empty"
+          ]
       ++ [
         "agent-sandbox.claude-desktop: launchers.work.sandbox must not set dbus.policies, dbus.rules or dbus.args, which the D-Bus proxy doesn't take; its rules go in launchers.work.dbus"
       ];
@@ -947,9 +1021,9 @@ let
                   versions = lib.genAttrs (map (i: "org.test.I${toString i}@/") (lib.range 1 64)) (_: 1);
                 };
                 "org.test.Many".broadcast = lib.genList (_: "*") 65;
-                "org.test.ManyVersions".versions = lib.genAttrs (map (i: "org.test.I${toString i}@/") (lib.range 1 65)) (
-                  _: 1
-                );
+                "org.test.ManyVersions".versions = lib.genAttrs (map (i: "org.test.I${toString i}@/") (
+                  lib.range 1 65
+                )) (_: 1);
                 # Over 64 KiB in one rule
                 "org.test.Big".call = [ "@/${lib.strings.replicate (64 * 1024) "a"}" ];
               };
@@ -1015,10 +1089,19 @@ let
     # Only a launcher with the broker gets its MCP server, given the host commands' declarations (checked in the
     # closure: without run)
     testPermissionsMcp = {
-      expr = map (l: if l.mcpServers ? permissions then l.mcpServers.permissions // { args = lib.take 2 l.mcpServers.permissions.args; } else null) [
-        aliceMemo.agent-sandbox.claude-desktop
-        aliceMemo.agent-sandbox.claude-desktop.launchers.work
-      ];
+      expr =
+        map
+          (
+            l:
+            if l.mcpServers ? permissions then
+              l.mcpServers.permissions // { args = lib.take 2 l.mcpServers.permissions.args; }
+            else
+              null
+          )
+          [
+            aliceMemo.agent-sandbox.claude-desktop
+            aliceMemo.agent-sandbox.claude-desktop.launchers.work
+          ];
       expected = [
         null
         {
@@ -1366,6 +1449,462 @@ let
         "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.shot: a name of letters, digits and - (vm_shot at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
       ];
     };
+    # S14 by every spelling: a bind's source is read as written, so it has to be the one spelling of its path, and
+    # /proc and /var/run name every path of the host again. One trailing slash aside
+    testBindSpellings = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              binds."/srv/a".src = "/run/user//";
+              binds."/srv/b".src = "/run/./user/1000";
+              binds."/srv/c".src = "//run/user/1000";
+              binds."/srv/d".src = "/home/alice/.local/share/claude-desktop/home/..";
+              binds."/srv/e".src = "/home/alice/.local//share/claude-desktop-work";
+              binds."/srv/f".src = ".local/share/claude-desktop-work";
+              binds."/srv/g".src = "/var/run/user/1000";
+              binds."/srv/h".src = "/proc/self/root/run/user/1000";
+              binds."/srv/i".src = "/proc";
+              # Clean but for its slash, and nothing no sandbox may reach
+              binds."/srv/ok".src = "/srv/ok/";
+              # Not bound
+              binds."/srv/off" = {
+                src = "/run/user//";
+                enable = false;
+              };
+            }
+          )
+        )
+      );
+      expected =
+        map
+          (
+            b:
+            "agent-sandbox.claude-desktop: binds.${b}, which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written"
+          )
+          [
+            ''"/srv/a" binds /run/user//''
+            ''"/srv/b" binds /run/./user/1000''
+            ''"/srv/c" binds //run/user/1000''
+            ''"/srv/d" binds /home/alice/.local/share/claude-desktop/home/..''
+            ''"/srv/e" binds /home/alice/.local//share/claude-desktop-work''
+            ''"/srv/f" binds .local/share/claude-desktop-work''
+          ]
+        ++
+          map
+            (
+              b:
+              "agent-sandbox.claude-desktop: binds.${b}, which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
+            )
+            [
+              ''"/srv/g" binds /var/run/user/1000''
+              ''"/srv/h" binds /proc/self/root/run/user/1000''
+              ''"/srv/i" binds /proc''
+            ];
+    };
+    # S14 for devices, bound read-write from their own path: none that a bind's source may not be
+    testStateDevices = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            enabled
+            // {
+              devices = [
+                "/dev/nvidiactl"
+                "/run/user/1000"
+                "/home/alice/.local/share/claude-desktop-work"
+                "/dev/../run/user/1000"
+                "/proc/1/root"
+              ];
+            }
+          )
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: devices binds /run/user/1000, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+        "agent-sandbox.claude-desktop: devices binds /home/alice/.local/share/claude-desktop-work, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+        "agent-sandbox.claude-desktop: devices binds /dev/../run/user/1000, which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written"
+        "agent-sandbox.claude-desktop: devices binds /proc/1/root, which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
+      ];
+    };
+    # A schema keyword the broker doesn't read (its schema package decodes leniently) would load and restrict nothing:
+    # refused wherever a schema goes, as is a schema without a type of the broker's. Every keyword it has passes
+    testSchemaKeywords = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                commands.vm = {
+                  description = "a VM";
+                  consent.title = "use the VM";
+                  bounding.vm = {
+                    type = "string";
+                    description = "the VM";
+                    const = "win11";
+                  };
+                  # No type: the broker refuses the schema
+                  bounding.disk.description = "the disk";
+                  commands.type = {
+                    description = "typing";
+                    consent = "Type text";
+                    run = [ "/srv/type" ];
+                    arguments.text = {
+                      type = "string";
+                      description = "the text";
+                      maxlength = 10;
+                      minLength = 1;
+                    };
+                    arguments.keys = {
+                      type = "array";
+                      description = "the keys";
+                      items = {
+                        type = "string";
+                        format = "key";
+                      };
+                    };
+                    arguments.flat = "string";
+                  };
+                };
+                commands.all = {
+                  description = "every keyword";
+                  consent.title = "use every keyword";
+                  bounding.vm = {
+                    type = "string";
+                    description = "the VM";
+                    instances = "/srv/vms/*/console.sock";
+                    maxLength = 20;
+                    pattern = "[a-z]+";
+                  };
+                  commands.run = {
+                    description = "running";
+                    consent = "Run it";
+                    run = [ "/srv/run" ];
+                    arguments = {
+                      n = {
+                        type = "integer";
+                        description = "a number";
+                        minimum = 0;
+                        maximum = 9;
+                      };
+                      s = {
+                        type = "string";
+                        description = "a string";
+                        opaque = true;
+                        enum = [ "a" ];
+                      };
+                      t = {
+                        type = "string";
+                        description = "lines";
+                        multiline = true;
+                      };
+                      l = {
+                        type = "array";
+                        description = "a list";
+                        maxItems = 3;
+                        items.type = "boolean";
+                      };
+                    };
+                  };
+                };
+                sockets.vms = {
+                  description = "a console";
+                  bounding.vm = {
+                    type = "string";
+                    description = "the VM";
+                    instances = "/srv/vms/*/console.sock";
+                    minLength = 1;
+                  };
+                };
+              };
+            }
+          )
+        )
+      );
+      expected =
+        map
+          (
+            m:
+            "agent-sandbox.claude-desktop: launchers.work.permissions.${m.at}: a schema of the broker's has a type of string, boolean, integer, number, array and of keywords type, description, opaque, multiline, maxLength, pattern, enum, minimum, maximum, items, maxItems, instances alone, any other it would ignore; not ${m.keys}"
+          )
+          [
+            {
+              at = "sockets.vms";
+              keys = "vm.minLength";
+            }
+            {
+              at = "commands.vm";
+              keys = "disk.type, vm.const";
+            }
+            {
+              at = "commands.vm.commands.type";
+              keys = "flat.(not an object), keys.items.format, text.maxlength, text.minLength";
+            }
+          ]
+        ++ [
+          "agent-sandbox.claude-desktop: launchers.work.permissions.commands.vm.commands.type: a name of letters, digits and - (vm_type at most 64 characters), every argument described, none named reason, lease or as a bounding one, and a result of text or image/*"
+        ];
+    };
+    # Host sockets the eval check took and the daemon refuses at its start, or reads as another path: ~ alone, a
+    # variable past the leading one (the daemon expands any its environment has), no description, and an instances
+    # glob that isn't one * without ? or [
+    testSocketAgreement = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                sockets =
+                  lib.mapAttrs
+                    (_: instances: {
+                      description = "by instance";
+                      bounding.s = {
+                        type = "string";
+                        description = "a socket";
+                        inherit instances;
+                      };
+                    })
+                    {
+                      glob-one = "/srv/socks/*.sock";
+                      glob-two = "/srv/*/*.sock";
+                      glob-mark = "/srv/*/?.sock";
+                      glob-class = "/srv/*/[ab].sock";
+                      glob-none = "/srv/a.sock";
+                    }
+                  // {
+                    home = {
+                      description = "below the home directory";
+                      path = "~/.gnupg/S.gpg-agent";
+                    };
+                    tilde = {
+                      description = "the home directory";
+                      path = "~";
+                    };
+                    variable = {
+                      description = "a variable the daemon would expand";
+                      path = "/run/user/1000/\${EMPTY}bus";
+                    };
+                    variables = {
+                      description = "the runtime dir twice";
+                      path = "$XDG_RUNTIME_DIR/x/$XDG_RUNTIME_DIR/bus";
+                    };
+                    undescribed = {
+                      description = "";
+                      path = "/srv/a.sock";
+                    };
+                  };
+              };
+            }
+          )
+        )
+      );
+      expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.sockets.${m}") [
+        "glob-class: instances is a glob with one * and no ? or [, on a string"
+        "glob-mark: instances is a glob with one * and no ? or [, on a string"
+        "glob-none: instances is a glob with one * and no ? or [, on a string"
+        "glob-two: instances is a glob with one * and no ? or [, on a string"
+        "tilde: ~ is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "undescribed: a description, which the consent names"
+        "variable: /run/user/1000/\${EMPTY}bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "variables: $XDG_RUNTIME_DIR/x/$XDG_RUNTIME_DIR/bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+      ];
+    };
+    # Host commands the daemon refuses at its start (checkBounding, hostcmd's Check), caught at eval: instances on two
+    # bounding arguments, on one that isn't a string, as a glob it doesn't take or on a free argument, no description,
+    # nothing to run
+    testCommandAgreement = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                commands =
+                  lib.mapAttrs
+                    (
+                      _: c:
+                      lib.recursiveUpdate {
+                        description = "a VM";
+                        consent.title = "use the VM";
+                        commands.shot = {
+                          description = "a screenshot";
+                          consent = "Take screenshots";
+                          run = [ "/srv/shot" ];
+                        };
+                      } c
+                    )
+                    {
+                      ok.bounding.vm = {
+                        type = "string";
+                        description = "the VM";
+                        instances = "$XDG_RUNTIME_DIR/vms/*/qmp.sock";
+                      };
+                      two.bounding = {
+                        vm = {
+                          type = "string";
+                          description = "the VM";
+                          instances = "/srv/vms/*";
+                        };
+                        disk = {
+                          type = "string";
+                          description = "the disk";
+                          instances = "/srv/disks/*";
+                        };
+                      };
+                      stars.bounding.vm = {
+                        type = "string";
+                        description = "the VM";
+                        instances = "/srv/*/*";
+                      };
+                      number.bounding.vm = {
+                        type = "integer";
+                        description = "the VM";
+                        instances = "/srv/vms/*";
+                      };
+                      free.commands.shot.arguments.screen = {
+                        type = "string";
+                        description = "the screen";
+                        instances = "/srv/screens/*";
+                      };
+                      silent.commands.shot.description = "";
+                      idle.commands.shot.run = lib.mkForce [ ];
+                    };
+              };
+            }
+          )
+        )
+      );
+      expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.commands.${m}") [
+        "free.commands.shot: a description, what it runs (run), and instances on bounding arguments only"
+        "idle.commands.shot: a description, what it runs (run), and instances on bounding arguments only"
+        "number: at most one bounding argument with instances, a glob with one * and no ? or [, on a string"
+        "silent.commands.shot: a description, what it runs (run), and instances on bounding arguments only"
+        "stars: at most one bounding argument with instances, a glob with one * and no ? or [, on a string"
+        "two: at most one bounding argument with instances, a glob with one * and no ? or [, on a string"
+      ];
+    };
+    # Standing grants the daemon refuses at its start (checkStanding), caught at eval: a parameter the capability
+    # doesn't take, a value its bounding argument doesn't (type, enum, bounds, length; a pattern is the daemon's to
+    # match), params that are no object, and one listed twice
+    testStandingGrantParams = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                enable = true;
+                commands.vm = {
+                  description = "a VM";
+                  consent.title = "use the VM";
+                  bounding = {
+                    vm = {
+                      type = "string";
+                      description = "the VM";
+                      enum = [
+                        "win11"
+                        "win10"
+                      ];
+                    };
+                    screen = {
+                      type = "integer";
+                      description = "the screen";
+                      minimum = 0;
+                      maximum = 3;
+                    };
+                    label = {
+                      type = "string";
+                      description = "a label";
+                      maxLength = 4;
+                    };
+                  };
+                  commands.shot = {
+                    description = "a screenshot";
+                    consent = "Take screenshots";
+                    run = [ "/srv/shot" ];
+                  };
+                };
+                sockets.agent = {
+                  description = "an agent";
+                  path = "/srv/agent.sock";
+                };
+                grants = [
+                  {
+                    capability = "vm";
+                    params = {
+                      vm = "win11";
+                      screen = 3;
+                      label = "æøå!";
+                    };
+                  }
+                  # A bounding argument left out is a value of its own
+                  { capability = "vm"; }
+                  { capability = "agent"; }
+                  {
+                    capability = "vm";
+                    params.host = "desktop";
+                  }
+                  {
+                    capability = "vm";
+                    params = {
+                      vm = "win7";
+                      screen = 4;
+                      label = "label";
+                    };
+                  }
+                  {
+                    capability = "vm";
+                    params = {
+                      vm = 11;
+                      screen = "0";
+                      label = "a\nb";
+                    };
+                  }
+                  {
+                    capability = "vm";
+                    params = [ "win11" ];
+                  }
+                  {
+                    capability = "agent";
+                    params.socket = "other";
+                  }
+                  { capability = "agent"; }
+                  {
+                    capability = "port";
+                    params = {
+                      protocol = "tcp";
+                      port = 3000;
+                    };
+                  }
+                  {
+                    capability = "port";
+                    params = {
+                      port = 3000;
+                      protocol = "tcp";
+                    };
+                  }
+                  {
+                    capability = "port";
+                    params = "tcp/3000";
+                  }
+                ];
+              };
+            }
+          )
+        )
+      );
+      expected = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.grants: ${m}") [
+        "the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not host"
+        "the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not label, screen, vm"
+        "the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not label, screen, vm"
+        ''the params of a vm grant are values of its bounding arguments (label, screen, vm), each one its schema takes, not ["win11"]''
+        "the params of a agent grant are values of its bounding arguments (), each one its schema takes, not socket"
+        "the params of a port grant are protocol (tcp or udp) and port (1 to 65535)"
+        "agent {} is listed 2 times"
+        ''port {"port":3000,"protocol":"tcp"} is listed 2 times''
+      ];
+    };
     testMcpServersHmTransform = {
       expr =
         let
@@ -1622,7 +2161,9 @@ in
           configOf() {
             local w
             w=$(readlink -f "$1")
-            grep -qF '${lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.launcher} start --config=' "$w" ||
+            grep -qF '${
+              lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.launcher
+            } start --config=' "$w" ||
               { echo "$1 doesn't run the launcher" >&2; exit 1; }
             grep -oP -- '--config=\K/nix/store/\S+\.json' "$w"
           }

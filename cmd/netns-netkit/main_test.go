@@ -14,7 +14,7 @@ import (
 
 // What run refuses before it touches anything
 func TestRunRefuses(t *testing.T) {
-	long := strings.Repeat("a", 47)
+	long := strings.Repeat("a", 40)
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -37,10 +37,10 @@ func TestRunRefuses(t *testing.T) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.want)
 		}
 	}
-	// A name of 46 characters passes the check
+	// A name of 39 characters passes the check
 	opts, _ := docopt.ParseArgs(usage, []string{"down", "--name=" + long[1:]}, "")
 	if err := run(opts); err != nil && strings.Contains(err.Error(), "is not [a-z]") {
-		t.Errorf("Name of 46 characters refused: %v", err)
+		t.Errorf("Name of 39 characters refused: %v", err)
 	}
 }
 

@@ -64,7 +64,7 @@ var human = caller.Human
 func run(opts docopt.Opts, config string, owner uint32) error {
 	name, _ := opts.String("--name")
 	if !caller.LauncherName.MatchString(name) {
-		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 46 characters", name)
+		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 39 characters", name)
 	}
 	if err := human(); err != nil {
 		return err

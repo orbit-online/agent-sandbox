@@ -87,12 +87,17 @@ let
         ]
     ) (sl.byDepth (lib.filterAttrs (_: b: b.rw == rw) config.binds));
   devices = lib.unique (lib.optional config.kvm "/dev/kvm" ++ config.devices);
-  # The launcher's enabled binds whose source holds or lies in a launcher's state dir, holds $XDG_RUNTIME_DIR (any
-  # /run/user/<uid>) or lies in its .flatpak or claude-desktop dirs: the sandbox would reach another sandbox's state,
-  # the permissions broker's sockets, or the nixpak instance info the broker and the launcher read as the
-  # sandbox's identity. Its own home, store and scratchpad aside, which it holds anyway. As the broker's attach
-  # ceiling denies them
-  stateBinds =
+  # What the checks below say about a bind's or a device's source on the host, null for nothing. They read the path as
+  # written, so first it has to be the one spelling of itself: absolute and clean, one trailing slash aside
+  # (/run/user//, /run/./user/1000 and <state dir>/home/.. are /run/user, the runtime dir and the state dir to bwrap).
+  # Then it may not be /proc or /var/run or lie in them, where every path of the host has another name
+  # (/proc/self/root/run/user/1000, /var/run/user/1000) and the host's /proc opens the root of each of the user's
+  # processes; nor hold or lie in a launcher's state dir, hold $XDG_RUNTIME_DIR (any /run/user/<uid>) or lie in its
+  # .flatpak or claude-desktop dirs: the sandbox would reach another sandbox's state, the permissions broker's
+  # sockets, or the nixpak instance info the broker and the launcher read as the sandbox's identity. Its own home,
+  # store and scratchpad aside, which it holds anyway. As the broker's attach ceiling denies them. A source that is a
+  # link on the host to one of these isn't seen here
+  sourceRefusal =
     let
       stateDirs = map sl.stateDirOf sl.names;
       ownParts = map (d: "${ids.stateDir}/${d}") [
@@ -108,7 +113,7 @@ let
           "/run/user"
         ]
         || builtins.match "/run/user/[^/]+(/(\\.flatpak|claude-desktop)(/.*)?)?" src != null;
-      bad =
+      state =
         src:
         runtime src
         || lib.any (
@@ -116,9 +121,25 @@ let
           sl.holds src d || (sl.holds d src && !(d == ids.stateDir && lib.any (r: sl.holds r src) ownParts))
         ) stateDirs;
     in
-    lib.filterAttrs (
-      _: b: b.enable && bad (if b.src == "/" then "/" else lib.removeSuffix "/" b.src)
-    ) config.binds;
+    written:
+    let
+      src = if written == "/" then "/" else lib.removeSuffix "/" written;
+    in
+    if !sl.cleanPath src then
+      "which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written"
+    else if
+      lib.any (alias: sl.holds alias src) [
+        "/proc"
+        "/var/run"
+      ]
+    then
+      "which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
+    else if state src then
+      "which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+    else
+      null;
+  refusedBinds = lib.filterAttrs (_: b: b.enable && sourceRefusal b.src != null) config.binds;
+  refusedDevices = lib.filter (d: sourceRefusal d != null) devices;
 in
 {
   config = {
@@ -191,18 +212,23 @@ in
           message = "agent-sandbox.claude-desktop: launcher name ${launcherName} must match [a-z][a-z0-9-]*";
         }
         {
-          # The tightest of what the name goes into: the broker's control socket and request.sock, 61 bytes besides
-          # the name with a 10-digit uid, bound by path (at most 107 bytes and the NUL). The app ID (D-Bus's 255 bytes, 21
-          # besides), the slice (systemd's 255 characters, 27 besides and 3 more for each - escaped) and the state
-          # dir's file name (255, 15 besides) allow more; the netkit primary's name hashes it
+          # The tightest of what the name goes into: the launcher's warning socket, bound by path (at most 107 bytes and
+          # the NUL), 68 bytes besides the name with a 10-digit uid; see sl.launcherSockets for the others. The app ID
+          # (D-Bus's 255 bytes, 21 besides), the slice (systemd's 255 characters, 27 besides and 3 more for each -
+          # escaped) and the state dir's file name (255, 15 besides) allow more; the netkit primary's name hashes it
           assertion = lib.stringLength launcherName <= sl.launcherNameMax;
-          message = "agent-sandbox.claude-desktop: launcher name ${launcherName} must be at most ${toString sl.launcherNameMax} characters, so its permissions broker's socket path, /run/user/<uid>/claude-desktop/permissions-<name>-control.sock, fits a socket's 107 bytes and its NUL";
+          message = "agent-sandbox.claude-desktop: launcher name ${launcherName} must be at most ${toString sl.launcherNameMax} characters, so the socket paths it goes into fit a socket's 107 bytes and its NUL; the longest is the launcher's warning socket, /run/user/<uid>/claude-desktop/claude-desktop-<name>-app.service.warn";
         }
       ]
       ++ lib.mapAttrsToList (path: b: {
         assertion = false;
-        message = "${ids.opt}binds.\"${path}\" binds ${b.src}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those";
-      }) stateBinds;
+        message = "${ids.opt}binds.\"${path}\" binds ${b.src}, ${sourceRefusal b.src}";
+      }) refusedBinds
+      # A device is bound read-write from its own path
+      ++ map (d: {
+        assertion = false;
+        message = "${ids.opt}devices binds ${d}, ${sourceRefusal d}";
+      }) refusedDevices;
 
     build.sandboxed =
       inputs.nixpak.lib.nixpak

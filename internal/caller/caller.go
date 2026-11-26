@@ -15,8 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// What a launcher name may be (the assertion of the module), so it makes a pin name
-var LauncherName = regexp.MustCompile(`^([a-z][a-z0-9-]{0,45})?$`)
+// What a launcher name may be (the assertion of the module: at most 39 characters, launcherNameMax in its lib.nix), so
+// it makes a pin name
+var LauncherName = regexp.MustCompile(`^([a-z][a-z0-9-]{0,38})?$`)
 
 // Human refuses callers outside group users: the setuid and setgid wrappers (netns-netkit, sandbox-hooks) take the
 // group of the file, so the group can't limit who runs them. Whoever runs netns-netkit gives their own namespaces a

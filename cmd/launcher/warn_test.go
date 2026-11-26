@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,5 +42,34 @@ func TestWarningUnheld(t *testing.T) {
 	acknowledge(w.cfg.Unit, []string{"No splash"})
 	if took := time.Since(start); took > time.Second {
 		t.Errorf("Held %v", took)
+	}
+}
+
+// The longest launcher name the module takes (launcherNameMax in nix/home/claude-desktop/lib.nix). The eval tests
+// read it from here too
+const launcherNameMax = 39
+
+// supervise binds the warning socket by path, $XDG_RUNTIME_DIR/claude-desktop/<the app's unit>.warn, at most 107
+// bytes and its NUL: of the sockets a launcher's name goes into, the longest. With the longest runtime dir,
+// /run/user/4294967294, it binds for a launcher name at the cap and not for one a byte longer
+func TestWarningSocketAtLauncherNameCap(t *testing.T) {
+	w := newWorld(t)
+	t.Chdir(t.TempDir())
+	// A relative path as long as the longest runtime dir
+	t.Setenv("XDG_RUNTIME_DIR", strings.Repeat("r", len("/run/user/4294967294")))
+	w.cfg.Splash = nil
+	sp := showSplash(w.cfg)
+	for _, n := range []int{launcherNameMax, launcherNameMax + 1} {
+		// As the module names the app's unit (appUnit in its lib.nix)
+		w.cfg.Unit = "claude-desktop-" + strings.Repeat("a", n) + "-app.service"
+		path := filepath.Join(strings.Repeat("r", len("/run/user/4294967294")), "claude-desktop", w.cfg.Unit+".warn")
+		if n == launcherNameMax && len(path) != 107 {
+			t.Errorf("%s is %d bytes at the cap, want 107", path, len(path))
+		}
+		ws := listenWarnings(w.cfg, sp)
+		if ws.path != path || (ws.ln != nil) != (n == launcherNameMax) {
+			t.Errorf("Listening at %s (%d bytes), for a launcher name of %d: %v", ws.path, len(ws.path), n, ws.ln != nil)
+		}
+		ws.close()
 	}
 }

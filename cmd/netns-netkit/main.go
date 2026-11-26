@@ -76,7 +76,7 @@ func main() {
 func run(opts docopt.Opts) error {
 	name, _ := opts.String("--name")
 	if !caller.LauncherName.MatchString(name) {
-		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 46 characters", name)
+		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 39 characters", name)
 	}
 	grants := opts["grant"] == true || opts["revoke"] == true
 	all := opts["--all"] == true

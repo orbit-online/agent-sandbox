@@ -65,9 +65,27 @@ rec {
   names = [ null ] ++ lib.attrNames cfg.launchers;
   # A named launcher's suffix to file names, empty for the default one
   suffixOf = name: lib.optionalString (name != null) "-${name}";
-  # The longest launcher name, see its assertion. cmd/permissions-broker/socketpath_test.go binds the broker's sockets at
-  # it, and the eval tests check the two agree
-  launcherNameMax = 46;
+  # The longest launcher name, see its assertion: the tightest of the socket paths it goes into, each at most 107
+  # bytes and the NUL (launcherSockets). cmd/launcher/warn_test.go binds the warning socket at it and
+  # cmd/permissions-broker/socketpath_test.go the broker's, internal/caller takes no longer one, and the eval tests
+  # check they agree
+  launcherNameMax = 39;
+  # The sockets bound by a path the launcher's name is in, with the longest runtime dir (a 10-digit uid): the
+  # launcher's warning socket (cmd/launcher warn.go), 68 bytes besides the name, the broker's control socket and
+  # request.sock, 61, and the varlink socket of the sandbox's journald namespace (systemd-journald-varlink@.socket,
+  # which systemd-journald@.service requires and systemd refuses past 107 bytes), 63
+  launcherSockets =
+    name:
+    let
+      ids = idsOf name;
+      runtime = "/run/user/4294967294/claude-desktop";
+    in
+    [
+      "${runtime}/${ids.appUnit}.warn"
+      "${runtime}/permissions${ids.suffix}-control.sock"
+      "${runtime}/permissions${ids.suffix}/request.sock"
+      "/run/systemd/journal.${ids.sandboxJournal}/io.systemd.journal"
+    ];
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
   stateDirOf = name: "${hm.xdg.dataHome}/claude-desktop${suffixOf name}";
   # The launcher's cgroup slice, holding the app's unit, the broker's and its calls'. A - in
@@ -169,6 +187,21 @@ rec {
   } "source ${./environment-split.sh}";
   # Whether path a is path b or holds it
   holds = a: b: a == b || lib.hasPrefix "${lib.removeSuffix "/" a}/" b;
+  # Whether a string is an absolute path in its clean form: no ., .. or empty segments, so no two spellings of one
+  # path. The checks on paths compare them as written
+  cleanPath =
+    p:
+    p == "/"
+    ||
+      lib.hasPrefix "/" p
+      && !lib.any (
+        seg:
+        lib.elem seg [
+          ""
+          "."
+          ".."
+        ]
+      ) (lib.tail (lib.splitString "/" p));
   # How many characters a UTF-8 string holds, as the broker counts runes: its bytes but the continuation bytes
   # (0x80-0xBF), each the second byte of U+0080-U+00BF's encoding, since a Nix string can't spell a lone byte.
   # lib.stringLength counts bytes
