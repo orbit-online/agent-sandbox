@@ -215,16 +215,19 @@ static __always_inline int own(const struct sandbox *sb, const struct addr *a)
 }
 
 // Where cloud metadata services listen: link-local addresses, 169.254.0.0/16 (169.254.169.254) and fe80::/10, the
-// CGNAT one of Alibaba, 100.100.100.200, and the ULAs of AWS (fd00:ec2::254), GCP (fd20:ce::254) and OCI
-// (fd00:c1::a9fe:a9fe)
+// CGNAT one of Alibaba, 100.100.100.200, the public one of the Azure WireServer, 168.63.129.16, which only a VM there
+// reaches, and the ULAs of AWS (fd00:ec2::254), GCP (fd20:ce::254), OCI (fd00:c1::a9fe:a9fe) and Scaleway
+// (fd00:42::42)
 static __always_inline int metadata(const struct addr *a)
 {
 	if (mapped(a))
-		return (a->w[3] & bpf_htonl(0xffff0000)) == bpf_htonl(0xa9fe0000) || a->w[3] == bpf_htonl(0x646464c8);
+		return (a->w[3] & bpf_htonl(0xffff0000)) == bpf_htonl(0xa9fe0000) || a->w[3] == bpf_htonl(0x646464c8) ||
+		       a->w[3] == bpf_htonl(0xa83f8110);
 	if (!a->w[1] && !a->w[2] &&
 	    ((a->w[0] == bpf_htonl(0xfd000ec2) && a->w[3] == bpf_htonl(0x254)) ||
 	     (a->w[0] == bpf_htonl(0xfd2000ce) && a->w[3] == bpf_htonl(0x254)) ||
-	     (a->w[0] == bpf_htonl(0xfd0000c1) && a->w[3] == bpf_htonl(0xa9fea9fe))))
+	     (a->w[0] == bpf_htonl(0xfd0000c1) && a->w[3] == bpf_htonl(0xa9fea9fe)) ||
+	     (a->w[0] == bpf_htonl(0xfd000042) && a->w[3] == bpf_htonl(0x42))))
 		return 1;
 	return a->b[0] == 0xfe && (a->b[1] & 0xc0) == 0x80;
 }

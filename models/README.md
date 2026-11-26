@@ -616,7 +616,8 @@ them, and their revert checks are that design.
   destinations.
 - N14. No sandbox packet reaches a link-local destination off the host
   (`169.254.0.0/16`, `fe80::/10`) or a known cloud metadata address
-  (the ULAs of AWS, GCP and OCI, the CGNAT one of Alibaba), so a cloud metadata service doesn't
+  (the ULAs of AWS, GCP, OCI and Scaleway, the CGNAT one of Alibaba, the
+  public one of the Azure WireServer, `168.63.129.16`), so a cloud metadata service doesn't
   answer it with the credentials of the host: einat would NAT it to the
   host address.
 

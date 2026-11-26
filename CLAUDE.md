@@ -220,7 +220,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   past that, through `bpf_skb_load_bytes`; no GSO packet, nor one with bytes past its IP length, nor one with an
   authority or additional section; `MDNS_RATE` (10 a
   second) after `MDNS_BURST` (20), a GCRA in the unpinned `limits` map), any source but the
-  sandbox addresses dropped, link-local destinations and the ULA and CGNAT metadata addresses of AWS, GCP, OCI and Alibaba dropped,
+  sandbox addresses dropped, link-local destinations and the ULA, CGNAT and public metadata addresses of AWS, GCP, OCI, Scaleway, Alibaba and Azure dropped,
   `bpf_fib_lookup` with `tot_len` 0; local delivery only
   for a recorded flow that `primary` renewed within `IDLE_TCP` (an hour) or `IDLE_SHORT` (2 minutes, UDP and after a
   FIN of the host) while its port is still in `ports`, never a TCP SYN without ACK (TCP whose header isn't whole in
@@ -1007,7 +1007,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `route_localnet` on both sides, a spoofed source (IPv4, IPv6) going nowhere, no AF_PACKET socket on `eth0` and no
   `ip link set eth0 down` from the sandbox, with or without a nested user namespace (the socket bound by root of the
   host as the control), a VLAN device on `eth0` (made as root
-  in the netns) getting nothing out, `169.254.169.254`, `fd00:ec2::254`, `fd20:ce::254` and `100.100.100.200` on the router (cloud metadata services)
+  in the netns) getting nothing out, `169.254.169.254`, `fd00:ec2::254`, `fd20:ce::254`, `fd00:42::42`, `100.100.100.200` and `168.63.129.16` on the router (cloud metadata services)
   reached by the host and not the sandbox while the internet stand-in is, a full-tunnel VPN (a dummy device as
   wg-quick and NetworkManager set them up: a table of its own with the default of main suppressed, and the two halves
   of the address space) taking the traffic of the host while the sandbox leaves through the uplink and nothing of it

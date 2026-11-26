@@ -114,8 +114,8 @@ unless you ask otherwise); release it when you're done.
   host-only networks (VPN mesh of the host, container bridges, auth
   proxies) and other sandboxes are out of reach, and so are link-local
   addresses (`169.254.0.0/16`, `fe80::/10`) and cloud metadata services
-  (link-local, and the known ULA and CGNAT addresses of AWS, GCP, OCI
-  and Alibaba). The LAN sees you at the address of the
+  (link-local, and the known ULA, CGNAT and public addresses of AWS,
+  GCP, OCI, Scaleway, Alibaba and Azure). The LAN sees you at the address of the
   host, so a LAN service that trusts the host trusts you too. Behind a full-tunnel VPN you still leave through the
   physical uplink with the default route, never into the VPN. Packets
   the programs drop vanish without an ICMP error or a TCP reset, so a

@@ -644,8 +644,8 @@
       workstation.succeed(f"{ns} ip link del eth0.5", f"{ns} ping -c1 -W2 ${internet4}")
       assert stop() > 0, "the ping without the VLAN device didn't leave"
 
-  with subtest("cloud metadata services on the LAN are out of reach: link-local, and the ULAs and CGNAT address of clouds"):
-      metadata = ["169.254.169.254", "100.100.100.200", "fd00:ec2::254", "fd20:ce::254"]
+  with subtest("cloud metadata services on the LAN are out of reach: link-local, and the ULAs, CGNAT and public addresses of clouds"):
+      metadata = ["169.254.169.254", "100.100.100.200", "168.63.129.16", "fd00:ec2::254", "fd20:ce::254", "fd00:42::42"]
       routes = [f"{h}/32 via ${routerIP}" if "." in h else f"{h}/128 via ${routerIP6}" for h in metadata]
       workstation.succeed(*[f"ip route add {r}" for r in routes],
                           *[f"curl -sf -m3 -o /dev/null 'http://{h if ':' not in h else '[' + h + ']'}:443/'" for h in metadata])
