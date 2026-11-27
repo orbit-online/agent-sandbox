@@ -28,6 +28,7 @@ and Paseo.
   `homeDirs`, the state script's `stateHome`, `stateVars` and `stateInputs`, and `mcpServers`, the features' MCP
   servers the app gives its agent, `appArgs`, ahead of the caller's on every start, `desktop`, the keys of the
   `.desktop` file the core writes for each launcher (never upstream's; nothing of nixpak's own launcher lands on PATH),
+  `wrapperPrelude`, bash the launcher's wrapper runs ahead of the launcher, which may rewrite its arguments,
   `environmentBind`, how the environment doc lists a bind, and `coreBinds`, the core's own; `build.environment` gives
   the app the doc, whole and in parts). An app module builds on `sl`'s helpers: `fhsAppOf` and `fhsEnvOf` (the app in
   the core's FHS env), `keepInHome`, `hostBindOf`, `boundHomeDirsOf` and `hostPathOf` (what it keeps in the home, a
@@ -669,6 +670,7 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `stand-in`: the stand-in app built next to Claude Desktop, both with memo, from the stub app in another shape (its
   program `standin`, two `.desktop` files without `Actions=`): its launchers' packages hold their wrapper alone and a
   `.desktop` file the core wrote (Name, Exec, Icon, StartupWMClass, its action and Shell), the default one the icons;
+  its `wrapperPrelude` in the wrapper ahead of the launcher;
   its environment doc imported, the core's part filled in for it, its own section that loads by topic left to memo and
   pointed to, no Claude Desktop in it; memo's stores with each section once, the core's naming no app.
 - `paseo`: Paseo built for alice next to Claude Desktop, with the broker and a launcher `work`: the app root's

@@ -104,6 +104,7 @@ let
           (sl.keepInHome config launcherName [ ".stand-in" ] { })
           {
             build.app = sl.fhsAppOf config stub;
+            build.wrapperPrelude = ''set -- --prelude "$@"'';
             build.desktop = {
               entries.Icon = "standin";
               actions.Other = {
@@ -3379,6 +3380,9 @@ in
         ''
           [[ $(ls $default/bin) == stand-in && $(ls $work/bin) == stand-in-work ]] ||
             { echo "bin: $(ls $default/bin) $(ls $work/bin)" >&2; exit 1; }
+          # The app's prelude, ahead of the launcher with the arguments it rewrote
+          grep -A1 -xF 'set -- --prelude "$@"' $default/bin/stand-in | grep -q '^exec .* start --config=' ||
+            { echo "the wrapper doesn't run the prelude ahead of the launcher: $(<$default/bin/stand-in)" >&2; exit 1; }
           [[ $(ls $default/share/applications) == org.example.StandIn.desktop ]] ||
             { echo "the default launcher's .desktop files: $(ls $default/share/applications)" >&2; exit 1; }
           [[ $(ls $work/share/applications) == org.example.StandIn.work.desktop ]] ||

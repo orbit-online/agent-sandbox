@@ -29,6 +29,7 @@ let
       VARS=(
         ${vars}
       )
+      ${config.build.wrapperPrelude}
       exec ${launcher} start --config=${launcherConfig} --vars-fd=3 -- "$@" 3< <(printf '%s\0' "''${VARS[@]}")
     '';
   };
@@ -73,6 +74,13 @@ in
       internal = true;
       description = "A share/icons tree the default launcher installs, which Icon names an icon in.";
     };
+  };
+
+  options.build.wrapperPrelude = mkOption {
+    type = types.lines;
+    default = "";
+    internal = true;
+    description = "Bash the launcher's wrapper runs on the host ahead of the launcher, which may rewrite the arguments (`\"$@\"`) before they reach the launcher and so the app: Paseo makes a relative directory absolute.";
   };
 
   options.splash = {
