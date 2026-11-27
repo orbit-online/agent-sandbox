@@ -14,6 +14,12 @@
     };
     # Its own nixpkgs-unstable: it's only built and tested against that, and breaks on a stable release
     llm-agents.url = "github:numtide/llm-agents.nix";
+    # The Paseo desktop app. On this nixpkgs: its own pin (nixos-unstable of 2026-03-08) brings Electron 38 and a
+    # second copy of everything the sandbox shares with Claude Desktop
+    paseo = {
+      url = "github:getpaseo/paseo/v0.18.0";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # NAT for the sandbox network (nix/packages/einat)
     einat = {
       url = "github:EHfive/einat-ebpf";
@@ -56,6 +62,7 @@
         launcher = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/launcher { };
         sandbox-uplink = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/sandbox-uplink { };
         einat = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/einat { input = inputs.einat; };
+        paseo-desktop = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/paseo { input = inputs.paseo; };
       });
       checks = forAllSystems (system: (checksFor system).checks);
       # nix-unit's, run by checks.claude-desktop-eval
