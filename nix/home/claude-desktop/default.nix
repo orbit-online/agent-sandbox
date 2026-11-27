@@ -89,7 +89,9 @@ in
         Modules added to every launcher, the default one and each of `agent-sandbox.claude-desktop.launchers`, for
         options of their own next to the launcher's: `permissions.commands` from a plugin's settings, for one.
         Their arguments: the launcher's `config`, `launcherName` (null for the default launcher), Home Manager's
-        config as `hm`, `pkgs` and `osConfig`.
+        config as `hm`, `pkgs`, `osConfig`, and the shared helpers of `lib.nix` as `sl`. A feature with options beside
+        the ones every feature has is declared with `sl.feature`, under `options.features.<name>` as
+        `types.submodule [ sl.feature { options = ...; } ]`, the way `request-send.nix` declares `request-send`.
       '';
     };
     claude-desktop = mkOption {
