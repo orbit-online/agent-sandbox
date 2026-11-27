@@ -1234,22 +1234,18 @@ let
           inherit (l.build.stateVars)
             PASEO_CONFIG
             CLAUDE_JSON
-            CODEX_DIR
             MCP_RECORD
             ;
           inherit (l.build.launcherConfig) homeDirs;
           binds = lib.filter (lib.hasPrefix "/home/alice/") (lib.attrNames l.permissions.binds);
         };
-        bound =
+        boundWith =
+          rw:
           (withPaseo {
             permissions.binds = {
               "/home/alice/.paseo" = {
                 src = "/srv/paseo";
-                rw = true;
-              };
-              "/home/alice/.codex" = {
-                src = "/srv/codex";
-                rw = true;
+                inherit rw;
               };
               "/home/alice/.claude.json" = {
                 src = "/srv/claude.json";
@@ -1262,37 +1258,46 @@ let
       {
         expr = {
           default = vars paseo;
-          bound = vars bound;
+          bound = vars (boundWith true);
+          readOnly = vars (boundWith false);
         };
         expected = {
           default = {
             PASEO_CONFIG = "${h}/.paseo/config.json";
             CLAUDE_JSON = "${h}/.claude.json";
-            CODEX_DIR = "${h}/.codex";
             MCP_RECORD = "${h}/.local/state/agent-sandbox/mcp-servers.json";
             homeDirs = [ h ];
             binds = [ ];
           };
+          # A read-write ~/.paseo is Paseo's own home on both sides: its config.json still gets the dictation default
           bound = {
             PASEO_CONFIG = "/srv/paseo/config.json";
             CLAUDE_JSON = "";
-            CODEX_DIR = "/srv/codex";
             MCP_RECORD = "${h}/.local/state/agent-sandbox/mcp-servers.json";
             homeDirs = [
               h
-              "/srv/codex"
               "/srv/paseo"
             ];
             binds = [
               "/home/alice/.claude.json"
-              "/home/alice/.codex"
+              "/home/alice/.paseo"
+            ];
+          };
+          # A read-only one is the host's: never among the directories the step writes
+          readOnly = {
+            PASEO_CONFIG = "${h}/.paseo/config.json";
+            CLAUDE_JSON = "";
+            MCP_RECORD = "${h}/.local/state/agent-sandbox/mcp-servers.json";
+            homeDirs = [ h ];
+            binds = [
+              "/home/alice/.claude.json"
               "/home/alice/.paseo"
             ];
           };
         };
       };
-    # The agents' MCP servers: the broker's and programs.mcp.servers, with the env files wrapped, in mcpServers and
-    # (command, args and env) in Codex's block; the doc bound for Claude Code's managed memory
+    # The agents' MCP servers: the broker's and programs.mcp.servers; the doc bound for Claude Code's managed memory and
+    # Codex's system config in the files
     testPaseoMcp =
       let
         p =
@@ -1311,6 +1316,7 @@ let
           servers = lib.attrNames p.mcpServers;
           plain = p.mcpServers.plain;
           claudeMd = p.files."/etc/claude-code/CLAUDE.md".text;
+          codex = lib.hasSuffix "-paseo-codex-config.toml" (toString p.files."/etc/codex/config.toml".source);
         };
         expected = {
           servers = [
@@ -1322,6 +1328,7 @@ let
             args = [ "x" ];
           };
           claudeMd = "@/etc/claude/environment.md\n";
+          codex = true;
         };
       };
     # What Paseo refuses: a remote MCP server or one named paseo, the server Paseo gives every agent; app arguments,
@@ -1348,7 +1355,7 @@ let
         "agent-sandbox.paseo: programs.mcp.servers.paseo must be a local server (command) and not named paseo, which is the server Paseo gives its agents"
         "agent-sandbox.paseo: programs.mcp.servers.remote must be a local server (command) and not named paseo, which is the server Paseo gives its agents"
         "agent-sandbox.paseo: env must not set PASEO_DESKTOP_WINDOW_CONTROLS (Paseo throws at startup when packaged) or APPIMAGE (electron-updater would update the app)"
-        "agent-sandbox.paseo: Paseo takes no arguments but paths and paseo:// links and runs as its CLI on any other; pass Chromium's switches in env.PASEO_ELECTRON_FLAGS"
+        "agent-sandbox.paseo: Paseo takes no arguments but an absolute directory and a paseo://h/<server>/agent/<agent> link, and runs as its CLI on any other; pass Chromium's switches in env.PASEO_ELECTRON_FLAGS"
         "agent-sandbox.paseo: launchers.work.env must not set PASEO_DESKTOP_WINDOW_CONTROLS (Paseo throws at startup when packaged) or APPIMAGE (electron-updater would update the app)"
         # Claude Desktop's, on the same servers
         "agent-sandbox.claude-desktop: programs.mcp.servers.remote must be a local server (command) and not named filesystem or claude-code, which are the sandbox's own"
@@ -3419,14 +3426,18 @@ in
         '';
 
     # Paseo built next to Claude Desktop, with the broker on and a launcher work: the app root (its version the
-    # package's, each launcher's app ID, index.js against a fake Electron), the launch command, the .desktop files,
-    # the doc bound where Claude Code reads it and inlined for Codex, the state script's paths, its home step on a home
-    # of its own (paseo-home.sh), Paseo's defaults for a fresh home as v0.18.0's source has them, and no agent CLI on
-    # the default PATH
+    # package's, each launcher's app ID, index.js against a fake Electron), the launch command, the wrapper's prelude,
+    # the .desktop files, the doc bound where Claude Code reads it and Codex's system config, the state script's paths,
+    # its home step run for alice with her home in the build's directory (paseo-home.sh), Paseo's defaults for a fresh
+    # home as v0.18.0's source has them, and no agent CLI on the default PATH
     paseo =
       let
         work = paseo.launchers.work;
         vars = paseo.build.stateVars;
+        # The same Paseo for alice with her home where the build may write
+        inBuild =
+          (paseoSystem.extendModules { modules = [ { users.users.alice.home = lib.mkForce "/build/alice"; } ]; })
+          .config.home-manager.users.alice.agent-sandbox.paseo;
       in
       pkgs.runCommand "paseo-check"
         {
@@ -3449,11 +3460,11 @@ in
           paseoPkg = paseo.package;
           paseoVersion = paseo.package.version;
           appRootTest = ./paseo-app-root.js;
-          HOME_SH = ../home/paseo/home.sh;
           DEFAULTS = ../home/paseo/config-defaults.json;
           SERVERS = vars.MCP_SERVERS;
-          TOML = vars.CODEX_MCP;
-          DOC = vars.AGENTS_DOC;
+          codexConfig = paseo.files."/etc/codex/config.toml".source;
+          prelude = paseo.build.wrapperPrelude;
+          buildState = inBuild.build.state;
           homeTest = ./paseo-home.sh;
           upstreamConfig = "${inputs.paseo}/packages/server/src/server/persisted-config.ts";
         }
@@ -3502,21 +3513,38 @@ in
           done
           ! grep -q '^MimeType=' $d && [[ ! -e $workPkg/share/icons ]] || fail "work handles paseo:// or installs the icons"
 
-          # The state script's paths, and the doc for Codex: the static part and the launcher's, no frontmatter, under
-          # Codex's 32 KiB for all its AGENTS.md files
+          # The state script's paths
           inner=$(grep -- '-paseo-state-inner$' $stateClosure/store-paths)/bin/paseo-state-inner
           h=/home/alice/.local/share/paseo/home
           for line in "readonly PASEO_CONFIG=$h/.paseo/config.json" "readonly CLAUDE_JSON=$h/.claude.json" \
-            "readonly CODEX_DIR=$h/.codex" "readonly MCP_SERVERS=$SERVERS" "readonly AGENTS_DOC=$DOC"; do
+            "readonly MCP_SERVERS=$SERVERS"; do
             grep -qxF -- "$line" $inner || fail "$inner lacks: $line"
           done
-          [[ $(head -n1 $DOC) == '# Your environment: the Paseo sandbox' ]] || fail "$DOC starts with $(head -n1 $DOC)"
-          grep -qxF '## Binds' $DOC && grep -qxF '## Paseo' $DOC || fail "$DOC lacks a part"
-          (( $(stat -c %s $DOC) < 32768 )) || fail "$DOC takes all of Codex's 32 KiB"
+          ! grep -qi codex $inner || fail "$inner writes something of Codex's"
           jq -e 'keys == ["permissions"]' $SERVERS >/dev/null || fail "the servers: $(<$SERVERS)"
-          grep -qxF '[mcp_servers.permissions]' $TOML || fail "$TOML: $(<$TOML)"
 
-          # Paseo's defaults for a fresh home, as v0.18.0 writes them (DEFAULT_PERSISTED_CONFIG): ours stand in for them
+          # Codex's system config, bound where Codex reads it: the servers and the doc, whole and without frontmatter
+          grep -qF -- "--ro-bind $codexConfig /etc/codex/config.toml" $app/bin/paseo || fail "no /etc/codex/config.toml"
+          python3 -c '
+          import sys, tomllib
+          c = tomllib.load(open(sys.argv[1], "rb"))
+          assert set(c) == {"developer_instructions", "mcp_servers"}, c.keys()
+          assert set(c["mcp_servers"]) == {"permissions"} and set(c["mcp_servers"]["permissions"]) == {"command", "args"}, c
+          d = c["developer_instructions"]
+          assert d.startswith("# Your environment: the Paseo sandbox\n"), d[:80]
+          assert "\n## Binds\n" in d and "\n## Paseo\n" in d and "\n## PATH\n" in d, "a part missing"
+          ' $codexConfig || fail "Codex's config: $(<$codexConfig)"
+
+          # The wrapper's prelude: a relative directory made absolute, everything else as it came
+          mkdir -p cwd/proj && cd cwd
+          got=$(bash -c "$prelude"'
+          printf "%s\n" "$@"' _ proj . /abs paseo://h/s/agent/a --shell file-or-nothing)
+          [[ $got == "$PWD/proj"$'\n'"$PWD"$'\n/abs\npaseo://h/s/agent/a\n--shell\nfile-or-nothing' ]] || fail "the prelude gave: $got"
+          cd ..
+
+          # Paseo's defaults for a fresh home, as v0.18.0 writes them: ours stand in for them. Compared with the literal
+          # handed to PersistedConfigSchema.parse, not with what Paseo writes (the schema's output, which may add
+          # defaults); the two are equal at v0.18.0
           node -e '
             const src = require("fs").readFileSync(process.argv[1], "utf8");
             const m = src.match(/DEFAULT_PERSISTED_CONFIG = PersistedConfigSchema\.parse\((\{[\s\S]*?\n\})\) as PersistedConfig;/);
@@ -3525,10 +3553,11 @@ in
           ' $upstreamConfig >upstream.json
           jq -e --slurpfile d $DEFAULTS '. == $d[0]' upstream.json >/dev/null || fail "Paseo's defaults: $(<upstream.json)"
 
-          bash $homeTest
+          INNER=$(grep -oP '^readonly COMMAND=\K\S+' $buildState/bin/paseo-state) bash $homeTest
 
           # No agent CLI on the default PATH: the consumer adds them
-          path=$(grep -A2 -xF '## PATH' $doc)
+          path=$(awk '/^## / { on = $0 == "## PATH"; next } on' $doc)
+          grep -qF 'coreutils' <<<"$path" || fail "the doc's PATH section: $path"
           ! grep -qiE 'claude-code|codex' <<<"$path" || fail "PATH holds an agent CLI: $path"
           touch $out
         '';

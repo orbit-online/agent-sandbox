@@ -139,19 +139,33 @@ home-manager.users.alice.agent-sandbox.paseo = {
 ```
 
 `paseo` launches it like `claude-desktop` does Claude Desktop, with the same
-options and `launchers.<name>`, its app ID `sh.paseo.Paseo[.<name>]`; a second
-launch or a `paseo://` link (the default launcher handles the scheme) reaches the
-running app. Every launcher, the default one too, keeps Paseo's state
-(`~/.paseo`, `~/.config/Paseo`) and the agents' (`~/.claude`, `~/.claude.json`,
+options and `launchers.<name>`, its app ID `sh.paseo.Paseo[.<name>]`. A second
+launch reaches the running app; Paseo takes an absolute directory there (the
+project to open; `paseo .` works, the wrapper makes a relative one absolute,
+and it must be bound at the same path) and an agent link
+`paseo://h/<server>/agent/<agent>` (the default launcher handles the scheme).
+Any other argument, a file or another `paseo://` URL, makes Paseo run as its
+CLI. Every launcher, the default one too, keeps Paseo's state (`~/.paseo`,
+`~/.config/Paseo`) and the agents' (`~/.claude`, `~/.claude.json`,
 `~/.codex`) in its own home; bind them to share. No agent CLI is on `path`
-by default: add the ones Paseo should run. Each launch gives the agents the
-sandbox's doc (Claude Code through `/etc/claude-code/CLAUDE.md`, Codex in a block
-of `~/.codex/AGENTS.md`) and its MCP servers (`~/.claude.json`, a block of
-`~/.codex/config.toml`), keeping what is already there, and turns Paseo's
-dictation off unless set (it downloads a 631 MB model). The relay stays at
-Paseo's default, off for a fresh home; the daemon's port, 6767, is the
-sandbox's alone unless you grant `port` 6767, and has no password unless you
-set one in `~/.paseo/config.json`.
+by default: add the ones Paseo should run.
+
+Each launch gives the agents the sandbox's doc and its MCP servers. Claude
+Code gets the doc through `/etc/claude-code/CLAUDE.md` and the servers in
+`~/.claude.json` beside the user's own, whose entry wins a name; a
+`~/.claude.json` bound from the host as a file is left alone, so add the
+servers there by hand. Codex gets both in its system config,
+`/etc/codex/config.toml`, below `~/.codex/config.toml`, so nothing of Codex's
+is written into the home, bound or not. Each launch also turns Paseo's
+dictation off unless set (it downloads a 631 MB model), in `config.json`,
+also in a `~/.paseo` bound read-write from the host (Paseo's own home there
+too). The relay stays at Paseo's default, off for a fresh home.
+
+The daemon listens on `127.0.0.1:6767` in the sandbox, without a password:
+the host doesn't reach it, and a grant of `port` 6767 alone doesn't change
+that. To reach it from the host, set `daemon.listen` in
+`~/.paseo/config.json` to `0.0.0.0:6767`, set a password with Paseo's CLI
+(`daemon set-password`), restart Paseo, then grant the port.
 
 ## Launching
 

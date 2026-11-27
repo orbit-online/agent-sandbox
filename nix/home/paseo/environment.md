@@ -37,14 +37,20 @@ otherwise:
 The daemon listens on `127.0.0.1:6767` in the sandbox's network
 namespace, without a password by default: anything in the sandbox reaches
 it, the host and the LAN don't. Paseo gives each agent an MCP server
-named `paseo` there (agents, terminals, schedules). The host reaches the
-daemon only through a grant of `port` 6767; set a password in
-`config.json` before asking for one.
+named `paseo` there (agents, terminals, schedules). A grant of `port`
+6767 alone doesn't change that, as it reaches the sandbox's `eth0`
+addresses and the daemon listens on loopback. For the host to reach it,
+the user sets `daemon.listen` in `config.json` to an address of the
+sandbox (`0.0.0.0:6767`), sets a password (`"$PASEO_CLI" daemon set-password`, Paseo's CLI, which
+the daemon passes its agents),
+restarts Paseo and then grants the port.
 
 Each launch writes into Paseo's `config.json` dictation off where unset
-(it would download a 631 MB speech model), and the sandbox's MCP servers
-and this doc for the agents: `/etc/claude-code/CLAUDE.md` imports this
-doc for Claude Code, `~/.claude.json` gets the servers in `mcpServers`
-beside your own, and `~/.codex/config.toml` and `~/.codex/AGENTS.md` get
-them in a block between `agent-sandbox: begin` and `end` markers, which
-each launch replaces. Edit outside the blocks.
+(it would download a 631 MB speech model), and gives the agents the
+sandbox's MCP servers and this doc. Claude Code: this doc through
+`/etc/claude-code/CLAUDE.md`, the servers in `~/.claude.json`'s
+`mcpServers` beside your own (an entry of yours by the same name wins).
+Codex: both in its system config, `/etc/codex/config.toml`, read-only,
+below your `~/.codex/config.toml`, which wins a key; this doc is its
+`developer_instructions` there, so a `developer_instructions` of your
+own replaces it.

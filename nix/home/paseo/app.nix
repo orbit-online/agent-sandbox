@@ -14,9 +14,11 @@ let
   inherit (lib) mkOption types;
   ids = sl.idsOf launcherName;
   pkg = config.package;
-  # Electron's arguments, all the app takes besides paths and paseo:// links: any other makes Paseo run as its CLI and
-  # exit (desktop/src/daemon/cli/passthrough.ts). So build.appArgs stays empty, and Chromium's switches go through
-  # PASEO_ELECTRON_FLAGS
+  # Besides Electron's own (--no-sandbox, --class=, --remote-debugging-port=), the app takes only an absolute path to a
+  # directory that exists in the sandbox (the project to open, desktop/src/open-project-routing.ts) and an agent link,
+  # paseo://h/<server>/agent/<agent>: anything else, a relative path, a file, another paseo:// URL, makes Paseo run as its
+  # CLI (desktop/src/daemon/cli/passthrough.ts). So build.appArgs stays empty, Chromium's switches go through
+  # PASEO_ELECTRON_FLAGS, and the wrapper makes a relative directory absolute (wrapperPrelude)
   appRoot = pkgs.runCommand "paseo-app-root${ids.suffix}" { } ''
     mkdir $out
     cp ${
@@ -71,7 +73,17 @@ in
       PASEO_CONFIG = "${sl.hostPathOf config launcherName ".paseo"}/config.json";
       PASEO_DEFAULTS = "${./config-defaults.json}";
     };
-    build.homeDirs = lib.filter (d: d != null) [ (sl.hostBindOf config ".paseo") ];
+    build.homeDirs = sl.boundHomeDirsOf config [ ".paseo" ];
+    # `paseo .`: a directory given relative to the caller's, made absolute while that still means something. It must
+    # be at the same path in the sandbox, bound, for Paseo to open it
+    build.wrapperPrelude = ''
+      args=()
+      for a; do
+        [[ $a == /* || $a == -* || $a == *:* || ! -d $a ]] || a=$(${pkgs.coreutils}/bin/realpath -s -- "$a")
+        args+=("$a")
+      done
+      set -- "''${args[@]}"
+    '';
     build.stateHome = builtins.readFile ./home.sh;
     # As upstream's paseo-desktop.desktop has them
     build.desktop = {
@@ -99,7 +111,7 @@ in
       }
       {
         assertion = config.build.appArgs == [ ];
-        message = "${ids.opt}Paseo takes no arguments but paths and paseo:// links and runs as its CLI on any other; pass Chromium's switches in env.PASEO_ELECTRON_FLAGS";
+        message = "${ids.opt}Paseo takes no arguments but an absolute directory and a paseo://h/<server>/agent/<agent> link, and runs as its CLI on any other; pass Chromium's switches in env.PASEO_ELECTRON_FLAGS";
       }
     ];
   };

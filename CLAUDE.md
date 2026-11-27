@@ -110,16 +110,18 @@ and Paseo.
   `app.nix` (its `package`, the app root it runs from, `package.json` with the package's version and the launcher's
   app ID as `desktopName`, and `index.js`: the ready line, `app.setDesktopName` stubbed, the app root taken out of a
   second instance's command line, then Paseo's `main.js`; the app in the core's FHS env as `paseo-electron <app root>
-  --no-sandbox`, nothing of Paseo's in that env; no `appArgs`, as any argument but a path or a `paseo://` link makes
-  Paseo run as its CLI, asserted; the `.desktop` keys with `x-scheme-handler/paseo` on the default launcher; the
-  splash's agent logo), `agents.nix` (what the agents Paseo runs get: `/etc/claude-code/CLAUDE.md`, Claude Code's
-  managed memory file, importing the doc at `environmentPath`, `/etc/claude/environment.md`; `build.mcpServers` with
-  `programs.mcp.servers`, merged into `~/.claude.json`'s `mcpServers` and into a marked block of `~/.codex/config.toml`;
-  the doc inlined in a marked block of `~/.codex/AGENTS.md`), `home.sh` (their part of the state script's `home` step:
-  `~/.paseo/config.json` from Paseo's defaults for a fresh home, `config-defaults.json`, with dictation off where
-  unset; `~/.claude.json`'s servers with the module's of the last launch, recorded in the home, replaced and the user's
-  kept, left alone when bound as a file; the blocks replaced and the rest of each file kept), and `environment.md`.
-  No launcher binds anything of the host's home, the default one neither.
+  --no-sandbox`, nothing of Paseo's in that env; no `appArgs`, asserted, as Paseo takes only an absolute directory and
+  a `paseo://h/<server>/agent/<agent>` link and runs as its CLI on any other argument; its `wrapperPrelude` making a
+  relative directory absolute; the `.desktop` keys with `x-scheme-handler/paseo` on the default launcher; the splash's
+  agent logo), `agents.nix` (what the agents Paseo runs get: `/etc/claude-code/CLAUDE.md`, Claude Code's managed
+  memory file, importing the doc at `environmentPath`, `/etc/claude/environment.md`; `/etc/codex/config.toml`, Codex's
+  system config, a layer below the user's, with `build.mcpServers` and `programs.mcp.servers` as `mcp_servers` and the
+  doc inlined as `developer_instructions`; the servers for `~/.claude.json`), `home.sh` (their part of the state
+  script's `home` step, each file through `merge`: `~/.paseo/config.json` from Paseo's defaults for a fresh home,
+  `config-defaults.json`, with dictation off where unset, also in a `~/.paseo` bound read-write; `~/.claude.json`'s
+  servers, an entry that still is what the module wrote (recorded in the home) the module's, any other the user's,
+  which wins a name; left alone when bound as a file), and `environment.md`. No launcher binds anything of the host's
+  home, the default one neither.
 - `nix/nixos/sandbox.nix`: the NixOS module, `nixosModules.agent-sandbox`, the host side of every app's sandboxes:
   it reads each Home Manager user's `agent-sandbox.sandboxes` and runs two journald namespaces per sandbox. Installs the
   `netns-netkit` wrapper (`cap_net_admin` and `cap_bpf`, setgid `sandbox-uplink` through `permissions`, as the wrapper
@@ -581,8 +583,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   `testSandboxNameCollision`: a stand-in app named `claude-desktop-work` refused beside Claude Desktop's launcher work),
   Paseo next to Claude Desktop (`testPaseo`: no assertion fails, the four sandboxes' names and ids differ, Paseo's
   launchers' app IDs, words and empty `appArgs`, its broker's agent; `testPaseoState`: the home step's paths in the
-  sandbox's home, no host bind, a bound source of `~/.paseo` or `~/.codex` in `homeDirs`, `~/.claude.json` bound as a
-  file left alone; `testPaseoMcp`: the agents' servers and the managed memory file; `testPaseoAssertions`: a remote MCP
+  sandbox's home, no host bind, a read-write bound source of `~/.paseo` in `homeDirs` and a read-only one not,
+  `~/.claude.json` bound as a file left alone; `testPaseoMcp`: the agents' servers, the managed memory file and
+  Codex's system config; `testPaseoAssertions`: a remote MCP
   server or one named `paseo`, app arguments, `APPIMAGE` and `PASEO_DESKTOP_WINDOW_CONTROLS` refused), the per-launcher netns assertion, the tray feature on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
@@ -677,13 +680,15 @@ modules and a user alice (the `home-manager` input exists only for it).
   `package.json` (the package's version, each launcher's `desktopName`), its `index.js` in node against a fake Electron
   (`paseo-app-root.js`: the ready line once, for a window visible once loaded or when shown; `setDesktopName` a no-op;
   a second instance's command line without the app root, a path and a link kept), the FHS env's init running
-  `paseo-electron <app root> --no-sandbox`, the doc bound at `/etc/claude/environment.md` and imported by
-  `/etc/claude-code/CLAUDE.md`, both launchers' wrappers and `.desktop` files (`paseo://` and the icons on the default
-  one alone), the state script's paths, the doc for Codex (no frontmatter, under Codex's 32 KiB), the servers as JSON
-  and TOML, `config-defaults.json` against `DEFAULT_PERSISTED_CONFIG` of the input's source, `paseo-home.sh` (the home
-  step on a home of its own: Paseo's defaults and dictation off on a fresh home, the files private, a second run
-  changing nothing, the user's settings, servers, keys, comment and text kept, a server of the last launch removed, an
-  empty block removed, `~/.claude.json` bound as a file left alone), and no agent CLI on the default PATH.
+  `paseo-electron <app root> --no-sandbox`, the wrapper's prelude (a relative directory made absolute, the rest as it
+  came), the doc bound at `/etc/claude/environment.md` and imported by `/etc/claude-code/CLAUDE.md`, Codex's system
+  config bound at `/etc/codex/config.toml` (its servers with Codex's keys, the doc whole), both launchers' wrappers and
+  `.desktop` files (`paseo://` and the icons on the default one alone), the state script's paths and nothing of
+  Codex's in it, `config-defaults.json` against the literal of `DEFAULT_PERSISTED_CONFIG` in the input's source,
+  `paseo-home.sh` (the home step, as built for alice with her home in the build's directory: Paseo's defaults and
+  dictation off on a fresh home, the files private, the record, a second run changing nothing, the user's settings
+  and servers kept, a server of the last launch removed, a user's server by a module server's name winning and
+  unrecorded, truncated files left as they were with warnings), and no agent CLI in the doc's PATH section.
 - `state-merge`: the state script's home step run unconfined for alice with her home in the build's directory: a
   truncated config of Claude Desktop's left as it was with the warning, the step going on, a valid one merged.
 - `timer-calendar`: the sandbox's user units building with a calendar spec of the user's in the GC timer, and
