@@ -464,6 +464,21 @@ checks for a live grant; without one it closes the connection at once (the MCP `
 connection carries no reason). With one, it connects to the host socket and copies bytes both ways. It parses nothing
 and passes no file descriptors. A revoke closes the grant's connections.
 
+A socket that reaches no more than a host command capability already does needs no consent of its own. With
+`grantedBy` naming that capability, whose bounding arguments are the socket's by name, a grant of the commands opens
+the socket for the same bounding values, and its end closes the socket's connections; the socket has no grants of
+its own, and no standing grant (the module and the daemon refuse one). A request of the socket asks for the commands,
+with their consent, and the grant it answers with carries the socket's address. nixos-windows-vm's UI Automation
+socket is one: every VM it reaches the `windows-vm` commands reach too, PowerShell as SYSTEM included.
+
+```nix
+permissions.sockets.windows-vm-uia = {
+  description = "Use UI Automation in a running Windows VM";
+  grantedBy = "windows-vm";
+  bounding.vm = { type = "string"; description = "the VM"; instances = "$XDG_RUNTIME_DIR/windows-vm-uia/*.sock"; };
+};
+```
+
 The host service sees the broker as its peer: an unsandboxed process with no `/.flatpak-info`, whose pid and
 credentials are what `SO_PEERCRED` and polkit see. So a host socket must be one whose service authorizes nothing by
 its peer, or whose peer checks the grant is meant to pass. Never declare a D-Bus bus, a portal or a service that

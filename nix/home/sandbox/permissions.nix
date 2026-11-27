@@ -133,6 +133,17 @@ in
                   whose matches are the sockets, each an instance reachable at its own address.
                 '';
               };
+              grantedBy = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "windows-vm";
+                description = ''
+                  A capability of `permissions.commands` whose grant opens the socket, for the same bounding values:
+                  for a socket that reaches no more than those commands do, which then needs no grant of its own. Its
+                  bounding arguments are the socket's, by name. A request of the socket asks for that capability, and
+                  the grant it answers with names the socket's address.
+                '';
+              };
             };
           }
         );

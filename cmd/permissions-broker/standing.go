@@ -37,6 +37,10 @@ func checkStanding(grants []standingConfig, caps map[string]*capability) ([]*sta
 		if !ok {
 			return nil, fmt.Errorf("Standing grant of %s: no such capability", s.Capability)
 		}
+		if c.grantor != nil {
+			return nil, fmt.Errorf("Standing grant of %s: it comes with grants of %s, make that one standing",
+				s.Capability, c.GrantedBy)
+		}
 		if c.Type == "attach" {
 			return nil, fmt.Errorf("Standing grant of %s: folders get none, bind what should always be there",
 				s.Capability)

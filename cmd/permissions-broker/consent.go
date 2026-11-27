@@ -24,6 +24,11 @@ func (b *broker) request(p peer, req wire.Request) (*grant, error) {
 	if !ok {
 		return nil, refusef(refUnknown, "No capability %q: see list", req.Capability)
 	}
+	if c.grantor != nil {
+		// A host socket that comes with a host command grant: asked for as that, for the same instance, and the
+		// answer names the socket's address (sockets.go)
+		c = c.grantor
+	}
 	params, err := c.validate(req.Params)
 	if err != nil {
 		return nil, refuse(refParams, err)

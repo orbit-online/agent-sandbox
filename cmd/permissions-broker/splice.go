@@ -113,13 +113,17 @@ func (b *broker) splice(conn *net.UnixConn, c *capability, params json.RawMessag
 }
 
 // connectUnder records s as a connection of the live grant covering c with params, and returns that grant: nil
-// without one
+// without one. A socket with a grantor is covered by the grantor's grant for the same parameters, whose end closes it
 func (b *broker) connectUnder(c *capability, params json.RawMessage, s *spliced) *grant {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	want := c
+	if c.grantor != nil {
+		want = c.grantor
+	}
 	for _, g := range b.grants {
 		// b.grants holds no grant that's ending: end deletes it under b.mu before it closes the connections
-		if g.cap == c && string(g.Params) == string(params) {
+		if g.cap == want && string(g.Params) == string(params) {
 			if g.conns == nil {
 				g.conns = map[*spliced]bool{}
 			}

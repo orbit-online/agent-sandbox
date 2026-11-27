@@ -148,6 +148,16 @@ in
               message = "${gopt}: the params of a port grant are protocol (tcp or udp) and port (1 to 65535)";
             }
           ]
+        else if config.permissions.sockets.${g.capability}.grantedBy or null != null then
+          [
+            {
+              # As the broker's checkStanding: such a socket has no grants of its own
+              assertion = false;
+              message = "${gopt}: ${g.capability} comes with grants of ${
+                config.permissions.sockets.${g.capability}.grantedBy
+              }, make that one standing";
+            }
+          ]
         else
           [
             {
@@ -310,6 +320,17 @@ in
           {
             assertion = unknownIn sock.bounding == [ ];
             message = "${sopt}: ${unknownMessage sock.bounding}";
+          }
+          {
+            # As the broker's resolveGrantor: one grant's parameters name one of the socket's addresses
+            assertion =
+              sock.grantedBy == null
+              ||
+                config.permissions.commands ? ${sock.grantedBy}
+                &&
+                  lib.sort lib.lessThan (lib.attrNames config.permissions.commands.${sock.grantedBy}.bounding)
+                  == lib.sort lib.lessThan (lib.attrNames sock.bounding);
+            message = "${sopt}: grantedBy names a capability of permissions.commands whose bounding arguments are the socket's, by name";
           }
         ]
       ) config.permissions.sockets

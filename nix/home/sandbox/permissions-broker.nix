@@ -79,6 +79,7 @@ let
         inherit (sock) description bounding;
       }
       // lib.optionalAttrs (sock.path != null) { inherit (sock) path; }
+      // lib.optionalAttrs (sock.grantedBy != null) { inherit (sock) grantedBy; }
     ) config.permissions.sockets;
     # The standing grants, in the order of their names
     grants = map (g: { inherit (g) capability params; }) (

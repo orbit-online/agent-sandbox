@@ -31,6 +31,10 @@ type capability struct {
 	Path string
 	// The bounding argument whose values the instances glob gives, and the glob
 	glob, globArg string
+	// Host sockets: the host command capability whose grant opens it, by name, and that capability; a grant of the
+	// socket itself there is none
+	GrantedBy string
+	grantor   *capability
 
 	schemas map[string]*schema.Schema
 

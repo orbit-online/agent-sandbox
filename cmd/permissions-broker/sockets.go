@@ -123,6 +123,9 @@ func (b *broker) handleRequest(_ *net.UnixConn, p peer, req wire.Request) respon
 		var g *grant
 		g, err = b.request(p, req)
 		res.Grant = b.view(g)
+		if c := b.caps[req.Capability]; res.Grant != nil && c.grantor != nil {
+			res.Grant.Socket = b.ridingAddr(c, res.Grant.Params)
+		}
 	case "call":
 		res, err = b.call(p, req)
 	case "release":

@@ -75,7 +75,8 @@ and are there from the start. Its tools named `<capability>_<command>` run
 commands on the host: a call asks the user for a grant of the capability
 unless one covers it. Host sockets sit at fixed addresses under
 `/run/permissions/sockets/`: a connection without a grant is closed at once,
-so ask first. A grant is the whole sandbox's and lasts its lease (an hour
+so ask first. One whose `list` entry has `grantedBy` comes with a grant of
+that capability for the same instance, and asking for it asks for that. A grant is the whole sandbox's and lasts its lease (an hour
 unless you ask otherwise); release it when you're done.
 
 - Own PID, user, UTS and IPC namespaces (pid 1 is `bwrap`), new session.
@@ -278,7 +279,7 @@ The `permissions` MCP server:
   `standing`.
 - Each host socket capability has its address under
   `/run/permissions/sockets/`; a connection without a grant is closed at
-  once.
+  once, also for one with `grantedBy` until its capability is granted.
 - With the user's go: `request` a read-only grant of a folder `list`
   offers, read a file through it under `/run/permissions`, then `release`
   it and see it gone from `status` and the mount gone.

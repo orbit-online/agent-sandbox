@@ -2317,6 +2317,89 @@ let
     # Host sockets the eval check took and the daemon refuses at its start, or reads as another path: ~ alone, a
     # variable past the leading one (the daemon expands any its environment has), no description, and an instances
     # glob that isn't one * without ? or [
+    # A host socket opened by a host command capability's grants: in the broker's config, and the assertions on it
+    testSocketGrantedBy =
+      let
+        vmCommands = extra: {
+          description = "a VM";
+          consent.title = "use the VM";
+          bounding = {
+            vm = {
+              type = "string";
+              description = "the VM";
+            };
+          }
+          // extra;
+          commands.shot = {
+            description = "a screenshot";
+            consent = "Take screenshots";
+            result = "image/png";
+            run = [ "/srv/shot" ];
+          };
+        };
+        console = grantedBy: name: {
+          description = "a VM's UI";
+          inherit grantedBy;
+          bounding.${name} = {
+            type = "string";
+            description = "the VM";
+            instances = "/srv/vms/*.sock";
+          };
+        };
+        work =
+          permissions:
+          (nixos (
+            lib.recursiveUpdate enabled {
+              launchers.work.permissions = {
+                broker.enable = true;
+              }
+              // permissions;
+            }
+          ));
+        good = work {
+          commands.vm = vmCommands { };
+          sockets.ui = console "vm" "vm";
+        };
+      in
+      {
+        expr = {
+          config =
+            (lib.head good.config.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.work.build.permissionsConfig.sockets)
+            .grantedBy;
+          good = failedAssertions good;
+          bad = map (a: a.message) (
+            failedAssertions (work {
+              commands.vm = vmCommands { };
+              commands.more = vmCommands {
+                mode = {
+                  type = "string";
+                  description = "a mode";
+                };
+              };
+              sockets = {
+                missing = console "nothing" "vm";
+                renamed = console "vm" "name";
+                wider = console "more" "vm";
+                ui = console "vm" "vm";
+              };
+              grants.standing-ui = {
+                capability = "ui";
+                params.vm = "win11";
+              };
+            })
+          );
+        };
+        expected = {
+          config = "vm";
+          good = [ ];
+          bad = map (m: "agent-sandbox.claude-desktop: launchers.work.permissions.${m}") [
+            "grants.standing-ui: ui comes with grants of vm, make that one standing"
+            "sockets.missing: grantedBy names a capability of permissions.commands whose bounding arguments are the socket's, by name"
+            "sockets.renamed: grantedBy names a capability of permissions.commands whose bounding arguments are the socket's, by name"
+            "sockets.wider: grantedBy names a capability of permissions.commands whose bounding arguments are the socket's, by name"
+          ];
+        };
+      };
     testSocketAgreement = {
       expr = map (a: a.message) (
         failedAssertions (

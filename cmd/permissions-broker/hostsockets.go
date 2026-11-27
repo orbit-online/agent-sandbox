@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
@@ -27,13 +28,20 @@ type socketConfig struct {
 	Description string                     `json:"description"`
 	Path        string                     `json:"path,omitempty"`
 	Bounding    map[string]json.RawMessage `json:"bounding,omitempty"`
+	// A host command capability whose grant opens the socket, for the same bounding values: a socket that reaches no
+	// more than its commands do needs no grant of its own
+	GrantedBy string `json:"grantedBy,omitempty"`
 }
 
 // loadSockets makes the config's host socket capabilities, each under its own name
 func loadSockets(cfgs []socketConfig, caps map[string]*capability) error {
 	for _, sc := range cfgs {
-		c := &capability{Name: sc.Name, Type: "socket", Description: sc.Description, Params: sc.Bounding, Path: sc.Path}
+		c := &capability{Name: sc.Name, Type: "socket", Description: sc.Description, Params: sc.Bounding, Path: sc.Path,
+			GrantedBy: sc.GrantedBy}
 		if err := c.check(); err != nil {
+			return fmt.Errorf("Host socket %s: %w", sc.Name, err)
+		}
+		if err := c.resolveGrantor(caps); err != nil {
 			return fmt.Errorf("Host socket %s: %w", sc.Name, err)
 		}
 		if _, dup := caps[c.id()]; dup {
@@ -79,6 +87,51 @@ func (c *capability) checkSocket() error {
 		s.MaxLength = &n
 	}
 	return hostsock.RefusedGlob(expandPath(c.glob))
+}
+
+// resolveGrantor finds the host command capability a socket's grantedBy names, among caps, which hold the commands
+// already. Its bounding arguments are the socket's, by name, so one grant's parameters name one of the socket's
+// addresses: none for a socket with a path, the one its instances glob is on otherwise
+func (c *capability) resolveGrantor(caps map[string]*capability) error {
+	if c.GrantedBy == "" {
+		return nil
+	}
+	g, ok := caps[c.GrantedBy]
+	if !ok || g.Type != "command" {
+		return fmt.Errorf("grantedBy %s: no host command capability of that name", c.GrantedBy)
+	}
+	same := len(g.Params) == len(c.Params)
+	for k := range c.Params {
+		if _, ok := g.Params[k]; !ok {
+			same = false
+		}
+	}
+	if !same {
+		return fmt.Errorf("grantedBy %s: its bounding arguments %s aren't the socket's %s", c.GrantedBy,
+			paramNames(g.Params), paramNames(c.Params))
+	}
+	c.grantor = g
+	return nil
+}
+
+func paramNames(params map[string]json.RawMessage) string {
+	names := make([]string, 0, len(params))
+	for k := range params {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return "[" + strings.Join(names, " ") + "]"
+}
+
+// ridingAddr is where the socket c, which a grant of its grantor opens, is in the sandbox for that grant's
+// parameters, for the answer to a request of c: listening there first, as an instance may have just appeared
+func (b *broker) ridingAddr(c *capability, params json.RawMessage) string {
+	b.syncSockets(c)
+	addr := socketAddr(c, params)
+	if !b.listening(addr) {
+		return ""
+	}
+	return filepath.Join(b.cfg.SandboxGrantDir, addr)
 }
 
 // Tests' hooks: after syncSockets looked for instances, before splice connects to the host
@@ -192,6 +245,8 @@ type socketKind struct{ baseKind }
 func (socketKind) check(c *capability) error { return c.checkSocket() }
 
 func (socketKind) start(b *broker, c *capability) { b.syncSockets(c) }
+
+func (socketKind) info(c *capability, i *capabilityInfo) { i.GrantedBy = c.GrantedBy }
 
 func (socketKind) live(b *broker, g *grant) error {
 	b.syncSockets(g.cap)

@@ -878,7 +878,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   path or by the bus address variables, `$XDG_RUNTIME_DIR`, a path holding it or a glob over it, the launchers'
   control sockets, nixpak's proxies, `.flatpak` and the lock directory, a relative path or an unset variable,
   neither or both of a path and an instances glob, another bounding argument, a bad name, no description, a
-  name twice) and a glob match among the refused no instance; the address there before any grant, a connection
+  name twice) and a glob match among the refused no instance; `grantedBy` (`hostsockets_granted_test.go`): a declaration naming no host commands, another socket, or commands bounded otherwise refused, a connection spliced under the commands' grant for its instance alone and closed by its revoke, a request of the socket asking for the commands and answered with their grant and the socket's address, a standing grant of it refused, and `list` naming the commands; the address there before any grant, a connection
   without a grant closed at once, one under a grant spliced to the host (the grant at
   `/run/permissions/sockets/<capability>/<instance>` with the default `PT1H` lease), a revoke closing every
   connection; an instance's address appearing and going with it on the timer, its grant ending with it; 64

@@ -60,6 +60,8 @@ type capabilityInfo struct {
 	Params      map[string]json.RawMessage `json:"params,omitempty"`
 	Instances   json.RawMessage            `json:"instances,omitempty"`
 	Error       string                     `json:"error,omitempty"`
+	// Host sockets: the host command capability whose grant opens it, for the same parameters
+	GrantedBy string `json:"grantedBy,omitempty"`
 	// Host commands: each command's description and free arguments; the consent's title and what a grant covers, a
 	// command a line as the consent says it, and in detail
 	Commands map[string]*hostcmd.Command `json:"commands,omitempty"`
