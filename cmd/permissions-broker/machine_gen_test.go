@@ -172,7 +172,10 @@ func drawBadNumber(t *rapid.T, d *decl) string {
 			return new(big.Rat).Sub(d.min, hair).FloatString(17)
 		}
 	case 2:
-		return drawNumber(t, d) + rapid.SampledFrom([]string{".0", "e0", "E+0"}).Draw(t, "dressed")
+		// A number drawn with an exponent already (a member of a number enum, 100e-2) takes no more: 100e-2.0 isn't JSON
+		if n := drawNumber(t, d); !strings.ContainsAny(n, "eE") {
+			return n + rapid.SampledFrom([]string{".0", "e0", "E+0"}).Draw(t, "dressed")
+		}
 	case 3:
 		return rapid.SampledFrom([]string{"9223372036854775808", "-9223372036854775809", "123456789012345678901234567890",
 			"1e309", "-1e400"}).Draw(t, "huge")
