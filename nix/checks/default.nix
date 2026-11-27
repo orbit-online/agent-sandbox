@@ -139,6 +139,31 @@ let
       ];
     };
   withStandIn = name: withStandInCfg { inherit name; } { };
+  # alice with Claude Desktop as `enabled` has it and Paseo with `cfg`, beside more of alice's Home Manager config,
+  # `hmCfg`
+  withPaseoCfg =
+    cfg: hmCfg:
+    system.extendModules {
+      modules = [
+        {
+          home-manager.sharedModules = [
+            self.homeModules.paseo
+            self.homeModules.paseo
+          ];
+          home-manager.users.alice = lib.mkMerge [
+            { agent-sandbox.paseo = { enable = true; } // cfg; }
+            hmCfg
+          ];
+        }
+      ];
+    };
+  withPaseo = cfg: withPaseoCfg cfg { };
+  # Paseo with a launcher work and the broker on
+  paseoSystem = withPaseo {
+    permissions.broker.enable = true;
+    launchers.work = { };
+  };
+  paseo = paseoSystem.config.home-manager.users.alice.agent-sandbox.paseo;
   # The cap on a sandbox's name, <app>[-<launcher>], as the broker's sockets set it, and so on a launcher name of
   # Claude Desktop's
   sandboxNameMax = lib.toInt (
@@ -1114,6 +1139,194 @@ let
           };
         };
       };
+    # Paseo next to Claude Desktop, each with a launcher work: no assertion fails, the four sandboxes' names and ids
+    # differ, Paseo's launchers have their app IDs, its own words and no app arguments (the argv trap), and its broker
+    # calls the agent Paseo
+    testPaseo =
+      let
+        hm = paseoSystem.config.home-manager.users.alice.agent-sandbox;
+        configs = lib.concatMap (a: [
+          hm.${a}.build.launcherConfig
+          hm.${a}.launchers.work.build.launcherConfig
+        ]) [
+          "claude-desktop"
+          "paseo"
+        ];
+        pick = c: {
+          inherit (c)
+            sandbox
+            appId
+            app
+            appArgs
+            unit
+            stateDir
+            homeDirs
+            ;
+        };
+      in
+      {
+        expr = {
+          failed = map (a: a.message) (failedAssertions paseoSystem);
+          unique = lib.genAttrs [ "sandbox" "appId" "stateDir" "home" "unit" "slice" "journal" "appPid" ] (
+            f: lib.allUnique (map (c: c.${f}) configs)
+          );
+          default = pick paseo.build.launcherConfig;
+          work = pick paseo.launchers.work.build.launcherConfig;
+          agent = paseo.build.permissionsConfig.agent;
+        };
+        expected = {
+          failed = [ ];
+          unique = lib.genAttrs [ "sandbox" "appId" "stateDir" "home" "unit" "slice" "journal" "appPid" ] (_: true);
+          default = {
+            sandbox = "paseo";
+            appId = "sh.paseo.Paseo";
+            app = "Paseo";
+            appArgs = [ ];
+            unit = "paseo-app.service";
+            stateDir = "/home/alice/.local/share/paseo";
+            homeDirs = [ "/home/alice/.local/share/paseo/home" ];
+          };
+          work = {
+            sandbox = "paseo-work";
+            appId = "sh.paseo.Paseo.work";
+            app = "Paseo";
+            appArgs = [ ];
+            unit = "paseo-work-app.service";
+            stateDir = "/home/alice/.local/share/paseo-work";
+            homeDirs = [ "/home/alice/.local/share/paseo-work/home" ];
+          };
+          agent = "Paseo";
+        };
+      };
+    # The state step's paths: in the sandbox's home by default, with no host bind for any of it (the default launcher
+    # too, unlike Claude Desktop's), and a bound source where the consumer binds ~/.paseo or ~/.codex, which the step
+    # then works in; ~/.claude.json bound as a file is left alone
+    testPaseoState =
+      let
+        vars = l: {
+          inherit (l.build.stateVars)
+            PASEO_CONFIG
+            CLAUDE_JSON
+            CODEX_DIR
+            MCP_RECORD
+            ;
+          inherit (l.build.launcherConfig) homeDirs;
+          binds = lib.filter (lib.hasPrefix "/home/alice/") (lib.attrNames l.permissions.binds);
+        };
+        bound =
+          (withPaseo {
+            permissions.binds = {
+              "/home/alice/.paseo" = {
+                src = "/srv/paseo";
+                rw = true;
+              };
+              "/home/alice/.codex" = {
+                src = "/srv/codex";
+                rw = true;
+              };
+              "/home/alice/.claude.json" = {
+                src = "/srv/claude.json";
+                rw = true;
+              };
+            };
+          }).config.home-manager.users.alice.agent-sandbox.paseo;
+        h = "/home/alice/.local/share/paseo/home";
+      in
+      {
+        expr = {
+          default = vars paseo;
+          bound = vars bound;
+        };
+        expected = {
+          default = {
+            PASEO_CONFIG = "${h}/.paseo/config.json";
+            CLAUDE_JSON = "${h}/.claude.json";
+            CODEX_DIR = "${h}/.codex";
+            MCP_RECORD = "${h}/.local/state/agent-sandbox/mcp-servers.json";
+            homeDirs = [ h ];
+            binds = [ ];
+          };
+          bound = {
+            PASEO_CONFIG = "/srv/paseo/config.json";
+            CLAUDE_JSON = "";
+            CODEX_DIR = "/srv/codex";
+            MCP_RECORD = "${h}/.local/state/agent-sandbox/mcp-servers.json";
+            homeDirs = [
+              h
+              "/srv/codex"
+              "/srv/paseo"
+            ];
+            binds = [
+              "/home/alice/.claude.json"
+              "/home/alice/.codex"
+              "/home/alice/.paseo"
+            ];
+          };
+        };
+      };
+    # The agents' MCP servers: the broker's and programs.mcp.servers, with the env files wrapped, in mcpServers and
+    # (command, args and env) in Codex's block; the doc bound for Claude Code's managed memory
+    testPaseoMcp =
+      let
+        p =
+          (withPaseoCfg { permissions.broker.enable = true; } {
+            programs.mcp = {
+              enable = true;
+              servers.plain = {
+                command = "/srv/bin/plain";
+                args = [ "x" ];
+              };
+            };
+          }).config.home-manager.users.alice.agent-sandbox.paseo;
+      in
+      {
+        expr = {
+          servers = lib.attrNames p.mcpServers;
+          plain = p.mcpServers.plain;
+          claudeMd = p.files."/etc/claude-code/CLAUDE.md".text;
+        };
+        expected = {
+          servers = [
+            "permissions"
+            "plain"
+          ];
+          plain = {
+            command = "/srv/bin/plain";
+            args = [ "x" ];
+          };
+          claudeMd = "@/etc/claude/environment.md\n";
+        };
+      };
+    # What Paseo refuses: a remote MCP server or one named paseo, the server Paseo gives every agent; app arguments,
+    # which make Paseo run as its CLI; APPIMAGE and PASEO_DESKTOP_WINDOW_CONTROLS
+    testPaseoAssertions = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          withPaseoCfg
+            {
+              build.appArgs = [ "--ozone-platform=wayland" ];
+              env.APPIMAGE = "/x";
+              launchers.work.env.PASEO_DESKTOP_WINDOW_CONTROLS = "1";
+            }
+            {
+              programs.mcp = {
+                enable = true;
+                servers.paseo.command = "/srv/bin/paseo";
+                servers.remote.url = "https://example.com/mcp";
+              };
+            }
+        )
+      );
+      expected = [
+        "agent-sandbox.paseo: programs.mcp.servers.paseo must be a local server (command) and not named paseo, which is the server Paseo gives its agents"
+        "agent-sandbox.paseo: programs.mcp.servers.remote must be a local server (command) and not named paseo, which is the server Paseo gives its agents"
+        "agent-sandbox.paseo: env must not set PASEO_DESKTOP_WINDOW_CONTROLS (Paseo throws at startup when packaged) or APPIMAGE (electron-updater would update the app)"
+        "agent-sandbox.paseo: Paseo takes no arguments but paths and paseo:// links and runs as its CLI on any other; pass Chromium's switches in env.PASEO_ELECTRON_FLAGS"
+        "agent-sandbox.paseo: launchers.work.env must not set PASEO_DESKTOP_WINDOW_CONTROLS (Paseo throws at startup when packaged) or APPIMAGE (electron-updater would update the app)"
+        # Claude Desktop's, on the same servers
+        "agent-sandbox.claude-desktop: programs.mcp.servers.remote must be a local server (command) and not named filesystem or claude-code, which are the sandbox's own"
+      ];
+    };
     # A launcher whose sandbox name another app's default launcher has: refused, as their units, state dirs and the
     # helpers' names would be one
     testSandboxNameCollision = {
@@ -3144,8 +3357,123 @@ in
           touch $out
         '';
 
+    # Paseo built next to Claude Desktop, with the broker on and a launcher work: the app root (its version the
+    # package's, each launcher's app ID, index.js against a fake Electron), the launch command, the .desktop files,
+    # the doc bound where Claude Code reads it and inlined for Codex, the state script's paths, its home step on a home
+    # of its own (paseo-home.sh), Paseo's defaults for a fresh home as v0.18.0's source has them, and no agent CLI on
+    # the default PATH
+    paseo =
+      let
+        work = paseo.launchers.work;
+        vars = paseo.build.stateVars;
+      in
+      pkgs.runCommand "paseo-check"
+        {
+          nativeBuildInputs = [
+            pkgs.jq
+            pkgs.nodejs
+            pkgs.gawk
+            pkgs.python3
+          ];
+          default = paseo.build.package;
+          workPkg = work.build.package;
+          root = paseo.build.appRoot;
+          workRoot = work.build.appRoot;
+          app = paseo.build.app;
+          appClosure = pkgs.closureInfo { rootPaths = [ paseo.build.app ]; };
+          state = paseo.build.state;
+          stateClosure = pkgs.closureInfo { rootPaths = [ paseo.build.state ]; };
+          doc = paseo.build.environment.doc;
+          file = paseo.build.environment.file;
+          paseoPkg = paseo.package;
+          paseoVersion = paseo.package.version;
+          appRootTest = ./paseo-app-root.js;
+          HOME_SH = ../home/paseo/home.sh;
+          DEFAULTS = ../home/paseo/config-defaults.json;
+          SERVERS = vars.MCP_SERVERS;
+          TOML = vars.CODEX_MCP;
+          DOC = vars.AGENTS_DOC;
+          homeTest = ./paseo-home.sh;
+          upstreamConfig = "${inputs.paseo}/packages/server/src/server/persisted-config.ts";
+        }
+        ''
+          fail() { echo "paseo: $*" >&2; exit 1; }
+          # The app root
+          jq -e '. == {name: "paseo-sandbox", version: env.paseoVersion, main: "index.js", desktopName: "sh.paseo.Paseo.desktop"}' \
+            $root/package.json >/dev/null || fail "the app root's package.json: $(<$root/package.json)"
+          jq -e '.desktopName == "sh.paseo.Paseo.work.desktop"' $workRoot/package.json >/dev/null || fail "work's desktopName"
+          main=$(grep -oP '^require\("\K[^"]+(?="\);$)' $root/index.js) || fail "index.js requires no main.js"
+          [[ $main == $paseoPkg/share/paseo-desktop/packages/desktop/dist/main.js && -f $main ]] || fail "index.js requires $main"
+          mkdir approot
+          sed "s|^require(\"$main\");$|require(\"./stub-main.js\");|" $root/index.js >approot/index.js
+          cat >approot/stub-main.js <<'EOF'
+          const { app } = require("electron");
+          app.setDesktopName("Paseo.desktop");
+          app.on("second-instance", (_e, argv, cwd) => { global.secondArgv = argv; global.secondCwd = cwd; });
+          global.stubMainLoaded = true;
+          EOF
+          node $appRootTest approot
+
+          # The launch: Paseo's packaged Electron on the app root, no argument but --no-sandbox; the doc bound for
+          # Claude Code, directly and through its managed memory file
+          init=$(grep -- '-paseo-init$' $appClosure/store-paths)
+          grep -qF "$paseoPkg/libexec/paseo-desktop/paseo-electron $root --no-sandbox" $init || fail "$init doesn't run the app root"
+          grep -qF -- "--ro-bind $doc /etc/claude/environment.md" $app/bin/paseo || fail "the doc isn't at /etc/claude/environment.md"
+          claudeMd=$(grep -oP -- '--ro-bind \K\S+(?= /etc/claude-code/CLAUDE.md)' $app/bin/paseo) || fail "no /etc/claude-code/CLAUDE.md"
+          [[ $(<$claudeMd) == '@/etc/claude/environment.md' ]] || fail "$claudeMd: $(<$claudeMd)"
+          grep -qxF "@$file" $doc || fail "$doc doesn't import $file"
+          for line in '# Your environment: the Paseo sandbox' '## Paseo' 'This sandbox'"'"'s app is `paseo`, and its environment doc, the file that'; do
+            grep -qxF -- "$line" $file || fail "$file lacks: $line"
+          done
+          ! grep -qi 'claude desktop' $file || fail "$file names Claude Desktop"
+
+          # The .desktop files and the wrappers
+          [[ $(ls $default/bin) == paseo && $(ls $workPkg/bin) == paseo-work ]] || fail "bin: $(ls $default/bin) $(ls $workPkg/bin)"
+          d=$default/share/applications/sh.paseo.Paseo.desktop
+          for line in Name=Paseo 'Exec=paseo %U' StartupWMClass=sh.paseo.Paseo 'MimeType=x-scheme-handler/paseo;' Icon=paseo-desktop \
+            'Actions=Shell;Permissions;' Categories=Development; do
+            grep -qxF -- "$line" $d || fail "$d lacks: $line"
+          done
+          [[ -e $default/share/icons/hicolor/512x512/apps/paseo-desktop.png ]] || fail "the default launcher lacks the icon"
+          d=$workPkg/share/applications/sh.paseo.Paseo.work.desktop
+          for line in 'Name=Paseo (work)' 'Exec=paseo-work %U' StartupWMClass=sh.paseo.Paseo.work 'Actions=Shell;'; do
+            grep -qxF -- "$line" $d || fail "$d lacks: $line"
+          done
+          ! grep -q '^MimeType=' $d && [[ ! -e $workPkg/share/icons ]] || fail "work handles paseo:// or installs the icons"
+
+          # The state script's paths, and the doc for Codex: the static part and the launcher's, no frontmatter, under
+          # Codex's 32 KiB for all its AGENTS.md files
+          inner=$(grep -- '-paseo-state-inner$' $stateClosure/store-paths)/bin/paseo-state-inner
+          h=/home/alice/.local/share/paseo/home
+          for line in "readonly PASEO_CONFIG=$h/.paseo/config.json" "readonly CLAUDE_JSON=$h/.claude.json" \
+            "readonly CODEX_DIR=$h/.codex" "readonly MCP_SERVERS=$SERVERS" "readonly AGENTS_DOC=$DOC"; do
+            grep -qxF -- "$line" $inner || fail "$inner lacks: $line"
+          done
+          [[ $(head -n1 $DOC) == '# Your environment: the Paseo sandbox' ]] || fail "$DOC starts with $(head -n1 $DOC)"
+          grep -qxF '## Binds' $DOC && grep -qxF '## Paseo' $DOC || fail "$DOC lacks a part"
+          (( $(stat -c %s $DOC) < 32768 )) || fail "$DOC takes all of Codex's 32 KiB"
+          jq -e 'keys == ["permissions"]' $SERVERS >/dev/null || fail "the servers: $(<$SERVERS)"
+          grep -qxF '[mcp_servers.permissions]' $TOML || fail "$TOML: $(<$TOML)"
+
+          # Paseo's defaults for a fresh home, as v0.18.0 writes them (DEFAULT_PERSISTED_CONFIG): ours stand in for them
+          node -e '
+            const src = require("fs").readFileSync(process.argv[1], "utf8");
+            const m = src.match(/DEFAULT_PERSISTED_CONFIG = PersistedConfigSchema\.parse\((\{[\s\S]*?\n\})\) as PersistedConfig;/);
+            if (!m) throw new Error("no DEFAULT_PERSISTED_CONFIG");
+            console.log(JSON.stringify(Function("return " + m[1])()));
+          ' $upstreamConfig >upstream.json
+          jq -e --slurpfile d $DEFAULTS '. == $d[0]' upstream.json >/dev/null || fail "Paseo's defaults: $(<upstream.json)"
+
+          bash $homeTest
+
+          # No agent CLI on the default PATH: the consumer adds them
+          path=$(grep -A2 -xF '## PATH' $doc)
+          ! grep -qiE 'claude-code|codex' <<<"$path" || fail "PATH holds an agent CLI: $path"
+          touch $out
+        '';
+
     scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
-      shellcheck ${../../scripts}/*.sh ${../home/sandbox}/*.sh ${../home/claude-desktop}/*.sh
+      shellcheck ${../../scripts}/*.sh ${../home/sandbox}/*.sh ${../home/claude-desktop}/*.sh ${../home/paseo}/*.sh ${./paseo-home.sh}
       touch $out
     '';
   };

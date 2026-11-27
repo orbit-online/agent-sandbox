@@ -47,6 +47,10 @@
         key = "agent-sandbox#homeModules.claude-desktop";
         imports = [ (import ./nix/home/claude-desktop { inherit inputs; }) ];
       };
+      homeModules.paseo = {
+        key = "agent-sandbox#homeModules.paseo";
+        imports = [ (import ./nix/home/paseo { inherit inputs; }) ];
+      };
       # The host side of every app's sandboxes
       nixosModules.agent-sandbox = {
         key = "agent-sandbox#nixosModules.agent-sandbox";

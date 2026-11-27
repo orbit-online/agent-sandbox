@@ -7,9 +7,10 @@ One prompt injection in a README it was asked to summarise is enough to use
 all of that.
 
 agent-sandbox runs an agent's desktop app in a bubblewrap sandbox on NixOS,
-built with [nixpak](https://github.com/nixpak/nixpak). Today that app is
-Claude Desktop (with its Code tab); the sandbox itself, its core, knows no app,
-and an app is a small module on it. It sees only
+built with [nixpak](https://github.com/nixpak/nixpak). The apps are Claude
+Desktop (with its Code tab) and [Paseo](https://github.com/getpaseo/paseo)
+(a desktop app whose daemon runs agent CLIs such as Claude Code and Codex); the
+sandbox itself, its core, knows no app, and an app is a small module on it. It sees only
 the paths you bind into it. It gets its own network namespace, joined to the
 host by a netkit pair whose eBPF programs let it out only through the
 physical uplink with the default route (Ethernet or Wi-Fi, IPv4 and IPv6, NATed by
@@ -34,7 +35,8 @@ are. Your own `CLAUDE.md` imports it.
 How it fits together, namespace by namespace: the diagram at the top of
 [`nix/home/sandbox/default.nix`](nix/home/sandbox/default.nix), the core, which
 also says what an app gives it; Claude Desktop's is
-[`nix/home/claude-desktop/`](nix/home/claude-desktop/).
+[`nix/home/claude-desktop/`](nix/home/claude-desktop/), Paseo's
+[`nix/home/paseo/`](nix/home/paseo/).
 Working on the repo: [`CLAUDE.md`](CLAUDE.md).
 
 ## Usage
@@ -109,8 +111,9 @@ Other options: `extraPath` (directories ahead of the PATH packages),
 The sandbox's core, [`nix/home/sandbox/`](nix/home/sandbox/), takes an app's
 descriptor: its name, app ID, the names the user and the agent see, its part of
 the environment doc, and the modules that build the app in the core's FHS env.
-Claude Desktop is the one app so far:
-[`nix/home/claude-desktop/default.nix`](nix/home/claude-desktop/default.nix).
+Claude Desktop is one:
+[`nix/home/claude-desktop/default.nix`](nix/home/claude-desktop/default.nix),
+Paseo the other: [`nix/home/paseo/default.nix`](nix/home/paseo/default.nix).
 Each app's Home Manager module is `agent-sandbox.<app>`, with the options above
 and `launchers.<name>` for more sandboxes of it; `agent-sandbox.launcherModules`
 join every launcher of every app.
@@ -121,7 +124,34 @@ journald namespaces. The helpers know it by that name too: `netns-netkit`'s
 addresses, primary and pins (`/run/sandbox-uplink/<uid>-<sandbox>`), and the
 `<name>` the NixOS module's `agent-sandbox.hooks` get. The launchers of all apps
 share `$XDG_RUNTIME_DIR/agent-sandbox/`. A sandbox name has at most 47
-characters, so a launcher name of Claude Desktop's at most 32.
+characters, so a launcher name of Claude Desktop's at most 32, of Paseo's 41.
+
+### Paseo
+
+```nix
+home-manager.sharedModules = [ inputs.agent-sandbox.homeModules.paseo ];
+home-manager.users.alice.agent-sandbox.paseo = {
+  enable = true;
+  # The agents Paseo runs, none by default: added to the default path at its priority, which keeps it
+  path = lib.mkOptionDefault [ pkgs.claude-code ];
+  permissions.binds."/home/alice/src/project".rw = true;
+};
+```
+
+`paseo` launches it like `claude-desktop` does Claude Desktop, with the same
+options and `launchers.<name>`, its app ID `sh.paseo.Paseo[.<name>]`; a second
+launch or a `paseo://` link (the default launcher handles the scheme) reaches the
+running app. Every launcher, the default one too, keeps Paseo's state
+(`~/.paseo`, `~/.config/Paseo`) and the agents' (`~/.claude`, `~/.claude.json`,
+`~/.codex`) in its own home; bind them to share. No agent CLI is on `path`
+by default: add the ones Paseo should run. Each launch gives the agents the
+sandbox's doc (Claude Code through `/etc/claude-code/CLAUDE.md`, Codex in a block
+of `~/.codex/AGENTS.md`) and its MCP servers (`~/.claude.json`, a block of
+`~/.codex/config.toml`), keeping what is already there, and turns Paseo's
+dictation off unless set (it downloads a 631 MB model). The relay stays at
+Paseo's default, off for a fresh home; the daemon's port, 6767, is the
+sandbox's alone unless you grant `port` 6767, and has no password unless you
+set one in `~/.paseo/config.json`.
 
 ## Launching
 

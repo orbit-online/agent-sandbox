@@ -2,8 +2,8 @@
 
 Sandboxes for AI agents on NixOS: an agent's desktop app under nixpak (bubblewrap), with its own network namespace
 on a netkit pair isolated by eBPF, its own single-user Nix store, and an environment doc for the agent running inside.
-The sandbox is a core that knows no app; an app is a descriptor and a few modules on it. Today the one app is Claude
-Desktop.
+The sandbox is a core that knows no app; an app is a descriptor and a few modules on it. The apps are Claude Desktop
+and Paseo.
 
 ## Layout
 
@@ -94,13 +94,28 @@ Desktop.
   (`<sandbox>-state`) in a bwrap holding only its closure and
   the directories named: links there resolve within that view. The app's part of its `home` step comes ahead of the
   script as the function `app_home` (`build.stateHome`).
-- `nix/home/claude-desktop/`: Claude Desktop, the one app: `default.nix` (its descriptor, which
+- `nix/home/claude-desktop/`: Claude Desktop, one app: `default.nix` (its descriptor, which
   `homeModules.claude-desktop` imports, making `agent-sandbox.claude-desktop`), `app.nix` (its `package`, the asar
   `patch-asar.sh` patches (the ready line, the tray icon, the notification backend, `channels.js` hooked into the app
   for `mcpChannels`), the FHS override through the core's `fhsEnvArgs`, the default launcher's `~/.claude` and
   `~/.config/Claude` binds, `claude_desktop_config.json` merged at each launch, `claude.sh` on PATH, the splash's
   agent logo), `mcp.nix` (the app's local MCP servers: `filesystem`, `claude-code`, the features' and Home Manager's
   `programs.mcp.servers`), and its part of the environment doc, `environment.md`, around the core's.
+- `nix/home/paseo/`: Paseo (`packages.paseo-desktop`), the other app: `default.nix` (its descriptor, which
+  `homeModules.paseo` imports, making `agent-sandbox.paseo`; app ID `sh.paseo.Paseo`, the broker's agent "Paseo"),
+  `app.nix` (its `package`, the app root it runs from, `package.json` with the package's version and the launcher's
+  app ID as `desktopName`, and `index.js`: the ready line, `app.setDesktopName` stubbed, the app root taken out of a
+  second instance's command line, then Paseo's `main.js`; the app in the core's FHS env as `paseo-electron <app root>
+  --no-sandbox`, nothing of Paseo's in that env; no `appArgs`, as any argument but a path or a `paseo://` link makes
+  Paseo run as its CLI, asserted; the `.desktop` keys with `x-scheme-handler/paseo` on the default launcher; the
+  splash's agent logo), `agents.nix` (what the agents Paseo runs get: `/etc/claude-code/CLAUDE.md`, Claude Code's
+  managed memory file, importing the doc at `environmentPath`, `/etc/claude/environment.md`; `build.mcpServers` with
+  `programs.mcp.servers`, merged into `~/.claude.json`'s `mcpServers` and into a marked block of `~/.codex/config.toml`;
+  the doc inlined in a marked block of `~/.codex/AGENTS.md`), `home.sh` (their part of the state script's `home` step:
+  `~/.paseo/config.json` from Paseo's defaults for a fresh home, `config-defaults.json`, with dictation off where
+  unset; `~/.claude.json`'s servers with the module's of the last launch, recorded in the home, replaced and the user's
+  kept, left alone when bound as a file; the blocks replaced and the rest of each file kept), and `environment.md`.
+  No launcher binds anything of the host's home, the default one neither.
 - `nix/nixos/sandbox.nix`: the NixOS module, `nixosModules.agent-sandbox`, the host side of every app's sandboxes:
   it reads each Home Manager user's `agent-sandbox.sandboxes` and runs two journald namespaces per sandbox. Installs the
   `netns-netkit` wrapper (`cap_net_admin` and `cap_bpf`, setgid `sandbox-uplink` through `permissions`, as the wrapper
@@ -421,7 +436,7 @@ Desktop.
   shaped like the sandbox's. Run inside the sandbox with a bwrap path; not
   part of the checks.
 
-Flake outputs: `homeModules.claude-desktop`, `nixosModules.agent-sandbox`,
+Flake outputs: `homeModules.claude-desktop`, `homeModules.paseo`, `nixosModules.agent-sandbox`,
 `packages.<system>.netns-netkit`, `packages.<system>.sandbox-hooks`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
 `packages.<system>.request-send`, `packages.<system>.launcher`, `packages.<system>.sandbox-uplink`,
@@ -559,7 +574,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   with refused; `testCrossAppState`: a bind of one app's state dir from another's sandbox refused both ways, and each
   app's broker denying every app's state dirs; `testMemoStoresTwoApps`: memo's stores with both apps on memo, the
   core's once and the stand-in's own; `testLockDirBind`: a bind of the broker's lock dir refused;
-  `testSandboxNameCollision`: a stand-in app named `claude-desktop-work` refused beside Claude Desktop's launcher work), the per-launcher netns assertion, the tray feature on two launchers at once,
+  `testSandboxNameCollision`: a stand-in app named `claude-desktop-work` refused beside Claude Desktop's launcher work),
+  Paseo next to Claude Desktop (`testPaseo`: no assertion fails, the four sandboxes' names and ids differ, Paseo's
+  launchers' app IDs, words and empty `appArgs`, its broker's agent; `testPaseoState`: the home step's paths in the
+  sandbox's home, no host bind, a bound source of `~/.paseo` or `~/.codex` in `homeDirs`, `~/.claude.json` bound as a
+  file left alone; `testPaseoMcp`: the agents' servers and the managed memory file; `testPaseoAssertions`: a remote MCP
+  server or one named `paseo`, app arguments, `APPIMAGE` and `PASEO_DESKTOP_WINDOW_CONTROLS` refused), the per-launcher netns assertion, the tray feature on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
@@ -647,6 +667,17 @@ modules and a user alice (the `home-manager` input exists only for it).
   `.desktop` file the core wrote (Name, Exec, Icon, StartupWMClass, its action and Shell), the default one the icons;
   its environment doc imported, the core's part filled in for it, its own section that loads by topic left to memo and
   pointed to, no Claude Desktop in it; memo's stores with each section once, the core's naming no app.
+- `paseo`: Paseo built for alice next to Claude Desktop, with the broker and a launcher `work`: the app root's
+  `package.json` (the package's version, each launcher's `desktopName`), its `index.js` in node against a fake Electron
+  (`paseo-app-root.js`: the ready line once, for a window visible once loaded or when shown; `setDesktopName` a no-op;
+  a second instance's command line without the app root, a path and a link kept), the FHS env's init running
+  `paseo-electron <app root> --no-sandbox`, the doc bound at `/etc/claude/environment.md` and imported by
+  `/etc/claude-code/CLAUDE.md`, both launchers' wrappers and `.desktop` files (`paseo://` and the icons on the default
+  one alone), the state script's paths, the doc for Codex (no frontmatter, under Codex's 32 KiB), the servers as JSON
+  and TOML, `config-defaults.json` against `DEFAULT_PERSISTED_CONFIG` of the input's source, `paseo-home.sh` (the home
+  step on a home of its own: Paseo's defaults and dictation off on a fresh home, the files private, a second run
+  changing nothing, the user's settings, servers, keys, comment and text kept, a server of the last launch removed, an
+  empty block removed, `~/.claude.json` bound as a file left alone), and no agent CLI on the default PATH.
 - `timer-calendar`: the sandbox's user units building with a calendar spec of the user's in the GC timer, and
   refusing `weakly` with the timer and spec named (`systemd-analyze calendar`, `fhs.nix`).
 - `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first

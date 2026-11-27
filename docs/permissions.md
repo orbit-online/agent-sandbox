@@ -115,7 +115,7 @@ host (user, no capabilities)                       sandbox
 
 - `permissions-broker`, Go, in `cmd/permissions-broker/`. One per launcher, as the transient user unit
   `<sandbox>-permissions.service` (`<sandbox>` the sandbox's name, `<app>[-<launcher>]`, `claude-desktop[-<name>]` for
-  Claude Desktop) with `Restart=on-failure`, which the launcher's supervise starts with
+  Claude Desktop, `paseo[-<name>]` for Paseo) with `Restart=on-failure`, which the launcher's supervise starts with
   `systemd-run --user` before it execs bwrap. It listens on:
   - `request.sock` in the grant directory, for the sandbox.
   - `<sandbox>-permissions-control.sock` in the launchers' runtime directory on the host, mode 0600, for the window and the launcher. It
@@ -220,7 +220,7 @@ only the daemon creates.
 ## The options of a launcher
 
 Everything that lets a launcher reach outside the sandbox is set under one root, `permissions`, on the launcher
-(`agent-sandbox.<app>`, such as `agent-sandbox.claude-desktop`, or one of its `launchers.<name>`). Each option there applies at one of two times. From the
+(`agent-sandbox.<app>`, such as `agent-sandbox.claude-desktop` or `agent-sandbox.paseo`, or one of its `launchers.<name>`). Each option there applies at one of two times. From the
 start: fixed when the sandbox starts, changed by a rebuild, and listed in the window (Overview). On request: what the
 broker may grant while the sandbox runs, after asking the user.
 
@@ -913,7 +913,8 @@ any grant. The sandbox is one trust domain toward the broker.
 
 The daemon asks with a notification on the host (`org.freedesktop.Notifications` on the session bus). Its summary is
 built by the daemon from the validated, resolved request ("Claude wants read-write access to
-~/Workspace/agent/notes"), and the reason follows below it, quoted and marked as Claude's. The reason never stands
+~/Workspace/agent/notes"), and the reason follows below it, quoted and marked as Claude's. "Claude" is the app's `agent`, the
+descriptor's word for who asks: "Paseo" in Paseo's sandbox, whichever of its agents asks. The reason never stands
 in for what's granted. Buttons: Allow (with the proposed lease, "Allow for 1 h"), Deny, and Options, which opens
 the window on the request to pick another lease or, for a folder, narrow it (read-only instead of rw). A host command
 grant has only its lease to change: its bounding values are what the call needs. A click on the body sends the action
