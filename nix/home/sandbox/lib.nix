@@ -44,14 +44,17 @@ rec {
       buildFHSEnv = args: (prev.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (lcfg.build.fhsEnvArgs args);
     });
   fhsEnvOf = lcfg: args: (pkgs.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (lcfg.build.fhsEnvArgs args);
-  # Where a path the app keeps in the home directory (rel, relative to it) is on the host: its bind's source when bound,
-  # null when not; hostPathOf the sandbox's home in that case
+  # Where a path the app keeps in the home directory (rel, relative to it) is on the host: its bind's source when bound
+  # read-write, null when not; hostPathOf the sandbox's home in that case. A read-only bind is the host's alone: the
+  # state script, which binds what it works in read-write (confine.sh), never writes there
   hostBindOf =
     lcfg: rel:
     let
       b = lcfg.permissions.binds."${hm.home.homeDirectory}/${rel}" or null;
     in
-    if b != null && b.enable then b.src else null;
+    if b != null && b.enable && b.rw then b.src else null;
+  # For build.homeDirs: the host sources of those of rels that are bound read-write
+  boundHomeDirsOf = lcfg: rels: lib.filter (d: d != null) (map (hostBindOf lcfg) rels);
   hostPathOf =
     lcfg: launcherName: rel:
     let
@@ -66,7 +69,7 @@ rec {
       permissions.binds = lib.mkIf (launcherName == null) (
         lib.genAttrs (map (r: "${hm.home.homeDirectory}/${r}") rels) (_: { rw = true; } // bind)
       );
-      build.homeDirs = lib.filter (d: d != null) (map (hostBindOf lcfg) rels);
+      build.homeDirs = boundHomeDirsOf lcfg rels;
     };
   # The packages on the sandbox's PATH: the launcher's path, the app's (build.pathPackages), then the same nix as the
   # host, so the sandbox's store database is never migrated to a schema one side can't read. .out: the man output is

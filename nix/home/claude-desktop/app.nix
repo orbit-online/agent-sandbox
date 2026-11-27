@@ -79,10 +79,9 @@ in
       build.stateHome = ''
         : "''${DOT_CLAUDE:?}" "''${CONFIG:?}" "''${MCP_SERVERS:?}" "''${TRAY:?}"
         mkdir -p "$DOT_CLAUDE" "''${CONFIG%/*}"
-        config='{}'
-        [[ ! -s $CONFIG ]] || config=$(<"$CONFIG")
-        jq --slurpfile m "$MCP_SERVERS" --argjson tray "$TRAY" \
-          '.mcpServers = $m[0] | .preferences.menuBarEnabled = $tray' <<<"$config" | replace "$CONFIG"
+        # shellcheck disable=SC2016 # jq's variables
+        merge "$CONFIG" '{}' jq --slurpfile m "$MCP_SERVERS" --argjson tray "$TRAY" \
+          '.mcpServers = $m[0] | .preferences.menuBarEnabled = $tray' || :
       '';
       build.pathPackages = [ claudeCode ];
       # Chromium's, so it never asks for a keyring the sandbox doesn't reach

@@ -833,6 +833,32 @@ let
       ];
     };
     # S14: no bind reaches a launcher's state or the runtime dir
+    # A directory an app keeps in the home, bound read-only from the host: the host's alone, so not among the
+    # directories the state script works in (and binds read-write, confine.sh); read-write it is
+    testReadOnlyHomeBind = {
+      expr =
+        map
+          (
+            rw:
+            (nixos (enabled // { permissions.binds."/home/alice/.config/Claude".rw = lib.mkForce rw; }))
+            .config.home-manager.users.alice.agent-sandbox.claude-desktop.build.launcherConfig.homeDirs
+          )
+          [
+            false
+            true
+          ];
+      expected = [
+        [
+          "/home/alice/.local/share/claude-desktop/home"
+          "/home/alice/.claude"
+        ]
+        [
+          "/home/alice/.local/share/claude-desktop/home"
+          "/home/alice/.claude"
+          "/home/alice/.config/Claude"
+        ]
+      ];
+    };
     testStateBinds = {
       expr = map (a: a.message) (
         failedAssertions (
@@ -2930,6 +2956,37 @@ in
           cd $src
           # The standard library alone: no module to fetch
           go test ./nix/checks/execsites/
+          touch $out
+        '';
+
+    # The state script's home step, unconfined, for alice with her home in the build's own directory: an app's config
+    # it can't merge (truncated) left as it was with a warning, the step going on; Claude Desktop's merged otherwise
+    state-merge =
+      let
+        users =
+          (system.extendModules { modules = [ { users.users.alice.home = lib.mkForce "/build/alice"; } ]; })
+          .config.home-manager.users.alice.agent-sandbox;
+      in
+      pkgs.runCommand "state-merge-check"
+        {
+          nativeBuildInputs = [ pkgs.jq ];
+          claudeState = users.claude-desktop.build.state;
+        }
+        ''
+          fail() { echo "state-merge: $*" >&2; exit 1; }
+          inner() { grep -oP '^readonly COMMAND=\K.*' "$1/bin/$2" | tr -d "'"; }
+          cd=$(inner $claudeState claude-desktop-state)
+          config=/build/alice/.config/Claude/claude_desktop_config.json
+          mkdir -p "''${config%/*}"
+          printf '{"a":' >$config
+          $cd home 2>err || fail "the step failed: $(<err)"
+          [[ $(<$config) == '{"a":' ]] || fail "Claude Desktop's truncated config became: $(<$config)"
+          grep -qF "claude-desktop-state: Left $config as it was" err || fail "no warning: $(<err)"
+          echo '{"a": 1}' >$config
+          $cd home 2>err || fail "the step failed: $(<err)"
+          jq -e '.a == 1 and .mcpServers.filesystem != null and .preferences.menuBarEnabled == false' $config >/dev/null ||
+            fail "Claude Desktop's config: $(<$config)"
+          [[ ! -s err ]] || fail "a warning on a config that merged: $(<err)"
           touch $out
         '';
 

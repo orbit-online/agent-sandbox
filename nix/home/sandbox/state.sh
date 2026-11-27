@@ -20,6 +20,23 @@ replace() {
   mv -fT "$tmp" "$1"
 }
 
+# File $1 through a command, for an app's config the app and the sandbox write too: the command ($3...) reads the
+# file's content on stdin, or $2 where the file is missing or empty, and its output replaces the file only when it
+# succeeded and wrote something. Otherwise (the file truncated, not the JSON the command takes) the file stays as it
+# was, a warning goes to stderr, which the launcher logs, and merge returns 1 for the caller to skip what depends on it
+merge() {
+  local file=$1 default=$2 tmp
+  shift 2
+  tmp=$(mktemp "$file.XXXXXX")
+  if if [[ -s $file ]]; then "$@" <"$file"; else "$@" <<<"$default"; fi >"$tmp" && [[ -s $tmp ]]; then
+    mv -fT "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    echo "$APP-state: Left $file as it was: merging the sandbox's settings into it failed" >&2
+    return 1
+  fi
+}
+
 store="local?root=$STATE_DIR"
 root=$STATE_DIR/nix/var/nix/gcroots/$APP
 case ${1:?} in

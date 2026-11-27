@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -208,8 +209,13 @@ func prepare(cfg *config, p *progress, dns *dns) error {
 		return err
 	}
 	state := exec.Command(cfg.State, append(append([]string{}, cfg.HomeDirs...), "--", "home")...)
-	if out, err := state.CombinedOutput(); err != nil {
+	out, err := state.CombinedOutput()
+	if err != nil {
 		return fmt.Errorf("Prepare the sandbox's home: %w: %s", err, out)
+	}
+	// What it went on without, such as an app's config it couldn't merge (state.sh's merge)
+	if len(bytes.TrimSpace(out)) > 0 {
+		slog.Warn("Prepare the sandbox's home", "output", strings.TrimSpace(string(out)))
 	}
 	// The DNS of the host unread is no reason to fail the start: follow reads it again
 	if err := dns.update(); errors.Is(err, errUnread) {
@@ -217,7 +223,7 @@ func prepare(cfg *config, p *progress, dns *dns) error {
 	} else if err != nil {
 		return err
 	}
-	err := syncStore(cfg, p.copying)
+	err = syncStore(cfg, p.copying)
 	p.copied()
 	if err != nil {
 		return err

@@ -197,3 +197,23 @@ func TestSuperviseFailureLogs(t *testing.T) {
 		t.Errorf("The splash got:\n%s", in)
 	}
 }
+
+// What the state script went on without (state.sh's merge leaving a config it couldn't merge) reaches the journal, and
+// the start goes on
+func TestSuperviseStateWarning(t *testing.T) {
+	w := newWorld(t)
+	msgs := notifySocket(t)
+	w.cfg.State = w.script("state", `case "$*" in *store-missing*) cat >/dev/null; echo current;; *" home") echo "app-state: Left x as it was" >&2;; esac`)
+	w.cfg.NixpakLauncher = w.script("nixpak", `echo "agent-sandbox: ready"`)
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+	if err := supervise(w.cfg, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	expectMsg(t, msgs, "READY=1")
+	if !strings.Contains(buf.String(), `level=WARN msg="Prepare the sandbox's home" output="app-state: Left x as it was"`) {
+		t.Errorf("Logged:\n%s", buf.String())
+	}
+}

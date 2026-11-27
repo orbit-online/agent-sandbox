@@ -30,7 +30,8 @@ and Paseo.
   `.desktop` file the core writes for each launcher (never upstream's; nothing of nixpak's own launcher lands on PATH),
   `environmentBind`, how the environment doc lists a bind, and `coreBinds`, the core's own; `build.environment` gives
   the app the doc, whole and in parts). An app module builds on `sl`'s helpers: `fhsAppOf` and `fhsEnvOf` (the app in
-  the core's FHS env), `keepInHome`, `hostBindOf` and `hostPathOf` (what it keeps in the home). The ready line is the
+  the core's FHS env), `keepInHome`, `hostBindOf`, `boundHomeDirsOf` and `hostPathOf` (what it keeps in the home, a
+  read-only bind of it the host's alone, never among the directories the state script writes). The ready line is the
   app's to print. The core's sections of the environment doc that load by topic are one memo store every app shares,
   `agent-sandbox-environment` (no app's name in them), an app's own sections a store of its own, and
   `agent-sandbox.memoStores` lists each once. What lets a launcher reach outside the sandbox is set under its `permissions`
@@ -93,7 +94,9 @@ and Paseo.
   write and plant links in, goes through `state.sh`, run by `confine.sh`
   (`<sandbox>-state`) in a bwrap holding only its closure and
   the directories named: links there resolve within that view. The app's part of its `home` step comes ahead of the
-  script as the function `app_home` (`build.stateHome`).
+  script as the function `app_home` (`build.stateHome`), which merges a config the app or the sandbox writes too
+  through `merge`: replaced only when the command succeeded, otherwise left as it was with a warning, which the
+  launcher logs, and the launch goes on.
 - `nix/home/claude-desktop/`: Claude Desktop, one app: `default.nix` (its descriptor, which
   `homeModules.claude-desktop` imports, making `agent-sandbox.claude-desktop`), `app.nix` (its `package`, the asar
   `patch-asar.sh` patches (the ready line, the tray icon, the notification backend, `channels.js` hooked into the app
@@ -614,7 +617,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   `permissions.network.hooks` in its `--net` alone (`testLauncherHooks`), in the order of their names
   (`testNetworkHooksOrder`),
   and the assertions on binds that reach a launcher's
-  state dir or `$XDG_RUNTIME_DIR` (`testStateBinds`), by another spelling of the path (an empty, `.` or `..`
+  state dir or `$XDG_RUNTIME_DIR` (`testStateBinds`), a read-only bind of a directory the app keeps in the home
+  never among the state script's directories (`testReadOnlyHomeBind`), by another spelling of the path (an empty, `.` or `..`
   segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `permissions.devices`
   (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
   its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
@@ -678,6 +682,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   step on a home of its own: Paseo's defaults and dictation off on a fresh home, the files private, a second run
   changing nothing, the user's settings, servers, keys, comment and text kept, a server of the last launch removed, an
   empty block removed, `~/.claude.json` bound as a file left alone), and no agent CLI on the default PATH.
+- `state-merge`: the state script's home step run unconfined for alice with her home in the build's directory: a
+  truncated config of Claude Desktop's left as it was with the warning, the step going on, a valid one merged.
 - `timer-calendar`: the sandbox's user units building with a calendar spec of the user's in the GC timer, and
   refusing `weakly` with the timer and spec named (`systemd-analyze calendar`, `fhs.nix`).
 - `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
@@ -940,7 +946,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   environment and telling the window, and a line sets what it names (a new step's progress unknown until it says).
 - `launcher`: the package build runs the Go tests of `cmd/launcher` and `internal/` with fake tools (the state
   script, nix-store, nixpak's launcher and the splash as scripts) and a notify socket of the test's: supervise
-  sending READY=1 on the app's ready line and passing its arguments and output on, a refusal (a missing bind source)
+  sending READY=1 on the app's ready line and passing its arguments and output on, what the state script went on
+  without logged as a warning, a refusal (a missing bind source)
   left in the result file before READY=1 with nixpak's launcher never run, an app failing before it's up shown in the
   splash with its status and last output, no splash being no obstacle, the tail's size, an abort from the splash while
   the app starts (nixpak's launcher stopped with SIGTERM, the result, READY=1, at least a second shown), Ctrl-C while
