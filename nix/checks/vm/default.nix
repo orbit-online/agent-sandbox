@@ -6,6 +6,8 @@
 {
   pkgs,
   aliceModule,
+  # Paseo's Home Manager module, which only the paseo part's workstation imports
+  paseoModule,
   broker,
   dbusProxy,
   # How often vm-loop launches the default launcher
@@ -446,16 +448,36 @@ let
     workstation.wait_for_unit("link-dns.service")
   '';
 
-  test =
-    part:
+  # The paseo part's workstation: the same, with alice's Paseo beside her Claude Desktop, a default launcher with the
+  # broker and a launcher work without, both on the stub (../paseo-stub.nix). A machine of its own, so the other parts'
+  # closures don't take Paseo's
+  paseoNodes = nodes // {
+    workstation = {
+      imports = [ nodes.workstation ];
+      home-manager.sharedModules = [ paseoModule ];
+      home-manager.users.alice.agent-sandbox.paseo = {
+        enable = true;
+        package = paseoStub;
+        permissions.broker.enable = true;
+        # Made by the test script before the first launch
+        permissions.binds."/srv/project" = { };
+        launchers.work.package = paseoStub;
+      };
+    };
+  };
+  paseoStub = pkgs.callPackage ../paseo-stub.nix { };
+
+  test = part: testOn "claude-desktop-${part}" nodes part;
+  testOn =
+    name: nodes: part:
     pkgs.testers.runNixOSTest {
-      name = "claude-desktop-${part}";
-      inherit nodes;
+      inherit name nodes;
       testScript =
         { nodes, ... }:
         prelude
         + import ./${part}.nix {
           inherit
+            nodes
             pkgs
             broker
             brokerLive
@@ -483,3 +505,6 @@ lib.genAttrs [
   "loop"
   "switch"
 ] test
+// {
+  paseo = testOn "paseo" paseoNodes "paseo";
+}

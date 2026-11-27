@@ -2906,6 +2906,7 @@ let
   # The VM test's parts as vm-<part>, and vm, which builds them all
   vmParts = import ./vm {
     inherit pkgs aliceModule dbusProxy;
+    paseoModule = self.homeModules.paseo;
     broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
   };
   # The host side of the sandbox network, on machines of its own
@@ -2922,6 +2923,7 @@ let
   vmLoopFull =
     (import ./vm {
       inherit pkgs aliceModule dbusProxy;
+      paseoModule = self.homeModules.paseo;
       broker = self.packages.${pkgs.stdenv.hostPlatform.system}.permissions-broker;
       launches = 100;
     }).loop;

@@ -1043,9 +1043,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   capabilities; `setns` is called by `enterM1` alone, and its listed callers reach no exec through their package.
   `rules_test.go` runs the rules on sources that break each. It reads syntax: an exec behind an interface or in
   another package isn't seen. A new helper goes into its lists (`sites`, `joins`) with the class it must keep to.
-- `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`: the NixOS VM test
-  (`nix/checks/vm/`, needs KVM), in six parts that Nix runs in parallel;
-  `vm` builds them all. Each boots the same two machines (built once) and
+- `vm-launch`, `vm-store`, `vm-work`, `vm-live`, `vm-loop`, `vm-switch`, `vm-paseo`: the NixOS VM test
+  (`nix/checks/vm/`, needs KVM), in seven parts that Nix runs in parallel;
+  `vm` builds them all. Each boots the same two machines (built once; `paseo` a workstation of its own) and
   runs the shared prelude in `vm/default.nix` (helpers, the boot), then its
   part's script, `vm/<part>.nix`: `launch` the default launcher and the
   network (and the launcher `offline`, without one), `store` its store dir swapped or without a record, `--shell`
@@ -1063,7 +1063,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   default launcher launched and stopped 20 times, none failing (100 in `legacyPackages.<system>.vm-loop-full`, which
   CI's `test-vm` builds and `nix flake check` only evaluates: about 4 minutes; it prints the count; nixpak's launcher without `nixpak-launcher-reaper.patch` fails
   some, see `nix/patches/`), `switch` switches to the workstation's specialisations while the app runs (the slice's
-  CPU weight changed, its unit file gone) and back, the app's unit untouched. A router VM runs
+  CPU weight changed, its unit file gone) and back, the app's unit untouched, `paseo` alice's Paseo (below). A router VM runs
   dnsmasq for DNS and stands in for the internet: its DNS points
   api.anthropic.com and github.com at itself and `dual.test` at its internet addresses of both families, which listens
   on 443, and it holds an address of each family off the LAN,
@@ -1217,6 +1217,28 @@ modules and a user alice (the `home-manager` input exists only for it).
   A failure shrinks slowly here (each attempt replays its sequence live):
   `-rapid.seed` of the failing sequence with `-rapid.checks=1` and a long
   `-rapid.shrinktime` gets further.
+  `paseo` runs on a workstation of its own (`paseoNodes` in `vm/default.nix`, so the other parts' closures don't take
+  Paseo's): alice has `agent-sandbox.paseo` beside her Claude Desktop, the broker on, `/srv/project` bound, and a
+  launcher `work` without the broker, both on a stub of `packages.paseo-desktop` (`nix/checks/paseo-stub.nix`): its
+  `paseo-electron` runs the module's own app root (`index.js`, `package.json`) in node against a fake Electron
+  (`paseo-stub-electron.js`: the single-instance lock on a socket in the home, `second-instance` with the second's argv,
+  windows that show; the log in `~/paseo-stub.log`), whose `main.js` (`paseo-stub-main.js`) logs what the app got, and
+  with `--exec` runs a command in the sandbox through the re-entry. It covers the launch beside Claude Desktop's sandbox
+  (the ready line once, in the sandbox's journal; the app root on the package's Electron with `--no-sandbox` alone, the
+  launcher's app ID as desktop name, the package's version; its pid, no capabilities, its own netns, mount namespace,
+  address, unit, slice and store, neither sandbox reaching a listener of the other), the state step (Paseo's defaults
+  with dictation off, the `permissions` server in `~/.claude.json`, both 0600; the same on a second launch; the user's
+  dictation, server and key kept on a third; a truncated `~/.claude.json` and the record left as they were with the
+  warning in the host side's journal and the launch going on; a server of the user's named `permissions` winning the
+  name and the record emptied, the module's back once the user's is gone), Codex's `/etc/codex/config.toml` (the
+  servers with Codex's keys, the doc as `developer_instructions`) and no `~/.codex` in the home, inside the doc where
+  Claude Code reads it (`/etc/claude-code/CLAUDE.md`), no `claude` or `codex` on PATH, the app's PATH and the one a
+  `bash -i -l -c` gets (the module's, then `/usr/bin:/usr/sbin`), the `permissions` server answering `tools/list` as
+  `~/.claude.json` names it, the re-entries (`paseo /srv/project`, `paseo .` in `/srv/project/sub` reaching the app
+  as that absolute path, and a `paseo://` link, each handed to the first instance without the app root and without a
+  ready line, `paseo --shell` in the app's namespaces), and the launcher `work` (its app ID, pid, namespaces,
+  `/.flatpak-info`, `.desktop` file, unit and slice, no `paseo://` handler but the default launcher's, no server for
+  the agents and Codex's config with the doc alone).
 
 CI runs on pushes to `main` and on pull requests, split by what changed
 (`.github/workflows/test-*.yaml`, each with its own `paths:`): `test-go`
