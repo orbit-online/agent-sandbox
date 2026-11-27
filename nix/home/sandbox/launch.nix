@@ -33,9 +33,48 @@ let
     '';
   };
   launcherConfig = pkgs.writeText "launcher${ids.suffix}.json" (builtins.toJSON config.build.launcherConfig);
-  actions = lib.concatMapStrings (a: ";${a}") (lib.attrNames config.build.desktopActions);
 in
 {
+  # The app's .desktop file as the core writes it for each launcher (config.build.package below), set by the app's
+  # modules. Name, Exec, StartupWMClass, Actions and MimeType are the core's
+  options.build.desktop = {
+    entries = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      internal = true;
+      description = "Other keys of [Desktop Entry]: Icon, Categories, Comment, Keywords, ….";
+    };
+    execArgs = mkOption {
+      type = types.str;
+      default = "%U";
+      internal = true;
+      description = "What Exec passes the launcher after its name.";
+    };
+    mimeTypes = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      internal = true;
+      description = "The MIME types the default launcher handles (x-scheme-handler/claude); a named launcher none.";
+    };
+    actions = mkOption {
+      type = types.attrsOf (
+        types.submodule {
+          options.name = mkOption { type = types.str; };
+          options.args = mkOption { type = types.str; };
+        }
+      );
+      default = { };
+      internal = true;
+      description = "The app's actions, by id, ahead of the core's (Shell, Permissions): the launcher run with `args`.";
+    };
+    icons = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      internal = true;
+      description = "A share/icons tree the default launcher installs, which Icon names an icon in.";
+    };
+  };
+
   options.splash = {
     logo = mkOption {
       type = types.nullOr types.path;
@@ -69,6 +108,7 @@ in
       scratchpad
       ;
     inherit (ids) sandbox;
+    inherit (config.build) appArgs;
     # The app's name for the user, in the launcher's words ("Starting Claude")
     app = sl.app.displayName;
     unit = ids.appUnit;
@@ -101,58 +141,53 @@ in
     ++ lib.optional (config.splash.agentLogo != null) "--agent-logo=${config.splash.agentLogo}";
   };
 
-  # First path wins on collisions: the wrapper shadows nixpak's bin/<app>, while the icons carry over. Each launcher
-  # installs upstream's .desktop file under its app ID, its windows' StartupWMClass. A named launcher takes only that
-  # file: the default launcher installs the icons and keeps the app's URL handler (claude://)
-  config.build.package = pkgs.symlinkJoin {
-    name = "${ids.sandbox}-sandboxed";
-    paths = [ wrapper ] ++ lib.optional (launcherName == null) sandboxed.config.env;
-    postBuild = ''
-      # The package's only .desktop file, whose name changed upstream
-      set -- ${sandboxed.config.env}/share/applications/*.desktop
-      [[ $# == 1 ]]
-      d=$out/share/applications/${ids.desktopFile}
-      mkdir -p "$out/share/applications"
-      rm -f "$out/share/applications/''${1##*/}" "$d"
-      sed ${
-        lib.escapeShellArgs (
-          [
-            "-e"
-            "s/^Actions=.*/&;Shell${actions}/"
-            "-e"
-            "/^StartupWMClass=/d"
-            "-e"
-            "s/^\\[Desktop Entry\\]$/&\\nStartupWMClass=${ids.appId}/"
-          ]
-          ++ lib.optionals (launcherName != null) [
-            "-e"
-            "0,/^Name=/s/^Name=.*/Name=${ids.displayName}/"
-            "-e"
-            "s/^Exec=${sl.app.name} /Exec=${ids.sandbox} /"
-            "-e"
-            "/^MimeType=/d"
-          ]
+  # Each launcher's .desktop file, written here from build.desktop, never upstream's: named by the launcher's app ID,
+  # its windows' StartupWMClass, running the launcher by name, found on PATH: gnome-shell keeps a .desktop file it read
+  # until it notices a change, which a profile switch doesn't make, and a store path there would run the launcher of the
+  # generation it read. The default launcher keeps the app's MIME types (its URL handler, claude://) and installs the
+  # app's icons. Nothing of nixpak's own launcher (its bin/) lands on PATH, whatever the app's program is called
+  config.build.package =
+    let
+      d = config.build.desktop;
+      line = k: v: "${k}=${v}\n";
+      appActions = lib.mapAttrsToList (n: a: {
+        inherit n;
+        name = a.name;
+        exec = "${ids.sandbox} ${a.args}";
+      }) d.actions;
+      coreActions = lib.mapAttrsToList (n: arg: {
+        inherit n;
+        name = n;
+        exec = "${ids.sandbox} ${arg}";
+      }) config.build.desktopActions;
+      shell = {
+        n = "Shell";
+        name = "New shell";
+        exec = "${lib.getExe pkgs.xdg-terminal-exec} ${ids.sandbox} --shell";
+      };
+      actionList = map (a: a) appActions ++ [ shell ] ++ coreActions;
+      text =
+        "[Desktop Entry]\n"
+        + line "Type" "Application"
+        + line "Name" ids.displayName
+        + line "Exec" "${ids.sandbox}${lib.optionalString (d.execArgs != "") " ${d.execArgs}"}"
+        + line "StartupWMClass" ids.appId
+        + line "Actions" "${lib.concatMapStringsSep ";" (a: a.n) actionList};"
+        + lib.optionalString (launcherName == null && d.mimeTypes != [ ]) (
+          line "MimeType" "${lib.concatStringsSep ";" d.mimeTypes};"
         )
-      } "$(readlink -f "$1")" >"$d"
-      grep -q '^Actions=.*;Shell${actions}$' "$d"
-      [[ $(grep -c '^StartupWMClass=' "$d") == 1 ]]
-      grep -qxF 'StartupWMClass=${ids.appId}' "$d"
-      ${lib.optionalString (launcherName != null) ''
-        grep -qxF 'Name=${ids.displayName}' "$d"
-        ! grep -q '^Exec=${sl.app.name} ' "$d" || exit 1
-        ! grep -q '^MimeType=' "$d" || exit 1
-      ''}
-      # The launcher by name, found on PATH as upstream's Exec finds it: gnome-shell keeps a .desktop file it read
-      # until it notices a change, which a profile switch doesn't make, and a store path there would run the
-      # launcher of the generation it read
-      printf '\n[Desktop Action Shell]\nExec=%s %s --shell\nName=New shell\n' \
-        ${lib.getExe pkgs.xdg-terminal-exec} "${ids.sandbox}" >>"$d"
-      ${lib.concatStrings (
-        lib.mapAttrsToList (action: arg: ''
-          printf '\n[Desktop Action ${action}]\nExec=%s ${arg}\nName=${action}\n' \
-            "${ids.sandbox}" >>"$d"
-        '') config.build.desktopActions
-      )}
-    '';
-  };
+        + lib.concatStrings (lib.mapAttrsToList line d.entries)
+        + lib.concatMapStrings (a: "\n[Desktop Action ${a.n}]\n" + line "Exec" a.exec + line "Name" a.name) actionList;
+      desktopFile = pkgs.writeTextDir "share/applications/${ids.desktopFile}" text;
+    in
+    pkgs.symlinkJoin {
+      name = "${ids.sandbox}-sandboxed";
+      paths = [
+        wrapper
+        desktopFile
+      ]
+      ++ lib.optional (launcherName == null && d.icons != null) (
+        pkgs.runCommand "${ids.sandbox}-icons" { } "mkdir -p $out/share && ln -s ${d.icons} $out/share/icons"
+      );
+    };
 }

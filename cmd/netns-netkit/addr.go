@@ -11,7 +11,7 @@ import (
 // How many addresses pick tries past the first before it gives up
 const probes = 1024
 
-// seed is what a sandbox hashes its addresses from: the uid and launcher name, so a launcher keeps its addresses
+// seed is what a sandbox hashes its addresses from: the uid and the sandbox's name, so a launcher keeps its addresses
 // across launches while they're free
 func seed(uid int, name string) [32]byte {
 	return sha256.Sum256([]byte("netns-netkit\x00" + strconv.Itoa(uid) + "\x00" + name))
@@ -38,7 +38,7 @@ func pick(block netip.Prefix, seed [32]byte, taken func(netip.Addr) bool) (netip
 	return netip.Addr{}, fmt.Errorf("No free address in %v", block)
 }
 
-// primaryName is the name of the netkit primary of the sandbox of launcher name of uid: the uid in base 36, so no two
+// primaryName is the name of the netkit primary of the sandbox of that name (<app>[-<launcher>]) of uid: the uid in base 36, so no two
 // users share one, and a hash of the name, cut to the 15 bytes of a device name (7 hex digits or more for a uid below 36^3)
 func primaryName(prefix string, uid int, name string) string {
 	h := sha256.Sum256([]byte(name))

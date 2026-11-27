@@ -24,8 +24,13 @@ var steps = []struct{ name, text string }{
 	{stepPrepared, "Starting the D-Bus proxy"},
 	{stepProxy, "Creating the sandbox"},
 	{stepSandbox, "Connecting the sandbox to the network"},
-	{stepNetwork, "Starting <app>"},
+	{stepNetwork, "Starting <app>"}, // stepText puts the app's name in
 	{stepReady, ""},
+}
+
+// stepText is what the splash says at step i, the app's name (from the config) in it
+func stepText(app string, i int) string {
+	return strings.Replace(steps[i].text, "<app>", app, 1)
 }
 
 // marker is the step an entry of the host side's journal namespace marks, if any. The entry's start is a helper's own
@@ -181,8 +186,7 @@ func (p *progress) tick() {
 func (p *progress) send(text bool) {
 	st := splashState{}
 	if text {
-		// The app's name, from the config
-		st.Text = strings.Replace(steps[p.cur].text, "<app>", p.app, 1)
+		st.Text = stepText(p.app, p.cur)
 	}
 	if f, ok := p.estimate(p.elapsed(time.Now())); ok {
 		if p.copyTo > 0 {

@@ -148,7 +148,7 @@ host shows what Claude inside gets.
 
 ## MCP servers
 
-The app gets the sandbox's own two (`filesystem` for the binds with `mcp`, and
+The app gets the sandbox's own two (`filesystem` for the binds with `mcp`, an option of a bind Claude Desktop adds, and
 `claude-code`) and Home Manager's
 [`programs.mcp.servers`](https://nix-community.github.io/home-manager/options.xhtml#opt-programs.mcp.servers)
 when `programs.mcp.enable` is on, in every launcher. They run inside the

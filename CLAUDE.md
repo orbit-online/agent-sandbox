@@ -26,7 +26,14 @@ Desktop.
   (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's JSON config (`cmd/launcher`), the
   `.desktop` actions, assertions, and what the app fills: `app`, its FHS env built with `fhsEnvArgs`, `pathPackages`,
   `homeDirs`, the state script's `stateHome`, `stateVars` and `stateInputs`, and `mcpServers`, the features' MCP
-  servers the app gives its agent). What lets a launcher reach outside the sandbox is set under its `permissions`
+  servers the app gives its agent, `appArgs`, ahead of the caller's on every start, `desktop`, the keys of the
+  `.desktop` file the core writes for each launcher (never upstream's; nothing of nixpak's own launcher lands on PATH),
+  `environmentBind`, how the environment doc lists a bind, and `coreBinds`, the core's own; `build.environment` gives
+  the app the doc, whole and in parts). An app module builds on `sl`'s helpers: `fhsAppOf` and `fhsEnvOf` (the app in
+  the core's FHS env), `keepInHome`, `hostBindOf` and `hostPathOf` (what it keeps in the home). The ready line is the
+  app's to print. The core's sections of the environment doc that load by topic are one memo store every app shares,
+  `agent-sandbox-environment` (no app's name in them), an app's own sections a store of its own, and
+  `agent-sandbox.memoStores` lists each once. What lets a launcher reach outside the sandbox is set under its `permissions`
   options (`docs/permissions.md`, The options of a launcher), each an attrset where an entry may need overriding:
   from the start `binds` and `devices` (`options.nix`), `bus` (`dbus.nix`) and `network` (`network.nix`), on request
   `commands`, `sockets`, `folders` and `grants` with `broker.enable` (`permissions.nix`). The modules:
@@ -447,7 +454,7 @@ sandbox ends (`internal/uplink`):
   `uplink.MdnsMap`, `/run/sandbox-uplink/mdns` (key the ifindex, value 1, 0660 like the registration map), and the
   programs load with the constant `mdns`: pre copies mDNS responses to the primaries listed there, and only a
   `primary` with `mdns` passes them.
-- netns-netkit pins the links and maps of each sandbox in `uplink.SandboxDir`, `/run/sandbox-uplink/<uid>[-<name>]`
+- netns-netkit pins the links and maps of each sandbox in `uplink.SandboxDir`, `/run/sandbox-uplink/<uid>-<sandbox>`
   (owner the user, group `sandbox-uplink`, 0770): `peer` and `primary` (the links), `ports` (granted ports,
   `protocol << 16 | port`), `flows` (LRU, the time of the last packet of the host and whether the host sent a FIN) and `sandbox`
   (0640, `uplink.Sandbox`: the two keys, the ifindex of the primary and the uid of the owner), which `down` and
@@ -548,6 +555,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   FHS env, next to Claude Desktop, each with a launcher work: no assertion fails, and the four sandboxes' names, state
   dirs, homes, scratchpads, units, slices, journal namespaces, app IDs, app pids and GC root links all differ, the NixOS
   module runs the stand-in's journal namespaces, netns-netkit gets each sandbox's name and its primaries differ;
+  `testAppIdCollision`, `testAppName`: an app ID another app's sandbox has and an app name no sandbox name may start
+  with refused; `testCrossAppState`: a bind of one app's state dir from another's sandbox refused both ways, and each
+  app's broker denying every app's state dirs; `testMemoStoresTwoApps`: memo's stores with both apps on memo, the
+  core's once and the stand-in's own; `testLockDirBind`: a bind of the broker's lock dir refused;
   `testSandboxNameCollision`: a stand-in app named `claude-desktop-work` refused beside Claude Desktop's launcher work), the per-launcher netns assertion, the tray feature on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
@@ -594,11 +605,12 @@ modules and a user alice (the `home-manager` input exists only for it).
   `testFeatureAssertions`: a feature that is on needs a name of letters, digits and `-`, a description, and both it
   and the note on one line, one that is off needs none, and a bind a feature adds is refused as the launcher's own). The test system imports both modules twice and has a launcher
   `work`.
-- `claude-desktop`: builds alice's sandboxed app (the patched asar and the
+- `claude-desktop`: builds alice's sandboxed app (the default launcher's package its wrapper alone in `bin` with the
+  app's icons, the core's memo store naming no app; the patched asar and the
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure, all
   sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
-  the devices (`/dev/kvm` once, from the `kvm` feature and `permissions.devices`), the features that are on (`kvm` with its description and note; none for `work`) and PATH in `claude-environment.md`, the patched asar's tray
+  the devices (`/dev/kvm` once, from the `kvm` feature and `permissions.devices`), the features that are on (`kvm` with its description and note; none for `work`) and PATH in `sandbox-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
   refused), the channel hook (on a 4.23118-shaped asar: `channels.js` only with `mcpChannels`, hooked into the
@@ -619,7 +631,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   agent's logo from the unwrapped app, the asar's ready hook, its broker's
   slice. For `work`: its wrapper alone in `bin`, its app ID,
   `~/.claude` and the app's config in its home, its GC root link, the name
-  netns-netkit gets, its `claude-environment.md` (with memo: the core
+  netns-netkit gets, its `sandbox-environment.md` (with memo: the core
   import, its pointer to memo, memo's config in the FHS env with the store
   right after the embedded ones, the store in the closure), its permissions broker (the
   read-only `/run/permissions` bind, the config with its folders, host sockets, standing grants (a folder and a grant that are off left out), `netnsNetkit` and the window's overview (no features, binds, devices, D-Bus rules, the network, the implicit lines), the launcher config's; no
@@ -630,6 +642,11 @@ modules and a user alice (the `home-manager` input exists only for it).
   default launcher's `.desktop` file keeps the `claude://` handler and
   upstream's actions, and lacks the Permissions action. For `work`, the
   Permissions window's `--app-id` in its broker's config.
+- `stand-in`: the stand-in app built next to Claude Desktop, both with memo, from the stub app in another shape (its
+  program `standin`, two `.desktop` files without `Actions=`): its launchers' packages hold their wrapper alone and a
+  `.desktop` file the core wrote (Name, Exec, Icon, StartupWMClass, its action and Shell), the default one the icons;
+  its environment doc imported, the core's part filled in for it, its own section that loads by topic left to memo and
+  pointed to, no Claude Desktop in it; memo's stores with each section once, the core's naming no app.
 - `timer-calendar`: the sandbox's user units building with a calendar spec of the user's in the GC timer, and
   refusing `weakly` with the timer and spec named (`systemd-analyze calendar`, `fhs.nix`).
 - `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
@@ -777,7 +794,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   and more than whitespace is (`sockets_test.go`); no answer in time and a notification closed unanswered refused as
   `unanswered`, a body click or a foreign key as `denied`; and the journal: `Asking`, `Answered` (`via` the button, the body), `Timed out` and
   `Refused` with its category by the request's id, an opaque value by digest alone and the reason never. Ports (`ports_test.go`, against a fake `netns-netkit`): a grant running `grant` and `addr` with
-  the name of the launcher and carrying the addresses, its release, lease, revoke and the end of the daemon running
+  the sandbox's name and carrying the addresses, its release, lease, revoke and the end of the daemon running
   `revoke`, `grant` or `addr` of the helper failing leaving no grant and no port, a port, protocol or other key refused
   before asking, an answer from the window for another port refused, a standing port at start and `revoke --all` in the
   cleanup, with the sandbox found or not, and tried again while it fails until the sandbox ends, a grant of a port while the end of another revokes it (the revoke first, the

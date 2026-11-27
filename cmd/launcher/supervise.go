@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,7 +109,7 @@ func supervise(cfg *config, vars, args []string) error {
 	}
 
 	p.mark(stepPrepared, time.Now())
-	cmd := exec.Command(cfg.NixpakLauncher, append([]string{"--password-store=basic"}, args...)...)
+	cmd := exec.Command(cfg.NixpakLauncher, append(slices.Clone(cfg.AppArgs), args...)...)
 	// nixpak's sloth.env panics on unset variables, so it gets the sandbox's environment the wrapper filtered
 	cmd.Env = vars
 	tail := &tail{max: tailMax}

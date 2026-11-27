@@ -71,47 +71,74 @@ let
     launchers.work.permissions.binds."/srv/work".rw = true;
   };
   system = nixos enabled;
-  # A second, minimal app on the sandbox's core, for the checks alone: the stub app (stub-app.nix) in the core's FHS env
-  standInApp =
-    name:
-    import ../home/sandbox { inherit inputs; } {
-      inherit name;
-      appId = "org.example.StandIn";
-      displayName = "Stand-in";
-      agent = "The stand-in";
-      description = "A stand-in app";
-      environmentPath = "/etc/stand-in/environment.md";
-      environment = pkgs.writeText "stand-in-environment.md" "# The stand-in's sandbox\n\n<!-- agent-sandbox: core -->\n";
-      modules = [
-        (
+  # A second, minimal app on the sandbox's core, for the checks alone: the stub app (stub-app.nix) in another shape (its
+  # program not named as the app, two .desktop files, neither with Actions=), in the core's FHS env through sl's
+  # helpers, keeping .stand-in in the home. `over` overrides the descriptor's fields
+  standInDescriptor = {
+    name = "stand-in";
+    appId = "org.example.StandIn";
+    displayName = "Stand-in";
+    agent = "The stand-in";
+    description = "A stand-in app";
+    environmentPath = "/etc/stand-in/environment.md";
+    environment = ./stand-in-environment.md;
+    modules = [
+      (
+        {
+          config,
+          sl,
+          pkgs,
+          launcherName,
+          ...
+        }:
+        let
+          stub = pkgs.callPackage ./stub-app.nix {
+            program = "standin";
+            desktopFiles = {
+              "standin.desktop" = "[Desktop Entry]\nName=Stand-in\nExec=standin %U\nType=Application\n";
+              "Standin-hidden.desktop" = "[Desktop Entry]\nName=Hidden\nExec=standin --hidden\nNoDisplay=true\n";
+            };
+          };
+        in
+        lib.mkMerge [
+          (sl.keepInHome config launcherName [ ".stand-in" ] { })
           {
-            config,
-            sl,
-            pkgs,
-            ...
-          }:
-          {
-            build.app = (pkgs.callPackage ./stub-app.nix { }).override (prev: {
-              buildFHSEnv = args: (prev.buildFHSEnv.override { bubblewrap = sl.bwrapFhs; }) (config.build.fhsEnvArgs args);
-            });
+            build.app = sl.fhsAppOf config stub;
+            build.desktop = {
+              entries.Icon = "standin";
+              actions.Other = {
+                name = "Other";
+                args = "--other";
+              };
+              icons = "${stub.unwrapped}/share/icons";
+            };
           }
-        )
-      ];
-    };
-  # alice with Claude Desktop as `enabled` has it and the stand-in app `name`, each with a launcher work
-  withStandIn =
-    name:
+        ]
+      )
+    ];
+  };
+  standInApp = over: import ../home/sandbox { inherit inputs; } (standInDescriptor // over);
+  # alice with Claude Desktop as `enabled` has it and the stand-in app with `over`, each with a launcher work; `cfg` more
+  # of alice's Home Manager config
+  withStandInCfg =
+    over: cfg:
     system.extendModules {
       modules = [
         {
-          home-manager.sharedModules = [ (standInApp name) ];
-          home-manager.users.alice.agent-sandbox.${name} = {
-            enable = true;
-            launchers.work = { };
-          };
+          home-manager.sharedModules = [ (standInApp over) ];
+          home-manager.users.alice = lib.mkMerge [
+            {
+              agent-sandbox.${(standInDescriptor // over).name} = {
+                enable = true;
+                launchers.work = { };
+              };
+            }
+            cfg
+          ];
         }
       ];
     };
+  withStandIn = name: withStandInCfg { inherit name; } { };
   # The cap on a sandbox's name, <app>[-<launcher>], as the broker's sockets set it, and so on a launcher name of
   # Claude Desktop's
   sandboxNameMax = lib.toInt (
@@ -337,10 +364,11 @@ let
       expr = lib.filter (a: !a.assertion) aliceMemo.assertions;
       expected = [ ];
     };
-    # memo's config on the host lists the sandbox's store too, right after the embedded ones
+    # memo's config on the host lists the sandbox's store too, right after the embedded ones: the core's alone, as
+    # Claude Desktop's part of the doc has no section that loads by topic
     testMemoStores = {
       expr = map (
-        s: if lib.hasSuffix "-claude-desktop-environment/environment.memo" s then "environment.memo" else s
+        s: if lib.hasSuffix "-agent-sandbox-environment/environment.memo" s then "environment.memo" else s
       ) aliceMemo.programs.agent-memos.settings.stores;
       expected = [
         "embed:core"
@@ -1092,6 +1120,104 @@ let
       expr = map (a: a.message) (failedAssertions (withStandIn "claude-desktop-work"));
       expected = [
         "agent-sandbox: two sandboxes share a name, which their units, state dirs and the helpers' names would share too: claude-desktop-work. A launcher's name joins its app's with a -, so rename the launcher"
+      ];
+    };
+    # Two apps with memo: the core's store once, then the stand-in's own (Claude Desktop has none), so memo answers each
+    # section once; the stand-in-check build looks into them
+    testMemoStoresTwoApps =
+      let
+        hm =
+          (withStandInCfg { } {
+            imports = [ memoStub ];
+            programs.agent-memos.enable = true;
+            agent-sandbox.claude-desktop.memo.enable = true;
+            agent-sandbox.claude-desktop.launchers.work.memo.enable = true;
+            agent-sandbox.stand-in.memo.enable = true;
+          }).config.home-manager.users.alice;
+      in
+      {
+        expr = map (
+          s:
+          if lib.hasSuffix "-agent-sandbox-environment/environment.memo" s then
+            "core"
+          else if lib.hasSuffix "-stand-in-environment/environment.memo" s then
+            "stand-in"
+          else
+            s
+        ) hm.programs.agent-memos.settings.stores;
+        expected = [
+          "embed:core"
+          "embed:docs"
+          "core"
+          "stand-in"
+        ];
+      };
+    # An app ID one sandbox of another app has, here the stand-in's as Claude Desktop's launcher work's: refused, as
+    # the launcher's re-entry and the broker find a sandbox by it
+    testAppIdCollision = {
+      expr = map (a: a.message) (failedAssertions (withStandInCfg { appId = "com.anthropic.Claude.work"; } { }));
+      expected = [
+        "agent-sandbox: two sandboxes share an app ID, by which the launcher and the permissions broker find a running sandbox: com.anthropic.Claude.work. A named launcher's is its app's with .<name>"
+      ];
+    };
+    # An app's name that no sandbox name may start with
+    testAppName = {
+      expr = map (a: a.message) (failedAssertions (withStandInCfg { name = "Stand-in"; } { }));
+      expected = [
+        "agent-sandbox: the app's name Stand-in must match [a-z][a-z0-9-]* and be at most ${toString sandboxNameMax} characters, as the names of its sandboxes start with it"
+      ];
+    };
+    # What the split rests on: no app's sandbox binds another app's state, either way, and the broker of each denies
+    # every app's state dirs
+    testCrossAppState =
+      let
+        sys = withStandInCfg { } {
+          agent-sandbox.claude-desktop.permissions.binds."/srv/si".src = "/home/alice/.local/share/stand-in/home/x";
+          agent-sandbox.stand-in.launchers.work.permissions.binds."/srv/cd".src =
+            "/home/alice/.local/share/claude-desktop-work";
+          agent-sandbox.claude-desktop.launchers.work.permissions.broker.enable = true;
+          agent-sandbox.stand-in.permissions.broker.enable = true;
+        };
+        hm = sys.config.home-manager.users.alice.agent-sandbox;
+      in
+      {
+        expr = {
+          failed = map (a: a.message) (failedAssertions sys);
+          denied = map (c: c.denied) [
+            hm.claude-desktop.launchers.work.build.permissionsConfig
+            hm.stand-in.build.permissionsConfig
+          ];
+        };
+        expected = {
+          failed = [
+            "agent-sandbox.claude-desktop: permissions.binds.\"/srv/si\" binds /home/alice/.local/share/stand-in/home/x, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those"
+            "agent-sandbox.stand-in: launchers.work.permissions.binds.\"/srv/cd\" binds /home/alice/.local/share/claude-desktop-work, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those"
+          ];
+          denied =
+            let
+              all = [
+                "/home/alice/.local/share/claude-desktop"
+                "/home/alice/.local/share/claude-desktop-work"
+                "/home/alice/.local/share/stand-in"
+                "/home/alice/.local/share/stand-in-work"
+                "\${XDG_RUNTIME_DIR}"
+              ];
+            in
+            [
+              all
+              all
+            ];
+        };
+      };
+    # The broker's exclusive locks lie in the runtime dir every launcher shares, so a bind of them is refused with it
+    testLockDirBind = {
+      expr = map (a: a.message) (
+        failedAssertions (
+          nixos (enabled // { permissions.binds."/srv/locks".src = "/run/user/1000/agent-sandbox/locks"; })
+        )
+      );
+      expected = [
+        "agent-sandbox.claude-desktop: permissions.binds.\"/srv/locks\" binds /run/user/1000/agent-sandbox/locks, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those"
       ];
     };
     testLauncherNetnsAssertion = {
@@ -2848,13 +2974,15 @@ in
           fhs=$(grep -P -- '-claude-desktop-[^/]+-bwrap$' "$workClosure/store-paths")
           memo=$(grep -oP -- '--ro-bind \K\S+(?= /home/alice/\.config/agent-memos/config\.yaml$)' "$fhs") || { echo "work's FHS env lacks memo's config" >&2; exit 1; }
           stores=$(grep '^- ' "$memo" | tr '\n' ' ')
-          [[ $stores =~ ^'- embed:core - embed:docs - '(/nix/store/[^/ ]+-claude-desktop-environment/environment\.memo)' - /srv/team.memo '$ ]] ||
+          [[ $stores =~ ^'- embed:core - embed:docs - '(/nix/store/[^/ ]+-agent-sandbox-environment/environment\.memo)' - /srv/team.memo '$ ]] ||
             { echo "memo's stores in the sandbox: $stores" >&2; exit 1; }
           store=''${BASH_REMATCH[1]}
           grep -qxF "$(dirname "$store")" "$workClosure/store-paths" || { echo "work's closure lacks $store" >&2; exit 1; }
           for line in '-- nix/pragmas --' 'filter=topic={nix,sandbox}' 'topic=sandbox # The sandbox you run in: its home, what survives a restart, its namespaces' 'unix=environment' 'echo environment=bwrap'; do
             grep -qxF -- "$line" "$store" || { echo "$store lacks: $line" >&2; exit 1; }
           done
+          # The core's store, which every app shares: nothing of an app's in it
+          ! grep -qi -e claude-desktop -e 'claude desktop' -e '@app@' "$store" || { echo "$store names an app" >&2; exit 1; }
           # work has the permissions broker: its grant directory read-only at /run/permissions, its config, the daemon
           # started by the wrapper; the default launcher has none of it
           workArgs=$(grep -- '-bwrap-args\.json$' "$workClosure/store-paths")
@@ -2923,6 +3051,10 @@ in
             grep -qaF "\"desktopName\": \"$id.desktop\"" "$(grep -- '-claude-desktop-app\.asar$' "$c")" ||
               { echo "$bin's asar lacks the desktopName $id.desktop" >&2; exit 1; }
           }
+          # The default launcher's package: its wrapper alone in bin, none of nixpak's, and the app's icons
+          [[ $(ls ${sandboxed}/bin) == claude-desktop ]] || { echo "the default launcher's bin: $(ls ${sandboxed}/bin)" >&2; exit 1; }
+          [[ -e ${sandboxed}/share/icons/hicolor/256x256/apps/claude-desktop.png ]] || { echo "the default launcher lacks the icons" >&2; exit 1; }
+          [[ ! -e $work/share/icons ]] || { echo "work installs the icons" >&2; exit 1; }
           same_id ${sandboxed} claude-desktop "$paths" com.anthropic.Claude
           same_id $work claude-desktop-work "$workClosure/store-paths" com.anthropic.Claude.work
           # The default launcher keeps the claude:// handler and upstream's actions, and lacks the Permissions action
@@ -2948,6 +3080,69 @@ in
         '';
 
     request-send-module = requestSend.check;
+
+    # The stand-in app built next to Claude Desktop, both with memo: its launchers' packages hold their wrapper alone
+    # and a .desktop file the core wrote, none of the stub's (which lack Actions=, two of them), the default one the
+    # icons; its environment doc has the core's part filled in for it and its own sections; memo's stores hold each
+    # section once, the core's store nothing of an app's
+    stand-in =
+      let
+        hm =
+          (withStandInCfg { } {
+            imports = [ memoStub ];
+            programs.agent-memos.enable = true;
+            agent-sandbox.claude-desktop.memo.enable = true;
+            agent-sandbox.stand-in.memo.enable = true;
+          }).config.home-manager.users.alice;
+        si = hm.agent-sandbox.stand-in;
+        store = suffix: lib.findFirst (lib.hasSuffix suffix) null hm.programs.agent-memos.settings.stores;
+      in
+      pkgs.runCommand "stand-in-check"
+        {
+          default = si.build.package;
+          work = si.launchers.work.build.package;
+          doc = si.build.environment.doc;
+          file = si.build.environment.file;
+          coreStore = store "-agent-sandbox-environment/environment.memo";
+          appStore = store "-stand-in-environment/environment.memo";
+        }
+        ''
+          [[ $(ls $default/bin) == stand-in && $(ls $work/bin) == stand-in-work ]] ||
+            { echo "bin: $(ls $default/bin) $(ls $work/bin)" >&2; exit 1; }
+          [[ $(ls $default/share/applications) == org.example.StandIn.desktop ]] ||
+            { echo "the default launcher's .desktop files: $(ls $default/share/applications)" >&2; exit 1; }
+          [[ $(ls $work/share/applications) == org.example.StandIn.work.desktop ]] ||
+            { echo "work's .desktop files: $(ls $work/share/applications)" >&2; exit 1; }
+          [[ -e $default/share/icons/hicolor/256x256/apps/standin.svg && ! -e $work/share/icons ]] ||
+            { echo "the icons are off" >&2; exit 1; }
+          d=$default/share/applications/org.example.StandIn.desktop
+          for line in Name=Stand-in 'Exec=stand-in %U' Icon=standin StartupWMClass=org.example.StandIn 'Actions=Other;Shell;' \
+            'Exec=stand-in --other' 'Name=Other' 'Name=New shell'; do
+            grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
+          done
+          ! grep -q -e '^Exec=standin' -e '^MimeType=' "$d" || { echo "$d runs the app itself or handles a type" >&2; exit 1; }
+          d=$work/share/applications/org.example.StandIn.work.desktop
+          for line in 'Name=Stand-in (work)' 'Exec=stand-in-work %U' 'Exec=stand-in-work --other' StartupWMClass=org.example.StandIn.work; do
+            grep -qxF -- "$line" "$d" || { echo "$d lacks: $line" >&2; exit 1; }
+          done
+          # The doc: imported by the one bound at the stand-in's path, the core's part filled in for it
+          grep -qxF "@$file" $doc || { echo "$doc doesn't import $file" >&2; exit 1; }
+          for line in "# Your environment: the stand-in's sandbox" '## The stand-in' 'This sandbox'"'"'s app is `stand-in`, and its environment doc, the file that' \
+            'imports this one, `/etc/stand-in/environment.md`. The sections that load through'; do
+            grep -qxF -- "$line" "$file" || { echo "$file lacks: $line" >&2; exit 1; }
+          done
+          ! grep -qxF -e '## Stand-in notes' -e '## Home' "$file" || { echo "$file has the sections memo loads" >&2; exit 1; }
+          grep -qF 'Stand-in notes (`topic=stand-in`)' "$file" || { echo "$file lacks the pointer to its own memo" >&2; exit 1; }
+          ! grep -qi -e claude-desktop -e 'claude desktop' "$file" || { echo "$file names Claude Desktop" >&2; exit 1; }
+          # Each section once across the stores, the core's naming no app
+          (( $(cat $coreStore $appStore | grep -cxF -- '-- home/pragmas --') == 1 )) || { echo "Home isn't in one store" >&2; exit 1; }
+          grep -qxF -- '-- home/pragmas --' $coreStore || { echo "the core's store lacks Home" >&2; exit 1; }
+          grep -qxF -- '-- stand-in-notes/pragmas --' $appStore || { echo "the stand-in's store lacks its notes" >&2; exit 1; }
+          [[ $(grep -c '/pragmas --$' $appStore) == 1 ]] || { echo "the stand-in's store holds more than its notes" >&2; exit 1; }
+          grep -qxF 'topic=stand-in # The stand-in app' $appStore || { echo "the stand-in's store lacks its doc" >&2; exit 1; }
+          ! grep -qi -e claude-desktop -e 'claude desktop' -e stand-in $coreStore || { echo "the core's store names an app" >&2; exit 1; }
+          touch $out
+        '';
 
     scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
       shellcheck ${../../scripts}/*.sh ${../home/sandbox}/*.sh ${../home/claude-desktop}/*.sh

@@ -4,6 +4,8 @@
 # then the session bus's reply to its RequestName for the tray item's name (StatusNotifierItem-<pid>-1, 1 when it got
 # it, denied when the proxy refused), prints the ready line the launcher waits for, and stays up as the first instance.
 # `--exec CMD...` runs CMD instead, which through the wrapper's claude:// re-entry means inside the running sandbox.
+# `program` and `desktopFiles` give it another shape, as the checks' stand-in app does: its program named otherwise,
+# other .desktop files, which the module never reads
 {
   lib,
   stdenvNoCC,
@@ -14,9 +16,11 @@
   coreutils,
   glib,
   libnotify,
+  program ? "claude-desktop",
+  desktopFiles ? null,
 }:
 let
-  app = writeShellScript "claude-desktop" ''
+  app = writeShellScript program ''
     args=()
     for a; do [[ $a == --password-store=basic ]] || args+=("$a"); done
     if [[ ''${args[0]:-} == --exec ]]; then
@@ -37,7 +41,7 @@ let
     exec ${lib.getExe' coreutils "sleep"} infinity
   '';
   unwrapped = stdenvNoCC.mkDerivation {
-    pname = "claude-desktop-stub";
+    pname = "${program}-stub";
     version = "0";
     dontUnpack = true;
     nativeBuildInputs = [ asar ];
@@ -49,18 +53,30 @@ let
       echo 'function c(e){return e||rk()==="gnome"||a.nativeTheme.shouldUseDarkColors?"TrayIconLinux-Dark.png":"TrayIconLinux.png"}' >>app/main.js
       # The .desktop file the module installs under each launcher's app ID, with its shell action, and rewrites for a named
       # launcher
-      printf '%s\n' '[Desktop Entry]' Name=Claude Actions=NewChat 'Exec=claude-desktop %U' 'MimeType=x-scheme-handler/claude;' StartupWMClass=com.anthropic.Claude \
-        "" '[Desktop Action NewChat]' 'Name=New chat' 'Exec=claude-desktop claude://claude.ai/new' \
-        >$out/share/applications/com.anthropic.Claude.desktop
+      ${
+        if desktopFiles == null then
+          ''
+            printf '%s\n' '[Desktop Entry]' Name=Claude Actions=NewChat 'Exec=claude-desktop %U' 'MimeType=x-scheme-handler/claude;' StartupWMClass=com.anthropic.Claude \
+              "" '[Desktop Action NewChat]' 'Name=New chat' 'Exec=claude-desktop claude://claude.ai/new' \
+              >$out/share/applications/com.anthropic.Claude.desktop
+          ''
+        else
+          lib.concatStrings (
+            lib.mapAttrsToList (n: text: "cp ${builtins.toFile n text} $out/share/applications/${n}\n") desktopFiles
+          )
+      }
+      # The icon the module's .desktop file names and the splash shows
+      mkdir -p $out/share/icons/hicolor/256x256/apps
+      cp ${../home/sandbox/assets/orbit-landskab-farve.svg} $out/share/icons/hicolor/256x256/apps/${program}.svg
       # Unpacked like the real app's native modules, so app.asar.unpacked exists
       touch app/stub.node
       asar pack app $out/lib/claude-desktop/resources/app.asar --unpack '{*.node,github-mcp-server}'
-      ln -s ${app} $out/bin/claude-desktop
+      ln -s ${app} $out/bin/${program}
     '';
   };
 in
 buildFHSEnv {
-  pname = "claude-desktop";
+  pname = program;
   version = "0";
   passthru = { inherit unwrapped; };
   targetPkgs = _: [
@@ -69,7 +85,7 @@ buildFHSEnv {
     libnotify
     (writeScriptBin "nettest" (builtins.readFile ../../scripts/nettest.sh))
   ];
-  runScript = "claude-desktop";
+  runScript = program;
   extraInstallCommands = ''
     ln -s ${unwrapped}/share $out/share
   '';

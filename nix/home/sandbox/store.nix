@@ -11,9 +11,6 @@
 }:
 let
   ids = sl.idsOf launcherName;
-  sys = {
-    mcp = false;
-  };
   # Run by the sandbox's systemd --user (userUnits below), see environment.md
   app = sl.app.name;
   storeGc = sl.script "store-gc.sh" {
@@ -79,17 +76,21 @@ in
   config = {
     env.NIX_CONF_DIR = "${sl.nixConf}";
     permissions.binds = {
-      "/nix" = sys // {
+      "/nix" = {
         src = "${ids.stateDir}/nix";
         rw = true;
       };
       # On its own, so the sandbox can't rename it: host-side processes that join its mount namespace run binaries
       # from the closure's binds in it
-      "/nix/store" = sys // {
+      "/nix/store" = {
         src = "${ids.stateDir}/nix/store";
         rw = true;
       };
     };
+    build.coreBinds = [
+      "/nix"
+      "/nix/store"
+    ];
     build.storeRoots = [ sl.nixConf ];
     build.sw = [
       storeGc

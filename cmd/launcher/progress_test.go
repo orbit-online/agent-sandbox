@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +190,16 @@ func TestCopySegment(t *testing.T) {
 	p.copying(0.5)
 	if p.shown != 0.5 {
 		t.Errorf("Without history: %v", p.shown)
+	}
+}
+
+// The last step names the app, as the config has it
+func TestStepText(t *testing.T) {
+	i := slices.IndexFunc(steps, func(s struct{ name, text string }) bool { return s.name == stepNetwork })
+	if got := stepText("Paseo", i); got != "Starting Paseo" {
+		t.Errorf("stepText = %q, want Starting Paseo", got)
+	}
+	if got := stepText("Paseo", 0); got != "Preparing the sandbox" {
+		t.Errorf("stepText = %q for the first step", got)
 	}
 }

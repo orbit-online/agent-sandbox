@@ -48,6 +48,7 @@ func newWorld(t *testing.T) *world {
 		AppID:          "com.example.App",
 		Sandbox:        "app-test",
 		App:            "Test App",
+		AppArgs:        []string{"--app-arg"},
 		Unit:           "app-test-app.service",
 		Slice:          "app-test.slice",
 		StateDir:       filepath.Join(dir, "state"),

@@ -72,6 +72,7 @@ type config struct {
 	AppID          string   `json:"appId"`
 	Sandbox        string   `json:"sandbox"`        // The sandbox's name, <app>[-<launcher>]: its wrapper's, its units'
 	App            string   `json:"app"`            // The app's name for the user: "Starting <app>"
+	AppArgs        []string `json:"appArgs"`        // Ahead of the caller's, on every start and re-entry
 	Unit           string   `json:"unit"`           // The app's unit
 	Journal        string   `json:"journal"`        // The journal namespace the launcher's host side logs to
 	SandboxJournal string   `json:"sandboxJournal"` // The one the sandbox and the app's output log to

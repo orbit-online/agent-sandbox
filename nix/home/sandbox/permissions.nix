@@ -19,7 +19,8 @@ in
         description = ''
           Run the permissions broker (`docs/permissions.md`), which grants the sandbox outside access while it runs,
           asking the user each time. Binds its grant directory read-only at `/run/permissions`, with the socket
-          requests go to, and adds the `permissions` MCP server.
+          requests go to, and adds the `permissions` MCP server to `build.mcpServers`, which the app hands its agents
+          (Claude Desktop does).
         '';
       };
       commands = mkOption {

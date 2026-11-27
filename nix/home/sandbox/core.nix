@@ -13,9 +13,6 @@
 }:
 let
   ids = sl.idsOf launcherName;
-  sys = {
-    mcp = false;
-  };
   # nixpak's D-Bus proxy: its launcher runs pkgs.xdg-dbus-proxy in a wrapper whose path it sets at build time
   # (docs/permissions.md, D-Bus), so the proxy comes in through the pkgs it gets. And nixpak's launcher, which it builds
   # with this callPackage, with its reaper leaving alone the children it waits for (nix/patches/nixpak-launcher-reaper.patch).
@@ -193,13 +190,20 @@ in
         XDG_CURRENT_DESKTOP = "\${XDG_CURRENT_DESKTOP:+\${XDG_CURRENT_DESKTOP/GNOME/COSMIC:GNOME}}";
       };
     permissions.binds = {
-      "/sys" = sys;
-      ${hm.home.homeDirectory} = sys // {
+      "/sys" = { };
+      ${hm.home.homeDirectory} = {
         src = ids.home;
         rw = true;
       };
     }
-    // lib.genAttrs (map (e: "/etc/${e}") sl.hostEtc) (_: sys // { optional = true; });
+    // lib.genAttrs (map (e: "/etc/${e}") sl.hostEtc) (_: { optional = true; });
+    # The binds above and store.nix's: the sandbox's own, which the environment doc lists only when read-write and an
+    # app may treat apart (Claude Desktop keeps them from its filesystem MCP server)
+    build.coreBinds = [
+      "/sys"
+      hm.home.homeDirectory
+    ]
+    ++ map (e: "/etc/${e}") sl.hostEtc;
 
     build.devices = devices;
     # The directories <sandbox>-state works in for the launcher: the sandbox's home, and those the app adds (the bind

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/orbit-online/agent-sandbox/cmd/permissions-broker/internal/hostsock"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,7 +134,7 @@ func TestRemoveLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
+	dir := lockDir()
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
 		t.Fatalf("Locks: %v", entries)
@@ -151,5 +152,16 @@ func TestRemoveLocks(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, entries[0].Name())); err == nil {
 		t.Error("Left its own lock")
+	}
+}
+
+// The locks lie where host sockets are refused, so no grant reaches them: a sandbox with one could remove another
+// launcher's lock or forge one
+func TestLockDirRefused(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	for _, p := range []string{lockDir(), filepath.Join(lockDir(), "x")} {
+		if err := hostsock.Refused(p); err == nil {
+			t.Errorf("%s isn't refused", p)
+		}
 	}
 }

@@ -1,6 +1,11 @@
 # Where a launcher's feature modules and its app's meet: what each adds to the store roots, nixpak's config, the FHS env,
 # the launcher's variables and its .desktop file, and the assertions. Internal: core.nix and launch.nix read them
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  config,
+  ...
+}:
 let
   inherit (lib) mkOption types;
   internal =
@@ -35,7 +40,7 @@ in
     };
     stateInputs = list types.package;
     # Set by fhs.nix: what the core adds to the arguments of the app's buildFHSEnv, a function of them. The app builds
-    # build.app with it and sl.buildFHSEnv
+    # build.app with it, through sl.fhsAppOf or sl.fhsEnvOf
     fhsEnvArgs = internal (types.functionTo types.attrs);
     # The launcher's config (cmd/launcher/main.go), as JSON
     launcherConfig = internal (types.attrsOf types.anything) // {
@@ -46,8 +51,23 @@ in
       default = { };
     };
     assertions = list types.attrs;
-    # Local MCP servers for the agent, by name, as Claude Desktop's config takes them: the features' (the permissions
-    # broker's) and the app's own. The app gives them to its agent (Claude Desktop: mcp.nix)
+    # The paths of the binds the core adds for itself (core.nix, store.nix)
+    coreBinds = list types.str;
+    # How the environment doc lists a bind (environment.nix), the bind with its path: whether at all, and what it says
+    # besides rw or ro. By default the read-write ones and the user's read-only ones; the app may say more (Claude
+    # Desktop: MCP)
+    environmentBind = internal (types.functionTo (types.attrsOf types.anything)) // {
+      default = b: {
+        listed = b.rw || !lib.elem b.path config.build.coreBinds;
+        tags = [ ];
+      };
+    };
+    # Arguments the launcher puts ahead of the caller's on every start and re-entry of the app (Claude Desktop:
+    # --password-store=basic, Chromium's)
+    appArgs = list types.str;
+    # Local MCP servers, by name, each a command, its args and env: the features' (the permissions broker's `permissions`
+    # server) and the app's own. Every app hands them to the agents it runs, in whatever form they take them (Claude
+    # Desktop: mcp.nix, its config's mcpServers); an app that doesn't leaves the broker's tools out of reach
     mcpServers = internal (types.attrsOf (pkgs.formats.json { }).type) // {
       default = { };
     };

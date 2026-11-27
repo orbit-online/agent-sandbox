@@ -223,7 +223,7 @@ func TestCleanup(t *testing.T) {
 	if _, err := os.Stat(inside); err != nil {
 		t.Fatal(err)
 	}
-	lock := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions", "x")
+	lock := filepath.Join(lockDir(), "x")
 	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
 		t.Fatal(err)
 	}

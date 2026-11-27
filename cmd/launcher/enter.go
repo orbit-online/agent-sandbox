@@ -47,7 +47,7 @@ func start(cfg *config, cfgPath string, vars, args []string) error {
 		}
 		// Joins the app's namespaces, its pid ns included, so Electron's single-instance lock finds the first instance
 		// and checks its pid where it lives. /init is the FHS env's, which the FHS env's bwrap would otherwise run
-		return enter(cfg, app, vars, append([]string{"/init", "--password-store=basic"}, args...))
+		return enter(cfg, app, vars, append(append([]string{"/init"}, cfg.AppArgs...), args...))
 	}
 	return startUnit(cfg, cfgPath, vars, args)
 }

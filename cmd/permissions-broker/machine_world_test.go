@@ -358,7 +358,7 @@ func (w *world) ceiling() *ceiling {
 
 // lockHolders reads the exclusive locks: the launcher holding each of the VMs names
 func lockHolders(names []string) map[string]string {
-	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
+	dir := lockDir()
 	held := map[string]string{}
 	for _, n := range names {
 		key, _ := json.Marshal(map[string]string{"name": n})

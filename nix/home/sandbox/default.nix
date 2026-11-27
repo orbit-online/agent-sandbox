@@ -142,13 +142,24 @@ in
       # Every sandbox of the app, enabled or not (shared.nix)
       agent-sandbox.sandboxes = lib.imap0 (index: name: {
         inherit index;
-        inherit (sl.idsOf name) sandbox stateDir journal sandboxJournal;
+        inherit (sl.idsOf name)
+          sandbox
+          appId
+          stateDir
+          journal
+          sandboxJournal
+          ;
         app = app.name;
         inherit (cfg) enable;
       }) sl.names;
     }
     (lib.mkIf cfg.enable {
       assertions = [
+        {
+          # As a launcher name, and so its sandbox's name: what the helpers take (internal/caller)
+          assertion = builtins.match "[a-z][a-z0-9-]*" app.name != null && lib.stringLength app.name <= sl.sandboxNameMax;
+          message = "agent-sandbox: the app's name ${app.name} must match [a-z][a-z0-9-]* and be at most ${toString sl.sandboxNameMax} characters, as the names of its sandboxes start with it";
+        }
         {
           assertion = osConfig.hardware.graphics.enable;
           message = "agent-sandbox.${app.name}: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
@@ -173,13 +184,8 @@ in
           }
         ) sl.names
       );
-      # The sandbox's store right after memo's embedded ones (mkOrder 550, ahead of the default), by its store path, so
-      # memo on the host answers as it does inside
-      programs = lib.optionalAttrs (options ? programs.agent-memos) {
-        agent-memos.settings.stores = lib.mkIf (lib.any (l: l.memo.enable) launchers) (
-          lib.mkOrder 550 [ "${sl.environment}/environment.memo" ]
-        );
-      };
+      # The memo stores, which shared.nix puts in memo's config
+      agent-sandbox.memoStores = lib.mkIf (lib.any (l: l.memo.enable) launchers) sl.memoStores;
     })
   ];
 }

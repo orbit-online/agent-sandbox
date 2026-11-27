@@ -246,7 +246,6 @@ in
             "dbus-.*"
             sl.runtimeDir
             "\\.flatpak"
-            "agent-sandbox-permissions"
             "nixpak-.*"
           ];
           roots = [

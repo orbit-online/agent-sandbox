@@ -24,7 +24,7 @@ import (
 func refusedRoots(run string) []string {
 	roots := []string{"/proc", "/run/dbus", "/var/run"}
 	for _, own := range []string{"bus", "systemd", "at-spi", ".dbus-proxy", "dbus-*", "agent-sandbox", ".flatpak",
-		"agent-sandbox-permissions", "nixpak-*"} {
+		"nixpak-*"} {
 		roots = append(roots, run+"/"+own)
 	}
 	for _, env := range []string{"DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS"} {

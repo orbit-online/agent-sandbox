@@ -20,13 +20,19 @@ let
   # PATH as configured, then environmentText. claude-env reads `environment:` from the frontmatter. Claude Code, for
   # one, follows imports four hops deep, and ~/.claude reaches this file in three (CLAUDE.md, the account's, the shared
   # one), so environmentFile is the last that loads
-  environmentDoc = pkgs.writeText "sandbox-environment.md" ''
-    ---
-    environment: bwrap
-    ---
+  environmentDoc = pkgs.writeText "sandbox-environment.md" (
+    ''
+      ---
+      environment: bwrap
+      ---
 
-    @${config.environmentFile}
+      @${config.environmentFile}
 
+    ''
+    + generated
+  );
+  # What the doc says of this launcher (binds, features, PATH, environmentText), without the frontmatter or the import
+  generated = ''
     ## Binds
 
     ${
@@ -36,7 +42,7 @@ let
           "- `${b.path}` (${
             lib.concatStringsSep ", " (
               [ (if b.rw then "rw" else "ro") ]
-              ++ lib.optional b.mcp "MCP"
+              ++ (config.build.environmentBind b).tags
               ++ lib.optional (b.src != b.path) "from `${b.src}`"
             )
           })\n"
@@ -44,7 +50,9 @@ let
         (
           lib.sortOn (b: b.path) (
             lib.mapAttrsToList (path: b: b // { inherit path; }) (
-              lib.filterAttrs (_: b: b.enable && (b.rw || b.mcp)) config.permissions.binds
+              lib.filterAttrs (
+                path: b: b.enable && (config.build.environmentBind (b // { inherit path; })).listed
+              ) config.permissions.binds
             )
           )
         )
@@ -89,6 +97,20 @@ in
       type = types.lines;
       default = "";
       description = "Appended to the sandbox's environment doc (`${sl.app.environmentPath}`), which the agent loads every session: per-user notes, `@` imports and read-when triggers.";
+    };
+  };
+
+  # The doc, whole and in its parts, for an app that binds it somewhere else too or feeds an agent that doesn't follow
+  # `@` imports: `doc` the file bound at the app's environmentPath, `file` the static part it imports (environmentFile),
+  # `generated` this launcher's part, as text
+  options.build.environment = mkOption {
+    type = types.attrsOf types.anything;
+    internal = true;
+    readOnly = true;
+    default = {
+      doc = environmentDoc;
+      file = config.environmentFile;
+      inherit generated;
     };
   };
 

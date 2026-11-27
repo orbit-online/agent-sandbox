@@ -24,7 +24,7 @@ func TestSuperviseReady(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if c := w.calls(); !strings.Contains(c, "nixpak --password-store=basic claude://x") ||
+	if c := w.calls(); !strings.Contains(c, "nixpak --app-arg claude://x") ||
 		!strings.Contains(c, "state "+w.cfg.Home+" -- home") || !strings.Contains(c, "nix-store --add-root") {
 		t.Errorf("Calls:\n%s", c)
 	}

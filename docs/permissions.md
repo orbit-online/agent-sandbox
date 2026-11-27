@@ -226,7 +226,7 @@ broker may grant while the sandbox runs, after asking the user.
 
 | Option | When | What |
 |---|---|---|
-| `permissions.binds.<path>` | from the start | A host path mounted at `<path>`: `src`, `rw`, `optional`, `mcp`, `enable` |
+| `permissions.binds.<path>` | from the start | A host path mounted at `<path>`: `src`, `rw`, `optional`, `enable`, and an app's own (Claude Desktop's `mcp`) |
 | `permissions.devices.<path>` | from the start | A device node, bound where it exists on the host: `enable` |
 | `permissions.bus.<name>` | from the start | What the app reaches of a well-known name on the session bus, through the proxy (D-Bus): `policy`, `call`, `broadcast`, `versions` |
 | `permissions.network.enable`, `.mdns` | from the start | The network of the sandbox, and mDNS in it |
@@ -371,7 +371,7 @@ permissions.commands.windows-vm = {
 - `result` is `text` (the default) or an image MIME type.
 - `maxValidity` (optional) caps the validity the command is told (below), for commands that issue credentials.
 - `exclusive` (optional): an instance may be granted to one launcher at a time. The daemons share lock files in
-  `$XDG_RUNTIME_DIR/agent-sandbox-permissions/`, one per instance, holding the launcher's name and linked into place
+  `$XDG_RUNTIME_DIR/agent-sandbox/locks/`, one per instance, holding the sandbox's name and linked into place
   so only one daemon wins. A daemon removes its locks when the grant ends and in its cleanup after a crash; a
   standing grant takes one like any other. Grants of one launcher share a lock only with the same parameters (a
   `once` grant beside another): other parameters are another client of the instance, refused as before. A request
@@ -474,7 +474,7 @@ The module (at eval, on the literal path) and the daemon (at start, on the expan
 connection) refuse what's known to hand over more than its own service: anything beneath `/proc` (aliases of any path),
 `/run/dbus`, `/var/run` (an alias of `/run`), and in `$XDG_RUNTIME_DIR` its `bus`, `systemd/` (the user manager's
 private bus: a transient unit runs code on the host), `at-spi/`, `.dbus-proxy/`, `dbus-*`, `agent-sandbox/`,
-`.flatpak/`, `agent-sandbox-permissions/` and `nixpak-*`; the paths the D-Bus address variables name; and
+`.flatpak/` and `nixpak-*` (`agent-sandbox/` holding the broker's locks too); the paths the D-Bus address variables name; and
 `$XDG_RUNTIME_DIR` itself or what holds it. A path must be clean (no `.`, `..` or empty segments). A glob is refused
 when its `*` could fall within one of those: when the segments before it lead to or into one. Without
 `$XDG_RUNTIME_DIR` the daemon refuses every host socket. The daemon expands every variable of its environment and
@@ -498,8 +498,8 @@ port. Over UDP the sandbox answers only a host client with a connected socket: a
 reachable from the host", and the window shows the protocol and port and lets the user change only the lease, as for
 a host command: the port is the one the sandbox listens on.
 
-Making the grant live runs `netns-netkit grant [--name=<launcher>] tcp 8080` as the user, which switches the port on in
-the `ports` map of the sandbox, then `netns-netkit addr`, which prints the sandbox addresses. If either fails, nothing is
+Making the grant live runs `netns-netkit grant --name=<sandbox> tcp 8080` as the user, which switches the port on in
+the `ports` map of the sandbox, then `netns-netkit addr --name=<sandbox>`, which prints the sandbox addresses. If either fails, nothing is
 granted (`failed`) and the port is switched off again. The grant carries `addresses`, `<IPv4>:8080` and
 `[<IPv6>]:8080`, in the answer to the request, `status`, `list` and the window. Its end, whatever ends it, runs
 `netns-netkit revoke`, which switches the port off and deletes the flows recorded on it, so open connections from the

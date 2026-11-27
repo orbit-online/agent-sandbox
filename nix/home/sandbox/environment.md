@@ -5,6 +5,11 @@
 
 ## Services and logs
 
+This sandbox's app is `@app@`, and its environment doc, the file that
+imports this one, `@environmentPath@`. The sections that load through
+memo, which every app's sandbox shares, call them `<app>` and the
+environment doc.
+
 A `systemd --user` runs in the sandbox, started right after the app in the
 cgroup `user/` beside the app's `app/`, and gone with it. `systemctl --user`
 reaches it over its private socket. It has no D-Bus, so `systemd-run`'s
@@ -41,9 +46,9 @@ On the host they're `journalctl --namespace=@app@[-<name>]` and
 
 The user can run several of these sandboxes side by side, each from its own
 launcher with a state dir of its own on the host:
-`~/.local/share/@app@` for the default one,
-`~/.local/share/@app@-<name>` for a named one. The binds in
-`@environmentPath@` show which one this is.
+`~/.local/share/<app>` for the default one,
+`~/.local/share/<app>-<name>` for a named one. The binds in
+the environment doc show which one this is.
 
 `$HOME` is the host user's home path, but it's yours: on the host it's `home/`
 in the state dir, and it survives restarts and rebuilds.
@@ -219,9 +224,9 @@ and its `store/` bound again at `/nix/store`. The next launch refuses a
 no record (an install from before it kept one), it deletes `nix/` and copies the closure into a fresh one: what was installed in `/nix` before is
 gone then. No daemon, substitutes from cache.nixos.org only. The launcher copies the app's
 closure in and roots it
-(`/nix/var/nix/gcroots/@app@`); those paths are bound read-only on
-top. When it moves the root it leaves `/nix/var/@app@/gc-pending`,
-which starts `@app@-store-gc` (see Services and logs).
+(`/nix/var/nix/gcroots/<app>`); those paths are bound read-only on
+top. When it moves the root it leaves `/nix/var/<app>/gc-pending`,
+which starts `<app>-store-gc` (see Services and logs).
 
 The app runs in a buildFHSEnv, which mounts a tmpfs on `etc/` of the glibc
 it uses (for `ld.so.cache`), and every process here inherits that mount. To
@@ -240,16 +245,16 @@ read-only binds, and fail.
 
 The sandbox:
 
-- Each bind under Binds in `@environmentPath@` is a mount in
+- Each bind under Binds in the environment doc is a mount in
   `/proc/self/mountinfo`, read-write or read-only as listed. One marked as
   present only if the host has it may be missing.
 - The binaries of each package under PATH there resolve on PATH.
 - pid 1 is `bwrap`, and `/proc/self/uid_map` and `gid_map` hold 65536 ids
   with your own kept as themselves.
-- `/nix/var/nix/gcroots/@app@` resolves.
+- `/nix/var/nix/gcroots/<app>` resolves.
 - `systemctl --user is-system-running` says `running`, and
-  `systemctl --user list-timers` shows `@app@-store-gc.timer` and
-  `@app@-scratchpad-prune.timer`, unless the config left one out
+  `systemctl --user list-timers` shows `<app>-store-gc.timer` and
+  `<app>-scratchpad-prune.timer`, unless the config left one out
   (a `null` frequency).
 - `journalctl -n 1` and `journalctl --namespace=<the host side's> -n 1`
   each show an entry, and `systemd-cat --namespace=<the host side's> true`

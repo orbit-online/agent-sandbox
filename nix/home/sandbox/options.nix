@@ -48,11 +48,6 @@ in
                   default = false;
                   description = "Mount read-write.";
                 };
-                mcp = mkOption {
-                  type = types.bool;
-                  default = true;
-                  description = "Expose the path to the filesystem MCP server.";
-                };
               };
             }
           )

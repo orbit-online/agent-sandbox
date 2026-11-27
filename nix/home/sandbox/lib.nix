@@ -34,6 +34,40 @@ rec {
     };
 
   xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
+  # The app in the core's FHS env (build.app), for an app module: from a package that builds itself with
+  # buildFHSEnv and takes it as an override (as llm-agents' claude-desktop does), or for one that doesn't, a buildFHSEnv
+  # of the app's own arguments (name, runScript, targetPkgs, ...). Either way through the core's bwrap and with the
+  # core's arguments (build.fhsEnvArgs: the app's pid, the files, /etc, the subid shims, xdg-open)
+  fhsAppOf =
+    lcfg: package:
+    package.override (prev: {
+      buildFHSEnv = args: (prev.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (lcfg.build.fhsEnvArgs args);
+    });
+  fhsEnvOf = lcfg: args: (pkgs.buildFHSEnv.override { bubblewrap = bwrapFhs; }) (lcfg.build.fhsEnvArgs args);
+  # Where a path the app keeps in the home directory (rel, relative to it) is on the host: its bind's source when bound,
+  # null when not; hostPathOf the sandbox's home in that case
+  hostBindOf =
+    lcfg: rel:
+    let
+      b = lcfg.permissions.binds."${hm.home.homeDirectory}/${rel}" or null;
+    in
+    if b != null && b.enable then b.src else null;
+  hostPathOf =
+    lcfg: launcherName: rel:
+    let
+      bound = hostBindOf lcfg rel;
+    in
+    if bound != null then bound else "${(idsOf launcherName).home}/${rel}";
+  # For an app module's config: directories the app keeps in the home (rels), bound read-write from the host's own for
+  # the default launcher (a named one keeps them in its sandbox's home), and among the directories the state script works
+  # in (build.homeDirs) where bound. `bind` adds to each bind
+  keepInHome =
+    lcfg: launcherName: rels: bind: {
+      permissions.binds = lib.mkIf (launcherName == null) (
+        lib.genAttrs (map (r: "${hm.home.homeDirectory}/${r}") rels) (_: { rw = true; } // bind)
+      );
+      build.homeDirs = lib.filter (d: d != null) (map (hostBindOf lcfg) rels);
+    };
   # The packages on the sandbox's PATH: the launcher's path, the app's (build.pathPackages), then the same nix as the
   # host, so the sandbox's store database is never migrated to a schema one side can't read. .out: the man output is
   # a symlink, see storeRoots
@@ -202,6 +236,7 @@ rec {
   # store
   environment = pkgs.runCommand "${app.name}-environment" {
     nativeBuildInputs = [ pkgs.gawk ];
+    MODE = "app";
     APP_SRC = app.environment;
     CORE_SRC = ./environment.md;
     APP = app.name;
@@ -212,6 +247,21 @@ rec {
     # As in environmentDoc's frontmatter
     ENVIRONMENT = "bwrap";
   } "source ${./environment-split.sh}";
+  # The memo store of the core's sections that load by topic, which every app's sandbox shares: one store path whatever
+  # the app, so a host with two apps lists it once
+  coreEnvironment = pkgs.runCommand "agent-sandbox-environment" {
+    nativeBuildInputs = [ pkgs.gawk ];
+    MODE = "core";
+    CORE_SRC = ./environment.md;
+    NAME = "agent-sandbox/core";
+    DESCRIPTION = "The agent sandbox you run in, whatever its app: its home, its user namespaces and its Nix store.";
+    ENVIRONMENT = "bwrap";
+  } "source ${./environment-split.sh}";
+  # The memo stores of a launcher with memo.enable: the core's, and the app's own when its part of the doc has sections
+  # that load by topic (app.environment is a file, read at eval)
+  memoStores =
+    [ "${coreEnvironment}/environment.memo" ]
+    ++ lib.optional (lib.hasInfix "<!-- memo: " (builtins.readFile app.environment)) "${environment}/environment.memo";
   # The options of a feature (features.nix): a switch, its words for the user and for the agent, and its body. The body
   # is definitions of the launcher's `permissions` options, kept as they were written, mkForce and the like inside
   # them included, until features.nix merges them into those options while the feature is on

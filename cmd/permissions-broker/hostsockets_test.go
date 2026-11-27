@@ -76,7 +76,7 @@ func TestSocketDeclarations(t *testing.T) {
 		"control socket":    {Path: "$XDG_RUNTIME_DIR/agent-sandbox/claude-desktop-permissions-control.sock"},
 		"nixpak's proxy":    {Path: "$XDG_RUNTIME_DIR/nixpak-bus-1234"},
 		"flatpak instances": {Path: "$XDG_RUNTIME_DIR/.flatpak/nixpak-app-1/bwrapinfo.json"},
-		"locks":             {Path: "$XDG_RUNTIME_DIR/agent-sandbox-permissions/x"},
+		"locks":             {Path: "$XDG_RUNTIME_DIR/agent-sandbox/locks/x"},
 		"relative":          {Path: "agent.sock"},
 		"unset variable":    {Path: "$NO_SUCH_VARIABLE/agent.sock"},
 		"neither":           {},

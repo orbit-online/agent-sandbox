@@ -100,7 +100,7 @@ func (c *capability) exclusiveLock(sandbox string, params json.RawMessage) (func
 			keys = append(keys, key)
 		}
 	}
-	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
+	dir := lockDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -173,10 +173,17 @@ func createWith(name, data string) error {
 	return os.Link(f.Name(), name)
 }
 
+// lockDir holds the exclusive locks of every launcher's daemon, in the runtime dir the launchers share, which no
+// sandbox reaches: the module refuses binds there and host sockets refuse it (hostsock.refusedRoots). No sandbox's file
+// there is named locks: theirs start with the sandbox's name and end with a suffix
+func lockDir() string {
+	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox", "locks")
+}
+
 // removeLocks removes the sandbox's exclusive locks. Never one without content, which is no lock of this sandbox's
 // (see createWith)
 func removeLocks(sandbox string) {
-	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
+	dir := lockDir()
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
