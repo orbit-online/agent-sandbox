@@ -548,10 +548,15 @@ Item {
                                             text: item.modelData.value
                                             font.family: item.modelData.mono ? "monospace" : Qt.application.font.family
                                         }
-                                        Badges {
-                                            Layout.alignment: Qt.AlignTop
-                                            model: item.modelData.badges.map(b => ({ name: "", text: b.text,
-                                                                                     warning: b.warning === true }))
+                                        // Beside the value at their own width: a few short words
+                                        Repeater {
+                                            model: item.modelData.badges
+                                            delegate: Badge {
+                                                required property var modelData
+                                                Layout.alignment: Qt.AlignTop
+                                                text: modelData.text
+                                                warning: modelData.warning === true
+                                            }
                                         }
                                     }
                                     Repeater {

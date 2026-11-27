@@ -34,13 +34,26 @@ ColumnLayout {
             Layout.leftMargin: 8
             spacing: 6
             Label {
+                Layout.alignment: Qt.AlignTop
                 text: "•"
                 renderType: Text.NativeRendering
             }
             ReadOnlyText {
                 objectName: "consent-" + scope.key + "-" + line.index
-                Layout.fillWidth: false
+                id: phrase
+                // At most as wide as the phrase, wrapping when the window is narrower: a layout keeps an item that
+                // doesn't fill at its preferred width, which pushed the card past the window. Measured apart, as the
+                // implicit width shrinks once it wraps
+                Layout.fillWidth: true
+                Layout.maximumWidth: Math.ceil(phraseWidth.implicitWidth) + leftPadding + rightPadding
                 text: line.modelData.consent
+                Text {
+                    id: phraseWidth
+                    visible: false
+                    font: phrase.font
+                    text: phrase.text
+                    renderType: phrase.renderType
+                }
             }
             Badge {
                 objectName: "consent-unrestricted-" + scope.key + "-" + line.index
@@ -51,6 +64,8 @@ ColumnLayout {
             Label {
                 objectName: "consent-commands-" + scope.key + "-" + line.index
                 Layout.fillWidth: true
+                // What's left after the phrase and its badge, elided before the phrase wraps
+                Layout.preferredWidth: 0
                 text: line.modelData.commands.join(", ")
                 font.family: "monospace"
                 opacity: 0.6

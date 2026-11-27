@@ -19,20 +19,15 @@ Card {
     readonly property var paramTypes: fixed ? ({}) : view.types[modelData.capability] || {}
     readonly property var resolved: view.resolvedTarget(modelData.summary)
 
-    RowLayout {
+    ReadOnlyText {
+        objectName: "summary-" + request.modelData.id
         Layout.fillWidth: true
-        ReadOnlyText {
-            objectName: "summary-" + request.modelData.id
-            Layout.fillWidth: true
-            text: request.view.headline(request.modelData)
-            font.bold: true
-            font.pointSize: request.font.pointSize * 1.1
-        }
-        Badges {
-            Layout.alignment: Qt.AlignTop
-            model: request.view.freeBadges(request.modelData.capability, request.modelData.id)
-            visible: model.length > 0
-        }
+        text: request.view.headline(request.modelData)
+        font.bold: true
+        font.pointSize: request.font.pointSize * 1.1
+    }
+    Badges {
+        model: request.view.freeBadges(request.modelData.capability, request.modelData.id)
     }
 
     // The bounding values of a host command, the protocol and port of a port
