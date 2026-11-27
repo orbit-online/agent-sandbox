@@ -2,7 +2,7 @@
  * The launcher's journald namespaces (README.md, Crossings, S15): the
  * plan, one namespace (d8ca1ad), and the fix that's built, the host side's
  * and the sandbox's (cmd/launcher supervise.go appLog, helper.go
- * hostUnits, nix/home/claude-desktop/lib.nix ids). In the plan the host enables systemd-journald@claude-desktop; the
+ * hostUnits, nix/home/sandbox/lib.nix ids). In the plan the host enables systemd-journald@claude-desktop; the
  * sandbox gets its `socket`, `stdout` and `dev-log` at
  * /run/systemd/journal/socket, /run/systemd/journal/stdout and /dev/log,
  * and its storage read-only. The host helpers (supervise and

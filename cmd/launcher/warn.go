@@ -18,7 +18,7 @@ import (
 
 // warnSocket is where supervise listens for the warnings of the start of unit
 func warnSocket(unit string) string {
-	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "claude-desktop", unit+".warn")
+	return filepath.Join(runtimeDir(), unit+".warn")
 }
 
 // The most a warning may be

@@ -57,7 +57,7 @@ func start(cfg *config, cfgPath string, vars, args []string) error {
 func shell(cfg *config, cfgPath string, vars []string) error {
 	app, running, err := runningApp(cfg, 30)
 	if !running {
-		fmt.Println("Starting Claude")
+		fmt.Println("Starting " + cfg.App)
 		if err := startUnit(cfg, cfgPath, vars, nil); err != nil {
 			return err
 		}
@@ -186,18 +186,12 @@ func startUnit(cfg *config, cfgPath string, vars, args []string) error {
 	// The sandbox's network ends with the unit, however it ends: the pins and registration of its netkit pair, and the
 	// pair while the kernel still tears the netns down (sandbox-uplink removes them too, but only once the pair is gone)
 	if cfg.Network && cfg.Tools.WrapperDir != "" {
-		down := "ExecStopPost=-" + filepath.Join(cfg.Tools.WrapperDir, "netns-netkit") + " down"
-		if cfg.Launcher != "" {
-			down += " --name=" + cfg.Launcher
-		}
+		down := "ExecStopPost=-" + filepath.Join(cfg.Tools.WrapperDir, "netns-netkit") + " down --name=" + cfg.Sandbox
 		argv = append(argv, "-p", down)
 	}
 	// The stop hooks of sandbox-hooks, likewise
 	if cfg.Hooks && cfg.Tools.WrapperDir != "" {
-		stop := "ExecStopPost=-" + filepath.Join(cfg.Tools.WrapperDir, "sandbox-hooks") + " stop"
-		if cfg.Launcher != "" {
-			stop += " --name=" + cfg.Launcher
-		}
+		stop := "ExecStopPost=-" + filepath.Join(cfg.Tools.WrapperDir, "sandbox-hooks") + " stop --name=" + cfg.Sandbox
 		argv = append(argv, "-p", stop)
 	}
 	for _, kv := range os.Environ() {
@@ -271,11 +265,9 @@ func unitOwnVar(name string) bool {
 	return false
 }
 
-// resultFile is where supervise leaves why the app didn't start, for startUnit to tell the caller. The runtime dir's
-// claude-desktop/, of mode 0700, which no sandbox reaches: the module refuses a bind that holds it or lies in it
-// (core.nix, stateBinds), the broker's ceiling denies it, and vm-launch looks ("the host's runtime dir stays out of
-// the sandbox"). The same goes for the unit's environment (.vars), the activation token (.activate) and the warnings'
-// socket (.warn) next to it
+// resultFile is where supervise leaves why the app didn't start, for startUnit to tell the caller: in runtimeDir, which
+// no sandbox reaches. The same goes for the unit's environment (.vars), the activation token (.activate) and the
+// warnings' socket (.warn) next to it
 func resultFile(cfg *config) string {
-	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "claude-desktop", cfg.Unit+".error")
+	return filepath.Join(runtimeDir(), cfg.Unit+".error")
 }

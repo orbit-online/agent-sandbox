@@ -31,7 +31,7 @@ func (b *broker) run() error {
 	go b.serveOn(reqLn, b.handleRequest)
 	go b.serveOn(ctlLn, b.handleControl)
 	go b.syncSocketsEvery()
-	slog.Info("Serving", "launcher", b.cfg.Launcher, "sandbox", b.sb.pid)
+	slog.Info("Serving", "sandbox", b.cfg.Sandbox, "pid", b.sb.pid)
 	fds := []unix.PollFd{{Fd: int32(b.sb.pidfd), Events: unix.POLLIN}}
 	for {
 		if _, err := unix.Poll(fds, -1); err == nil || !errors.Is(err, unix.EINTR) {
@@ -54,7 +54,7 @@ func (b *broker) start() (reqLn, ctlLn *net.UnixListener, err error) {
 	if err := os.MkdirAll(b.cfg.GrantDir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("Create the grant directory: %w", err)
 	}
-	// claude-desktop.sh creates it; nothing in the sandbox can write there (it's bound read-only), but it must be
+	// The launcher creates it; nothing in the sandbox can write there (it's bound read-only), but it must be
 	// ours and a directory, not a link to elsewhere
 	if fi, err := os.Lstat(b.cfg.GrantDir); err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
 		return nil, nil, fmt.Errorf("The grant directory %s isn't a directory of ours", b.cfg.GrantDir)

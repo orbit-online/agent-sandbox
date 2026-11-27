@@ -1,7 +1,7 @@
 # Features (docs/permissions.md, Features): named bundles of `permissions` entries behind a switch, each with a
 # description and a note. The module's own are declared here, with their bodies where they have one in `permissions`
 # options: the tray's is dbus.nix's, request-send is request-send.nix's. Those that are on show in the Permissions
-# window's overview (permissions-broker.nix) and in the sandbox's /etc/claude/environment.md (environment.nix)
+# window's overview (permissions-broker.nix) and in the sandbox's environment doc (environment.nix)
 {
   lib,
   config,
@@ -36,9 +36,9 @@ in
     '';
     description = ''
       Features: each bundles entries of `permissions` behind `enable`, with a `description` and a `note` that the
-      Permissions window and the sandbox's `/etc/claude/environment.md` show while it is on. The module's own, all
-      off: `kvm`, `audio`, `tray`, `keep-awake` and `request-send`. Add your own by name, with a body in
-      `permissions`, written in the launcher's `permissions` options.
+      Permissions window and the sandbox's environment doc (`/etc/claude/environment.md` for Claude Desktop) show
+      while it is on. The module's own, all off: `kvm`, `audio`, `tray`, `keep-awake` and `request-send`. Add your
+      own by name, with a body in `permissions`, written in the launcher's `permissions` options.
     '';
   };
   # The features that are on, by name, as the window's overview and environment.md list them

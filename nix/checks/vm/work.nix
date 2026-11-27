@@ -41,14 +41,15 @@
       # Its own state dir, with ~/.claude and the app's config in its home
       workstation.succeed(f"test -d {work_home}/.claude && test -s {work_home}/.config/Claude/claude_desktop_config.json")
       workstation.succeed("test -L ${workStateDir}/nix/var/nix/gcroots/claude-desktop")
-      workstation.succeed("test -L /run/user/1000/claude-desktop/store-roots-work")
+      workstation.succeed("test -L /run/user/1000/agent-sandbox/claude-desktop-work-store-roots")
       # The start hook fails for work (vm/default.nix): it started anyway, without mesh-1000, the other hook ran, and
       # the host side says why; with no splash to acknowledge on, at once
       assert [l.split(":")[1].strip().split("@")[0] for l in in_work("ip -o link show").splitlines()] == ["lo", "eth0"]
       host = workstation.succeed("journalctl --namespace=claude-desktop-work --no-pager -o cat")
       assert "Hook failed" in host and "A start hook on the host failed" in host, host
-      assert workstation.succeed("cat /tmp/hook-start-1000-work").startswith("args=start 1000 work")
-      workstation.succeed("test -e /tmp/hook-nocaps-1000-work")
+      assert workstation.succeed("cat /tmp/hook-start-1000-claude-desktop-work").startswith(
+          "args=start 1000 claude-desktop-work")
+      workstation.succeed("test -e /tmp/hook-nocaps-1000-claude-desktop-work")
 
   with subtest("mDNS: queries of the default sandbox out, responses in; work, without mDNS, neither"):
       app_ns = f"nsenter -t {bwrap_info()['child-pid']} -n ${mdnsQuery}"
@@ -106,7 +107,7 @@
           assert leak not in lan, leak
       # Only the default primary takes responses
       mdns = workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/mdns")
-      ifindex = workstation.succeed("cat /sys/class/net/sbx-rs-e3b0c442/ifindex").strip()
+      ifindex = workstation.succeed("cat /sys/class/net/sbx-rs-0470e756/ifindex").strip()
       assert [int.from_bytes(bytes(int(x, 16) for x in e["key"]), "little") for e in json.loads(mdns)] == [int(ifindex)], mdns
 
   with subtest("mDNS: queries out at MDNS_RATE (10) a second after a burst of MDNS_BURST (20)"):
@@ -265,7 +266,7 @@
       status, out = workstation.execute(work_cmd("${pkgs.lib.getExe broker} share") + " 2>&1")
       assert status != 0 and "outer mount namespace" in out, out
       # The user's side through control.sock, as the window has it
-      control_sock = "/run/user/1000/claude-desktop/permissions-work-control.sock"
+      control_sock = "/run/user/1000/agent-sandbox/claude-desktop-work-permissions-control.sock"
       def control(req, tries=1):
           script = ("import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]);"
                     " s.sendall(sys.argv[2].encode()); print(s.makefile().readline())")
@@ -329,7 +330,7 @@
           "name": "test_thing", "arguments": {"reason": "the VM test"}}}), "issued-PT28800S")
       # The call ran as a unit in the launcher's slice
       call = workstation.succeed("cat /run/user/1000/test-call.cgroup").strip()
-      assert re.fullmatch(rf"0::{re.escape(work_slice)}/perm-work_call-[0-9a-f]+\.service", call), f"the call in {call}"
+      assert re.fullmatch(rf"0::{re.escape(work_slice)}/perm-claude-desktop-work_call-[0-9a-f]+\.service", call), f"the call in {call}"
       # The host socket at its stable address: the broker copies bytes to and from alice's echo server. The test
       # binary's live-connect is the client, as the sandbox has no nc
       workstation.succeed(f"install -D -m755 -o alice ${brokerLive}/bin/permissions-broker-live {work_home}/connect")
@@ -384,7 +385,7 @@
       ports = {g["params"]["port"]: g for g in control({"op": "state"})["grants"] if g["capability"] == "port"}
       assert ports[8001]["addresses"] == [f"{work4}:8001", f"[{work6}]:8001"], ports
       workstation.succeed(curl(work4, 8001), curl(f"[{work6}]", 8001))
-      flows = lambda: json.loads(workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/1000-work/flows"))
+      flows = lambda: json.loads(workstation.succeed("bpftool -j map dump pinned /run/sandbox-uplink/1000-claude-desktop-work/flows"))
       assert flows(), "no flow recorded"
       for p in (8001, 8081):
           control({"op": "revoke", "grant": ports[p]["id"]})

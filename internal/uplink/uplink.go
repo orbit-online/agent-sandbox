@@ -45,12 +45,9 @@ const (
 	MaxSandboxesPerUID = 16
 )
 
-// SandboxDir is where netns-netkit pins the programs and maps of the sandbox of launcher name (empty for the default
-// one) of uid: owner uid, group sandbox-uplink, mode 0770
+// SandboxDir is where netns-netkit pins the programs and maps of the sandbox of that name (<app>[-<launcher>]) of uid:
+// owner uid, group sandbox-uplink, mode 0770
 func SandboxDir(uid int, name string) string {
-	if name == "" {
-		return fmt.Sprintf("%s/%d", PinDir, uid)
-	}
 	return fmt.Sprintf("%s/%d-%s", PinDir, uid, name)
 }
 

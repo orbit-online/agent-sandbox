@@ -132,7 +132,7 @@ func runBwrap(o bwrapOpts, args []string) error {
 		// namespace, so grants mounted there later reach the app (docs/permissions.md)
 		if fi, err := os.Stat("/run/permissions"); err == nil && fi.IsDir() {
 			if err := exec.Command(o.permissionsBroker, "share").Run(); err != nil {
-				fmt.Fprintln(os.Stderr, "claude-desktop: No folder grants: the permissions broker didn't share /run/permissions")
+				fmt.Fprintln(os.Stderr, "agent-sandbox: No folder grants: the permissions broker didn't share /run/permissions")
 			}
 		}
 	default:
@@ -205,7 +205,7 @@ func readSubid(path, user string, own int) ([]int, error) {
 // startSubidBroker starts subid-broker as a unit, on a socket of this process, which becomes bwrap: it ends when bwrap
 // does, or with the app's unit
 func startSubidBroker(u *hostUnits, broker string) (string, error) {
-	sock := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "claude-desktop", fmt.Sprintf("subid-broker-%d.sock", os.Getpid()))
+	sock := filepath.Join(runtimeDir(), fmt.Sprintf("subid-broker-%d.sock", os.Getpid()))
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return "", err
 	}

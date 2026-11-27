@@ -27,7 +27,7 @@
       workstation.succeed(f"getcap {netkit} | grep -q cap_net_admin,cap_bpf=ep")
       assert workstation.succeed(f"stat -c '%A %U %G' {netkit}").strip() == "-r-x--s--x root sandbox-uplink"
       # System users can't run it, only group users
-      status, out = as_user("nobody", f"{netkit} up 1")
+      status, out = as_user("nobody", f"{netkit} up --name=claude-desktop 1")
       assert status != 0 and "Only members of group users may run netns-netkit" in out, f"nobody ran the wrapper: {status} {out}"
 
   # alice's own files, which links the sandbox planted in its state point at
@@ -237,7 +237,7 @@
       status, out = workstation.execute(sandbox_cmd("ip link add probe0 type dummy") + " 2>&1")
       assert status != 0 and "Operation not permitted" in out, f"{status} {out}"
       # The broker only serves clients in a sandbox
-      sock = workstation.succeed("ls /run/user/1000/claude-desktop/subid-broker-*.sock").strip()
+      sock = workstation.succeed("ls /run/user/1000/agent-sandbox/subid-broker-*.sock").strip()
       # The sleep's output elsewhere and killed after: execute waits for whatever holds the pipe
       status, out = as_user("alice", "sh -c " + shlex.quote(
           f"unshare --user sleep 30 >/dev/null 2>&1 & sleep 1; SUBID_BROKER_SOCKET={sock}"
@@ -348,13 +348,13 @@
   with subtest("the host's runtime dir stays out of the sandbox: the launcher's files, the broker's sockets, nixpak's instance info"):
       # What the launcher hands itself there (the unit's environment, why it didn't start, the activation token, the
       # warnings' socket) and what the launcher and the broker take as the sandbox's identity (S14) are the host's
-      workstation.succeed("test -d /run/user/1000/claude-desktop -a -d /run/user/1000/.flatpak -a -S /run/user/1000/bus")
+      workstation.succeed("test -d /run/user/1000/agent-sandbox -a -d /run/user/1000/.flatpak -a -S /run/user/1000/bus")
       inside = in_sandbox("ls -A /run/user/1000").split()
-      assert "nixpak-bus" in inside and not {"claude-desktop", ".flatpak", "bus"} & set(inside), inside
-      owner = workstation.succeed("stat -c '%a %U' /run/user/1000/claude-desktop").strip()
+      assert "nixpak-bus" in inside and not {"agent-sandbox", ".flatpak", "bus"} & set(inside), inside
+      owner = workstation.succeed("stat -c '%a %U' /run/user/1000/agent-sandbox").strip()
       assert owner == "700 alice", owner
       # The unit's environment is gone once supervise read it, and a start that worked leaves no result
-      left = workstation.succeed("ls /run/user/1000/claude-desktop").split()
+      left = workstation.succeed("ls /run/user/1000/agent-sandbox").split()
       assert not [f for f in left if f.endswith((".vars", ".error", ".activate"))], left
 
   with subtest("nothing in the sandbox holds a capability once the app runs: not the script that set its pid either"):
@@ -391,8 +391,9 @@
   import ipaddress, struct, time
   sandbox_pid = bwrap_info()["child-pid"]
   ns = f"nsenter -t {sandbox_pid} -n"
-  primary = "sbx-rs-e3b0c442"
-  pins = "/run/sandbox-uplink/1000"
+  # sbx-, alice's uid in base 36, and a hash of the sandbox's name, claude-desktop
+  primary = "sbx-rs-0470e756"
+  pins = "/run/sandbox-uplink/1000-claude-desktop"
 
   # An address as the registration map keys it, for bpftool
   def key(a):
@@ -471,13 +472,13 @@
       assert "inet 10.98.0.1/32" in dev, dev
       assert "10.98.0.0/16 dev mesh-1000" in in_sandbox("ip -4 route"), in_sandbox("ip -4 route")
       assert ",UP" in in_sandbox("ip -o link show dev mesh-1000")
-      for path, caps in [("/tmp/hook-start-1000-", "0000000000001000"), ("/tmp/hook-nocaps-1000-", "0000000000000000")]:
+      for path, caps in [("/tmp/hook-start-1000-claude-desktop", "0000000000001000"), ("/tmp/hook-nocaps-1000-claude-desktop", "0000000000000000")]:
           got, fields = hook_status(path)
           for cap in ["CapInh", "CapPrm", "CapEff", "CapAmb"]:
               assert fields[cap] == [caps], f"{path} {cap}: {got}"
           # sandbox-hooks as its real gid too, which bash keeps (it drops an effective gid other than the real one)
           assert fields["Gid"] == [hook_gid] * 4, got
-          assert "args=start 1000 " in got and "pwd=/" in got and not [l for l in got if l.startswith("env=")], got
+          assert "args=start 1000 claude-desktop" in got and "pwd=/" in got and not [l for l in got if l.startswith("env=")], got
       # The sandbox holds nothing over it
       status, out = workstation.execute(sandbox_cmd("ip link set mesh-1000 down") + " 2>&1")
       assert status != 0 and "Operation not permitted" in out, out
@@ -501,12 +502,12 @@
   with subtest("hooks: sandbox-hooks checks what it's given before any hook runs"):
       workstation.succeed("rm -f /tmp/hook-*hooktest*")
       bob_ns = spawn("bob-hook-ns", "bob", "/run/current-system/sw/bin/unshare -Urn")
-      for args, error in [(f"start {bob_ns}", "belongs to uid 1001, not 1000"),
+      for args, error in [(f"start --name=claude-desktop {bob_ns}", "belongs to uid 1001, not 1000"),
                           (f"start --name=Work {hook_ns}", "is not [a-z][a-z0-9-]*"),
-                          ("start $$", "shares the caller's network namespace")]:
+                          ("start --name=claude-desktop $$", "shares the caller's network namespace")]:
           status, out = as_user("alice", f"sh -c {shlex.quote(f'exec {hooks} {args}')}")
           assert status == 1 and error in out, f"{args}: {status} {out}"
-      status, out = as_user("nobody", f"{hooks} stop")
+      status, out = as_user("nobody", f"{hooks} stop --name=claude-desktop")
       assert status == 1 and "Only members of group users may run sandbox-hooks" in out, out
       # A config or hook that isn't root's
       cfg = "/etc/agent-sandbox/hooks.json"
@@ -584,11 +585,11 @@
              " c = s.accept()[0]; c.recv(1024); c.sendall(b'HTTP/1.0 200 OK\\r\\n\\r\\n'); c.close()")
       in_sandbox(f"sh -c {shlex.quote(f'setsid python3 -c {shlex.quote(srv)} >/dev/null 2>&1 </dev/null &')}")
       workstation.wait_until_succeeds(f"{ns} ss -Hltn 'sport = :8090' | grep -q .", timeout=30)
-      status, out = as_user("alice", f"{netkit} grant tcp 8090")
+      status, out = as_user("alice", f"{netkit} grant --name=claude-desktop tcp 8090")
       assert status == 0, out
       status, out = as_user("alice", f"curl -sf -m3 -o /dev/null http://{sb4}:8090/")
       assert status == 0, out
-      status, out = as_user("alice", f"{netkit} revoke tcp 8090")
+      status, out = as_user("alice", f"{netkit} revoke --name=claude-desktop tcp 8090")
       assert status == 0, out
       assert stop_local("src port 8090") > 0, "no reply of the sandbox on the primary"
       assert stop_local("not src port 8090") == 0, "the sandbox reached the host stack"
@@ -744,7 +745,7 @@
       workstation.wait_until_succeeds(sandbox_cmd(tcp_connect("::1", 8080)), timeout=30)
       curl = lambda user, a: as_user(user, f"curl -gsf -m3 -o /dev/null http://{a}:8080/")[0] == 0
       assert not curl("alice", sb4)
-      status, out = as_user("alice", f"{netkit} grant tcp 8080")
+      status, out = as_user("alice", f"{netkit} grant --name=claude-desktop tcp 8080")
       assert status == 0, out
       assert curl("alice", sb4) and curl("alice", f"[{sb6}]")
       flows = lambda: json.loads(workstation.succeed(f"bpftool -j map dump pinned {pins}/flows"))
@@ -761,7 +762,7 @@
       assert stop() == 0, "a forwarded packet reached the sandbox"
       workstation.succeed("sysctl -w net.ipv4.conf.br0.forwarding=0")
       # Another user's grant reaches only their own sandbox, which bob has none of
-      status, out = as_bob(f"{netkit} grant tcp 8080")
+      status, out = as_bob(f"{netkit} grant --name=claude-desktop tcp 8080")
       assert status != 0 and "does the sandbox run?" in out, out
 
   with subtest("port forwarding: a SYN of the sandbox on a flow gets nowhere with its TCP flags outside the linear part"):
@@ -809,7 +810,7 @@
       time.sleep(1)
       assert flow(rst) is None, f"the flow outlived the RST: {flows()}"
       assert flow(fin) is not None and flow(fin)[8] == 1, f"the FIN didn't mark the flow: {flows()}"
-      status, out = as_user("alice", f"{netkit} revoke tcp 8080")
+      status, out = as_user("alice", f"{netkit} revoke --name=claude-desktop tcp 8080")
       assert status == 0, out
       assert not flows(), f"flows left: {flows()}"
       assert not curl("alice", sb4)
@@ -820,7 +821,7 @@
               " [(s.sendto(b'now', a), threading.Timer(4, s.sendto, (b's1', a)).start(), threading.Timer(12, s.sendto, (b's2', a)).start())"
               " for d, a in iter(lambda: s.recvfrom(64), None)]")
       in_sandbox(f"sh -c {shlex.quote(f'setsid python3 -c {shlex.quote(echo)} >/dev/null 2>&1 </dev/null &')}")
-      status, out = as_user("alice", f"{netkit} grant udp 5300")
+      status, out = as_user("alice", f"{netkit} grant --name=claude-desktop udp 5300")
       assert status == 0, out
       # A connected socket: only its datagrams start a flow
       ask = ("import socket; c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); c.settimeout(15); c.bind(('0.0.0.0', {port}));"
@@ -856,11 +857,11 @@
       port_key = " ".join(f"{x:02x}" for x in struct.pack("=I", 17 << 16 | 5300))
       workstation.succeed(f"bpftool map delete pinned {pins}/ports key hex {port_key}")
       assert answers(40004) == ["now", "timeout"], answers(40004)
-      status, out = as_user("alice", f"{netkit} revoke udp 5300")
+      status, out = as_user("alice", f"{netkit} revoke --name=claude-desktop udp 5300")
       assert status == 0, out
 
   with subtest("port forwarding: a UDP flow outliving its socket: a socket of bob bound to its port after gets nothing"):
-      status, out = as_user("alice", f"{netkit} grant udp 5300")
+      status, out = as_user("alice", f"{netkit} grant --name=claude-desktop udp 5300")
       assert status == 0, out
       # What the sandbox sends, and what of it reaches the host
       sent = capture("eth0", "udp src port 5300", ns)
@@ -879,7 +880,7 @@
       assert sent() == 3, "the sandbox didn't send its three replies"
       assert passed() == 1, "a reply after the socket of alice closed reached the host"
       assert workstation.succeed("cat /tmp/udp-bob").split() == ["timeout"], workstation.succeed("cat /tmp/udp-bob")
-      status, out = as_user("alice", f"{netkit} revoke udp 5300")
+      status, out = as_user("alice", f"{netkit} revoke --name=claude-desktop udp 5300")
       assert status == 0, out
 
   with subtest("port forwarding: a sandbox address spoofed from a bridge (rp_filter off) gets no answer of alice in"):
@@ -889,7 +890,7 @@
                 " [u.sendto(b'answer', a) for d, a in iter(lambda: u.recvfrom(64), None)]")
       workstation.succeed(f"systemd-run --unit=alice-listen -p User=alice {py} -c {shlex.quote(listen)}")
       for p in ["udp 5300", "tcp 8080"]:
-          status, out = as_user("alice", f"{netkit} grant {p}")
+          status, out = as_user("alice", f"{netkit} grant --name=claude-desktop {p}")
           assert status == 0, out
       rp = workstation.succeed("sysctl -n net.ipv4.conf.all.rp_filter net.ipv4.conf.br0.rp_filter").split()
       workstation.succeed("sysctl -w net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.br0.rp_filter=0",
@@ -908,7 +909,7 @@
       workstation.succeed(f"ip netns exec ctr ip addr del {sb4}/32 dev vb1", "systemctl stop alice-listen",
                           f"sysctl -w net.ipv4.conf.all.rp_filter={rp[0]} net.ipv4.conf.br0.rp_filter={rp[1]}")
       for p in ["udp 5300", "tcp 8080"]:
-          status, out = as_user("alice", f"{netkit} revoke {p}")
+          status, out = as_user("alice", f"{netkit} revoke --name=claude-desktop {p}")
           assert status == 0, out
 
   with subtest("forwarding on the primary comes back after a change of all.forwarding reset it"):
@@ -929,7 +930,7 @@
           assert in_sandbox(f"{d}/agent-sandbox-test/hello").strip() == "Hello, world!", d
 
   with subtest("A host GC leaves the sandbox's store paths and /etc alone"):
-      root = "/run/user/1000/claude-desktop/store-roots"
+      root = "/run/user/1000/agent-sandbox/claude-desktop-store-roots"
       workstation.succeed(f"nix-store -q --roots $(readlink -e {root}) | grep -q '^{root} '")
       # hosts and resolv.conf are links in the FHS env's rootfs, so nixpak's binds of the host's go unused
       for f in ["hosts", "resolv.conf"]:
@@ -958,7 +959,7 @@
           (bob_in_alice_ns, "is owned by uid 1000, not 1001"),
           ("$$", "shares the caller's network namespace"),
       ]:
-          status, out = as_bob(f"sh -c {shlex.quote(f'exec {netkit} up {pid}')}")
+          status, out = as_bob(f"sh -c {shlex.quote(f'exec {netkit} up --name=claude-desktop {pid}')}")
           assert status != 0 and error in out, f"netns-netkit up {pid}: {status} {out}"
       # A network namespace owned by a user namespace of alice's, below one root made and mapped her uid into: the
       # immediate owner is hers, but she holds no capability there. The kernel's ptrace check on /proc/<pid>/ns/net
@@ -974,7 +975,7 @@
           timeout=30,
       )
       alice_in_nested = spawn("alice-in-nested", "alice", netns_pid=under_root)
-      status, out = as_user("alice", f"{netkit} up {alice_in_nested}")
+      status, out = as_user("alice", f"{netkit} up --name=claude-desktop {alice_in_nested}")
       assert status != 0 and "is owned by uid 0, not 1000" in out, f"netns-netkit up {alice_in_nested}: {status} {out}"
       workstation.succeed("systemctl stop alice-in-nested alice-under-root")
       # It holds the sandbox's netns
@@ -984,18 +985,18 @@
       # (bob is rt in base 36), it refuses another. sandbox-uplink deletes that primary after a grace of 30 seconds
       workstation.succeed("for i in $(seq 15); do mkdir /run/sandbox-uplink/1001-n$i; done",
                           "ip link add sbx-rt-0rphan00 type netkit")
-      status, out = as_bob(f"{netkit} up {bob_ns}")
+      status, out = as_bob(f"{netkit} up --name=claude-desktop {bob_ns}")
       assert status != 0 and "runs 16 sandboxes already" in out, out
       workstation.succeed("rmdir /run/sandbox-uplink/1001-n*")
       workstation.wait_until_fails("ip link show sbx-rt-0rphan00", timeout=60)
       assert "Deleting a primary without pins" in workstation.succeed("journalctl -u sandbox-uplink --no-pager -o cat")
-      status, out = as_bob(f"{netkit} up {bob_ns}")
+      status, out = as_bob(f"{netkit} up --name=claude-desktop {bob_ns}")
       assert status == 0, out
-      workstation.succeed(f"nsenter -t {bob_ns} -n ip -d link show eth0 | grep -q netkit", "test -d /run/sandbox-uplink/1001")
+      workstation.succeed(f"nsenter -t {bob_ns} -n ip -d link show eth0 | grep -q netkit", "test -d /run/sandbox-uplink/1001-claude-desktop")
       bob4 = out.split()[-2]
       # alice-in-bob-ns holds it too
       workstation.succeed("systemctl stop bob-ns alice-in-bob-ns")
-      workstation.wait_until_fails("test -e /run/sandbox-uplink/1001", timeout=30)
+      workstation.wait_until_fails("test -e /run/sandbox-uplink/1001-claude-desktop", timeout=30)
       workstation.fail(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(bob4)}")
 
   with subtest("the launcher's supervise, which follows the theme, is the app's unit and ends it"):
@@ -1006,7 +1007,7 @@
       workstation.wait_until_fails("systemctl --user -M alice@ -q is-active claude-desktop-app", timeout=30)
       workstation.wait_until_fails("pgrep -u alice -f 'launcher supervise'", timeout=30)
       workstation.wait_until_fails("pgrep -u alice subid-broker", timeout=30)
-      workstation.fail("ls /run/user/1000/claude-desktop/subid-broker-*.sock")
+      workstation.fail("ls /run/user/1000/agent-sandbox/subid-broker-*.sock")
       workstation.wait_until_fails("systemctl --user -M alice@ -q is-active claude-desktop-subid", timeout=30)
       # The unit's ExecStopPost ended its network: the pins and registration gone, sandbox-uplink stopped so it isn't the one
       workstation.wait_until_fails(f"test -e {pins}", timeout=30)
@@ -1015,9 +1016,9 @@
           workstation.fail(f"bpftool map lookup pinned /run/sandbox-uplink/sandboxes key {key(a)}")
       workstation.succeed("systemctl start sandbox-uplink")
       # And ran the stop hooks
-      workstation.wait_until_succeeds("test -e /tmp/hook-stop-1000-", timeout=30)
-      got, fields = hook_status("/tmp/hook-stop-1000-")
-      assert "args=stop 1000 " in got and fields["CapEff"] == ["0000000000000000"], got
+      workstation.wait_until_succeeds("test -e /tmp/hook-stop-1000-claude-desktop", timeout=30)
+      got, fields = hook_status("/tmp/hook-stop-1000-claude-desktop")
+      assert "args=stop 1000 claude-desktop" in got and fields["CapEff"] == ["0000000000000000"], got
 
   with subtest("a launcher without a network: lo alone, no routes, no netkit pair, no DNS"):
       launch("claude-desktop-offline", "/home/alice/.local/share/claude-desktop-offline/home")
@@ -1033,11 +1034,12 @@
           workstation.fail(offline_cmd(tcp_connect(host, 443)))
       # Nothing of it on the host: no primary, pins or ExecStopPost of netns-netkit
       workstation.fail("ip -o link show | grep sbx-")
-      workstation.fail("test -e /run/sandbox-uplink/1000-offline")
+      workstation.fail("test -e /run/sandbox-uplink/1000-claude-desktop-offline")
       stop = workstation.succeed("systemctl --user -M alice@ show -P ExecStopPost claude-desktop-offline-app")
-      assert "netns-netkit" not in stop and "sandbox-hooks stop --name=offline" in stop, stop
+      assert "netns-netkit" not in stop and "sandbox-hooks stop --name=claude-desktop-offline" in stop, stop
       # The start hooks run without a network too
-      assert workstation.succeed("cat /tmp/hook-nocaps-1000-offline").startswith("args=start 1000 offline")
+      assert workstation.succeed("cat /tmp/hook-nocaps-1000-claude-desktop-offline").startswith(
+          "args=start 1000 claude-desktop-offline")
       # An empty resolv.conf, without the warning about it
       workstation.fail(offline_cmd("test -s /etc/resolv.conf"))
       journal = workstation.succeed("journalctl --namespace=claude-desktop-offline --no-pager")

@@ -212,7 +212,7 @@ func TestCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _, _ := sandboxC(t, "allow")
-	b.cfg.Launcher = "work"
+	b.cfg.Sandbox = "work"
 	c := folders(t, `{"path": "`+src+`"}`)
 	b.caps[c.id()] = c
 	g, err := b.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "`+src+`"}`, "PT1H"))

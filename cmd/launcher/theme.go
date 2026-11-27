@@ -12,7 +12,7 @@ import (
 // The launcher mirrors the portal's color-scheme into the sandbox's GSettings keyfile as the GTK theme. The keyfile
 // only works because buildFHSEnv's inner bwrap keeps nixpak's /.flatpak-info out of the FHS root; GTK3 would otherwise
 // read the theme from the portal's org.gnome.* settings, which KDE leaves empty. The keyfile is in the sandbox's home,
-// written through claude-desktop-state while the sandbox runs
+// written through <sandbox>-state while the sandbox runs
 
 const (
 	portalName = "org.freedesktop.portal.Desktop"

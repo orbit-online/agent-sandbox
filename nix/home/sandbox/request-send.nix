@@ -36,7 +36,7 @@ let
           "https://helpdesk.example.com" = { proxy = "https://localhost:8090"; ca = "/var/lib/local-ca/ca.crt"; };
         }
       '';
-      description = "Where Claude may have requests sent, by origin (`https://host[:port]`), and nowhere else, each with the proxy it goes through and the CAs it trusts.";
+      description = "Where the agent may have requests sent, by origin (`https://host[:port]`), and nowhere else, each with the proxy it goes through and the CAs it trusts.";
     };
   };
 
@@ -64,7 +64,7 @@ let
     maxLength = 2048;
     description = "the request's path and query, any on that service";
   };
-  oneRequest = "It goes out as the user, through their proxy, and Claude gets the answer";
+  oneRequest = "It goes out as the user, through their proxy, and ${sl.app.agent} gets the answer";
 
   run =
     o: scope:
@@ -139,7 +139,7 @@ in
           { inherit options; }
         ];
         default = { };
-        description = "The host commands request-send and request-send-write, which send HTTP requests for Claude through a proxy that authenticates them as you. Needs the permissions broker.";
+        description = "The host commands request-send and request-send-write, which send HTTP requests for the agent through a proxy that authenticates them as you. Needs the permissions broker.";
       };
     };
   };

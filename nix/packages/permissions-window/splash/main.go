@@ -32,7 +32,7 @@ prints "continue"; the launcher ends it with an empty warning.
 Options:
   --app-id=<id>        The window's Wayland app ID: the sandbox's, so it shows
                        under its launcher's .desktop file
-  --title=<title>      The window's title [default: Claude]
+  --title=<title>      The window's title [default: Agent Sandbox]
   --logo=<file>        The main logo, beside the agent's, on a light background
   --logo-dark=<file>   The main logo on a dark background [default: the --logo]
   --agent-logo=<file>  The agent's logo, smaller

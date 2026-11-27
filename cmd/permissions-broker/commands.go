@@ -28,7 +28,7 @@ type commandConfig struct {
 	Bounding    map[string]json.RawMessage  `json:"bounding"`
 	Exclusive   bool                        `json:"exclusive"`
 	Commands    map[string]*hostcmd.Command `json:"commands"`
-	// For the user, where Description is for Claude
+	// For the user, where Description is for the agent
 	Consent struct {
 		// Completes "Claude wants to …": "control the Windows VM"
 		Title string `json:"title"`

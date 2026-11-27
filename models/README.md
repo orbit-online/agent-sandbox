@@ -11,7 +11,8 @@ messages can cite them.
 Sources, as of main 491eb09 (the broker's protocol as of acbceda, the
 network and the launch path as of 919484e):
 `docs/permissions.md`, the namespace diagram at the top of
-`nix/home/claude-desktop/default.nix`, the module's scripts, and the Go
+`nix/home/sandbox/default.nix` (the core, `nix/home/claude-desktop/` before the core was split from Claude Desktop's
+app), the module's scripts, and the Go
 in `cmd/`. Where the docs and the code disagree, the
 inventory follows the code and says so.
 
@@ -44,7 +45,7 @@ in the init namespaces unless noted.
 1. **Host user**: the terminal, the desktop, a host Claude Code session.
    Launches the sandbox and answers consent.
 2. **permissions-broker daemon**: one per launcher, the transient user
-   unit `claude-desktop[-<name>]-permissions.service`
+   unit `<sandbox>-permissions.service` (`<sandbox>` the sandbox's name, `<app>[-<launcher>]`)
    (`Restart=on-failure` up to 3 starts in 10 minutes,
    `ExecStopPost=permissions-broker cleanup`). Listens on `request.sock`
    and `control.sock` and at the host sockets' addresses, runs host
@@ -79,7 +80,7 @@ in the init namespaces unless noted.
    only its closure and those directories). Re-entries (`claude://`,
    `--shell`) and `--permissions` go through it.
 7. **subid-broker**: started by the launcher's bwrap as the transient
-   unit `claude-desktop[-<name>]-subid.service` in the launcher's slice,
+   unit `<sandbox>-subid.service` in the launcher's slice,
    `BindsTo=` the app's unit. Exits when bwrap does (a pidfd on it, opened
    before the socket exists, while the launcher still waits for it), or at
    once if bwrap is gone already. A launcher that gives up on its socket
@@ -96,7 +97,7 @@ in the init namespaces unless noted.
    unregisters and unpins; `grant` and `revoke` a port for forwarding;
    `addr` prints the sandbox addresses, `uplinks` the default-route
    uplinks of the `gateways` map (for the DNS of the launcher).
-9. **Call units**: `perm[-<launcher>]_call-<id>`, one transient user
+9. **Call units**: `perm-<sandbox>_call-<id>`, one transient user
    unit per host command call (`systemd-run --pipe`), `BindsTo=` the
    daemon's unit, `RuntimeMaxSec=` the command's timeout; runs the
    command the config declares with the call on stdin. The instances
@@ -130,7 +131,7 @@ Sandbox side, the attacker (see Attacker). Uid 1000 (kuid) unless noted.
 Added with the journal (17) and the sandbox's systemd --user (18), and
 with the netkit network (19, 20):
 
-17. **journald@claude-desktop[-<name>] and @claude-desktop[-<name>]_sandbox**:
+17. **journald@<sandbox> and @<sandbox>_sandbox**:
     two journald namespaces per launcher, host side, root
     (`systemd-journald@.service`). The host side's takes entries from the
     host helpers through systemd-cat (supervise, bwrap's helper and the D-Bus proxy in
@@ -144,7 +145,7 @@ with the netkit network (19, 20):
     (`DBUS_SESSION_BUS_ADDRESS` unset), clients on
     `$XDG_RUNTIME_DIR/systemd/private` (the sandbox's own `/run` tmpfs).
     Runs the store GC and scratchpad prune timers, the `.path` unit on
-    `/nix/var/claude-desktop/gc-pending` and `systemd-run --user --scope`
+    `/nix/var/<app>/gc-pending` and `systemd-run --user --scope`
     jobs. Started by `app-run.sh` after the app's fork (L11). Its units
     come from the sandbox's home, so it is the attacker's. It adds no
     crossing beyond the journal's: everything it reaches (its socket, the
@@ -191,8 +192,8 @@ joining needs CAP_SYS_ADMIN in init).
 
 | crossing | listener / actor | reachable from | checks |
 |---|---|---|---|
-| `request.sock` (`/run/permissions`, ro bind of `$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]`) | broker | M1, M2 and copies; the host | `SO_PEERPIDFD`, pid from fdinfo, peer alive after the read; 64 connections, 10 s, 1 MiB; `share` only from M1 (`sameNsAs` by pid); a call's arguments against the command's schema before asking |
-| `control.sock` (`$XDG_RUNTIME_DIR/claude-desktop/permissions[-<name>]-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
+| `request.sock` (`/run/permissions`, ro bind of `$XDG_RUNTIME_DIR/agent-sandbox/<sandbox>-permissions`) | broker | M1, M2 and copies; the host | `SO_PEERPIDFD`, pid from fdinfo, peer alive after the read; 64 connections, 10 s, 1 MiB; `share` only from M1 (`sameNsAs` by pid); a call's arguments against the command's schema before asking |
+| `control.sock` (`$XDG_RUNTIME_DIR/agent-sandbox/<sandbox>-permissions-control.sock`, 0600, not bound) | broker | host only, unless a bind or ceiling exposes it | `SO_PEERPIDFD`; same user namespace as the daemon, except `watch`, which both sockets serve before the op dispatch |
 | host socket addresses (`/run/permissions/sockets/<capability>[/<instance>]`) | broker, from its start or the instance's appearance | M1, M2 and copies | none of the peer: a grant is the sandbox's. Spliced to the host socket only while a live grant of that capability and instance covers it, closed at once otherwise and when the grant ends; bytes only, no fds; 64 connections per address |
 | `/run/subid-broker.sock` | subid-broker | M1, M2 and copies | `SO_PEERCRED` uid and `SO_PEERPIDFD`; client's and target's `/proc` entries owned by that uid, checked against their pidfds; client not in the broker's userns; target's parent userns the client's or below; the kernel then checks the map against the parent |
 | netns-netkit `up <pid>`, `down`, `addr`, `uplinks`, `grant`, `revoke` | netns-netkit | the host, callers in group `users` (setcap; under bwrap's no_new_privs file caps don't apply) | `/proc/<pid>` owned by the caller, by pidfd; netns not the caller's; its owner userns below the caller's, and the one right below the caller's on the way up owned by the caller's uid |

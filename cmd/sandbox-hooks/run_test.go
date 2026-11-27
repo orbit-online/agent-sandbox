@@ -99,7 +99,7 @@ func TestRun(t *testing.T) {
 	t.Cleanup(func() { human = caller.Human })
 	human = func() error { return errors.New("Only members of group users") }
 	write(t, dir+"/hooks.json", "{}", 0o644)
-	if err := run(docopt.Opts{"--name": "", "start": false}, dir+"/hooks.json", me); err == nil {
+	if err := run(docopt.Opts{"--name": "claude-desktop", "start": false}, dir+"/hooks.json", me); err == nil {
 		t.Error("a caller outside group users ran")
 	}
 	human = func() error { return nil }
@@ -118,9 +118,10 @@ func TestRun(t *testing.T) {
 		want string
 	}{
 		{[]string{"stop", "--name=Work"}, "is not [a-z]"},
-		{[]string{"start", "0"}, "is not a process"},
-		{[]string{"start", "x"}, "is not a process"},
-		{[]string{"start", strconv.Itoa(os.Getpid())}, "shares the caller's network namespace"},
+		{[]string{"stop", "--name="}, "is not [a-z]"},
+		{[]string{"start", "--name=claude-desktop", "0"}, "is not a process"},
+		{[]string{"start", "--name=claude-desktop", "x"}, "is not a process"},
+		{[]string{"start", "--name=claude-desktop", strconv.Itoa(os.Getpid())}, "shares the caller's network namespace"},
 	} {
 		if err := run(parse(tc.args...), dir+"/hooks.json", me); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.want)

@@ -114,14 +114,15 @@ host (user, no capabilities)                       sandbox
 ```
 
 - `permissions-broker`, Go, in `cmd/permissions-broker/`. One per launcher, as the transient user unit
-  `claude-desktop[-<name>]-permissions.service` with `Restart=on-failure`, which the launcher's supervise starts with
+  `<sandbox>-permissions.service` (`<sandbox>` the sandbox's name, `<app>[-<launcher>]`, `claude-desktop[-<name>]` for
+  Claude Desktop) with `Restart=on-failure`, which the launcher's supervise starts with
   `systemd-run --user` before it execs bwrap. It listens on:
   - `request.sock` in the grant directory, for the sandbox.
-  - `control.sock` in the launcher's runtime directory on the host, mode 0600, for the window and the launcher. It
+  - `<sandbox>-permissions-control.sock` in the launchers' runtime directory on the host, mode 0600, for the window and the launcher. It
     answers only peers in the daemon's own user namespace, so nothing in the sandbox can use it even if a ceiling
     exposes the path.
   - one socket per declared host socket under `sockets/` in the grant directory (Host sockets).
-- The grant directory: `$XDG_RUNTIME_DIR/claude-desktop[-<name>]/permissions/` on the host, bound **read-only** at
+- The grant directory: `$XDG_RUNTIME_DIR/agent-sandbox/<sandbox>-permissions/` on the host, bound **read-only** at
   `/run/permissions` in the sandbox. This is the one bind the feature adds. Connecting to a socket on a read-only
   bind works; creating, renaming or replacing anything in it doesn't, so the sandbox can't plant a symlink where a
   mountpoint or socket will go, or remove `request.sock`. The daemon creates every entry on the host side, through a
@@ -132,7 +133,7 @@ host (user, no capabilities)                       sandbox
 - The D-Bus proxy, Go, the same module: the session-bus proxy nixpak starts, with static rules. The design's second
   instance for the system bus and the broker's live rules over a control socket aren't built (D-Bus).
 - The Permissions window, a Qt 6 QML app in Go (miqt's bindings) talking to `control.sock`, opened by the desktop
-  action "Permissions" (`claude-desktop[-<name>] --permissions`). Qt because it's native under Plasma; Go like the
+  action "Permissions" (`<sandbox> --permissions`). Qt because it's native under Plasma; Go like the
   rest. It is a client only: all state lives in the daemon. A tab of its own shows, read-only, what the
   configuration gives the sandbox from its start (Overview, below). It refreshes on every watch event, which the
   sandbox can cause at will. So pending requests come in the order they arrived, and a row doesn't move under the
@@ -219,7 +220,7 @@ only the daemon creates.
 ## The options of a launcher
 
 Everything that lets a launcher reach outside the sandbox is set under one root, `permissions`, on the launcher
-(`agent-sandbox.claude-desktop` or one of `launchers.<name>`). Each option there applies at one of two times. From the
+(`agent-sandbox.<app>`, such as `agent-sandbox.claude-desktop`, or one of its `launchers.<name>`). Each option there applies at one of two times. From the
 start: fixed when the sandbox starts, changed by a rebuild, and listed in the window (Overview). On request: what the
 broker may grant while the sandbox runs, after asking the user.
 
@@ -396,7 +397,7 @@ A call is a request: `call` on `request.sock`, which the MCP server sends for th
    call's `reason` and proposed `lease`, and makes the grant on Allow. A `once` grant is tied to the call it was made
    for and covers no other, queued or concurrent;
 3. runs the command's `run` as a transient user unit (`systemd-run --user --pipe --collect`, named
-   `perm-<launcher>_call-<id>`, or `perm_call-<id>` for the default launcher), bound to the
+   `perm-<sandbox>_call-<id>`), bound to the
    daemon's unit, with `RuntimeMaxSec=` its `timeout` (default one minute), in the user manager's environment and
    nothing of the sandbox's. The arguments go on stdin as one JSON object, never on argv and never through a shell:
 
@@ -472,7 +473,7 @@ agent fits: it authorizes by holding the socket.
 The module (at eval, on the literal path) and the daemon (at start, on the expanded one, and again at every
 connection) refuse what's known to hand over more than its own service: anything beneath `/proc` (aliases of any path),
 `/run/dbus`, `/var/run` (an alias of `/run`), and in `$XDG_RUNTIME_DIR` its `bus`, `systemd/` (the user manager's
-private bus: a transient unit runs code on the host), `at-spi/`, `.dbus-proxy/`, `dbus-*`, `claude-desktop/`,
+private bus: a transient unit runs code on the host), `at-spi/`, `.dbus-proxy/`, `dbus-*`, `agent-sandbox/`,
 `.flatpak/`, `agent-sandbox-permissions/` and `nixpak-*`; the paths the D-Bus address variables name; and
 `$XDG_RUNTIME_DIR` itself or what holds it. A path must be clean (no `.`, `..` or empty segments). A glob is refused
 when its `*` could fall within one of those: when the segments before it lead to or into one. Without
@@ -727,11 +728,11 @@ nixpak's static config, and the proxy, broker, module and models are smaller wit
 when one is needed.
 
 The system bus: a second instance, for a launcher with D-Bus capabilities on the system bus. the launcher's bwrap starts
-it as the transient user unit `claude-desktop[-<name>]-system-bus` before it execs nixpak's bwrap, and waits up to five
+it as the transient user unit `<sandbox>-system-bus` before it execs nixpak's bwrap, and waits up to five
 seconds for its socket (a unit can't be handed an `--fd`). It runs in a bwrap of its own holding its closure, the
 host's system bus socket and its two directories, in user, IPC, network, UTS and cgroup namespaces of its own but the
 host's pid namespace. The host's socket is in that bwrap only, never in the sandbox. It listens in
-`$XDG_RUNTIME_DIR/claude-desktop/system-bus[-<name>]/`, which the module binds read-only at `/run/dbus`, so the socket
+`$XDG_RUNTIME_DIR/agent-sandbox/<sandbox>-system-bus/`, which the module binds read-only at `/run/dbus`, so the socket
 is at `/run/dbus/system_bus_socket` where clients look (sd-bus, libdbus and GLib as nixpkgs builds them). A socket on a
 read-only bind still takes connections: connect needs write permission on the socket, which a read-only mount refuses
 only for files, directories and links (verified in the VM test). It runs with `--filter` and no rules, so it passes
@@ -742,7 +743,7 @@ through it passes the proxy's rules.
 
 Live rules: each proxy listens on a control socket on the host side, mode 0600 in a directory it makes 0700, which only
 the broker connects to. The proxy takes it as `--control=<path>` relative to its `XDG_RUNTIME_DIR` (`dbus.args` aren't
-expanded, verified 9): `claude-desktop/dbus-control[-<name>]/session/control.sock` and `system/control.sock`, each in a
+expanded, verified 9): `agent-sandbox/<sandbox>-dbus-control/session/control.sock` and `system/control.sock`, each in a
 directory of its own, which nothing binds into the sandbox; nixpak's wrapper reaches the session one through its `/run`
 bind, and the system-bus proxy's bwrap holds only the system one's directory, so neither proxy reaches the other's.
 `--bus=session|system` names the policy its sets are checked against and `--app-id` the sandbox's app ID, below which
@@ -756,7 +757,7 @@ each way:
 ```
 
 The proxy checks the peer's uid (`SO_PEERCRED`, the proxy's own), and the socket's place does the rest: a 0700
-directory under `$XDG_RUNTIME_DIR/claude-desktop/`, which nothing binds into the sandbox (the module refuses binds
+directory under `$XDG_RUNTIME_DIR/agent-sandbox/`, which nothing binds into the sandbox (the module refuses binds
 and devices there, by any spelling of the path though not through a link on the host, and host sockets beneath it), so a peer is a host process of the user's, which reaches the bus without the proxy
 anyway. The proxy can't tell the sandbox's processes apart by more than that: they run as the user's uid too, the
 proxy has no `/proc` in nixpak's wrapper, and the kernel won't give it the peer's namespaces from its pidfd
@@ -1093,7 +1094,7 @@ It carries no consent: nothing in it can be changed from the window. A config ch
 
 ## Launcher
 
-`claude-desktop[-<name>] --permissions` opens the window. The launcher handles it first, before it looks for a
+`<sandbox> --permissions` (`claude-desktop[-<name>] --permissions`) opens the window. The launcher handles it first, before it looks for a
 running sandbox: otherwise it would hand the flag to the running app through nsenter, as it does with `claude://`
 URLs. With no sandbox running, the window says so. The recent decisions it lists are the daemon's, kept in memory:
 a daemon started again starts them afresh.
@@ -1286,11 +1287,11 @@ Each can be revisited.
 32. The system-bus proxy runs only for a launcher with D-Bus capabilities on the system bus, unlike decision 11's
     instance for every launcher: a capability needs a rebuild and a restart of the app anyway, as its declaration is in
     the store, so an instance without one would never get rules. No `/run/dbus` either then.
-33. The system-bus proxy listens in `$XDG_RUNTIME_DIR/claude-desktop/system-bus[-<name>]/` rather than
-    `claude-desktop[-<name>]/dbus/`, and the control sockets are in `claude-desktop/dbus-control[-<name>]/`: under
-    `claude-desktop/`, which host sockets and binds already refuse, and with different prefixes, so no launcher's
-    name makes its directory another's (launcher names can't hold `_`, and `dbus-control` would be a launcher `control`'s
-    `dbus-<name>`).
+33. The system-bus proxy listens in `$XDG_RUNTIME_DIR/agent-sandbox/<sandbox>-system-bus/` rather than
+    `<sandbox>/dbus/`, and the control sockets are in `agent-sandbox/<sandbox>-dbus-control/`: under
+    `agent-sandbox/`, which host sockets and binds already refuse, and with suffixes no sandbox's name ends a directory
+    of another's with (`-system-bus` and `-dbus-control` would be the names of launchers `system-bus` and
+    `dbus-control`: the module could refuse those).
 34. The control socket's peer check is the proxy's uid, one connection at a time, and the socket's place out of the
     sandbox's reach. A check of the peer's pid namespace through its pidfd was built first and dropped: the kernel
     refuses it across user namespaces (D-Bus). It accepts any host process of the user's, which can reach the bus

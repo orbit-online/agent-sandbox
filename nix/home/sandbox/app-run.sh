@@ -3,12 +3,12 @@
 # fork, so at that pid, then the sandbox's systemd --user, in the cgroup user/ beside app/: after the app's fork, so
 # neither it nor what it starts at once (timers catching up, units in the home) can take the app's pid
 # (models/launch-pid.als, L11). Nothing here may fork ahead of the app: builtins only until then
-: "${SETSID:?}" "${SYSTEMD:?}" "${USER_UNITS:?}"
+: "${APP:?}" "${SETSID:?}" "${SYSTEMD:?}" "${USER_UNITS:?}"
 # Without capabilities, or not at all: everything from here on is the sandbox's (models/README.md, L4)
 while read -r key value; do
   case $key in
   CapInh: | CapPrm: | CapEff: | CapAmb:)
-    [[ $value =~ ^0+$ ]] || { echo "claude-desktop: app-run.sh started with capabilities ($key $value)" >&2; exit 1; }
+    [[ $value =~ ^0+$ ]] || { echo "$APP: app-run.sh started with capabilities ($key $value)" >&2; exit 1; }
     ;;
   esac
 done </proc/self/status
@@ -27,6 +27,6 @@ if mkdir "$cg" 2>/dev/null && mkdir -p /run/systemd/system /run/systemd/user.con
     SYSTEMD_UNIT_PATH=$USER_UNITS: SYSTEMD_LOG_TARGET=journal exec "$SYSTEMD" --user
   ) &
 else
-  echo "claude-desktop: No systemd --user: the sandbox's cgroup is read-only" >&2
+  echo "$APP: No systemd --user: the sandbox's cgroup is read-only" >&2
 fi
 wait "$app"

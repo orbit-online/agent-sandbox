@@ -15,8 +15,10 @@ let
     mcp = false;
   };
   # Run by the sandbox's systemd --user (userUnits below), see environment.md
+  app = sl.app.name;
   storeGc = sl.script "store-gc.sh" {
-    name = "claude-desktop-store-gc";
+    name = "${app}-store-gc";
+    vars.APP = app;
     runtimeInputs = [
       osConfig.nix.package
       pkgs.coreutils
@@ -25,7 +27,7 @@ let
     ];
   };
   scratchpadPrune = sl.script "scratchpad-prune.sh" {
-    name = "claude-desktop-scratchpad-prune";
+    name = "${app}-scratchpad-prune";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.findutils
@@ -37,7 +39,7 @@ let
     let
       roots = config.build.storeRoots;
     in
-    pkgs.runCommand "claude-desktop-store-roots" { closure = pkgs.closureInfo { rootPaths = roots; }; }
+    pkgs.runCommand "${app}-store-roots" { closure = pkgs.closureInfo { rootPaths = roots; }; }
       ''
         while read -r p; do
           [[ ! -L $p ]] || { echo "$p is a symlink, nixpak can't bind it over the sandbox store's copy" >&2; exit 1; }
@@ -97,21 +99,21 @@ in
     # The GC at storeGc.frequency and when the launcher moved the GC root (gc-pending, which the script removes), the
     # prune at scratchpadPrune.frequency
     build.userUnits =
-      timer "claude-desktop-store-gc" config.storeGc.frequency
-      // timer "claude-desktop-scratchpad-prune" config.scratchpadPrune.frequency
+      timer "${app}-store-gc" config.storeGc.frequency
+      // timer "${app}-scratchpad-prune" config.scratchpadPrune.frequency
       // {
-        "claude-desktop-store-gc.service" = ''
+        "${app}-store-gc.service" = ''
           [Unit]
           Description=Collect the sandbox's Nix store
           [Service]
           Type=oneshot
           ExecStart=${lib.getExe storeGc}
         '';
-        "claude-desktop-store-gc.path" = ''
+        "${app}-store-gc.path" = ''
           [Path]
-          PathExists=/nix/var/claude-desktop/gc-pending
+          PathExists=/nix/var/${app}/gc-pending
         '';
-        "claude-desktop-scratchpad-prune.service" = ''
+        "${app}-scratchpad-prune.service" = ''
           [Unit]
           Description=Prune Claude Code's session scratchpads
           [Service]
@@ -121,7 +123,7 @@ in
       };
     build.launcherConfig = {
       storeRoots = "${storeRoots}";
-      storeRootsLink = "store-roots${ids.suffix}";
+      storeRootsLink = "${ids.sandbox}-store-roots";
     };
   };
 }

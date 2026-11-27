@@ -1,19 +1,20 @@
-# What every launcher module shares, passed to them as `sl`: the module's own scripts, the flake's packages, and the
-# names that follow from a launcher's name (null for the default launcher)
+# What every launcher module of an app shares, passed to them as `sl`: the app's descriptor (default.nix), the module's
+# own scripts, the flake's packages, and the names that follow from a launcher's name (null for the default launcher)
 {
   inputs,
   pkgs,
   lib,
   hm,
   osConfig,
+  app,
 }:
 let
-  cfg = hm.agent-sandbox.claude-desktop;
+  cfg = hm.agent-sandbox.${app.name};
   packages = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
 in
 rec {
-  inherit packages;
-  # A script from this directory as a writeShellApplication. `vars` become readonly variables ahead of it,
+  inherit packages app;
+  # A script from this directory, or `dir`, as a writeShellApplication. `vars` become readonly variables ahead of it,
   # `prelude` is raw bash between those and the script
   script =
     file:
@@ -22,31 +23,31 @@ rec {
       vars ? { },
       prelude ? "",
       runtimeInputs ? [ ],
+      dir ? ./.,
     }:
     pkgs.writeShellApplication {
       inherit name runtimeInputs;
       text =
         lib.concatLines (lib.mapAttrsToList (n: v: "readonly ${n}=${lib.escapeShellArg v}") vars)
         + prelude
-        + builtins.readFile (./. + "/${file}");
+        + builtins.readFile (dir + "/${file}");
     };
 
   xdgOpen = script "xdg-open.sh" { runtimeInputs = [ pkgs.glib ]; };
-  # The app keeps Claude Code under a versioned path, off PATH
-  claudeCode = script "claude.sh" { runtimeInputs = [ pkgs.coreutils ]; };
-  # The same nix as the host, so the sandbox's store database is never migrated to a schema one side can't read
-  # .out: the man output is a symlink, see storeRoots
+  # The packages on the sandbox's PATH: the launcher's path, the app's (build.pathPackages), then the same nix as the
+  # host, so the sandbox's store database is never migrated to a schema one side can't read. .out: the man output is
+  # a symlink, see storeRoots
   sandboxPackagesOf =
     lcfg:
     lcfg.path
+    ++ lcfg.build.pathPackages
     ++ [
-      claudeCode
       osConfig.nix.package.out
       # journalctl and systemctl ahead of the FHS env's systemd-minimal, which reads no compressed journal and has no
       # user units; the host's, as the namespace's journald, and in the sandbox's closure already
       osConfig.systemd.package
     ];
-  # PATH for the app (so the Code tab's shells) and the claude-code MCP server
+  # PATH for the app (Claude Desktop: its Code tab's shells and the claude-code MCP server)
   searchPathOf =
     lcfg:
     lib.concatStringsSep ":" (
@@ -65,35 +66,46 @@ rec {
   names = [ null ] ++ lib.attrNames cfg.launchers;
   # A named launcher's suffix to file names, empty for the default one
   suffixOf = name: lib.optionalString (name != null) "-${name}";
-  # The longest launcher name, see its assertion: the tightest of the socket paths it goes into, each at most 107
-  # bytes and the NUL (launcherSockets). cmd/launcher/warn_test.go binds the warning socket at it and
-  # cmd/permissions-broker/socketpath_test.go the broker's, internal/caller takes no longer one, and the eval tests
-  # check they agree
-  launcherNameMax = 39;
-  # The sockets bound by a path the launcher's name is in, with the longest runtime dir (a 10-digit uid): the
-  # launcher's warning socket (cmd/launcher warn.go), 68 bytes besides the name, the broker's control socket and
-  # request.sock, 61, and the varlink socket of the sandbox's journald namespace (systemd-journald-varlink@.socket,
-  # which systemd-journald@.service requires and systemd refuses past 107 bytes), 63
-  launcherSockets =
+  # The sandbox's name, <app>[-<launcher>]: what every name of the sandbox on the host starts with, and what the
+  # privileged helpers (netns-netkit, sandbox-hooks) and the broker know it by
+  sandboxOf = name: "${app.name}${suffixOf name}";
+  # Every sandbox of every app of the user (shared.nix): what no sandbox may reach, and what must differ between any two
+  allSandboxes = hm.agent-sandbox.sandboxes;
+  # The runtime dir all apps' launchers share, below $XDG_RUNTIME_DIR: the warnings and errors of their starts, the
+  # brokers' grant dirs and control sockets, the GC roots of their closures and subid-broker's sockets
+  runtimeDir = "agent-sandbox";
+  # The longest sandbox name, <app>[-<launcher>], see the launcher name's assertion: the tightest of the socket paths it
+  # goes into, each at most 107 bytes and the NUL (sandboxSockets). cmd/launcher/warn_test.go binds the warning socket
+  # at it and cmd/permissions-broker/socketpath_test.go the broker's, internal/caller takes no longer one, and the eval
+  # tests check they agree
+  sandboxNameMax = 47;
+  # The longest launcher name of this app: what the sandbox name leaves besides the app's and its -
+  launcherNameMax = sandboxNameMax - lib.stringLength app.name - 1;
+  # The sockets bound by a path the sandbox's name is in, with the longest runtime dir (a 10-digit uid): the broker's
+  # control socket and request.sock, 60 bytes besides the name, the varlink socket of the sandbox's journald
+  # namespace (systemd-journald-varlink@.socket, which systemd-journald@.service requires and systemd refuses past
+  # 107 bytes), 48, and the launcher's warning socket (cmd/launcher warn.go), 52
+  sandboxSockets =
     name:
     let
       ids = idsOf name;
-      runtime = "/run/user/4294967294/claude-desktop";
+      runtime = "/run/user/4294967294/${runtimeDir}";
     in
     [
       "${runtime}/${ids.appUnit}.warn"
-      "${runtime}/permissions${ids.suffix}-control.sock"
-      "${runtime}/permissions${ids.suffix}/request.sock"
+      "${runtime}/${ids.permissions}-control.sock"
+      "${runtime}/${ids.permissions}/request.sock"
       "/run/systemd/journal.${ids.sandboxJournal}/io.systemd.journal"
     ];
   # Holds the sandbox's home directory, its Nix store and Claude Code's temp dir (home/, nix/, tmp-scratchpad/)
-  stateDirOf = name: "${hm.xdg.dataHome}/claude-desktop${suffixOf name}";
+  stateDirOf = name: "${hm.xdg.dataHome}/${sandboxOf name}";
   # The launcher's cgroup slice, holding the app's unit, the broker's and its calls'. A - in
   # a slice's name nests it in the slice before it (claude-desktop-work.slice in claude-desktop.slice), so each is
   # escaped: one slice per launcher, each a sibling of app.slice. systemd makes it when a unit names it
-  sliceOf = name: "${lib.replaceStrings [ "-" ] [ "\\x2d" ] "claude-desktop${suffixOf name}"}.slice";
-  # The app's pid in the FHS env's pid ns (see app-pid.sh), one per launcher: their tray items share the session bus
-  appPidOf = name: 100 + lib.lists.findFirstIndex (n: n == name) null names;
+  sliceOf = name: "${lib.replaceStrings [ "-" ] [ "\\x2d" ] (sandboxOf name)}.slice";
+  # The app's pid in the FHS env's pid ns (see app-pid.sh), one per sandbox of any app: their tray items share the
+  # session bus. 100 and up by app and launcher, the default one first
+  appPidOf = name: 100 + lib.lists.findFirstIndex (s: s.sandbox == sandboxOf name) null allSandboxes;
   # What a launcher is called by: its file name suffix, the sandbox's app ID (the proxy's /.flatpak-info names the
   # app by it to the portals, and the wrapper finds its running sandbox by it; it names the launcher's .desktop file
   # and its windows' app ID too, the Permissions window's included: gnome-shell drops a portal notification unless
@@ -103,25 +115,35 @@ rec {
     name:
     let
       stateDir = stateDirOf name;
-      appId = "com.anthropic.Claude${lib.optionalString (name != null) ".${name}"}";
+      sandbox = sandboxOf name;
+      appId = "${app.appId}${lib.optionalString (name != null) ".${name}"}";
     in
     {
-      inherit name appId stateDir;
+      inherit
+        name
+        appId
+        stateDir
+        sandbox
+        ;
       suffix = suffixOf name;
       desktopFile = "${appId}.desktop";
       appPid = appPidOf name;
       slice = sliceOf name;
       # The app's unit, and the start of the names of the host's units for its daemons (cmd/launcher hostUnits)
-      appUnit = "claude-desktop${suffixOf name}-app.service";
-      unitPrefix = "claude-desktop${suffixOf name}";
+      appUnit = "${sandbox}-app.service";
+      unitPrefix = sandbox;
       # Its journald namespaces, which the NixOS module runs: the host side's, which the sandbox reads but can't write
-      # to, and the sandbox's, with the app's output. _ is in no launcher name
-      journal = "claude-desktop${suffixOf name}";
-      sandboxJournal = "claude-desktop${suffixOf name}_sandbox";
+      # to, and the sandbox's, with the app's output. _ is in no sandbox name
+      journal = sandbox;
+      sandboxJournal = "${sandbox}_sandbox";
+      # The broker's grant dir in the runtime dir, and with -control.sock its control socket
+      permissions = "${sandbox}-permissions";
+      # What the user sees it called: the splash's title, a named launcher's .desktop Name
+      displayName = "${app.displayName}${lib.optionalString (name != null) " (${name})"}";
       home = "${stateDir}/home";
       scratchpad = "${stateDir}/tmp-scratchpad";
       # Where the option's definitions say so in messages
-      opt = "agent-sandbox.claude-desktop: ${lib.optionalString (name != null) "launchers.${name}."}";
+      opt = "agent-sandbox.${app.name}: ${lib.optionalString (name != null) "launchers.${name}."}";
     };
 
   # bwrap with a range of ids, see cmd/launcher bwrap.go: the FHS env's inside, mode parent, which shares the
@@ -175,17 +197,22 @@ rec {
       )
     )
   );
-  # environment.md split by its markers (see environment-split.sh): all of it, the part every session needs, and the
-  # rest as a memo store
-  environment = pkgs.runCommand "claude-desktop-environment" {
+  # The app's environment.md with the core's (this directory's) in place of its `<!-- agent-sandbox: core -->` line,
+  # split by its markers (see environment-split.sh): all of it, the part every session needs, and the rest as a memo
+  # store
+  environment = pkgs.runCommand "${app.name}-environment" {
     nativeBuildInputs = [ pkgs.gawk ];
-    SRC = ./environment.md;
-    NAME = "agent-sandbox/claude-desktop";
-    DESCRIPTION = "The Claude Desktop sandbox you run in: its home, its user namespaces and its Nix store.";
+    APP_SRC = app.environment;
+    CORE_SRC = ./environment.md;
+    APP = app.name;
+    APP_ID = app.appId;
+    ENVIRONMENT_PATH = app.environmentPath;
+    NAME = "agent-sandbox/${app.name}";
+    DESCRIPTION = "The ${app.description} sandbox you run in: its home, its user namespaces and its Nix store.";
     # As in environmentDoc's frontmatter
     ENVIRONMENT = "bwrap";
   } "source ${./environment-split.sh}";
-  # The options of a feature (features.nix): a switch, its words for the user and for Claude, and its body. The body
+  # The options of a feature (features.nix): a switch, its words for the user and for the agent, and its body. The body
   # is definitions of the launcher's `permissions` options, kept as they were written, mkForce and the like inside
   # them included, until features.nix merges them into those options while the feature is on
   feature = {
@@ -198,7 +225,7 @@ rec {
       description = lib.mkOption {
         type = lib.types.str;
         default = "";
-        description = "What the feature gives the sandbox, in one line, for the user and for Claude: the Permissions window and the sandbox's `/etc/claude/environment.md` show it while the feature is on. Required for a feature that is on.";
+        description = "What the feature gives the sandbox, in one line, for the user and for the agent: the Permissions window and the sandbox's environment doc (`/etc/claude/environment.md` for Claude Desktop) show it while the feature is on. Required for a feature that is on.";
       };
       note = lib.mkOption {
         type = lib.types.str;

@@ -37,13 +37,6 @@ in
       whose MCP client is named `local-agent-mode-NAME`: the app starts each server a second time for its chat.
     '';
   };
-  # What the features add to mcpServers
-  options.build.mcpServers = lib.mkOption {
-    type = lib.types.attrsOf (pkgs.formats.json { }).type;
-    internal = true;
-    visible = false;
-  };
-
   config.build = {
     mcpServers = {
       filesystem = {

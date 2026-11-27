@@ -16,7 +16,7 @@ import (
 )
 
 // reenter starts sh -c script in the sandbox's user namespace, and its mount namespace with mnt, through nsenter from
-// here, as claude-desktop --shell does: no descendant of the sandbox's pid. env is its environment. Returns the pid
+// here, as <sandbox> --shell does: no descendant of the sandbox's pid. env is its environment. Returns the pid
 // script prints
 func reenter(t *testing.T, sb *sandbox, mnt bool, env []string, script string) int {
 	t.Helper()

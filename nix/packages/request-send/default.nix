@@ -1,4 +1,4 @@
-# The host commands of the request-send and request-send-write capabilities (nix/home/claude-desktop/request-send.nix):
+# The host commands of the request-send and request-send-write capabilities (nix/home/sandbox/request-send.nix):
 # one HTTP request per call, sent through the user's authenticating proxy
 {
   buildGoModule,
@@ -22,7 +22,7 @@ buildGoModule {
   vendorHash = "sha256-tqIS/tLBIRH2lP6eDk0roGiAoaeKrM9AdcBgehBc9tg=";
   env.CGO_ENABLED = 0;
   meta = {
-    description = "Send HTTP requests for a sandboxed Claude through your authenticating proxy";
+    description = "Send HTTP requests for a sandboxed agent through your authenticating proxy";
     mainProgram = "request-send";
     platforms = lib.platforms.linux;
   };

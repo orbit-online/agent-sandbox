@@ -1,5 +1,5 @@
-# What Claude in the sandbox knows about it: /etc/claude/environment.md, and with memo.enable Home Manager's memo with
-# the sandbox's own store
+# What the agent in the sandbox knows about it: its environment doc at the app's environmentPath
+# (/etc/claude/environment.md for Claude Desktop), and with memo.enable Home Manager's memo with the sandbox's own store
 {
   lib,
   pkgs,
@@ -15,12 +15,12 @@ let
   ids = sl.idsOf launcherName;
   # Home Manager's memo, when imported
   memoCfg = hm.programs.agent-memos or { };
-  # /etc/claude/environment.md, for the user's CLAUDE.md to import: an import of environmentFile (linked, so it's in
-  # the closure), the binds (minus the ro system ones), the features that are on and PATH as configured, then
-  # environmentText. claude-env reads `environment:` from the frontmatter. Claude Code follows imports four hops deep,
-  # and ~/.claude reaches this file in three (CLAUDE.md, the account's, the shared one), so environmentFile is the
-  # last that loads
-  environmentDoc = pkgs.writeText "claude-environment.md" ''
+  # The environment doc, for the agent's user instructions to import (the user's CLAUDE.md): an import of
+  # environmentFile (linked, so it's in the closure), the binds (minus the ro system ones), the features that are on and
+  # PATH as configured, then environmentText. claude-env reads `environment:` from the frontmatter. Claude Code, for
+  # one, follows imports four hops deep, and ~/.claude reaches this file in three (CLAUDE.md, the account's, the shared
+  # one), so environmentFile is the last that loads
+  environmentDoc = pkgs.writeText "sandbox-environment.md" ''
     ---
     environment: bwrap
     ---
@@ -73,7 +73,7 @@ in
       type = types.path;
       default = "${sl.environment}/${lib.optionalString config.memo.enable "core-"}environment.md";
       defaultText = lib.literalMD "`environment.md`, with `memo.enable` only the sections every session needs";
-      description = "What Claude in the sandbox knows about it, imported by `/etc/claude/environment.md`. Replace it to describe a consumer's own setup.";
+      description = "What the agent in the sandbox knows about it, imported by the sandbox's environment doc (`${sl.app.environmentPath}`). Replace it to describe a consumer's own setup.";
     };
     memo.enable = mkOption {
       type = types.bool;
@@ -88,12 +88,12 @@ in
     environmentText = mkOption {
       type = types.lines;
       default = "";
-      description = "Appended to the sandbox's `/etc/claude/environment.md`, which Claude loads every session: per-user notes, `@` imports and read-when triggers.";
+      description = "Appended to the sandbox's environment doc (`${sl.app.environmentPath}`), which the agent loads every session: per-user notes, `@` imports and read-when triggers.";
     };
   };
 
   config = {
-    build.fhsBwrapArgs = [ "--ro-bind ${environmentDoc} /etc/claude/environment.md" ];
+    build.fhsBwrapArgs = [ "--ro-bind ${environmentDoc} ${sl.app.environmentPath}" ];
     path = lib.mkIf config.memo.enable (lib.mkOptionDefault [ memoCfg.package ]);
     files = lib.mkIf config.memo.enable {
       "${hm.home.homeDirectory}/.config/agent-memos/config.yaml".source = memoCfg.configFile;

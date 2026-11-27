@@ -1,4 +1,4 @@
-# request-send's module (nix/home/claude-desktop/request-send.nix): nix-unit's `tests`, and `check`, which has the
+# request-send's module (nix/home/sandbox/request-send.nix): nix-unit's `tests`, and `check`, which has the
 # permissions broker load the declaration
 {
   pkgs,

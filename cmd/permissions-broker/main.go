@@ -24,12 +24,12 @@ Usage:
   permissions-broker move-tree <dir> <dirid> <name>
   permissions-broker detach <dir> <dirid> <entry>...
 
-serve runs the daemon for one launcher, as described in docs/permissions.md:
+serve runs the daemon for one sandbox, as described in docs/permissions.md:
 it finds the launcher's running sandbox by app ID, listens on request.sock in
 the grant directory for the sandbox and on control.sock for the Permissions
 window, asks the user about each request with a notification, and ends grants
 on their lease. Exits when the sandbox does. <config> is the JSON the module
-writes: appId, launcher, grantDir, controlSocket, sandboxGrantDir,
+writes: appId, sandbox (its name, <app>[-<launcher>]), grantDir, controlSocket, sandboxGrantDir,
 window (the command opening the Permissions window), folders (the folders
 that may be granted, each a path and rw), commands (the host command
 capabilities), sockets (the host socket capabilities), grants (the standing

@@ -48,23 +48,23 @@ let
     ]
     ++ lib.optional (osHooks.start != [ ]) "--hooks=${
       builtins.toJSON (
-        { exe = "${osConfig.security.wrapperDir}/sandbox-hooks"; }
-        // lib.optionalAttrs (launcherName != null) { name = launcherName; }
+        {
+          exe = "${osConfig.security.wrapperDir}/sandbox-hooks";
+          name = ids.sandbox;
+        }
       )
     }"
     # Without it the netns keeps what bwrap gives it: lo, up
     ++ lib.optional net.enable "--net=${
-      builtins.toJSON (
-        {
-          netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
-          nsenter = lib.getExe' pkgs.util-linux "nsenter";
-          ip = lib.getExe' pkgs.iproute2 "ip";
-          inherit (net) mdns;
-          # In the order of their names
-          hooks = lib.attrValues net.hooks;
-        }
-        // lib.optionalAttrs (launcherName != null) { name = launcherName; }
-      )
+      builtins.toJSON {
+        netnsNetkit = "${osConfig.security.wrapperDir}/netns-netkit";
+        nsenter = lib.getExe' pkgs.util-linux "nsenter";
+        ip = lib.getExe' pkgs.iproute2 "ip";
+        inherit (net) mdns;
+        # In the order of their names
+        hooks = lib.attrValues net.hooks;
+        name = ids.sandbox;
+      }
     }"
   );
   # nixpak's pasta slot, where it runs pasta after bwrap's info and before it lets the app start. A no-op: the bwrap
@@ -148,13 +148,11 @@ in
     build.assertions = [
       {
         assertion = lib.all isIP config.nameservers;
-        message = "agent-sandbox.claude-desktop: ${
-          if launcherName == null then "" else "launchers.${launcherName}."
-        }nameservers must be IP addresses: ${lib.concatStringsSep ", " (map builtins.toJSON config.nameservers)}";
+        message = "${ids.opt}nameservers must be IP addresses: ${lib.concatStringsSep ", " (map builtins.toJSON config.nameservers)}";
       }
       {
         assertion = nixpak.bubblewrap.network && nixpak.pasta.enable && nixpak.pasta.package == netSetup;
-        message = "agent-sandbox.claude-desktop: the sandbox always gets its own netns with a netkit pair; ${
+        message = "agent-sandbox.${sl.app.name}: the sandbox always gets its own netns with a netkit pair; ${
           if launcherName == null then "sandbox" else "launchers.${launcherName}.sandbox"
         } must not change bubblewrap.network or pasta";
       }

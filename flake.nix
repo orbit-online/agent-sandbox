@@ -47,9 +47,10 @@
         key = "agent-sandbox#homeModules.claude-desktop";
         imports = [ (import ./nix/home/claude-desktop { inherit inputs; }) ];
       };
-      nixosModules.claude-desktop = {
-        key = "agent-sandbox#nixosModules.claude-desktop";
-        imports = [ (import ./nix/nixos/claude-desktop.nix { inherit self; }) ];
+      # The host side of every app's sandboxes
+      nixosModules.agent-sandbox = {
+        key = "agent-sandbox#nixosModules.agent-sandbox";
+        imports = [ (import ./nix/nixos/sandbox.nix { inherit self; }) ];
       };
       packages = forAllSystems (system: {
         netns-netkit = nixpkgs.legacyPackages.${system}.callPackage ./nix/packages/netns-netkit { };

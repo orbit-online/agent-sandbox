@@ -91,8 +91,8 @@ let
       echo $$ >/tmp/hook-pid
       while [ -e /tmp/hook-hold ]; do ${pkgs.coreutils}/bin/sleep 0.2; done
     fi
-    [ "$3" != work ] || exit 1
-    [ "$3" != offline ] || exit 0
+    [ "$3" != claude-desktop-work ] || exit 1
+    [ "$3" != claude-desktop-offline ] || exit 0
     ${pkgs.iproute2}/bin/ip link add "mesh-$2" type dummy
     ${pkgs.iproute2}/bin/ip link set "mesh-$2" netns /proc/self/fd/3
   '';
@@ -264,7 +264,7 @@ let
         slice-gone.configuration.home-manager.users.alice.systemd.user.slices = lib.mkForce { };
       };
       users.users.bob.isNormalUser = true;
-      agent-sandbox.claude-desktop.delegateCpuset = true;
+      agent-sandbox.delegateCpuset = true;
       agent-sandbox.hooks = {
         start = [
           {

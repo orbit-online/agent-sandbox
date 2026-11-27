@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -69,7 +70,8 @@ Options:
 // The launcher's config, as launch.nix writes it
 type config struct {
 	AppID          string   `json:"appId"`
-	Launcher       string   `json:"launcher"`       // Its name, empty for the default launcher
+	Sandbox        string   `json:"sandbox"`        // The sandbox's name, <app>[-<launcher>]: its wrapper's, its units'
+	App            string   `json:"app"`            // The app's name for the user: "Starting <app>"
 	Unit           string   `json:"unit"`           // The app's unit
 	Journal        string   `json:"journal"`        // The journal namespace the launcher's host side logs to
 	SandboxJournal string   `json:"sandboxJournal"` // The one the sandbox and the app's output log to
@@ -80,7 +82,7 @@ type config struct {
 	Scratchpad     string   `json:"scratchpad"`
 	HomeDirs       []string `json:"homeDirs"`
 	RequiredBinds  []string `json:"requiredBinds"`
-	State          string   `json:"state"` // claude-desktop-state, see confine.sh
+	State          string   `json:"state"` // <sandbox>-state, see confine.sh
 	StoreRoots     string   `json:"storeRoots"`
 	StoreRootsLink string   `json:"storeRootsLink"`
 	NixpakLauncher string   `json:"nixpakLauncher"`
@@ -231,12 +233,20 @@ type exitError int
 
 func (e exitError) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
-// progName is how the launcher names itself in messages: claude-desktop, as the bash launcher did
+// progName is how the launcher names itself in messages and the journal: the sandbox's name, its wrapper's
+// (claude-desktop for Claude Desktop's default launcher)
 func progName(cfg *config) string {
-	if cfg != nil && cfg.Launcher != "" {
-		return "claude-desktop-" + cfg.Launcher
+	if cfg != nil && cfg.Sandbox != "" {
+		return cfg.Sandbox
 	}
-	return "claude-desktop"
+	return "agent-sandbox"
+}
+
+// runtimeDir is the directory in the host's runtime dir every app's launchers share, of mode 0700, which no sandbox
+// reaches: the module refuses a bind that holds it or lies in it (core.nix, sourceRefusal), the broker's ceiling denies
+// it and its host sockets refuse it, and vm-launch looks ("the host's runtime dir stays out of the sandbox")
+func runtimeDir() string {
+	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox")
 }
 
 func loadConfig(path string) (*config, error) {

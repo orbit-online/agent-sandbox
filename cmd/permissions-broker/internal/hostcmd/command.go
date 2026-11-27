@@ -19,9 +19,9 @@ import (
 
 // Command is a host command as the config declares it
 type Command struct {
-	// For Claude: what the command does, its MCP tool's description
+	// For the agent: what the command does, its MCP tool's description
 	Description string `json:"description"`
-	// For the user: what the command lets Claude do, in a short phrase the consent shows
+	// For the user: what the command lets the agent do, in a short phrase the consent shows
 	Consent     string                     `json:"consent"`
 	Arguments   map[string]json.RawMessage `json:"arguments"`
 	Result      string                     `json:"result"`

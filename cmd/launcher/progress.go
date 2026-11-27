@@ -24,7 +24,7 @@ var steps = []struct{ name, text string }{
 	{stepPrepared, "Starting the D-Bus proxy"},
 	{stepProxy, "Creating the sandbox"},
 	{stepSandbox, "Connecting the sandbox to the network"},
-	{stepNetwork, "Starting Claude"},
+	{stepNetwork, "Starting <app>"},
 	{stepReady, ""},
 }
 
@@ -48,7 +48,8 @@ func marker(cfg *config, e entry) string {
 // median share of their time, the bar creeping towards the next step, never past it. The store's copy, which only a
 // rebuild brings, counts for neither: it gets a segment of its own, see copying
 type progress struct {
-	sp *splash
+	sp  *splash
+	app string // The app's name for the user, which the last step names
 
 	mu     sync.Mutex
 	began  time.Time
@@ -180,7 +181,8 @@ func (p *progress) tick() {
 func (p *progress) send(text bool) {
 	st := splashState{}
 	if text {
-		st.Text = steps[p.cur].text
+		// The app's name, from the config
+		st.Text = strings.Replace(steps[p.cur].text, "<app>", p.app, 1)
 	}
 	if f, ok := p.estimate(p.elapsed(time.Now())); ok {
 		if p.copyTo > 0 {

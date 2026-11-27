@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Which processes are the sandbox's: by namespace, not by ancestry. A re-entry (claude-desktop --shell, claude://)
+// Which processes are the sandbox's: by namespace, not by ancestry. A re-entry (<sandbox> --shell, claude://)
 // joins the app's namespaces through nsenter from the host, so it and everything it starts are no descendants of the
 // sandbox's pid, yet they are in U2, below U1. A process is the sandbox's when its user namespace, or the one owning
 // its mount namespace, is the sandbox's pinned user namespace or below it

@@ -1,10 +1,11 @@
-# The launcher's general options: the app, nixpak's extra config, files, environment variables, PATH and units of the
-# sandbox's systemd --user, and of `permissions` the binds and devices. The features' own options are in their modules
+# The launcher's general options: nixpak's extra config, files, environment variables, PATH and units of the sandbox's
+# systemd --user, and of `permissions` the binds and devices. The features' own options are in their modules, the app's
+# (its package among them) in the app's
 {
   config,
   lib,
   pkgs,
-  inputs,
+  sl,
   ...
 }:
 let
@@ -12,9 +13,6 @@ let
 in
 {
   options = {
-    package =
-      lib.mkPackageOption inputs.llm-agents.packages.${pkgs.stdenv.hostPlatform.system} "claude-desktop"
-        { pkgsText = "inputs.llm-agents.packages.\${system}"; };
     sandbox = mkOption {
       type = types.deferredModule;
       default = { };
@@ -60,7 +58,7 @@ in
           )
         );
         default = { };
-        description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source is an absolute path in its clean form (no `.`, `..` or empty segments; one trailing slash is fine). One that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `claude-desktop` dir, or is `/proc` or `/var/run` or lies in them fails an assertion. So does a source beneath the source of a read-write bind, the sandbox's home and scratchpad included: the sandbox could put a link in its place, which the next launch would follow. The assertions read the path as written: a source that is a link to one of these on the host gets past them.";
+        description = "Host paths mounted in the sandbox, keyed by the path in the sandbox. A source is an absolute path in its clean form (no `.`, `..` or empty segments; one trailing slash is fine). One that holds or lies in a launcher's state dir (outside its own `home/`, `nix/` and `tmp-scratchpad/`), holds `$XDG_RUNTIME_DIR` or lies in its `.flatpak` or `agent-sandbox` dir, or is `/proc` or `/var/run` or lies in them fails an assertion. So does a source beneath the source of a read-write bind, the sandbox's home and scratchpad included: the sandbox could put a link in its place, which the next launch would follow. The assertions read the path as written: a source that is a link to one of these on the host gets past them.";
       };
       devices = mkOption {
         type = types.attrsOf (
@@ -147,7 +145,7 @@ in
       type = types.listOf types.str;
       default = [ ];
       example = lib.literalExpression ''[ "''${config.home.homeDirectory}/.claude/bin" ]'';
-      description = "Directories on PATH ahead of `path`'s packages, for the app, its Code tab shells and the claude-code MCP server.";
+      description = "Directories on PATH ahead of `path`'s packages, for the app and what it runs (Claude Desktop: its Code tab shells and the claude-code MCP server).";
     };
     path = mkOption {
       type = types.listOf types.package;
@@ -174,7 +172,7 @@ in
         file
         libnotify
       ];
-      description = "Packages on PATH for the app, its Code tab shells and the local MCP servers.";
+      description = "Packages on PATH for the app and what it runs (Claude Desktop: its Code tab shells and the local MCP servers).";
     };
     units = mkOption {
       type = types.attrsOf types.str;
@@ -188,7 +186,7 @@ in
       description = ''
         Units of the sandbox's systemd --user, by file name, each its text. A timer or path unit is wanted by
         timers.target or paths.target, so it runs while the sandbox does; a service starts from one of them. The
-        names starting with `claude-desktop-` are the module's own.
+        names starting with `<app>-` (`claude-desktop-` for Claude Desktop) are the module's own.
       '';
     };
   };
@@ -196,9 +194,9 @@ in
     userUnits = config.units;
     assertions = [
       {
-        assertion = !lib.any (lib.hasPrefix "claude-desktop-") (lib.attrNames config.units);
-        message = "agent-sandbox.claude-desktop: units starting with claude-desktop- are the module's own: ${
-          lib.concatStringsSep ", " (lib.filter (lib.hasPrefix "claude-desktop-") (lib.attrNames config.units))
+        assertion = !lib.any (lib.hasPrefix "${sl.app.name}-") (lib.attrNames config.units);
+        message = "agent-sandbox.${sl.app.name}: units starting with ${sl.app.name}- are the module's own: ${
+          lib.concatStringsSep ", " (lib.filter (lib.hasPrefix "${sl.app.name}-") (lib.attrNames config.units))
         }";
       }
     ];

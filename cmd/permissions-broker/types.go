@@ -73,7 +73,7 @@ type grant struct {
 	Capability string          `json:"capability"`
 	Params     json.RawMessage `json:"params"`
 	Summary    string          `json:"summary"`
-	// Claude's reason when the user allowed it: none for a standing grant
+	// The agent's reason when the user allowed it: none for a standing grant
 	Reason  string    `json:"reason,omitempty"`
 	Lease   string    `json:"lease"`
 	Expires time.Time `json:"expires,omitzero"`

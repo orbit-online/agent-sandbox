@@ -23,7 +23,7 @@ import (
 	"github.com/orbit-online/agent-sandbox/internal/journal"
 )
 
-const usage = `request-send - Send one HTTP request for a sandboxed Claude through your authenticating proxy
+const usage = `request-send - Send one HTTP request for a sandboxed agent through your authenticating proxy
 
 Usage:
   request-send send --scope=<scope> (--origin=<url> --proxy=<url> --ca=<file>)...

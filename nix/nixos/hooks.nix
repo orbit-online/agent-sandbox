@@ -1,7 +1,7 @@
 # Root-owned hooks the launcher runs at phases of each sandbox through the sandbox-hooks wrapper (sandbox-hooks --help),
 # for consumers to do what needs privileges, a device moved into the netns of the sandbox say. The wrapper holds the
 # union of the capabilities the hooks declare, setgid sandbox-hooks; without hooks there is no wrapper.
-# claude-desktop.nix imports it
+# sandbox.nix imports it
 { self }:
 {
   lib,
@@ -74,12 +74,12 @@ let
       type = lib.types.listOf hookType;
       default = [ ];
       description = ''
-        Hooks the launcher of every sandbox of every user runs ${when}, in order, as `<hook> ${args}` (the launcher
-        name empty for the default one), with the capabilities each declares, the user's uid and group
+        Hooks the launcher of every sandbox of every user runs ${when}, in order, as `<hook> ${args}` (the sandbox's
+        name, `<app>[-<launcher>]`: `claude-desktop` for Claude Desktop's default launcher), with the capabilities each declares, the user's uid and group
         `sandbox-hooks` as its gids, an empty environment and `/`, killed after 30 seconds. A hook that fails is
         logged${
           lib.optionalString (
-            args != "stop <uid> <launcher name>"
+            args != "stop <uid> <sandbox>"
           ) ", and the sandbox starts without what it does after a warning on the splash"
         }.
       '';
@@ -89,8 +89,8 @@ let
 in
 {
   options.agent-sandbox.hooks = {
-    start = phase "once the network namespace of the sandbox is set up (its netkit pair and addresses), before the app starts and before the launcher's permissions.network.hooks, with that network namespace on fd 3 (`ip link set <dev> netns /proc/self/fd/3`)" "start <uid> <launcher name>";
-    stop = phase "after the sandbox ended" "stop <uid> <launcher name>";
+    start = phase "once the network namespace of the sandbox is set up (its netkit pair and addresses), before the app starts and before the launcher's permissions.network.hooks, with that network namespace on fd 3 (`ip link set <dev> netns /proc/self/fd/3`)" "start <uid> <sandbox>";
+    stop = phase "after the sandbox ended" "stop <uid> <sandbox>";
   };
 
   config = lib.mkMerge [

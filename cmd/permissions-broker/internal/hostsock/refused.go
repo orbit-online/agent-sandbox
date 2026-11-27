@@ -23,7 +23,7 @@ import (
 // for buses and launchers, and the paths the bus address variables name
 func refusedRoots(run string) []string {
 	roots := []string{"/proc", "/run/dbus", "/var/run"}
-	for _, own := range []string{"bus", "systemd", "at-spi", ".dbus-proxy", "dbus-*", "claude-desktop", ".flatpak",
+	for _, own := range []string{"bus", "systemd", "at-spi", ".dbus-proxy", "dbus-*", "agent-sandbox", ".flatpak",
 		"agent-sandbox-permissions", "nixpak-*"} {
 		roots = append(roots, run+"/"+own)
 	}

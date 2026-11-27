@@ -11,9 +11,10 @@ import (
 // The config the module writes, which serve and cleanup read
 type config struct {
 	// The agent's name, which the notifications and the window put in their words ("Claude wants to …")
-	Agent         string `json:"agent"`
-	AppID         string `json:"appId"`
-	Launcher      string `json:"launcher"`
+	Agent string `json:"agent"`
+	AppID string `json:"appId"`
+	// The sandbox's name, <app>[-<launcher>]: its call units', its locks', netns-netkit's --name
+	Sandbox       string `json:"sandbox"`
 	GrantDir      string `json:"grantDir"`
 	ControlSocket string `json:"controlSocket"`
 	// The daemon's systemd unit, which call units are bound to

@@ -98,7 +98,7 @@ func (b *broker) runCall(c *capability, name string, cmd *hostcmd.Command, g *gr
 	if !b.isLive(g) {
 		return response{}, errors.New("The grant ended: ask again")
 	}
-	unit := unitPrefix(b.cfg.Launcher) + "call-" + randomID()
+	unit := unitPrefix(b.cfg.Sandbox) + "call-" + randomID()
 	// The grant ending stops the unit, whatever it started included. Until the call returns, as the end may come
 	// before systemd has the unit; the call returns once the stopping did, so no stop comes after it
 	finished, stopped := make(chan struct{}), make(chan struct{})

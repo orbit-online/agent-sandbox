@@ -28,15 +28,16 @@ in
             options = {
               description = mkOption {
                 type = types.str;
-                description = "What a grant of the capability lets Claude do, for Claude: the MCP tools' descriptions name it.";
+                description = "What a grant of the capability lets the agent do, for the agent: the MCP tools' descriptions name it.";
               };
               consent.title = mkOption {
                 type = types.str;
                 default = "";
                 example = "control the Windows VM";
                 description = ''
-                  For the user: a short phrase completing "Claude wants to …", which the notification follows with the
-                  bounding values and the lease. Required, one line of at most 80 characters.
+                  For the user: a short phrase completing "<agent> wants to …" ("Claude wants to …"), which the
+                  notification follows with the bounding values and the lease. Required, one line of at most 80
+                  characters.
                 '';
               };
               bounding = mkOption {
@@ -59,14 +60,14 @@ in
                     options = {
                       description = mkOption {
                         type = types.str;
-                        description = "What the command does, for Claude: its MCP tool's description.";
+                        description = "What the command does, for the agent: its MCP tool's description.";
                       };
                       consent = mkOption {
                         type = types.str;
                         default = "";
                         example = "Take screenshots";
                         description = ''
-                          For the user: what the command lets Claude do, in plain words for someone non-technical,
+                          For the user: what the command lets the agent do, in plain words for someone non-technical,
                           without ranges ("Take screenshots"). The consent shows it a line, commands with the same
                           phrase on one line, marked unrestricted when a free argument takes any text. Required, one
                           line of at most 80 characters.
@@ -99,7 +100,7 @@ in
                     };
                   }
                 );
-                description = "The commands, by name: Claude sees each as the tool `<capability>_<command>`.";
+                description = "The commands, by name: the agent sees each as the tool `<capability>_<command>`.";
               };
             };
           }
@@ -116,7 +117,7 @@ in
             options = {
               description = mkOption {
                 type = types.str;
-                description = "What a grant of the socket lets Claude do, for the consent.";
+                description = "What a grant of the socket lets the agent do, for the consent.";
               };
               path = mkOption {
                 type = types.nullOr types.str;

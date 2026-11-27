@@ -111,7 +111,7 @@ func jsonResult(v any) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
 }
 
-// reply is what the server reads of the broker's answers. What it passes on to Claude it keeps as the broker sent it
+// reply is what the server reads of the broker's answers. What it passes on to the agent it keeps as the broker sent it
 type reply struct {
 	Capabilities json.RawMessage `json:"capabilities"`
 	Grant        json.RawMessage `json:"grant"`
@@ -139,7 +139,7 @@ func callBroker(ctx context.Context, socket string, req wire.Request) (reply, er
 	return res, nil
 }
 
-// How old grants get before tool results remind Claude to release them, and how often they do
+// How old grants get before tool results remind the agent to release them, and how often they do
 var (
 	nudgeAfter = 15 * time.Minute
 	nudgeEvery = 10 * time.Minute

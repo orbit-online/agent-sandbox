@@ -9,9 +9,9 @@ let
   aliceModule = cfg: {
     imports = [
       inputs.home-manager.nixosModules.home-manager
-      self.nixosModules.claude-desktop
+      self.nixosModules.agent-sandbox
       # Twice, as when another flake's module imports it too
-      self.nixosModules.claude-desktop
+      self.nixosModules.agent-sandbox
     ];
     system.stateVersion = "26.05";
     hardware.graphics.enable = true;
@@ -71,13 +71,57 @@ let
     launchers.work.permissions.binds."/srv/work".rw = true;
   };
   system = nixos enabled;
-  launcherNameMax = lib.toInt (
+  # A second, minimal app on the sandbox's core, for the checks alone: the stub app (stub-app.nix) in the core's FHS env
+  standInApp =
+    name:
+    import ../home/sandbox { inherit inputs; } {
+      inherit name;
+      appId = "org.example.StandIn";
+      displayName = "Stand-in";
+      agent = "The stand-in";
+      description = "A stand-in app";
+      environmentPath = "/etc/stand-in/environment.md";
+      environment = pkgs.writeText "stand-in-environment.md" "# The stand-in's sandbox\n\n<!-- agent-sandbox: core -->\n";
+      modules = [
+        (
+          {
+            config,
+            sl,
+            pkgs,
+            ...
+          }:
+          {
+            build.app = (pkgs.callPackage ./stub-app.nix { }).override (prev: {
+              buildFHSEnv = args: (prev.buildFHSEnv.override { bubblewrap = sl.bwrapFhs; }) (config.build.fhsEnvArgs args);
+            });
+          }
+        )
+      ];
+    };
+  # alice with Claude Desktop as `enabled` has it and the stand-in app `name`, each with a launcher work
+  withStandIn =
+    name:
+    system.extendModules {
+      modules = [
+        {
+          home-manager.sharedModules = [ (standInApp name) ];
+          home-manager.users.alice.agent-sandbox.${name} = {
+            enable = true;
+            launchers.work = { };
+          };
+        }
+      ];
+    };
+  # The cap on a sandbox's name, <app>[-<launcher>], as the broker's sockets set it, and so on a launcher name of
+  # Claude Desktop's
+  sandboxNameMax = lib.toInt (
     builtins.head (
-      builtins.match ".*\nconst launcherNameMax = ([0-9]+)\n.*" (
+      builtins.match ".*\nconst sandboxNameMax = ([0-9]+)\n.*" (
         builtins.readFile ../../cmd/permissions-broker/socketpath_test.go
       )
     )
   );
+  launcherNameMax = sandboxNameMax - lib.stringLength "claude-desktop-";
   alice = system.config.home-manager.users.alice;
   failedAssertions = sys: lib.filter (a: !a.assertion) sys.config.home-manager.users.alice.assertions;
   # alice's programs.mcp set to `mcp`
@@ -509,16 +553,17 @@ let
           let
             c = (sys hooks).config.home-manager.users.alice.agent-sandbox.claude-desktop;
             roots = l: lib.concatMapStrings (r: r.text or "") l.build.storeRoots;
-            pick = l: {
+            pick = sandbox: l: {
               start = lib.hasInfix "'--hooks=" (roots l);
-              named = lib.hasInfix ''"name":"work"'' (roots l) && lib.hasInfix "sandbox-hooks" (roots l);
+              # The hooks get the sandbox's name
+              named = lib.hasInfix ''/sandbox-hooks","name":"${sandbox}"}'' (roots l);
               stop = l.build.launcherConfig.hooks;
               net = lib.hasInfix (builtins.unsafeDiscardStringContext ''"hooks":["${hook}"]'') (roots l);
             };
           in
           {
-            default = pick c;
-            work = pick c.launchers.work;
+            default = pick "claude-desktop" c;
+            work = pick "claude-desktop-work" c.launchers.work;
           };
       in
       {
@@ -532,7 +577,7 @@ let
             both = start: stop: {
               default = {
                 inherit start stop;
-                named = false;
+                named = start;
                 net = true;
               };
               work = {
@@ -616,7 +661,7 @@ let
     testUsersGroupAssertion = {
       expr = map (a: a.message) (lib.filter (a: !a.assertion) ownGroup.config.assertions);
       expected = [
-        "agent-sandbox.claude-desktop: alice enables the sandbox but isn't in group users, which netns-netkit is limited to. Add users to users.users.alice.extraGroups."
+        "agent-sandbox: alice enables a sandbox but isn't in group users, which netns-netkit is limited to. Add users to users.users.alice.extraGroups."
       ];
     };
     testSubIdsAssertion = {
@@ -627,7 +672,7 @@ let
           }).config.assertions
       );
       expected = [
-        "agent-sandbox.claude-desktop: alice enables the sandbox but has no subordinate uid and gid range, which the sandbox maps into its user namespace. Set users.users.alice.autoSubUidGidRange, or subUidRanges and subGidRanges."
+        "agent-sandbox: alice enables a sandbox but has no subordinate uid and gid range, which the sandbox maps into its user namespace. Set users.users.alice.autoSubUidGidRange, or subUidRanges and subGidRanges."
       ];
     };
     # The module mkForces them, so only a higher priority gets past it
@@ -742,7 +787,7 @@ let
             lib.recursiveUpdate enabled {
               permissions.binds."/srv/local".src = "/home/alice/.local/";
               permissions.binds."/srv/run".src = "/run/user/1000";
-              permissions.binds."/srv/sock".src = "/run/user/1000/claude-desktop/permissions-control.sock";
+              permissions.binds."/srv/sock".src = "/run/user/1000/agent-sandbox/claude-desktop-permissions-control.sock";
               # Another socket there is the user's call
               permissions.binds."/srv/agent".src = "/run/user/1000/ssh-agent.sock";
               launchers.work.permissions.binds."/srv/other".src = "/home/alice/.local/share/claude-desktop/home";
@@ -756,12 +801,12 @@ let
         map
           (
             b:
-            "agent-sandbox.claude-desktop: ${b}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+            "agent-sandbox.claude-desktop: ${b}, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those"
           )
           [
             ''permissions.binds."/srv/local" binds /home/alice/.local/''
             ''permissions.binds."/srv/run" binds /run/user/1000''
-            ''permissions.binds."/srv/sock" binds /run/user/1000/claude-desktop/permissions-control.sock''
+            ''permissions.binds."/srv/sock" binds /run/user/1000/agent-sandbox/claude-desktop-permissions-control.sock''
             ''launchers.work.permissions.binds."/srv/other" binds /home/alice/.local/share/claude-desktop/home''
             ''launchers.work.permissions.binds."/srv/store" binds /home/alice/.local/share/claude-desktop-work/nix-store.id''
           ];
@@ -872,8 +917,8 @@ let
       expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.Work = { }; })));
       expected = [ "agent-sandbox.claude-desktop: launcher name Work must match [a-z][a-z0-9-]*" ];
     };
-    # At the cap on a launcher name's length, and past it. The cap is the Go tests', which bind the sockets at it, so
-    # the module's has to agree
+    # At the cap on a launcher name's length, and past it. The cap is the Go tests' on the sandbox's name, which bind
+    # the sockets at it, less the app's name and its -, so the module's has to agree
     testLauncherNameMax = {
       expr = failedAssertions (
         nixos (enabled // { launchers.${lib.fixedWidthString launcherNameMax "a" "w"} = { }; })
@@ -887,19 +932,19 @@ let
       {
         expr = map (a: a.message) (failedAssertions (nixos (enabled // { launchers.${name} = { }; })));
         expected = [
-          "agent-sandbox.claude-desktop: launcher name ${name} must be at most ${toString launcherNameMax} characters, so the socket paths it goes into fit a socket's 107 bytes and its NUL; the longest is the launcher's warning socket, /run/user/<uid>/claude-desktop/claude-desktop-<name>-app.service.warn"
+          "agent-sandbox.claude-desktop: launcher name ${name} must be at most ${toString launcherNameMax} characters, so the socket paths its sandbox's name claude-desktop-<name> goes into fit a socket's 107 bytes and its NUL; the longest is the broker's, /run/user/<uid>/agent-sandbox/claude-desktop-<name>-permissions/request.sock"
         ];
       };
-    # The sockets bound by a path the launcher's name is in, for a name at the cap and the longest runtime dir
-    # (/run/user/4294967294): the launcher's warning socket, the broker's two, and the varlink socket of the sandbox's
-    # journald namespace, which the NixOS module starts. None past a socket path's 107 bytes, the longest at them
+    # The sockets bound by a path the sandbox's name is in, for a launcher name at the cap and the longest runtime dir
+    # (/run/user/4294967294): the broker's two, the launcher's warning socket, and the varlink socket of the sandbox's
+    # journald namespaces, which the NixOS module starts. None past a socket path's 107 bytes, the longest at them
     testLauncherNameSockets =
       let
         name = lib.fixedWidthString launcherNameMax "a" "w";
         sys = nixos (enabled // { launchers.${name}.permissions.broker.enable = true; });
         cfg =
           sys.config.home-manager.users.alice.agent-sandbox.claude-desktop.launchers.${name}.build.launcherConfig;
-        runtime = "/run/user/4294967294/claude-desktop";
+        runtime = "/run/user/4294967294/agent-sandbox";
         journals = lib.filter (lib.hasInfix name) sys.config.systemd.targets.sockets.wants;
       in
       {
@@ -924,32 +969,130 @@ let
           failed = [ ];
           sockets = [
             107
-            102
-            100
-            100
-            94
+            107
+            99
+            95
+            87
           ];
         };
       };
-    # The cap as the Go side has it: the tests that bind the warning socket and the broker's at it, and the helpers'
-    # check of a launcher name
-    testLauncherNameMaxAgrees = {
+    # The cap as the Go side has it: the module's (lib.nix), the tests that bind the warning socket and the broker's at
+    # it, and the helpers' check of a sandbox name
+    testSandboxNameMaxAgrees = {
       expr = {
+        module = (import ../home/sandbox/lib.nix {
+          inherit pkgs lib;
+          inputs = { self.packages = { }; };
+          hm = { };
+          osConfig = { };
+          app.name = "x";
+        }).sandboxNameMax;
         warn = lib.toInt (
           builtins.head (
-            builtins.match ".*\nconst launcherNameMax = ([0-9]+)\n.*" (
+            builtins.match ".*\nconst sandboxNameMax = ([0-9]+)\n.*" (
               builtins.readFile ../../cmd/launcher/warn_test.go
             )
           )
         );
-        helpers = builtins.match ".*\nvar LauncherName = [^\n]*a-z0-9-][{]0,([0-9]+)[}][^\n]*\n.*" (
+        helpers = builtins.match ".*\nvar SandboxName = [^\n]*a-z0-9-][{]0,([0-9]+)[}][^\n]*\n.*" (
           builtins.readFile ../../internal/caller/caller.go
         );
       };
       expected = {
-        warn = launcherNameMax;
-        helpers = [ (toString (launcherNameMax - 1)) ];
+        module = sandboxNameMax;
+        warn = sandboxNameMax;
+        helpers = [ (toString (sandboxNameMax - 1)) ];
       };
+    };
+    # A second app next to Claude Desktop: no assertion fails, and each of the four sandboxes (two apps, each with its
+    # default launcher and a launcher work) has a state dir, units, a slice, journal namespaces, an app ID, an app pid
+    # and a name for the helpers of its own. The NixOS module runs every sandbox's journal namespaces, and netns-netkit's
+    # primaries, which it names by a hash of the sandbox's name (cmd/netns-netkit/addr.go, primaryName), differ: the two
+    # default launchers no longer both give the helpers an empty name
+    testSecondApp =
+      let
+        sys = withStandIn "stand-in";
+        hm = sys.config.home-manager.users.alice.agent-sandbox;
+        configs = lib.concatMap (a: [
+          hm.${a}.build.launcherConfig
+          hm.${a}.launchers.work.build.launcherConfig
+        ]) [
+          "claude-desktop"
+          "stand-in"
+        ];
+        fields = [
+          "sandbox"
+          "stateDir"
+          "home"
+          "scratchpad"
+          "unit"
+          "slice"
+          "journal"
+          "sandboxJournal"
+          "appId"
+          "appPid"
+          "storeRootsLink"
+        ];
+        # As primaryName has it for alice's uid, 1000: rs in base 36
+        primary = name: "sbx-rs-${builtins.substring 0 8 (builtins.hashString "sha256" name)}";
+        # The --net of nixpak's bwrap, which gives netns-netkit the name
+        netName =
+          l:
+          let
+            roots = lib.concatMapStrings (r: r.text or "") l.build.storeRoots;
+          in
+          lib.hasInfix ''"name":"${l.build.launcherConfig.sandbox}","netnsNetkit":'' roots;
+      in
+      {
+        expr = {
+          failed = map (a: a.message) (failedAssertions sys);
+          sandboxes = map (c: c.sandbox) configs;
+          unique = lib.genAttrs fields (f: lib.allUnique (map (c: c.${f}) configs));
+          journals = lib.filter (lib.hasInfix "stand-in") sys.config.systemd.targets.sockets.wants;
+          primaries = lib.allUnique (map (c: primary c.sandbox) configs);
+          netNames = map netName [
+            hm.claude-desktop
+            hm.stand-in
+          ];
+          standInDefault = {
+            inherit (lib.head (lib.drop 2 configs)) appId app sandbox unit;
+          };
+        };
+        expected = {
+          failed = [ ];
+          sandboxes = [
+            "claude-desktop"
+            "claude-desktop-work"
+            "stand-in"
+            "stand-in-work"
+          ];
+          unique = lib.genAttrs fields (_: true);
+          journals = [
+            "systemd-journald@stand-in.socket"
+            "systemd-journald@stand-in_sandbox.socket"
+            "systemd-journald@stand-in-work.socket"
+            "systemd-journald@stand-in-work_sandbox.socket"
+          ];
+          primaries = true;
+          netNames = [
+            true
+            true
+          ];
+          standInDefault = {
+            appId = "org.example.StandIn";
+            app = "Stand-in";
+            sandbox = "stand-in";
+            unit = "stand-in-app.service";
+          };
+        };
+      };
+    # A launcher whose sandbox name another app's default launcher has: refused, as their units, state dirs and the
+    # helpers' names would be one
+    testSandboxNameCollision = {
+      expr = map (a: a.message) (failedAssertions (withStandIn "claude-desktop-work"));
+      expected = [
+        "agent-sandbox: two sandboxes share a name, which their units, state dirs and the helpers' names would share too: claude-desktop-work. A launcher's name joins its app's with a -, so rename the launcher"
+      ];
     };
     testLauncherNetnsAssertion = {
       expr = map (a: a.message) (
@@ -1413,7 +1556,7 @@ let
                   };
                   control = {
                     description = "a launcher's control socket";
-                    path = "/run/user/1000/claude-desktop/permissions-control.sock";
+                    path = "/run/user/1000/agent-sandbox/claude-desktop-permissions-control.sock";
                   };
                   proxy = {
                     description = "nixpak's D-Bus proxy";
@@ -1481,7 +1624,7 @@ let
         "atspi: $XDG_RUNTIME_DIR/at-spi/bus_0 is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
         "both: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
         "bus: $XDG_RUNTIME_DIR/bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
-        "control: /run/user/1000/claude-desktop/permissions-control.sock is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
+        "control: /run/user/1000/agent-sandbox/claude-desktop-permissions-control.sock is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
         "dotted: $XDG_RUNTIME_DIR/vms/../bus is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
         "lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll: a name of at most 80 letters, digits and - that no host commands have, and a path or one described string bounding argument with instances"
         "manager: $XDG_RUNTIME_DIR/systemd/private is refused: a clean path, and nothing that is or could match a D-Bus bus, the systemd user manager, /proc, /var/run, $XDG_RUNTIME_DIR as a whole or the launchers' own sockets"
@@ -1674,9 +1817,9 @@ let
       );
       expected = [
         ''agent-sandbox.claude-desktop: permissions.devices."/dev/../run/user/1000", which isn't an absolute path in its clean form (no ., .. or empty segments); the checks on what no sandbox may reach read it as written''
-        ''agent-sandbox.claude-desktop: permissions.devices."/home/alice/.local/share/claude-desktop-work", which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those''
+        ''agent-sandbox.claude-desktop: permissions.devices."/home/alice/.local/share/claude-desktop-work", which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those''
         ''agent-sandbox.claude-desktop: permissions.devices."/proc/1/root", which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those''
-        ''agent-sandbox.claude-desktop: permissions.devices."/run/user/1000", which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those''
+        ''agent-sandbox.claude-desktop: permissions.devices."/run/user/1000", which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those''
       ];
     };
     # A schema keyword the broker doesn't read (its schema package decodes leniently) would load and restrict nothing:
@@ -2332,7 +2475,7 @@ let
           "features.two words"
         ]
         ++ [
-          ''agent-sandbox.claude-desktop: permissions.binds."/srv/run" binds /run/user/1000, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those''
+          ''agent-sandbox.claude-desktop: permissions.binds."/srv/run" binds /run/user/1000, which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or agent-sandbox dir; no sandbox may reach those''
           (feature "launchers.work.features.silent")
         ];
     };
@@ -2396,7 +2539,7 @@ let
   vmAll = vmParts // {
     uplink = import ./uplink.nix {
       inherit pkgs;
-      module = self.nixosModules.claude-desktop;
+      module = self.nixosModules.agent-sandbox;
     };
   };
   vmChecks = lib.mapAttrs' (part: lib.nameValuePair "vm-${part}") vmAll // {
@@ -2520,14 +2663,14 @@ in
         }
         ''
           paths=$closure/store-paths
-          doc=$(grep -- '-claude-environment\.md$' "$paths")
+          doc=$(grep -- '-sandbox-environment\.md$' "$paths")
           # The static part is linked, so the sandbox needs it in its store. All of it without memo, markers dropped
           import=$(grep -oxP '@\K/nix/store/[^/]+-claude-desktop-environment/environment\.md' "$doc") || { echo "environment.md lacks the import" >&2; exit 1; }
           grep -qxF -- "''${import%/*}" "$paths" || { echo "$import is not in the closure" >&2; exit 1; }
           grep -qxF '# Your environment: the Claude Desktop sandbox' "$import" || { echo "$import is not the module's environment.md" >&2; exit 1; }
           grep -qxF '## Nix' "$import" || { echo "$import lacks the sections memo would load" >&2; exit 1; }
           ! grep -qF '<!-- memo' "$import" || { echo "$import keeps the memo markers" >&2; exit 1; }
-          custom=$(grep -- '-claude-environment\.md$' "$customClosure/store-paths")
+          custom=$(grep -- '-sandbox-environment\.md$' "$customClosure/store-paths")
           grep -qxP '@/nix/store/[^/]+-custom-environment\.md' "$custom" || { echo "environmentFile is not imported" >&2; exit 1; }
           for line in \
             '- `/srv/project` (rw, MCP)' \
@@ -2636,13 +2779,13 @@ in
           dcfg0=$(configOf ${sandboxed}/bin/claude-desktop)
           # The launchers' slices: the app as a unit of the launcher's in its own, the broker and its calls as units of
           # their own there. The app's unit runs nixpak's launcher, waiting for the app's ready line, with a splash
-          jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work"
+          jq -e '.appId == "com.anthropic.Claude.work" and .sandbox == "claude-desktop-work" and .app == "Claude"
             and .homeDirs == ["/home/alice/.local/share/claude-desktop-work/home"]
-            and .storeRootsLink == "store-roots-work" and .slice == "claude\\x2ddesktop\\x2dwork.slice"
+            and .storeRootsLink == "claude-desktop-work-store-roots" and .slice == "claude\\x2ddesktop\\x2dwork.slice"
             and .unit == "claude-desktop-work-app.service" and (.nixpakLauncher | test("^/nix/store/[^/]+-nixpak-"))
             and .ready == "agent-sandbox: ready" and (.splash[0] | endswith("/bin/sandbox-splash"))
             and .splash[1] == "--title=Claude (work)"' "$wcfg" >/dev/null || { echo "work's launcher config: $(<"$wcfg")" >&2; exit 1; }
-          jq -e '.slice == "claude\\x2ddesktop.slice" and .launcher == "" and .permissions == null
+          jq -e '.slice == "claude\\x2ddesktop.slice" and .sandbox == "claude-desktop" and .permissions == null
             and any(.splash[]; test("^--agent-logo=/nix/store/.+/share/icons/hicolor/256x256/apps/claude-desktop\\.png$"))
             and any(.splash[]; test("^--logo=/nix/store/[^/]+-orbit-landskab-farve\\.svg$"))
             and any(.splash[]; test("^--logo-dark=/nix/store/[^/]+-orbit-landskab-farve-negativ\\.svg$"))' \
@@ -2682,13 +2825,13 @@ in
               grep -oP -- "'--net=\K[^']*" "$b/bin/bwrap" | jq -r '.name // ""'
             done
           }
-          [[ $(name "$paths") == "" && $(name "$workClosure/store-paths") == "work" ]] ||
-            { echo "nixpak's bwrap's --net doesn't name work for work and nothing for the default launcher" >&2; exit 1; }
+          [[ $(name "$paths") == claude-desktop && $(name "$workClosure/store-paths") == claude-desktop-work ]] ||
+            { echo "nixpak's bwrap's --net doesn't name each launcher's sandbox" >&2; exit 1; }
           for c in "$paths" "$workClosure/store-paths"; do
             [[ $(for b in $(grep -- '-bwrap$' "$c"); do grep -l -- '--mode=subid' "$b/bin/bwrap" 2>/dev/null; done | wc -l) == 1 ]] ||
               { echo "not one nixpak bwrap in mode subid in $c" >&2; exit 1; }
           done
-          doc=$(grep -- '-claude-environment\.md$' "$workClosure/store-paths")
+          doc=$(grep -- '-sandbox-environment\.md$' "$workClosure/store-paths")
           for line in \
             '- `/srv/work` (rw, MCP)' \
             '- `/home/alice` (rw, from `/home/alice/.local/share/claude-desktop-work/home`)'; do
@@ -2719,17 +2862,17 @@ in
             jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and $a[. + 2] == "/run/permissions")' "$workArgs" >/dev/null ||
             { echo "work's bwrap args lack the read-only /run/permissions" >&2; exit 1; }
           ! jq -e 'any(.[]; . == "/run/permissions")' "$args" >/dev/null || { echo "the default launcher binds /run/permissions" >&2; exit 1; }
-          jq -e '.permissions.dir == "permissions-work" and .permissions.unit == "claude-desktop-work-permissions"' "$wcfg" >/dev/null ||
+          jq -e '.permissions.dir == "claude-desktop-work-permissions" and .permissions.unit == "claude-desktop-work-permissions"' "$wcfg" >/dev/null ||
             { echo "work's launcher config lacks the broker" >&2; exit 1; }
           pcfg=$(jq -r .permissions.config "$wcfg")
-          jq -e '.appId == "com.anthropic.Claude.work" and .launcher == "work" and .agent == "Claude"
-            and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work"
-            and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
+          jq -e '.appId == "com.anthropic.Claude.work" and .sandbox == "claude-desktop-work" and .agent == "Claude"
+            and .grantDir == "${"$"}{XDG_RUNTIME_DIR}/agent-sandbox/claude-desktop-work-permissions"
+            and .controlSocket == "${"$"}{XDG_RUNTIME_DIR}/agent-sandbox/claude-desktop-work-permissions-control.sock"
             and .unit == "claude-desktop-work-permissions.service"
             and .slice == "claude\\x2ddesktop\\x2dwork.slice"
             and .sandboxGrantDir == "/run/permissions"
             and .window[1] == "--app-id=com.anthropic.Claude.work"
-            and .window[2] == "${"$"}{XDG_RUNTIME_DIR}/claude-desktop/permissions-work-control.sock"
+            and .window[2] == "${"$"}{XDG_RUNTIME_DIR}/agent-sandbox/claude-desktop-work-permissions-control.sock"
             and .window[3] == "Claude permissions (work)"
             and .denied == ["/home/alice/.local/share/claude-desktop", "/home/alice/.local/share/claude-desktop-work",
               "${"$"}{XDG_RUNTIME_DIR}"]
@@ -2807,7 +2950,7 @@ in
     request-send-module = requestSend.check;
 
     scripts = pkgs.runCommand "scripts-check" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
-      shellcheck ${../../scripts}/*.sh ${../home/claude-desktop}/*.sh
+      shellcheck ${../../scripts}/*.sh ${../home/sandbox}/*.sh ${../home/claude-desktop}/*.sh
       touch $out
     '';
   };

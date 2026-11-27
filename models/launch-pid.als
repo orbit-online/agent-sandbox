@@ -1,6 +1,6 @@
 /*
  * The sandbox's `systemd --user` manager (README.md, Principals 18, L11),
- * and the app's pid. app-pid.sh (nix/home/claude-desktop/) writes
+ * and the app's pid. app-pid.sh (nix/home/sandbox/) writes
  * APP_PID-1 to ns_last_pid in P2 and execs into app-run.sh without its
  * capability, which forks the app as a background job, then starts the
  * manager; an exec forks nothing, so the app gets APP_PID as long as

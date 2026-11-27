@@ -45,33 +45,25 @@ let
     name = "graphics-drivers";
     paths = [ osConfig.hardware.graphics.package ] ++ osConfig.hardware.graphics.extraPackages;
   };
-  # Where a path under the home directory is on the host: its bind's source, or the sandbox's home
-  hostBind =
-    rel:
-    let
-      b = config.permissions.binds."${hm.home.homeDirectory}/${rel}" or null;
-    in
-    if b != null && b.enable then b.src else null;
-  hostPath = rel: if hostBind rel != null then hostBind rel else "${ids.home}/${rel}";
-  # What the host does in the sandbox's state dir and home, confined: see confine.sh
+  # What the host does in the sandbox's state dir and home, confined: see confine.sh. The app's own part of the home
+  # step, its variables and tools come from build.stateHome, build.stateVars and build.stateInputs
   stateInner = sl.script "state.sh" {
-    name = "claude-desktop${ids.suffix}-state-inner";
+    name = "${ids.sandbox}-state-inner";
     runtimeInputs = [
       pkgs.coreutils
-      pkgs.jq
       pkgs.glib
       osConfig.nix.package
-    ];
-    vars = {
+    ]
+    ++ config.build.stateInputs;
+    vars = config.build.stateVars // {
+      APP = sl.app.name;
       STATE_DIR = ids.stateDir;
       SANDBOX_HOME = ids.home;
       RESOLV_CONF = "${ids.home}/.config/resolv.conf";
-      DOT_CLAUDE = hostPath ".claude";
-      CONFIG = "${hostPath ".config/Claude"}/claude_desktop_config.json";
-      MCP_SERVERS = "${pkgs.writeText "mcp-servers.json" (builtins.toJSON config.mcpServers)}";
-      TRAY = lib.boolToString config.features.tray.enable;
       SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gsettings-desktop-schemas;
     };
+    # The home step's app part, as a function the script calls, so the script's checks see the app's variables used
+    prelude = "app_home() {\n:\n${config.build.stateHome}}\n";
   };
   # Shallowest first, so nested binds override their parents. nixpak mounts all rw binds before the ro ones
   binds =
@@ -94,13 +86,13 @@ let
   # Then it may not be /proc or /var/run or lie in them, where every path of the host has another name
   # (/proc/self/root/run/user/1000, /var/run/user/1000) and the host's /proc opens the root of each of the user's
   # processes; nor hold or lie in a launcher's state dir, hold $XDG_RUNTIME_DIR (any /run/user/<uid>) or lie in its
-  # .flatpak or claude-desktop dirs: the sandbox would reach another sandbox's state, the permissions broker's
+  # .flatpak or agent-sandbox dirs: the sandbox would reach another sandbox's state, the permissions broker's
   # sockets, or the nixpak instance info the broker and the launcher read as the sandbox's identity. Its own home,
   # store and scratchpad aside, which it holds anyway. As the broker's attach ceiling denies them. A source that is a
   # link on the host to one of these isn't seen here
   sourceRefusal =
     let
-      stateDirs = map sl.stateDirOf sl.names;
+      stateDirs = map (s: s.stateDir) sl.allSandboxes;
       ownParts = map (d: "${ids.stateDir}/${d}") [
         "home"
         "nix"
@@ -113,7 +105,7 @@ let
           "/run"
           "/run/user"
         ]
-        || builtins.match "/run/user/[^/]+(/(\\.flatpak|claude-desktop)(/.*)?)?" src != null;
+        || builtins.match "/run/user/[^/]+(/(\\.flatpak|${sl.runtimeDir})(/.*)?)?" src != null;
       state =
         src:
         runtime src
@@ -136,7 +128,7 @@ let
     then
       "which is /proc or /var/run or lies in one, where every path of the host has another name; no sandbox may reach those"
     else if state src then
-      "which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or claude-desktop dir; no sandbox may reach those"
+      "which holds or lies in a launcher's state dir, or holds $XDG_RUNTIME_DIR or lies in its .flatpak or ${sl.runtimeDir} dir; no sandbox may reach those"
     else
       null;
   refusedBinds = lib.filterAttrs (
@@ -207,28 +199,15 @@ in
         rw = true;
       };
     }
-    # A named launcher keeps them in its own home
-    // lib.optionalAttrs (launcherName == null) {
-      "${hm.home.homeDirectory}/.claude".rw = true;
-      "${hm.home.homeDirectory}/.config/Claude" = sys // {
-        rw = true;
-      };
-    }
     // lib.genAttrs (map (e: "/etc/${e}") sl.hostEtc) (_: sys // { optional = true; });
 
     build.devices = devices;
-    # The directories claude-desktop-state works in for the launcher: the sandbox's home, and the bind sources of
-    # ~/.claude and ~/.config/Claude where they're bound
-    build.homeDirs = lib.unique (
-      [ ids.home ]
-      ++ lib.filter (d: d != null) [
-        (hostBind ".claude")
-        (hostBind ".config/Claude")
-      ]
-    );
+    # The directories <sandbox>-state works in for the launcher: the sandbox's home, and those the app adds (the bind
+    # sources of directories it keeps in the home)
+    build.homeDirs = lib.mkBefore [ ids.home ];
     build.storeRoots = [ graphicsDrivers ];
     build.state = sl.script "confine.sh" {
-      name = "claude-desktop${ids.suffix}-state";
+      name = "${ids.sandbox}-state";
       vars = {
         BWRAP = lib.getExe' pkgs.bubblewrap "bwrap";
         CLOSURE = "${pkgs.closureInfo { rootPaths = [ stateInner ]; }}/store-paths";
@@ -240,15 +219,15 @@ in
         {
           # File names, the app ID and the .desktop file's Name take it as is
           assertion = builtins.match "[a-z][a-z0-9-]*" launcherName != null;
-          message = "agent-sandbox.claude-desktop: launcher name ${launcherName} must match [a-z][a-z0-9-]*";
+          message = "agent-sandbox.${sl.app.name}: launcher name ${launcherName} must match [a-z][a-z0-9-]*";
         }
         {
-          # The tightest of what the name goes into: the launcher's warning socket, bound by path (at most 107 bytes and
-          # the NUL), 68 bytes besides the name with a 10-digit uid; see sl.launcherSockets for the others. The app ID
-          # (D-Bus's 255 bytes, 21 besides), the slice (systemd's 255 characters, 27 besides and 3 more for each -
-          # escaped) and the state dir's file name (255, 15 besides) allow more; the netkit primary's name hashes it
+          # The tightest of what the sandbox's name, <app>-<name>, goes into: the broker's sockets, bound by path (at most
+          # 107 bytes and the NUL), 60 bytes besides the sandbox's name with a 10-digit uid; see sl.sandboxSockets for the
+          # others. The app ID (D-Bus's 255 bytes), the slice (systemd's 255 characters, 6 besides and 3 more for each -
+          # escaped) and the state dir's file name (255) allow more; the netkit primary's name hashes it
           assertion = lib.stringLength launcherName <= sl.launcherNameMax;
-          message = "agent-sandbox.claude-desktop: launcher name ${launcherName} must be at most ${toString sl.launcherNameMax} characters, so the socket paths it goes into fit a socket's 107 bytes and its NUL; the longest is the launcher's warning socket, /run/user/<uid>/claude-desktop/claude-desktop-<name>-app.service.warn";
+          message = "agent-sandbox.${sl.app.name}: launcher name ${launcherName} must be at most ${toString sl.launcherNameMax} characters, so the socket paths its sandbox's name ${sl.app.name}-<name> goes into fit a socket's 107 bytes and its NUL; the longest is the broker's, /run/user/<uid>/${sl.runtimeDir}/${sl.app.name}-<name>-permissions/request.sock";
         }
       ]
       ++ lib.mapAttrsToList (path: b: {

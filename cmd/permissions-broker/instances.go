@@ -82,8 +82,9 @@ func (c *capability) inList(params json.RawMessage) error {
 
 // exclusiveLock takes the host-wide locks on the instances of an exclusive capability params match, so two launchers'
 // daemons don't grant one at once, whatever other parameters (a mode, read-only) their requests carry. Without an
-// instances glob the parameters are the instance. Returns the release, or the holder's launcher
-func (c *capability) exclusiveLock(launcher string, params json.RawMessage) (func(), error) {
+// instances glob the parameters are the instance. Returns the release, or the holder's sandbox. A lock holds the name
+// of its sandbox
+func (c *capability) exclusiveLock(sandbox string, params json.RawMessage) (func(), error) {
 	if !c.Exclusive {
 		return func() {}, nil
 	}
@@ -108,9 +109,9 @@ func (c *capability) exclusiveLock(launcher string, params json.RawMessage) (fun
 	if c.locks == nil {
 		c.locks = map[string]int{}
 	}
-	// Shared only by grants of this launcher with the same parameters (a once grant beside another): other parameters
-	// are another client of the instance. By launcher too: tests run two on one capability
-	lockKey := func(name string) string { return launcher + "\x00" + name + "\x00" + string(params) }
+	// Shared only by grants of this sandbox with the same parameters (a once grant beside another): other parameters
+	// are another client of the instance. By sandbox too: tests run two on one capability
+	lockKey := func(name string) string { return sandbox + "\x00" + name + "\x00" + string(params) }
 	var taken []string
 	// Under c.locksMu: drop this grant's holds, and a lock file once no grant of ours holds it
 	drop := func() {
@@ -124,18 +125,18 @@ func (c *capability) exclusiveLock(launcher string, params json.RawMessage) (fun
 	for _, key := range keys {
 		name := filepath.Join(dir, strings.ReplaceAll(c.id(), "/", "_")+"-"+hashOf(key))
 		// The file is the lock: a count without it (a cleanup removed it) starts over
-		if data, err := os.ReadFile(name); err != nil || string(data) != launcher+"\n" {
+		if data, err := os.ReadFile(name); err != nil || string(data) != sandbox+"\n" {
 			delete(c.locks, lockKey(name))
 		}
 		if c.locks[lockKey(name)] == 0 {
-			err := createWith(name, launcher+"\n")
+			err := createWith(name, sandbox+"\n")
 			if errors.Is(err, os.ErrExist) {
 				drop()
 				holder, _ := os.ReadFile(name)
 				if h := strings.TrimSpace(string(holder)); h != "" {
-					return nil, refusef(refHeld, "Granted to the launcher %s already", h)
+					return nil, refusef(refHeld, "Granted to the sandbox %s already", h)
 				}
-				return nil, refusef(refHeld, "Granted to the default launcher already")
+				return nil, refusef(refHeld, "Granted to another sandbox already")
 			}
 			if err != nil {
 				drop()
@@ -154,8 +155,8 @@ func (c *capability) exclusiveLock(launcher string, params json.RawMessage) (fun
 }
 
 // createWith creates name holding data, failing when it exists, and never visible without it: written to a file of its
-// own first, then linked into place. Created empty and written after, the default launcher's lock ("\n") would look
-// like any other daemon's lock in the making, which removeLocks("") would remove
+// own first, then linked into place. Created empty and written after, a lock would look like any other daemon's lock
+// in the making, which no removeLocks may remove
 func createWith(name, data string) error {
 	f, err := os.CreateTemp(filepath.Dir(name), ".new-*")
 	if err != nil {
@@ -172,9 +173,9 @@ func createWith(name, data string) error {
 	return os.Link(f.Name(), name)
 }
 
-// removeLocks removes the launcher's exclusive locks. Never one without content, which is no lock of this launcher's
+// removeLocks removes the sandbox's exclusive locks. Never one without content, which is no lock of this sandbox's
 // (see createWith)
-func removeLocks(launcher string) {
+func removeLocks(sandbox string) {
 	dir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "agent-sandbox-permissions")
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
@@ -182,7 +183,7 @@ func removeLocks(launcher string) {
 		if strings.HasPrefix(e.Name(), ".new-") {
 			continue
 		}
-		if data, err := os.ReadFile(path); err == nil && len(data) > 0 && strings.TrimSpace(string(data)) == launcher {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 && strings.TrimSpace(string(data)) == sandbox {
 			_ = os.Remove(path)
 		}
 	}

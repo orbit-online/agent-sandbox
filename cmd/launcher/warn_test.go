@@ -45,30 +45,33 @@ func TestWarningUnheld(t *testing.T) {
 	}
 }
 
-// The longest launcher name the module takes (launcherNameMax in nix/home/claude-desktop/lib.nix). The eval tests
-// read it from here too
-const launcherNameMax = 39
+// The longest sandbox name, <app>[-<launcher>], the module takes (sandboxNameMax in nix/home/sandbox/lib.nix), which
+// the broker's sockets set (cmd/permissions-broker/socketpath_test.go)
+const sandboxNameMax = 47
 
-// supervise binds the warning socket by path, $XDG_RUNTIME_DIR/claude-desktop/<the app's unit>.warn, at most 107
-// bytes and its NUL: of the sockets a launcher's name goes into, the longest. With the longest runtime dir,
-// /run/user/4294967294, it binds for a launcher name at the cap and not for one a byte longer
-func TestWarningSocketAtLauncherNameCap(t *testing.T) {
+// The longest sandbox name whose warning socket binds: 107 bytes and its NUL with the longest runtime dir
+const warnNameMax = 55
+
+// supervise binds the warning socket by path, $XDG_RUNTIME_DIR/agent-sandbox/<the app's unit>.warn, at most 107 bytes
+// and its NUL. With the longest runtime dir, /run/user/4294967294, it binds for a sandbox name at the cap, which the
+// broker's sockets set lower, and at its own limit, and not for one a byte past that
+func TestWarningSocketAtSandboxNameCap(t *testing.T) {
 	w := newWorld(t)
 	t.Chdir(t.TempDir())
 	// A relative path as long as the longest runtime dir
 	t.Setenv("XDG_RUNTIME_DIR", strings.Repeat("r", len("/run/user/4294967294")))
 	w.cfg.Splash = nil
 	sp := showSplash(w.cfg)
-	for _, n := range []int{launcherNameMax, launcherNameMax + 1} {
+	for _, n := range []int{sandboxNameMax, warnNameMax, warnNameMax + 1} {
 		// As the module names the app's unit (appUnit in its lib.nix)
-		w.cfg.Unit = "claude-desktop-" + strings.Repeat("a", n) + "-app.service"
-		path := filepath.Join(strings.Repeat("r", len("/run/user/4294967294")), "claude-desktop", w.cfg.Unit+".warn")
-		if n == launcherNameMax && len(path) != 107 {
-			t.Errorf("%s is %d bytes at the cap, want 107", path, len(path))
+		w.cfg.Unit = strings.Repeat("a", n) + "-app.service"
+		path := filepath.Join(strings.Repeat("r", len("/run/user/4294967294")), "agent-sandbox", w.cfg.Unit+".warn")
+		if n == warnNameMax && len(path) != 107 {
+			t.Errorf("%s is %d bytes at its limit, want 107", path, len(path))
 		}
 		ws := listenWarnings(w.cfg, sp)
-		if ws.path != path || (ws.ln != nil) != (n == launcherNameMax) {
-			t.Errorf("Listening at %s (%d bytes), for a launcher name of %d: %v", ws.path, len(ws.path), n, ws.ln != nil)
+		if ws.path != path || (ws.ln != nil) != (n <= warnNameMax) {
+			t.Errorf("Listening at %s (%d bytes), for a sandbox name of %d: %v", ws.path, len(ws.path), n, ws.ln != nil)
 		}
 		ws.close()
 	}

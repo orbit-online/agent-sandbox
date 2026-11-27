@@ -6,8 +6,10 @@ can: the VPN mesh, the auth proxy on `127.0.0.1`, the cluster API behind them.
 One prompt injection in a README it was asked to summarise is enough to use
 all of that.
 
-agent-sandbox runs Claude Desktop (with its Code tab) in a bubblewrap sandbox
-on NixOS, built with [nixpak](https://github.com/nixpak/nixpak). It sees only
+agent-sandbox runs an agent's desktop app in a bubblewrap sandbox on NixOS,
+built with [nixpak](https://github.com/nixpak/nixpak). Today that app is
+Claude Desktop (with its Code tab); the sandbox itself, its core, knows no app,
+and an app is a small module on it. It sees only
 the paths you bind into it. It gets its own network namespace, joined to the
 host by a netkit pair whose eBPF programs let it out only through the
 physical uplink with the default route (Ethernet or Wi-Fi, IPv4 and IPv6, NATed by
@@ -30,7 +32,9 @@ The sandbox comes with a doc for the Claude running inside it,
 are. Your own `CLAUDE.md` imports it.
 
 How it fits together, namespace by namespace: the diagram at the top of
-[`nix/home/claude-desktop/default.nix`](nix/home/claude-desktop/default.nix).
+[`nix/home/sandbox/default.nix`](nix/home/sandbox/default.nix), the core, which
+also says what an app gives it; Claude Desktop's is
+[`nix/home/claude-desktop/`](nix/home/claude-desktop/).
 Working on the repo: [`CLAUDE.md`](CLAUDE.md).
 
 ## Usage
@@ -42,7 +46,7 @@ Import both modules and enable the Home Manager one per user:
   inputs.agent-sandbox.url = "github:orbit-online/agent-sandbox";
 
   # In the NixOS configuration
-  imports = [ inputs.agent-sandbox.nixosModules.claude-desktop ];
+  imports = [ inputs.agent-sandbox.nixosModules.agent-sandbox ];
   hardware.graphics.enable = true;
   home-manager.sharedModules = [ inputs.agent-sandbox.homeModules.claude-desktop ];
   home-manager.users.alice.agent-sandbox.claude-desktop = {
@@ -53,8 +57,9 @@ Import both modules and enable the Home Manager one per user:
 }
 ```
 
-The NixOS module installs `netns-netkit` for group `users`, so the user has
-to be in it, and needs Linux 6.8 or later. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
+The NixOS module, the host side of every app's sandboxes, installs
+`netns-netkit` for group `users`, so the user has to be in it, and needs Linux
+6.8 or later. Then add `@/etc/claude/environment.md` to `~/.claude/CLAUDE.md`.
 
 The sandboxes leave through the uplink with the default route, one of those einat NATs them on. By default those
 are the physical NICs (Ethernet and Wi-Fi), a NIC enslaved to a bridge or
@@ -90,12 +95,33 @@ agent-sandbox.claude-desktop.features.notes = {
 
 Other options: `extraPath` (directories ahead of the PATH packages),
 `nameservers` (the DNS servers of the sandbox; empty follows the host's resolved or NetworkManager),
-`environmentFile` (your own version of
+`environmentFile` (your own version of the environment doc, the core's
+[`environment.md`](nix/home/sandbox/environment.md) inside the app's
 [`environment.md`](nix/home/claude-desktop/environment.md)), `environmentText`
 (appended to it), `env`, `path`, `units` (of the sandbox's `systemd --user`), `splash` (see Launching) and
 `sandbox` (extra nixpak configuration). The descriptions are in the feature modules in
-[`nix/home/claude-desktop/`](nix/home/claude-desktop/), the general ones in
-[`options.nix`](nix/home/claude-desktop/options.nix).
+[`nix/home/sandbox/`](nix/home/sandbox/), the general ones in
+[`options.nix`](nix/home/sandbox/options.nix), and Claude Desktop's own (`package`, `mcpChannels`) in
+[`nix/home/claude-desktop/`](nix/home/claude-desktop/).
+
+## Apps
+
+The sandbox's core, [`nix/home/sandbox/`](nix/home/sandbox/), takes an app's
+descriptor: its name, app ID, the names the user and the agent see, its part of
+the environment doc, and the modules that build the app in the core's FHS env.
+Claude Desktop is the one app so far:
+[`nix/home/claude-desktop/default.nix`](nix/home/claude-desktop/default.nix).
+Each app's Home Manager module is `agent-sandbox.<app>`, with the options above
+and `launchers.<name>` for more sandboxes of it; `agent-sandbox.launcherModules`
+join every launcher of every app.
+
+A sandbox is named `<app>[-<launcher>]` (`claude-desktop`,
+`claude-desktop-work`), and so are its wrapper, state dir, units, slice and
+journald namespaces. The helpers know it by that name too: `netns-netkit`'s
+addresses, primary and pins (`/run/sandbox-uplink/<uid>-<sandbox>`), and the
+`<name>` the NixOS module's `agent-sandbox.hooks` get. The launchers of all apps
+share `$XDG_RUNTIME_DIR/agent-sandbox/`. A sandbox name has at most 47
+characters, so a launcher name of Claude Desktop's at most 32.
 
 ## Launching
 
@@ -204,7 +230,7 @@ host: `home/` (the sandbox's `$HOME`), `nix/` (its store, at `/nix`) and
 tmpfs.
 
 The sandbox's store paths are bound from the host's store, so the launcher
-roots them there too, at `$XDG_RUNTIME_DIR/claude-desktop/store-roots`: a GC
+roots them there too, at `$XDG_RUNTIME_DIR/agent-sandbox/claude-desktop-store-roots`: a GC
 after a rebuild leaves a running sandbox alone. The next launch replaces the
 root and logging out removes it.
 

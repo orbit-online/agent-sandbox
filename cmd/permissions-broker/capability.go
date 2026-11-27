@@ -137,16 +137,13 @@ func (c *capability) describe(params json.RawMessage) string {
 	return desc + " (" + strings.Join(parts, ", ") + ")"
 }
 
-// unitPrefix starts the names of a launcher's call units: perm_ for the default launcher, perm-<name>_ for a named
-// one. Launcher names can't contain _, so no launcher's prefix starts another's
-func unitPrefix(launcher string) string {
-	if launcher == "" {
-		return "perm_"
-	}
-	return "perm-" + launcher + "_"
+// unitPrefix starts the names of a sandbox's call units: perm-<sandbox>_. Sandbox names can't contain _, so no
+// sandbox's prefix starts another's
+func unitPrefix(sandbox string) string {
+	return "perm-" + sandbox + "_"
 }
 
-// stopAllCalls stops every call unit of the launcher's, left from a daemon that ended without cleaning up
-func stopAllCalls(launcher string) {
-	_ = exec.Command(systemctl, "--user", "stop", unitPrefix(launcher)+"*").Run()
+// stopAllCalls stops every call unit of the sandbox's, left from a daemon that ended without cleaning up
+func stopAllCalls(sandbox string) {
+	_ = exec.Command(systemctl, "--user", "stop", unitPrefix(sandbox)+"*").Run()
 }

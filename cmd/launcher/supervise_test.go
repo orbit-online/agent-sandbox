@@ -119,7 +119,7 @@ func fakeSplash(w *world, path string) string {
 // fakeJournal is journalctl answering from the world's files: follow (the host side's entries as they come), host
 // (all of them once), history (supervise's lines, newest first), warnings (the host side's) and sandbox (the sandbox's)
 func fakeJournal(w *world) {
-	w.cfg.Journal, w.cfg.SandboxJournal = "claude-desktop", "claude-desktop_sandbox"
+	w.cfg.Journal, w.cfg.SandboxJournal = "app-test", "app-test_sandbox"
 	w.cfg.Tools.SystemdCat = w.script("systemd-cat", "cat >/dev/null")
 	d := w.dir
 	w.cfg.Tools.Journalctl = w.script("journalctl", `case "$*" in
@@ -146,14 +146,14 @@ func TestSuperviseSteps(t *testing.T) {
 	fakeJournal(w)
 	splashIn := filepath.Join(w.dir, "splash-in")
 	w.cfg.Splash = []string{fakeSplash(w, splashIn)}
-	w.file("history", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Started prepared=1s proxy=2s sandbox=3s ready=10s"}
+	w.file("history", `{"SYSLOG_IDENTIFIER":"app-test","MESSAGE":"level=INFO msg=Started prepared=1s proxy=2s sandbox=3s ready=10s"}
 `)
 	w.file("follow", `{"SYSLOG_IDENTIFIER":"dbus-proxy","MESSAGE":"level=INFO msg=Listening path=/x"}
 {"SYSLOG_IDENTIFIER":"dbus-proxy","MESSAGE":"level=WARN msg=Refused member=\"x msg=Step step=network\""}
-{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Step step=sandbox"}
+{"SYSLOG_IDENTIFIER":"app-test","MESSAGE":"level=INFO msg=Step step=sandbox"}
 `)
 	// A marker the follower didn't get before the ready line, which the files have
-	w.file("host", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=INFO msg=Step step=network"}
+	w.file("host", `{"SYSLOG_IDENTIFIER":"app-test","MESSAGE":"level=INFO msg=Step step=network"}
 `)
 	w.cfg.NixpakLauncher = w.script("nixpak", `sleep 1; echo "agent-sandbox: ready"`)
 	var buf bytes.Buffer
@@ -166,7 +166,7 @@ func TestSuperviseSteps(t *testing.T) {
 	expectMsg(t, msgs, "READY=1")
 	in, _ := os.ReadFile(splashIn)
 	if !strings.Contains(string(in), `"text":"Connecting the sandbox to the network","progress":`) ||
-		strings.Contains(string(in), "Starting Claude") || !strings.Contains(string(in), `{"progress":`) {
+		strings.Contains(string(in), "Starting Test App") || !strings.Contains(string(in), `{"progress":`) {
 		t.Errorf("The splash got:\n%s", in)
 	}
 	if !strings.Contains(buf.String(), "msg=Started prepared=") || !strings.Contains(buf.String(), " sandbox=") ||
@@ -182,9 +182,9 @@ func TestSuperviseFailureLogs(t *testing.T) {
 	fakeJournal(w)
 	splashIn := filepath.Join(w.dir, "splash-in")
 	w.cfg.Splash = []string{fakeSplash(w, splashIn)}
-	w.file("warnings", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"level=WARN msg=\"No uplink yet\""}
+	w.file("warnings", `{"SYSLOG_IDENTIFIER":"app-test","MESSAGE":"level=WARN msg=\"No uplink yet\""}
 `)
-	w.file("sandbox", `{"SYSLOG_IDENTIFIER":"claude-desktop","MESSAGE":"app says hi"}
+	w.file("sandbox", `{"SYSLOG_IDENTIFIER":"app-test","MESSAGE":"app says hi"}
 {"SYSLOG_IDENTIFIER":"probe","MESSAGE":"no peer"}
 `)
 	w.cfg.NixpakLauncher = w.script("nixpak", "exit 3")
@@ -192,7 +192,7 @@ func TestSuperviseFailureLogs(t *testing.T) {
 		t.Fatal("Started")
 	}
 	in, _ := os.ReadFile(splashIn)
-	if !strings.Contains(string(in), `"host":"claude-desktop: No uplink yet"`) ||
+	if !strings.Contains(string(in), `"host":"app-test: No uplink yet"`) ||
 		!strings.Contains(string(in), `"log":"app says hi\nprobe: no peer"`) {
 		t.Errorf("The splash got:\n%s", in)
 	}

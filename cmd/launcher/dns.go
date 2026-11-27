@@ -23,7 +23,7 @@ import (
 // DNS of the sandbox: the nameservers option when set, or else what systemd-resolved on the host, or NetworkManager
 // without it, configures for the uplinks the sandbox leaves through (resolvconf.go), followed on the system bus and
 // netlink while the app runs, and with the routes of the host its default routes (sandboxRoutes). Read access to both
-// is unprivileged. The file is written in place through claude-desktop-state
+// is unprivileged. The file is written in place through <sandbox>-state
 
 const (
 	resolvedName  = "org.freedesktop.resolve1"

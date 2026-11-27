@@ -47,7 +47,7 @@ type hostUnits struct {
 	SystemdRun string `json:"systemdRun"`
 	Systemctl  string `json:"systemctl"`
 	App        string `json:"app"`    // The app's unit
-	Prefix     string `json:"prefix"` // Their names', claude-desktop[-<name>]
+	Prefix     string `json:"prefix"` // Their names', the sandbox's name
 	Slice      string `json:"slice"`
 	SystemdCat string `json:"systemdCat"`
 	Journal    string `json:"journal"`        // The host side's journal namespace, subid-broker's

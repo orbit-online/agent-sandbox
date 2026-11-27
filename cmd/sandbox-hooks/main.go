@@ -16,19 +16,20 @@ import (
 const usage = `sandbox-hooks - Run the hooks root configured for a phase of a sandbox
 
 Usage:
-  sandbox-hooks start [--name=<name>] <pid>
-  sandbox-hooks stop [--name=<name>]
+  sandbox-hooks start --name=<name> <pid>
+  sandbox-hooks stop --name=<name>
 
 The launcher runs it at each phase of a sandbox: start once the network
 namespace of the sandbox is set up and before the app starts, stop after the
 sandbox ended. It checks what the caller names first: the caller in group
-users, the launcher name, and for start that <pid> belongs to the caller and
+users, the sandbox's name, and for start that <pid> belongs to the caller and
 its network namespace to a user namespace below the caller's, through a child
 of it that the caller owns (as netns-netkit up checks it). Then it runs each
 hook of the phase in /etc/agent-sandbox/hooks.json
 ({"start": [{"path": "/abs/path", "capabilities": ["CAP_NET_ADMIN"]}],
 "stop": [...]}, agent-sandbox.hooks of the NixOS module), in order, as
-<hook> <phase> <uid> <name> (name empty for the default launcher):
+<hook> <phase> <uid> <name>, <name> the sandbox's, <app>[-<launcher>]
+(claude-desktop for Claude Desktop's default launcher):
 
 - with the capabilities it declares alone, which the wrapper holds for the
   union of what the hooks declare
@@ -63,8 +64,8 @@ var human = caller.Human
 // run checks what the caller names, then runs the hooks of the phase from config, which owner must own
 func run(opts docopt.Opts, config string, owner uint32) error {
 	name, _ := opts.String("--name")
-	if !caller.LauncherName.MatchString(name) {
-		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 39 characters", name)
+	if !caller.SandboxName.MatchString(name) {
+		return fmt.Errorf("Sandbox name %q is not %s", name, caller.SandboxNameRule)
 	}
 	if err := human(); err != nil {
 		return err

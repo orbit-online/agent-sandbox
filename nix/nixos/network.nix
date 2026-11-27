@@ -1,5 +1,5 @@
 # The host side of the sandbox network: einat NATs the sandboxes on the uplinks, and sandbox-uplink keeps the
-# programs around it attached (cmd/sandbox-uplink). claude-desktop.nix enables it when a user enables the sandbox
+# programs around it attached (cmd/sandbox-uplink). sandbox.nix enables it when a user enables a sandbox
 { self }:
 {
   lib,

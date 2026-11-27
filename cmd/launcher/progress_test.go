@@ -14,7 +14,7 @@ import (
 // Only a helper's own Step lines and the proxy's Listening line mark steps, not what the sandbox gets quoted into a
 // helper's line
 func TestMarker(t *testing.T) {
-	cfg := &config{Launcher: "work"}
+	cfg := &config{Sandbox: "claude-desktop-work"}
 	for _, c := range []struct {
 		e    entry
 		want string

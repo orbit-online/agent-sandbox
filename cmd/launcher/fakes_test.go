@@ -46,7 +46,9 @@ func newWorld(t *testing.T) *world {
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+filepath.Join(dir, "no-bus"))
 	w.cfg = &config{
 		AppID:          "com.example.App",
-		Unit:           "app-test.service",
+		Sandbox:        "app-test",
+		App:            "Test App",
+		Unit:           "app-test-app.service",
 		Slice:          "app-test.slice",
 		StateDir:       filepath.Join(dir, "state"),
 		Home:           filepath.Join(dir, "state/home"),

@@ -73,7 +73,7 @@ func TestSocketDeclarations(t *testing.T) {
 		"system bus":        {Path: "/run/dbus/system_bus_socket"},
 		"runtime dir":       {Path: "$XDG_RUNTIME_DIR"},
 		"above it":          {Path: filepath.Dir(run)},
-		"control socket":    {Path: "$XDG_RUNTIME_DIR/claude-desktop/permissions-control.sock"},
+		"control socket":    {Path: "$XDG_RUNTIME_DIR/agent-sandbox/claude-desktop-permissions-control.sock"},
 		"nixpak's proxy":    {Path: "$XDG_RUNTIME_DIR/nixpak-bus-1234"},
 		"flatpak instances": {Path: "$XDG_RUNTIME_DIR/.flatpak/nixpak-app-1/bwrapinfo.json"},
 		"locks":             {Path: "$XDG_RUNTIME_DIR/agent-sandbox-permissions/x"},

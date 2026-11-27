@@ -47,11 +47,9 @@ func portOf(params json.RawMessage) (proto string, port int, err error) {
 	return p.Protocol, p.Port, nil
 }
 
-// netkit runs the helper for the sandbox of the launcher and returns what it printed
+// netkit runs the helper for the sandbox and returns what it printed
 func netkit(cfg config, args ...string) (string, error) {
-	if cfg.Launcher != "" {
-		args = append([]string{args[0], "--name=" + cfg.Launcher}, args[1:]...)
-	}
+	args = append([]string{args[0], "--name=" + cfg.Sandbox}, args[1:]...)
 	out, err := exec.Command(cfg.NetnsNetkit, args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {

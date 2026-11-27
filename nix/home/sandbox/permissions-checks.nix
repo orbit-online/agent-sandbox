@@ -244,7 +244,7 @@ in
             "at-spi"
             "\\.dbus-proxy"
             "dbus-.*"
-            "claude-desktop"
+            sl.runtimeDir
             "\\.flatpak"
             "agent-sandbox-permissions"
             "nixpak-.*"

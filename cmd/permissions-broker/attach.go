@@ -161,8 +161,8 @@ func (b *broker) detachGrant(g *grant) {
 // which it tries until they're off. sb is nil when the sandbox wasn't found: its mounts went with it, and its ports
 // are revoked all the same
 func cleanup(cfg config, sb *sandbox, clk clock) {
-	stopAllCalls(cfg.Launcher)
-	removeLocks(cfg.Launcher)
+	stopAllCalls(cfg.Sandbox)
+	removeLocks(cfg.Sandbox)
 	// Removing the mountpoints below ends their mounts in every namespace as well; this is in case that fails
 	if dir, err := grantDirOf(cfg); err == nil && sb != nil && mounts.IsShared(sb, cfg.SandboxGrantDir) {
 		if err := mounts.DetachBelow(sb, dir); err != nil {

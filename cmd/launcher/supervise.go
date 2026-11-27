@@ -39,6 +39,7 @@ func supervise(cfg *config, vars, args []string) error {
 	warns := listenWarnings(cfg, sp)
 	defer warns.close()
 	p := newProgress(sp, began, history(cfg))
+	p.app = cfg.App
 	onEntry := func(e entry) {
 		if m := marker(cfg, e); m != "" {
 			p.mark(m, e.at)
@@ -180,7 +181,7 @@ func supervise(cfg *config, vars, args []string) error {
 		if failed.up() {
 			host, app = failureLogs(cfg, began, tail)
 		}
-		failed.fail(fmt.Sprintf("Claude ended with an error (%s).", exit), host, app)
+		failed.fail(fmt.Sprintf("%s ended with an error (%s).", cfg.App, exit), host, app)
 	default:
 		failStart(cfg, sp, fmt.Sprintf("The app didn't start (%s).", exit), began, tail)
 	}
@@ -222,7 +223,7 @@ func prepare(cfg *config, p *progress, dns *dns) error {
 	}
 	// nixpak binds the closure from the host store, where a GC would empty it under the running sandbox once a rebuild
 	// dropped its generation. The runtime dir goes at logout, the next launch replaces the root
-	runtime := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "claude-desktop")
+	runtime := runtimeDir()
 	if err := os.MkdirAll(runtime, 0o700); err != nil {
 		return err
 	}

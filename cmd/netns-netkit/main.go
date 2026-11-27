@@ -23,12 +23,12 @@ import (
 const usage = `netns-netkit - Connect a user-owned network namespace to the network through a netkit pair
 
 Usage:
-  netns-netkit up [--name=<name>] [--mdns] <pid>
-  netns-netkit down [--name=<name>]
-  netns-netkit addr [--name=<name>]
+  netns-netkit up --name=<name> [--mdns] <pid>
+  netns-netkit down --name=<name>
+  netns-netkit addr --name=<name>
   netns-netkit uplinks
-  netns-netkit grant [--name=<name>] (tcp|udp) <port>
-  netns-netkit revoke [--name=<name>] (--all | (tcp|udp) <port>)
+  netns-netkit grant --name=<name> (tcp|udp) <port>
+  netns-netkit revoke --name=<name> (--all | (tcp|udp) <port>)
 
 up creates eth0 in the network namespace of <pid>, the peer of a netkit pair
 whose primary stays in the host netns, and prints the addresses of the sandbox
@@ -55,7 +55,8 @@ ends that and the connections made under it, or with --all every grant and
 connection.
 
 Options:
-  --name=<name>  The name of the launcher, empty for the default launcher
+  --name=<name>  The name of the sandbox, <app>[-<launcher>]: claude-desktop
+                 for Claude Desktop's default launcher
   --all          Every port granted
   --mdns         Copy mDNS queries out and responses in
 `
@@ -75,8 +76,8 @@ func main() {
 
 func run(opts docopt.Opts) error {
 	name, _ := opts.String("--name")
-	if !caller.LauncherName.MatchString(name) {
-		return fmt.Errorf("Launcher name %q is not [a-z][a-z0-9-]*, at most 39 characters", name)
+	if opts["uplinks"] != true && !caller.SandboxName.MatchString(name) {
+		return fmt.Errorf("Sandbox name %q is not %s", name, caller.SandboxNameRule)
 	}
 	grants := opts["grant"] == true || opts["revoke"] == true
 	all := opts["--all"] == true

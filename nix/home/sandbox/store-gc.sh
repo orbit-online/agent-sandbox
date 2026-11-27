@@ -3,9 +3,10 @@
 # (it moved the GC root), which it removes. Only inside the sandbox, whose store has the launcher's root: on the host,
 # nix-store --gc would collect the host's store. Another run holding the lock makes it a no-op (Nix would queue it on
 # gc.lock instead)
-dir=/nix/var/claude-desktop
-[[ -L /nix/var/nix/gcroots/claude-desktop ]] ||
-  { echo "claude-desktop-store-gc: Only runs inside the claude-desktop sandbox" >&2; exit 1; }
+: "${APP:?}"
+dir=/nix/var/$APP
+[[ -L /nix/var/nix/gcroots/$APP ]] ||
+  { echo "$APP-store-gc: Only runs inside the $APP sandbox" >&2; exit 1; }
 mkdir -p "$dir"
 exec {fd}>"$dir/gc.lock"
 flock -n "$fd" || exit 0

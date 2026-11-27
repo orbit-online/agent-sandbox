@@ -65,7 +65,7 @@ func TestOpaqueParam(t *testing.T) {
 func TestExclusive(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	other, _ := testBroker(t, "allow", "allow") // both now see its XDG_RUNTIME_DIR, the host-wide lock directory
-	other.cfg.Launcher = "other"
+	other.cfg.Sandbox = "other"
 	c := testCap(t, "command")
 	c.Exclusive = true
 	b.caps[c.id()], other.caps[c.id()] = c, c
@@ -74,7 +74,7 @@ func TestExclusive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := other.request(peerAt(t, os.Getpid()), req(c.id(), `{"path": "/vm"}`, "PT1H")); err == nil ||
-		!strings.Contains(err.Error(), "launcher test") {
+		!strings.Contains(err.Error(), "sandbox test") {
 		t.Errorf("Another launcher got an exclusive instance: %v", err)
 	}
 	_ = b.release(g.ID, "test")
@@ -85,16 +85,21 @@ func TestExclusive(t *testing.T) {
 
 func TestUnitPrefixes(t *testing.T) {
 	log := fakeSystemd(t)
-	stopAllCalls("work")
-	stopAllCalls("")
+	stopAllCalls("claude-desktop-work")
+	stopAllCalls("claude-desktop")
 	data, _ := os.ReadFile(log)
-	if string(data) != "systemctl --user stop perm-work_*\nsystemctl --user stop perm_*\n" {
+	if string(data) != "systemctl --user stop perm-claude-desktop-work_*\nsystemctl --user stop perm-claude-desktop_*\n" {
 		t.Errorf("Stopped:\n%s", data)
 	}
-	// work's pattern doesn't reach work-2's units, nor the default launcher's
-	for _, other := range []string{unitPrefix("work-2") + "x", unitPrefix("") + "x"} {
-		if ok, _ := filepath.Match("perm-work_*", other); ok {
-			t.Errorf("perm-work_* matches %s", other)
+	// A sandbox's pattern doesn't reach the units of one whose name starts with its own, as a named launcher's does its
+	// app's default launcher's, nor the other way round
+	for _, c := range [][2]string{
+		{"claude-desktop", "claude-desktop-work"},
+		{"claude-desktop-work", "claude-desktop-work-2"},
+		{"claude-desktop-work", "claude-desktop"},
+	} {
+		if ok, _ := filepath.Match(unitPrefix(c[0])+"*", unitPrefix(c[1])+"x"); ok {
+			t.Errorf("%s* matches %sx", unitPrefix(c[0]), unitPrefix(c[1]))
 		}
 	}
 }
@@ -104,7 +109,7 @@ func TestUnitPrefixes(t *testing.T) {
 func TestExclusiveInstance(t *testing.T) {
 	b, _ := testBroker(t, "allow")
 	other, _ := testBroker(t, "allow")
-	other.cfg.Launcher = "other"
+	other.cfg.Sandbox = "other"
 	c := testCap(t, "command")
 	c.Exclusive = true
 	instancesIn(t, c, "vm")
@@ -117,13 +122,13 @@ func TestExclusiveInstance(t *testing.T) {
 	}
 }
 
-// P13: the default launcher's cleanup removes its own locks, and not one another daemon is making: a lock is never
-// visible without its launcher's name
-func TestRemoveLocksDefault(t *testing.T) {
+// P13: a sandbox's cleanup removes its own locks, and not one another daemon is making: a lock is never visible without
+// its sandbox's name
+func TestRemoveLocks(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	c := testCap(t, "command")
 	c.Exclusive = true
-	release, err := c.exclusiveLock("", json.RawMessage(`{"path":"/vm"}`))
+	release, err := c.exclusiveLock("claude-desktop", json.RawMessage(`{"path":"/vm"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,18 +138,18 @@ func TestRemoveLocksDefault(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("Locks: %v", entries)
 	}
-	if data, _ := os.ReadFile(filepath.Join(dir, entries[0].Name())); string(data) != "\n" {
-		t.Errorf("The default launcher's lock holds %q", data)
+	if data, _ := os.ReadFile(filepath.Join(dir, entries[0].Name())); string(data) != "claude-desktop\n" {
+		t.Errorf("The lock holds %q", data)
 	}
 	making := filepath.Join(dir, "test_thing-other")
 	if err := os.WriteFile(making, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	removeLocks("")
+	removeLocks("claude-desktop")
 	if _, err := os.Stat(making); err != nil {
 		t.Error("Removed a lock without content, another daemon's in the making")
 	}
 	if _, err := os.Stat(filepath.Join(dir, entries[0].Name())); err == nil {
-		t.Error("Left the default launcher's own lock")
+		t.Error("Left its own lock")
 	}
 }

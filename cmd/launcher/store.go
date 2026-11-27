@@ -15,7 +15,7 @@ import (
 )
 
 // syncStore copies the sandbox closure into its own store and roots it, when the root doesn't point at it yet. The
-// store is the sandbox's to write, so Nix works on it only through claude-desktop-state, confined to stateDir/nix; the
+// store is the sandbox's to write, so Nix works on it only through <sandbox>-state, confined to stateDir/nix; the
 // stream it imports comes from the host's store. progress, when given, hears how far the copy is, 0 to 1
 func syncStore(cfg *config, progress func(float64)) error {
 	nixDir := filepath.Join(cfg.StateDir, "nix")

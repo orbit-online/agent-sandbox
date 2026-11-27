@@ -1,10 +1,21 @@
 # shellcheck shell=bash
-# Splits environment.md by its markers into $out/environment.md (all of it, for consumers without memo),
-# $out/core-environment.md (the sections every session needs, for those with memo) and $out/environment.memo
-# (the rest, a memo store). `<!-- memo: FILTER -->` under a `## ` heading moves that section into the store as a memo
+# Puts the core's environment.md ($CORE_SRC, with @app@, @appId@ and @environmentPath@ filled in) in place of the
+# line `<!-- agent-sandbox: core -->` of the app's ($APP_SRC), which has it once, then splits the result by its
+# markers into $out/environment.md (all of it, for consumers without memo), $out/core-environment.md (the sections
+# every session needs, for those with memo) and $out/environment.memo (the rest, a memo store). `<!-- memo: FILTER -->` under a `## ` heading moves that section into the store as a memo
 # with that filter; `<!-- memo-doc: ATTRIBUTE=VALUE # TEXT -->` documents a value in the store. The store injects
-# `environment=$ENVIRONMENT`, the name in /etc/claude/environment.md's frontmatter
-: "${SRC:?}" "${NAME:?}" "${DESCRIPTION:?}" "${ENVIRONMENT:?}" "${out:?}"
+# `environment=$ENVIRONMENT`, the name in the environment doc's frontmatter
+: "${APP_SRC:?}" "${CORE_SRC:?}" "${APP:?}" "${APP_ID:?}" "${ENVIRONMENT_PATH:?}"
+: "${NAME:?}" "${DESCRIPTION:?}" "${ENVIRONMENT:?}" "${out:?}"
+
+marker='<!-- agent-sandbox: core -->'
+[[ $(grep -cxF "$marker" "$APP_SRC") == 1 ]] || { echo "$APP_SRC: needs the line $marker once" >&2; exit 1; }
+core=$(sed -e "s|@app@|$APP|g" -e "s|@appId@|$APP_ID|g" -e "s|@environmentPath@|$ENVIRONMENT_PATH|g" "$CORE_SRC")
+SRC=$(mktemp)
+while IFS= read -r line; do
+  if [[ $line == "$marker" ]]; then printf '%s\n' "$core"; else printf '%s\n' "$line"; fi
+done <"$APP_SRC" >"$SRC"
+! grep -q '@app@\|@appId@\|@environmentPath@' "$SRC" || { echo "$CORE_SRC: a placeholder left unfilled" >&2; exit 1; }
 
 mkdir -p "$out"
 awk -v out="$out" -v name="$NAME" -v description="$DESCRIPTION" -v environment="$ENVIRONMENT" '

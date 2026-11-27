@@ -36,33 +36,32 @@ let
       # The consent, in the user's words, is the broker's alone
       // lib.optionalAttrs withRun { inherit (c) consent; }
     ) config.permissions.commands;
-  # The permissions broker's, under $XDG_RUNTIME_DIR/claude-desktop: its grant directory, the sandbox's
+  # The permissions broker's, under $XDG_RUNTIME_DIR/agent-sandbox: its grant directory, the sandbox's
   # /run/permissions, and its control socket next to it, which isn't bound
-  permissionsDir = "permissions${ids.suffix}";
-  permissionsUnit = "claude-desktop${ids.suffix}-permissions";
-  permissionsTitle = "Claude permissions${
+  permissionsDir = ids.permissions;
+  runtime = "\${XDG_RUNTIME_DIR}/${sl.runtimeDir}";
+  permissionsUnit = "${ids.sandbox}-permissions";
+  permissionsTitle = "${sl.app.displayName} permissions${
     lib.optionalString (launcherName != null) " (${launcherName})"
   }";
   permissionsConfig = pkgs.writeText "permissions${ids.suffix}.json" (builtins.toJSON brokerConfig);
   brokerConfig = {
     # Who the notifications and the window say asks
-    agent = "Claude";
-    inherit (ids) appId;
-    # Empty for the default launcher: no named one can take that name
-    launcher = if launcherName == null then "" else launcherName;
-    grantDir = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}";
-    controlSocket = "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock";
+    inherit (sl.app) agent;
+    inherit (ids) appId sandbox;
+    grantDir = "${runtime}/${permissionsDir}";
+    controlSocket = "${runtime}/${permissionsDir}-control.sock";
     unit = "${permissionsUnit}.service";
     inherit (ids) slice;
     sandboxGrantDir = "/run/permissions";
     window = [
       (lib.getExe sl.packages.permissions-window)
       "--app-id=${ids.appId}"
-      "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock"
+      "${runtime}/${permissionsDir}-control.sock"
       permissionsTitle
     ];
-    # Every launcher's state directory and runtime directory, and anything holding one
-    denied = map sl.stateDirOf sl.names ++ [ "\${XDG_RUNTIME_DIR}" ];
+    # Every launcher's state directory, of every app, and the runtime directory, and anything holding one
+    denied = map (s: s.stateDir) sl.allSandboxes ++ [ "\${XDG_RUNTIME_DIR}" ];
     # The folders ceiling, by path
     folders = lib.mapAttrsToList (path: f: {
       inherit path;
@@ -167,7 +166,7 @@ in
       {
         bubblewrap.bind.ro = [
           [
-            (sloth.concat' (sloth.env "XDG_RUNTIME_DIR") "/claude-desktop/${permissionsDir}")
+            (sloth.concat' (sloth.env "XDG_RUNTIME_DIR") "/${sl.runtimeDir}/${permissionsDir}")
             "/run/permissions"
           ]
         ];
@@ -183,7 +182,7 @@ in
           window = [
             (lib.getExe sl.packages.permissions-window)
             "--app-id=${ids.appId}"
-            "\${XDG_RUNTIME_DIR}/claude-desktop/${permissionsDir}-control.sock"
+            "${runtime}/${permissionsDir}-control.sock"
             permissionsTitle
           ];
         }

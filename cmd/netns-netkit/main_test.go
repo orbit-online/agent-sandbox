@@ -14,7 +14,7 @@ import (
 
 // What run refuses before it touches anything
 func TestRunRefuses(t *testing.T) {
-	long := strings.Repeat("a", 40)
+	long := strings.Repeat("a", 48)
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -23,9 +23,10 @@ func TestRunRefuses(t *testing.T) {
 		{[]string{"down", "--name=1x"}, "is not [a-z][a-z0-9-]*"},
 		{[]string{"down", "--name=" + long}, "is not [a-z][a-z0-9-]*"},
 		{[]string{"down", "--name=a/../b"}, "is not [a-z][a-z0-9-]*"},
-		{[]string{"grant", "tcp", "0"}, "is not 1 to 65535"},
-		{[]string{"grant", "udp", "65536"}, "is not 1 to 65535"},
-		{[]string{"revoke", "tcp", "http"}, "is not 1 to 65535"},
+		{[]string{"down", "--name="}, "is not [a-z][a-z0-9-]*"},
+		{[]string{"grant", "--name=claude-desktop", "tcp", "0"}, "is not 1 to 65535"},
+		{[]string{"grant", "--name=claude-desktop", "udp", "65536"}, "is not 1 to 65535"},
+		{[]string{"revoke", "--name=claude-desktop", "tcp", "http"}, "is not 1 to 65535"},
 		{[]string{"revoke", "--all", "--name=Work"}, "is not [a-z][a-z0-9-]*"},
 		{[]string{"addr", "--name=a/b"}, "is not [a-z][a-z0-9-]*"},
 	} {
@@ -37,15 +38,21 @@ func TestRunRefuses(t *testing.T) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.want)
 		}
 	}
-	// A name of 39 characters passes the check
+	// A name of 47 characters passes the check
 	opts, _ := docopt.ParseArgs(usage, []string{"down", "--name=" + long[1:]}, "")
 	if err := run(opts); err != nil && strings.Contains(err.Error(), "is not [a-z]") {
-		t.Errorf("Name of 39 characters refused: %v", err)
+		t.Errorf("Name of 47 characters refused: %v", err)
+	}
+	// Without a name, only uplinks parses
+	for _, args := range [][]string{{"down"}, {"up", "1"}, {"addr"}, {"grant", "tcp", "80"}, {"revoke", "--all"}} {
+		if _, err := (&docopt.Parser{HelpHandler: docopt.NoHelpHandler}).ParseArgs(usage, args, ""); err == nil {
+			t.Errorf("%v parsed without a name", args)
+		}
 	}
 }
 
-// The sandboxes of a uid: its dirs, by name (its default launcher and named ones, not another uid or the pins of
-// sandbox-uplink), and its primaries without a dir
+// The sandboxes of a uid: its dirs, by name (and one without, from before every sandbox had a name), not another uid's
+// or the pins of sandbox-uplink, and its primaries without a dir
 func TestSandboxCount(t *testing.T) {
 	dir := t.TempDir()
 	for _, d := range []string{"1000", "1000-work", "1000-a-b", "10000", "10001-x", "100", "lock-1000"} {

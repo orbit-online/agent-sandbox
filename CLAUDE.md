@@ -1,44 +1,55 @@
 # agent-sandbox
 
-Sandboxes for AI agents on NixOS. Today that is Claude Desktop under nixpak
-(bubblewrap): its own network namespace on a netkit pair isolated by eBPF, its own
-single-user Nix store, and an environment doc for the Claude running inside.
+Sandboxes for AI agents on NixOS: an agent's desktop app under nixpak (bubblewrap), with its own network namespace
+on a netkit pair isolated by eBPF, its own single-user Nix store, and an environment doc for the agent running inside.
+The sandbox is a core that knows no app; an app is a descriptor and a few modules on it. Today the one app is Claude
+Desktop.
 
 ## Layout
 
-- `nix/home/claude-desktop/`: the Home Manager module
-  `agent-sandbox.claude-desktop` (`default.nix`, with a diagram of the
-  sandbox's namespaces at the top). Its options configure the default
-  launcher; `launchers.<name>` adds sandboxes next to it with the same
+- `nix/home/sandbox/`: the core, every app's Home Manager module (`default.nix`, with a diagram of the sandbox's
+  namespaces at the top), a function `{ inputs }: app: <module>` of the app's descriptor (its fields at the top of
+  `default.nix`: `name`, `appId`, `displayName`, `agent`, `description`, `environmentPath`, `environment`, `modules`,
+  `assertions`) to the module `agent-sandbox.<app>`. Nothing in it names an app but examples. Its options configure
+  the default launcher; `launchers.<name>` adds sandboxes next to it with the same
   options, each starting from the module's defaults alone, with its
-  own state dir, app ID, addresses and `claude-desktop-<name>`. Each launcher, the default one included, is a
-  `submoduleWith` of the same feature modules, which take `launcherName` (null for the default one), Home Manager's
-  config as `hm` and the shared helpers of `lib.nix` as `sl`, and meet in the internal `build` options
+  own state dir, app ID, addresses and name. A sandbox's name, `<app>[-<launcher>]` (`sl.sandboxOf`, `ids.sandbox`),
+  is what its wrapper, state dir, units, slice and journald namespaces are named by, and what the helpers
+  (netns-netkit, sandbox-hooks) and the broker know it by; at most 47 characters (`sandboxNameMax`, set by the broker's
+  sockets), so a launcher name gets what the app's name leaves. `shared.nix` (keyed, imported once however many
+  apps): `agent-sandbox.launcherModules`, and the internal `agent-sandbox.sandboxes`, every sandbox of every app,
+  which the NixOS module reads, the apps' state dirs and app pids come from, and no two of which may share a name. All
+  apps' launchers share `$XDG_RUNTIME_DIR/agent-sandbox/` (`sl.runtimeDir`). Each launcher, the default one included,
+  is a `submoduleWith` of the same feature modules and the app's, which take `launcherName` (null for the default one),
+  Home Manager's config as `hm` and the shared helpers of `lib.nix` as `sl` (`sl.app` the descriptor), and meet in the
+  internal `build` options
   (`build.nix`: store roots, nixpak config, FHS bwrap arguments, the launcher's JSON config (`cmd/launcher`), the
-  `.desktop` actions, assertions). What lets a launcher reach outside the sandbox is set under its `permissions`
+  `.desktop` actions, assertions, and what the app fills: `app`, its FHS env built with `fhsEnvArgs`, `pathPackages`,
+  `homeDirs`, the state script's `stateHome`, `stateVars` and `stateInputs`, and `mcpServers`, the features' MCP
+  servers the app gives its agent). What lets a launcher reach outside the sandbox is set under its `permissions`
   options (`docs/permissions.md`, The options of a launcher), each an attrset where an entry may need overriding:
   from the start `binds` and `devices` (`options.nix`), `bus` (`dbus.nix`) and `network` (`network.nix`), on request
   `commands`, `sockets`, `folders` and `grants` with `broker.enable` (`permissions.nix`). The modules:
   `options.nix` (the general options), `core.nix` (nixpak's config, the binds every
-  launcher starts with, the confined state script), `fhs.nix` (the app in its FHS env, `/etc`,
+  launcher starts with, the confined state script), `fhs.nix` (what the core adds to the app's FHS env: `/etc`,
   `/run/current-system/sw`, the store again at `/nix-root` as a chroot store's root, without the tmpfs buildFHSEnv puts on
-  `etc/` of its glibc), `environment.nix` (`environment.md` and memo), `network.nix`, `store.nix`, `theme.nix`,
-  `mcp.nix` (with `channels.js`, which `patch-asar.sh` hooks into the app for `mcpChannels`), `dbus.nix` (and the tray feature), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
+  `etc/` of its glibc), `environment.nix` (the environment doc at the app's `environmentPath`, and memo), `network.nix`,
+  `store.nix`, `theme.nix`, `dbus.nix` (and the tray feature), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
   `features.nix` (`features.<name>`: an `enable`, a `description` and a `note`, and a body of `permissions`
   definitions merged in while it is on; the module's `kvm`, `audio`, `tray`, `keep-awake` and `request-send`, all off;
-  the ones that are on listed in the broker's overview and in `claude-environment.md`),
+  the ones that are on listed in the broker's overview and in `sandbox-environment.md`),
   `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
-  `agent-sandbox.launcherModules` join them on every launcher, for a plugin's own options. The app ID,
-  `com.anthropic.Claude[.<name>]`, also names the launcher's `.desktop`
+  `agent-sandbox.launcherModules` join them on every launcher of every app, for a plugin's own options. The app ID,
+  `<appId>[.<name>]` (`com.anthropic.Claude[.<name>]`), also names the launcher's `.desktop`
   file, its `StartupWMClass`, the asar's `desktopName` (its windows' app
   ID) and the Permissions window's `--app-id`: the portal names the app's
   notifications by the app ID, and gnome-shell drops them unless a `.desktop`
   file of that name exists. The default launcher's is upstream's, so its
   `.desktop` file keeps upstream's name and stands in for upstream's. Each runs its
-  sandbox as a unit in a slice of its own, `claude\x2ddesktop[\x2d<name>].slice`
+  sandbox as a unit in a slice of its own, the sandbox's name escaped (`claude\x2ddesktop[\x2d<name>].slice`)
   (escaped, as a `-` nests one slice in another): the launcher, `cmd/launcher` (`launcher start`, behind a
   generated bash wrapper that expands the sandbox's environment from the caller's), starts `launcher supervise` as
-  `claude-desktop[-<name>]-app.service` there with the caller's environment, `Type=notify`, `Delegate=yes` and
+  `<sandbox>-app.service` there with the caller's environment, `Type=notify`, `Delegate=yes` and
   `DelegateSubgroup=supervisor`, and returns once supervise says the app is up or why it isn't (the result file),
   which it prints. The launcher's bwrap (`launcher bwrap`, mode subid, nixpak's bwrap) lays out
   the cgroups below it: nixpak's launcher and the host side in `supervisor/`,
@@ -73,21 +84,30 @@ single-user Nix store, and an environment doc for the Claude running inside.
   with `: "${VAR:?}"` at the top.
   What the host does in the sandbox's home and store, which the sandbox can
   write and plant links in, goes through `state.sh`, run by `confine.sh`
-  (`claude-desktop[-<name>]-state`) in a bwrap holding only its closure and
-  the directories named: links there resolve within that view.
-- `nix/nixos/claude-desktop.nix`: the NixOS module. Installs the
+  (`<sandbox>-state`) in a bwrap holding only its closure and
+  the directories named: links there resolve within that view. The app's part of its `home` step comes ahead of the
+  script as the function `app_home` (`build.stateHome`).
+- `nix/home/claude-desktop/`: Claude Desktop, the one app: `default.nix` (its descriptor, which
+  `homeModules.claude-desktop` imports, making `agent-sandbox.claude-desktop`), `app.nix` (its `package`, the asar
+  `patch-asar.sh` patches (the ready line, the tray icon, the notification backend, `channels.js` hooked into the app
+  for `mcpChannels`), the FHS override through the core's `fhsEnvArgs`, the default launcher's `~/.claude` and
+  `~/.config/Claude` binds, `claude_desktop_config.json` merged at each launch, `claude.sh` on PATH, the splash's
+  agent logo), `mcp.nix` (the app's local MCP servers: `filesystem`, `claude-code`, the features' and Home Manager's
+  `programs.mcp.servers`), and its part of the environment doc, `environment.md`, around the core's.
+- `nix/nixos/sandbox.nix`: the NixOS module, `nixosModules.agent-sandbox`, the host side of every app's sandboxes:
+  it reads each Home Manager user's `agent-sandbox.sandboxes` and runs two journald namespaces per sandbox. Installs the
   `netns-netkit` wrapper (`cap_net_admin` and `cap_bpf`, setgid `sandbox-uplink` through `permissions`, as the wrapper
   module keeps setgid to wrappers without capabilities; anyone may run it, the helper refuses callers outside `users`)
-  when any Home Manager user enables the Home Manager module, and asserts they're in `users` and have a subuid and
+  when any Home Manager user enables an app's module, and asserts they're in `users` and have a subuid and
   subgid range.
 - `nix/nixos/hooks.nix`: `agent-sandbox.hooks.start` and `.stop`, root-owned hooks (store paths, each with the
-  capabilities it declares) that every launcher runs at those phases through `sandbox-hooks`; `claude-desktop.nix`
-  imports it. The group `sandbox-hooks` comes with a sandbox user, hooks or not, so consumers can give it files a hook
+  capabilities it declares) that every launcher runs at those phases through `sandbox-hooks`, as
+  `<hook> <phase> <uid> <sandbox>`; `sandbox.nix` imports it. The group `sandbox-hooks` comes with a sandbox user, hooks or not, so consumers can give it files a hook
   will read before they configure one. Only with hooks and a sandbox user: `/etc/agent-sandbox/hooks.json` and the
   `sandbox-hooks` wrapper,
   whose capabilities are the union of what the hooks declare (`+ep`, none without), setgid `sandbox-hooks` through
   `permissions` as netns-netkit is.
-- `nix/nixos/network.nix`: the host side of the sandbox network on netkit, which `claude-desktop.nix` imports and
+- `nix/nixos/network.nix`: the host side of the sandbox network on netkit, which `sandbox.nix` imports and
   enables (the internal `agent-sandbox.network.enable`) when a user enables the sandbox. It asserts Linux 6.8 or later
   (netkit programs need 6.7, bpffs' `uid` and `gid` options 6.8), runs einat-ebpf (`nix/packages/einat`, the `einat`
   input built with NAT66) as `sandbox-einat.service` (DynamicUser, CAP_BPF, CAP_NET_ADMIN and CAP_PERFMON alone, its
@@ -207,15 +227,15 @@ single-user Nix store, and an environment doc for the Claude running inside.
   The unit of the app runs `sandbox-hooks stop` as `ExecStopPost=` too when the NixOS module has hooks (`hooks` in
   the launcher config). `warn.go`: what the sandbox starts without (`sandbox-hooks start` exiting 3 or refusing, a
   `permissions.network.hooks` hook failing) goes from bwrap's helper to supervise over
-  `$XDG_RUNTIME_DIR/claude-desktop/<unit>.warn` on the host, and the helper holds the start until supervise answers:
+  `$XDG_RUNTIME_DIR/agent-sandbox/<unit>.warn` on the host, and the helper holds the start until supervise answers:
   once the user chose Continue on the splash, at once without a splash or when nothing listens.
   `TimeoutStartSec=infinity` lets the start wait.
   `internal/sandbox`: finding a launcher's running
   sandbox from nixpak's instance info (`Find`, which the broker pins) and the app's main process in it (`AppPid`).
 - `cmd/netns-netkit/`: the setcap helper that joins the netns of a sandbox to the host by a netkit pair
   (`netns-netkit --help`): `main.go` (the commands, through `internal/caller`'s checks), `addr.go` (the
-  addresses, from a hash of uid and launcher name, past those on the host and the registered ones, and the name of the
-  primary, `sbx-<uid in base 36>-<hash of the launcher name>`), `pair.go` (the pair, L3, both ends policy drop, the
+  addresses, from a hash of uid and sandbox name, past those on the host and the registered ones, and the name of the
+  primary, `sbx-<uid in base 36>-<hash of the sandbox name>`), `pair.go` (the pair, L3, both ends policy drop, the
   peer `eth0` made in the sandbox netns; host routes to the addresses and forwarding on the primary) and `bpf.go`
   (loading `netkit.bpf.c`, attaching and pinning, the registration, port grants: `grant`, `revoke`, `revoke --all`
   for the cleanup of the broker, `addr`, the addresses of the running sandbox, which port grants report, and `uplinks`,
@@ -248,7 +268,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   primary keeps for it (`NETKIT_SCRUB_NONE`, `pair.go`) and the program clears with the priority). Without CAP_PERFMON the verifier refuses variable offsets into packets and
   pointers picked between map values, so the programs read no IPv4 options and compare both sandbox addresses.
 - `internal/caller/`: what the privileged helpers (netns-netkit, sandbox-hooks) check about their caller before
-  anything: `caller.go` (the caller in group `users`, which the setgid wrappers can't limit; the launcher name) and
+  anything: `caller.go` (the caller in group `users`, which the setgid wrappers can't limit; the sandbox name, `SandboxName`) and
   `netns.go` (`OpenNetns`: the process belongs to the caller, by pidfd, and its netns to a user namespace below the
   one of the caller, owned by the caller uid right below; opened with the real gid as fsgid, which the ptrace check
   compares).
@@ -264,7 +284,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
 - `cmd/subid-broker/`: the Go helper that writes uid and gid maps for
   user namespaces inside the sandbox, and its `newuidmap`/`newgidmap` shims
   (`subid-broker --help`). The launcher's bwrap, which nixpak and the FHS env run, maps the user's subuid
-  range in and starts it as a unit, `claude-desktop[-<name>]-subid.service`, a transient unit in the launcher's slice
+  range in and starts it as a unit, `<sandbox>-subid.service`, a transient unit in the launcher's slice
   with `BindsTo=` the app's unit (`hostUnits` in `helper.go`), so it logs as a unit of its own and stops with the app.
 - `cmd/dbus-proxy/`: the Go D-Bus proxy that replaces xdg-dbus-proxy
   (`docs/permissions.md`, D-Bus), taking nixpak's argv and its rules from a
@@ -355,7 +375,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   host's may be another Qt. Where the compositor leaves decorations to the window (GNOME), they're Adwaita's
   (`qadwaitadecorations-qt6`, `QT_WAYLAND_DECORATION=adwaita` on the Permissions window), with a shadow. The package also builds `sandbox-splash` (`splash/`, `sandbox-splash --help`), the
   launcher's splash: the main logo (the `splash.logo` and `splash.logoDark` options, by default the Orbit logo copied into
-  `nix/home/claude-desktop/assets/`, whose README says from where, and that the MIT licence doesn't cover it) under an "Agent
+  `nix/home/sandbox/assets/`, whose README says from where, and that the MIT licence doesn't cover it) under an "Agent
   Sandbox" title (in Lexend SemiBold, the brand's title font, from nixpkgs' `lexend`, which the wrapper passes as
   `--title-font`), the step and its progress with the agent's logo small at the right above the bar
   (`splash.agentLogo`, the app's icon), light or dark as the
@@ -373,7 +393,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   which it could reap first, so the launcher panicked with `waitid: no child
   processes`. The module applies it through `nixpakPkgs`, whose `callPackage`
   patches the package nixpak builds from its `launcher/`.
-- `nix/home/claude-desktop/request-send.nix` and `cmd/request-send/`: the host commands `request-send` and
+- `nix/home/sandbox/request-send.nix` and `cmd/request-send/`: the host commands `request-send` and
   `request-send-write` (README, request-send), the feature `features.request-send` on each launcher, with `origins` as its own option, a launcher
   module. `consent.title` and each command's `consent` are the user's words in the notification and the
   window: plain, for someone who isn't technical, without ranges (the window's Details show those from the schemas).
@@ -394,7 +414,7 @@ single-user Nix store, and an environment doc for the Claude running inside.
   shaped like the sandbox's. Run inside the sandbox with a bwrap path; not
   part of the checks.
 
-Flake outputs: `homeModules.claude-desktop`, `nixosModules.claude-desktop`,
+Flake outputs: `homeModules.claude-desktop`, `nixosModules.agent-sandbox`,
 `packages.<system>.netns-netkit`, `packages.<system>.sandbox-hooks`, `packages.<system>.subid-broker`,
 `packages.<system>.dbus-proxy`, `packages.<system>.permissions-broker`, `packages.<system>.permissions-window`,
 `packages.<system>.request-send`, `packages.<system>.launcher`, `packages.<system>.sandbox-uplink`,
@@ -445,8 +465,11 @@ sandbox ends (`internal/uplink`):
 
 ## Rules
 
-- Module defaults only hold what the module can't work without (the Claude
-  paths, the `/etc` entries, the Nix store). Machine- and user-dependent
+- Module defaults only hold what the module can't work without (the app's
+  paths, the `/etc` entries, the Nix store).
+- The core (`nix/home/sandbox/`, `nix/nixos/`, `cmd/`, `internal/`) knows no app: what is an app's goes in its
+  descriptor and modules, never an `if` on the app in the core. A name that must differ between sandboxes is built from
+  the sandbox's name, `<app>[-<launcher>]`; one in the sandbox's own store or `systemd --user` from the app's. Machine- and user-dependent
   settings, such as extra binds, go in the consumer's config.
 - The sandbox always gets its own netns, with a netkit pair unless `permissions.network.enable` is off (`lo` alone). There is no
   option to share the host's; the module asserts it.
@@ -461,7 +484,8 @@ sandbox ends (`internal/uplink`):
   (no_new_privs). What a hook does with a device on the host, the sandbox mustn't be able to redo: a WireGuard device
   moved in keeps its UDP socket in the host netns, so the sandbox holding no CAP_NET_ADMIN over its netns (above) is
   what keeps it from setting endpoints there.
-- `environment.md` is what Claude inside the sandbox knows about it, and
+- `environment.md` is what the agent inside the sandbox knows about it, the core's (`nix/home/sandbox/`, true of any
+  app's sandbox, with `@app@`, `@appId@` and `@environmentPath@` filled in) inside the app's, and
   stays generic: consumers replace it with `environmentFile`. A section only
   some work needs gets a memo marker; one every session needs stays unmarked.
   Change it in
@@ -515,11 +539,16 @@ modules and a user alice (the `home-manager` input exists only for it).
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
   `extraPath` at the front of PATH, the GC and prune timers' frequencies (the defaults, a launcher's own
   calendar spec, `null` leaving the timer out, a value of two lines refused), the launchers' packages, the launcher
-  name assertions (its characters, and its length at and past the cap, 39: the
-  `launcherNameMax` at which `cmd/launcher/warn_test.go` binds the launcher's warning socket and
-  `cmd/permissions-broker/socketpath_test.go` the broker's, and which `internal/caller` takes no name past; the
-  sockets bound by a path with the name in it, the varlink socket of the sandbox's journald namespace among them,
-  none past 107 bytes at the cap and the longest at them), the per-launcher netns assertion, the tray feature on two launchers at once,
+  name assertions (its characters, and its length at and past the cap, 32 for Claude Desktop: the sandbox name's,
+  47, `sandboxNameMax` of `cmd/permissions-broker/socketpath_test.go`, which binds the broker's sockets at it, less
+  `claude-desktop-`; `testSandboxNameMaxAgrees`: the module's, `cmd/launcher/warn_test.go`'s and the one
+  `internal/caller` takes no name past are the same; the sockets bound by a path with the name in it, the varlink
+  socket of the sandbox's journald namespace among them, none past 107 bytes at the cap and the longest at them), a
+  second app (`testSecondApp`: a stand-in app on the core, declared in the checks alone with the stub app in the core's
+  FHS env, next to Claude Desktop, each with a launcher work: no assertion fails, and the four sandboxes' names, state
+  dirs, homes, scratchpads, units, slices, journal namespaces, app IDs, app pids and GC root links all differ, the NixOS
+  module runs the stand-in's journal namespaces, netns-netkit gets each sandbox's name and its primaries differ;
+  `testSandboxNameCollision`: a stand-in app named `claude-desktop-work` refused beside Claude Desktop's launcher work), the per-launcher netns assertion, the tray feature on two launchers at once,
   a launcher's MCP roots without `~/.claude`, and `programs.mcp.servers` in
   every launcher's MCP servers (disabled ones out, env files wrapped, none
   without `programs.mcp.enable`, the assertion on remote servers and the
@@ -604,8 +633,8 @@ modules and a user alice (the `home-manager` input exists only for it).
 - `timer-calendar`: the sandbox's user units building with a calendar spec of the user's in the GC timer, and
   refusing `weakly` with the timer and spec named (`systemd-analyze calendar`, `fhs.nix`).
 - `netns-netkit`: the package build compiles `netkit.bpf.c` with `-Werror` and runs its Go tests: `addr_test.go`, the addresses against Python over the same inputs, past taken ones (host routes among them), wrapping, never the first
-  or last of the block, a full block refused, and the names of primaries; `main_test.go`, launcher names and ports
-  refused, the sandbox dirs and primaries of a uid counted, the lock of a uid exclusive, and neither the lock of another
+  or last of the block, a full block refused, and the names of primaries; `main_test.go`, sandbox names (none, empty or past 47
+  characters) and ports refused, every command but `uplinks` refused without a name, the sandbox dirs and primaries of a uid counted, the lock of a uid exclusive, and neither the lock of another
   uid nor one on `/run/sandbox-uplink` itself holding it up. `internal/caller`'s tests run with the launcher's
   (`netns_test.go`: `OpenNetns` against a child in its own user and network namespace, and the user namespace chain: a
   netns two user namespaces down accepted, refused as seen from a sibling user namespace and for one the user
@@ -717,7 +746,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   happens before the daemon serves; none granted when the lock stops being
   watched while the user is asked, nor when the screen locks while the grant is made live) leases, call units in systemd (faked), exclusive instances across
   launchers (locked by the instance, whatever other parameters
-  a request carries; the default launcher's cleanup leaving a lock without content alone), `share` through nsenter into a child's user and mount namespace
+  a request carries; a sandbox's cleanup removing its own locks and leaving one without content alone; a sandbox's call units' pattern reaching no other's, `claude-desktop` none of `claude-desktop-work`'s), `share` through nsenter into a child's user and mount namespace
   (refused from another mount namespace, a second time, and once a process of
   the sandbox is in a copy of its mount namespace), `control.sock` refusing a peer in
   another user namespace, a peer gone after its `/proc` entries were read
@@ -888,8 +917,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   launcher's; a failing newuidmap killing bwrap before it's unblocked); `internal/sandbox`'s `AppPid` on a real pid
   namespace tree (the app one level below the init, not one further down, two at its level ambiguous); a warning
   holding `acknowledge` until the splash's Continue and clearing it after, and going on at once without a listener or a
-  splash, and the warning socket bound for a launcher name at the cap with the longest runtime dir and not for one a
-  byte longer (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
+  splash, and the warning socket bound for a sandbox name at the cap and at its own limit, 55, with the longest
+  runtime dir, and not for one a byte longer (`warn_test.go`); `sandbox-hooks start` called with the pid and name, and a warning for its exit 3 or a
   refusal (`hooks_test.go`); `ip` and a network hook getting nothing of the helper's environment (`helper_test.go`);
   a descriptor the caller left open across exec reaching a child before `closeInherited`,
   which a re-entry runs, and none after (`enter_test.go`).
@@ -1088,7 +1117,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   starting the app when it isn't running, in the app's unit; on a pty of `script`, TIOCSTI from the shell refused
   while `dev.tty.legacy_tiocsti` is off and taken with it on, the control: the terminal is the shell's controlling
   one, and only the kernel keeps it from typing into the caller's), the host's runtime dir out of the sandbox
-  (`claude-desktop/` and `.flatpak/` and the session bus there on the host, none of them inside; the dir 0700 and
+  (`agent-sandbox/` and `.flatpak/` and the session bus there on the host, none of them inside; the dir 0700 and
   alice's, no `.vars`, `.error` or `.activate` left by a start that worked), no process in the sandbox with a
   capability in any set once the app runs (`app-run.sh` there in `app-pid.sh`'s place, the `systemd --user` too), the wrapper refusing system
   users (the capabilities of the wrapper, setgid `sandbox-uplink`), and
