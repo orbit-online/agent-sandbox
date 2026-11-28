@@ -45,10 +45,11 @@ and Paseo.
   `etc/` of its glibc), `environment.nix` (the environment doc at the app's `environmentPath`, and memo), `network.nix`,
   `store.nix`, `theme.nix`, `dbus.nix` (and the tray feature), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
   `features.nix` (`features.<name>`: an `enable`, a `description` and a `note`, and a body of `permissions`
-  definitions merged in while it is on; the module's `kvm`, `audio`, `gpu`, `tray`, `keep-awake` and `request-send`,
-  all off; `gpu` switches nixpak's `gpu` in `core.nix` (`/dev/dri`, the host's graphics drivers bundled at
-  `/run/opengl-driver`, among the store roots only then) and binds NVIDIA's nodes if present, and the
-  `hardware.graphics` assertion holds only while a launcher has it on;
+  definitions merged in while it is on; the module's `kvm`, `audio`, `gpu`, `cuda`, `tray`, `keep-awake` and
+  `request-send`, all off; `gpu` switches nixpak's `gpu` in `core.nix` (`/dev/dri`, the host's graphics drivers
+  bundled at `/run/opengl-driver`, among the store roots only then) and binds NVIDIA's nodes if present, and the
+  `hardware.graphics` assertion holds only while a launcher has it on; `cuda` binds `/dev/nvidia-uvm` if present and
+  needs `gpu`, asserted;
   the ones that are on listed in the broker's overview and in `sandbox-environment.md`),
   `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
   `agent-sandbox.launcherModules` join them on every launcher of every app, for a plugin's own options. The app ID,
@@ -565,7 +566,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   enables the module, setgid `sandbox-uplink`, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
   `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
   graphics assertions fire (`testGraphicsAssertion`: with `gpu` on the default launcher or another, not with it off on
-  all), the netns assertion fires when `sandbox`
+  all), the cuda assertion (`testCudaAssertion`: `cuda` without `gpu` on the default launcher or another, not beside
+  it or while off), the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the `nameservers` assertion on what isn't an IPv4 or IPv6 address (an
   octet past 255, a newline, a prefix length), a launcher with `permissions.network.enable` off (no `--net` for its bwrap, `network`
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
@@ -630,8 +632,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `permissions.devices`
   (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
   its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
-  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither; the features (`testFeatures`: the module's six, all off, and what `kvm`,
-  `audio`, `gpu` (nixpak's `gpu`, the drivers among the store roots, NVIDIA's nodes), `tray` and `keep-awake` each add
+  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither; the features (`testFeatures`: the module's seven, all off, and what `kvm`,
+  `audio`, `gpu` (nixpak's `gpu`, the drivers among the store roots, NVIDIA's nodes), `cuda` (`/dev/nvidia-uvm`), `tray` and `keep-awake` each add
   while on, an entry a feature adds turned off like any other;
   `testOwnFeatures`: a consumer's feature with an entry of every kind merged into the launcher it is on alone, a
   `mkForce` inside it kept, nothing of it while off, and the broker's overview listing the ones that are on;

@@ -82,7 +82,7 @@ that order). On request, through the broker (see Permissions): `permissions.comm
 Features bundle such entries behind a switch: `features.<name>.enable`, with a `description` and a `note` that the
 Permissions window and the sandbox's `/etc/claude/environment.md` show while it is on, and a body in the same
 `permissions` options. The module's own, all off: `kvm` (`/dev/kvm`, for VMs and NixOS tests inside), `audio` (the
-PipeWire and PulseAudio sockets: microphone, camera and screen-cast streams included), `gpu` (below), `tray` (a tray
+PipeWire and PulseAudio sockets: microphone, camera and screen-cast streams included), `gpu` and `cuda` (below), `tray` (a tray
 icon; closing the window then hides the app), `keep-awake` (the app keeping the machine awake while a session works; on
 Plasma a process in the sandbox can then release the holds of other apps too) and `request-send` (below).
 
@@ -92,6 +92,10 @@ which its driver needs beside `/dev/dri`. That is a big widening: the GPU driver
 in the kernel, are then in reach of everything in the sandbox, and a driver bug is a way out. Without it the app
 renders in software, with no WebGL (Paseo's terminal then falls back to a renderer that draws in its UI font). For
 less, leave it off and list the nodes you want in `permissions.devices`.
+
+`cuda` adds NVIDIA's `/dev/nvidia-uvm` where it exists, the unified memory driver's node, which CUDA opens at
+`cuInit` beside the nodes and drivers `gpu` brings; without it CUDA fails with `CUDA_ERROR_UNKNOWN`. It needs `gpu`
+on, which the module asserts, and adds another driver ioctl interface within reach of the sandbox.
 
 Add your own:
 

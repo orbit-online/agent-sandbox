@@ -37,14 +37,18 @@ in
     description = ''
       Features: each bundles entries of `permissions` behind `enable`, with a `description` and a `note` that the
       Permissions window and the sandbox's environment doc (`/etc/claude/environment.md` for Claude Desktop) show
-      while it is on. The module's own, all off: `kvm`, `audio`, `gpu`, `tray`, `keep-awake` and `request-send`. Add
-      your own by name, with a body in `permissions`, written in the launcher's `permissions` options.
+      while it is on. The module's own, all off: `kvm`, `audio`, `gpu`, `cuda`, `tray`, `keep-awake` and
+      `request-send`. Add your own by name, with a body in `permissions`, written in the launcher's `permissions`
+      options.
 
       `gpu` widens the sandbox a lot. It binds `/dev/dri`, primary and render nodes, and where they exist NVIDIA's
       `/dev/nvidiactl`, `/dev/nvidia0` and `/dev/nvidia-modeset`: the ioctl interfaces of the host's GPU drivers,
       among the largest in the kernel, within reach of everything in the sandbox, so a driver bug is a way out.
       Without it the app renders in software, with no WebGL. For less, leave it off and list the nodes you want in
       `permissions.devices`.
+
+      `cuda` adds NVIDIA's `/dev/nvidia-uvm` where it exists, which CUDA opens at `cuInit` beside the nodes `gpu`
+      binds, and needs `gpu` on: the unified memory driver's ioctl interface, one more way out.
     '';
   };
   # The features that are on, by name, as the window's overview and environment.md list them
@@ -78,6 +82,14 @@ in
           "/dev/nvidia-modeset" = { };
         };
       };
+      # CUDA on NVIDIA: libcuda from gpu's drivers, nvidiactl and nvidia0 from its nodes, and the unified memory
+      # driver's node, without which cuInit fails (CUDA_ERROR_UNKNOWN). Not /dev/nvidia-uvm-tools, which only the
+      # profilers' unified memory counters open
+      cuda = {
+        description = "NVIDIA's /dev/nvidia-uvm where it exists, for CUDA beside the gpu feature";
+        note = "Exposes the ioctl interface of NVIDIA's unified memory driver: a driver bug is a way out of the sandbox.";
+        permissions.devices."/dev/nvidia-uvm" = { };
+      };
       # Its sockets sit in $XDG_RUNTIME_DIR, which no bind names (a bind's source is a path as written, and that one
       # is known at launch alone), so core.nix has nixpak bind them and fhs.nix takes /etc/alsa: no body here
       audio = {
@@ -101,7 +113,13 @@ in
     permissions = lib.mkMerge (
       lib.mapAttrsToList (_: f: lib.mkIf f.enable f.permissions) config.features
     );
-    build.assertions = lib.mapAttrsToList (name: f: {
+    build.assertions = [
+      {
+        assertion = !config.features.cuda.enable || config.features.gpu.enable;
+        message = "${ids.opt}features.cuda: needs features.gpu, which brings the drivers and NVIDIA's nodes CUDA opens";
+      }
+    ]
+    ++ lib.mapAttrsToList (name: f: {
       assertion =
         builtins.match "[A-Za-z0-9][A-Za-z0-9-]*" name != null
         && builtins.match "[[:space:]]*" f.description == null

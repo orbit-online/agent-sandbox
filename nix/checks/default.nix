@@ -733,6 +733,31 @@ let
           none = [ ];
         };
       };
+    # cuda only beside gpu, on the default launcher and on another; off, it needs nothing
+    testCudaAssertion =
+      let
+        failed = cfg: map (a: a.message) (failedAssertions (nixos (lib.recursiveUpdate enabled cfg)));
+        message =
+          launcher:
+          "agent-sandbox.claude-desktop: ${launcher}features.cuda: needs features.gpu, which brings the drivers and NVIDIA's nodes CUDA opens";
+      in
+      {
+        expr = {
+          alone = failed {
+            features.gpu.enable = false;
+            features.cuda.enable = true;
+          };
+          work = failed { launchers.work.features.cuda.enable = true; };
+          withGpu = failed { features.cuda.enable = true; };
+          off = failed { features.gpu.enable = false; };
+        };
+        expected = {
+          alone = [ (message "") ];
+          work = [ (message "launchers.work.") ];
+          withGpu = [ ];
+          off = [ ];
+        };
+      };
     testUsersGroupAssertion = {
       expr = map (a: a.message) (lib.filter (a: !a.assertion) ownGroup.config.assertions);
       expected = [
@@ -2687,9 +2712,9 @@ let
       ];
     };
     # The module's features, all off unless turned on, and what each adds while it is on: kvm its device, audio the
-    # two sockets and /etc/alsa, gpu nixpak's gpu, the drivers among the store roots and NVIDIA's nodes, the tray its
-    # bus entries, keep-awake its two calls; and what the Permissions window and environment.md list of them. An
-    # entry a feature adds is turned off like any other
+    # two sockets and /etc/alsa, gpu nixpak's gpu, the drivers among the store roots and NVIDIA's nodes, cuda
+    # /dev/nvidia-uvm, the tray its bus entries, keep-awake its two calls; and what the Permissions window and
+    # environment.md list of them. An entry a feature adds is turned off like any other
     testFeatures =
       let
         of =
@@ -2707,7 +2732,7 @@ let
             sockets = lib.attrNames (lib.filterAttrs (_: v: v == true) nixpak.bubblewrap.sockets);
             bus = lib.attrNames c.permissions.bus;
           };
-        every = lib.genAttrs [ "audio" "gpu" "keep-awake" "kvm" "tray" ] (_: {
+        every = lib.genAttrs [ "audio" "cuda" "gpu" "keep-awake" "kvm" "tray" ] (_: {
           enable = true;
         });
       in
@@ -2735,6 +2760,7 @@ let
         expected = {
           names = [
             "audio"
+            "cuda"
             "gpu"
             "keep-awake"
             "kvm"
@@ -2753,6 +2779,7 @@ let
           on = {
             on = [
               "audio"
+              "cuda"
               "gpu"
               "keep-awake"
               "kvm"
@@ -2761,6 +2788,7 @@ let
             devices = [
               "/dev/kvm"
               "/dev/nvidia-modeset"
+              "/dev/nvidia-uvm"
               "/dev/nvidia0"
               "/dev/nvidiactl"
             ];
@@ -2782,6 +2810,7 @@ let
           overridden = {
             on = [
               "audio"
+              "cuda"
               "gpu"
               "keep-awake"
               "kvm"
@@ -2789,6 +2818,7 @@ let
             ];
             devices = [
               "/dev/nvidia-modeset"
+              "/dev/nvidia-uvm"
               "/dev/nvidiactl"
             ];
             alsa = true;
