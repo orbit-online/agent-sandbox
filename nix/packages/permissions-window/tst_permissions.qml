@@ -345,6 +345,14 @@ TestCase {
         compare(findChild(view, "overview-binds-1").text, "/srv/notes")
         compare(findChild(view, "overview-dbus-0").text, "org.kde.StatusNotifierItem-100-1")
         compare(findChild(view, "overview-standing-1").text, "the test thing")
+        // A row's name whole and inside its card, the longest as much as the shortest
+        const card = findChild(view, "overview-dbus")
+        for (const [i, name] of [[0, "calls"], [2, "broadcasts"], [3, "answers version"]]) {
+            const label = findChild(view, "overview-dbus-1-name-" + i)
+            compare(label.text, name)
+            verify(!label.truncated, name + " elided")
+            verify(label.mapToItem(card, 0, 0).x >= card.leftPadding, name + " outside its card")
+        }
     }
 
     // The features that are on, ahead of what they add: a name each, its description, and its note where it has one

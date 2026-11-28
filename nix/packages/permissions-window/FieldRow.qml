@@ -10,15 +10,20 @@ RowLayout {
     property string value: ""
     // The value's objectName, for the tests
     property string valueName: ""
+    // The name's objectName, for the tests
+    property string nameName: ""
     // What the name means, from the declaration, on hover
     property string description: ""
     property bool mono: true
+    // The name's column, as wide as the longest name it lines up with
+    property real nameWidth: 96
     default property alias editor: slot.data
     Layout.fillWidth: true
     spacing: 10
 
     Label {
-        Layout.preferredWidth: 96
+        objectName: row.nameName
+        Layout.preferredWidth: row.nameWidth
         Layout.alignment: Qt.AlignTop
         Layout.topMargin: 3
         horizontalAlignment: Text.AlignRight

@@ -521,9 +521,16 @@ Item {
                         title: modelData.title
                         info: modelData.items.length > 1 ? String(modelData.items.length) : ""
                         Card {
+                            id: card
                             objectName: "overview-" + part.modelData.key
                             readonly property string text: part.modelData.text
                             padding: 10
+                            // The rows' names, in a column as wide as the longest of the card's
+                            readonly property real nameWidth: Math.ceil(part.modelData.items.reduce(
+                                (w, i) => i.rows.reduce((w, r) => Math.max(w, names.advanceWidth(r.name)), w), 0))
+                            FontMetrics {
+                                id: names
+                            }
                             Repeater {
                                 model: part.modelData.items
                                 delegate: ColumnLayout {
@@ -563,7 +570,10 @@ Item {
                                         model: item.modelData.rows
                                         delegate: FieldRow {
                                             required property var modelData
-                                            Layout.leftMargin: -40
+                                            required property int index
+                                            nameName: "overview-" + part.modelData.key + "-" + item.index + "-name-" + index
+                                            Layout.leftMargin: 12
+                                            nameWidth: card.nameWidth
                                             name: modelData.name
                                             value: modelData.value
                                             mono: modelData.mono !== false

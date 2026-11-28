@@ -199,7 +199,13 @@
         "call": [
           "org.freedesktop.portal.OpenURI.*@/org/freedesktop/portal/desktop",
           "org.freedesktop.portal.Notification.*@/org/freedesktop/portal/desktop"
-        ]
+        ],
+        "broadcast": [
+          "org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"
+        ],
+        "versions": {
+          "org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop": 1
+        }
       },
       "org.kde.StatusNotifierWatcher": {
         "call": [
