@@ -37,8 +37,14 @@ in
     description = ''
       Features: each bundles entries of `permissions` behind `enable`, with a `description` and a `note` that the
       Permissions window and the sandbox's environment doc (`/etc/claude/environment.md` for Claude Desktop) show
-      while it is on. The module's own, all off: `kvm`, `audio`, `tray`, `keep-awake` and `request-send`. Add your
-      own by name, with a body in `permissions`, written in the launcher's `permissions` options.
+      while it is on. The module's own, all off: `kvm`, `audio`, `gpu`, `tray`, `keep-awake` and `request-send`. Add
+      your own by name, with a body in `permissions`, written in the launcher's `permissions` options.
+
+      `gpu` widens the sandbox a lot. It binds `/dev/dri`, primary and render nodes, and where they exist NVIDIA's
+      `/dev/nvidiactl`, `/dev/nvidia0` and `/dev/nvidia-modeset`: the ioctl interfaces of the host's GPU drivers,
+      among the largest in the kernel, within reach of everything in the sandbox, so a driver bug is a way out.
+      Without it the app renders in software, with no WebGL. For less, leave it off and list the nodes you want in
+      `permissions.devices`.
     '';
   };
   # The features that are on, by name, as the window's overview and environment.md list them
@@ -59,6 +65,18 @@ in
         description = "/dev/kvm, for VMs and NixOS tests in the sandbox";
         note = "Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox.";
         permissions.devices."/dev/kvm" = { };
+      };
+      # nixpak's gpu, switched in core.nix: /dev/dri, the PCI devices in /sys and the host's graphics drivers at
+      # /run/opengl-driver. NVIDIA's driver needs its own nodes beside /dev/dri; bound if present, so a Mesa machine
+      # gets /dev/dri alone
+      gpu = {
+        description = "/dev/dri and the host's graphics drivers, and NVIDIA's device nodes where they exist";
+        note = "Exposes the ioctl interfaces of the host's GPU drivers: a driver bug is a way out of the sandbox.";
+        permissions.devices = {
+          "/dev/nvidiactl" = { };
+          "/dev/nvidia0" = { };
+          "/dev/nvidia-modeset" = { };
+        };
       };
       # Its sockets sit in $XDG_RUNTIME_DIR, which no bind names (a bind's source is a path as written, and that one
       # is known at launch alone), so core.nix has nixpak bind them and fhs.nix takes /etc/alsa: no body here

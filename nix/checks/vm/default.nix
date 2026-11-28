@@ -239,12 +239,6 @@ let
         # The store syncs copy the sandbox closure into alice's home, once per launcher
         diskSize = 12288;
       };
-      # No graphics stack in the sandbox closure the store syncs copy, a third of it with mesa's: the stub app draws
-      # nothing, and the module's graphics assertion still holds
-      hardware.graphics = {
-        package = pkgs.emptyDirectory;
-        extraPackages = lib.mkForce [ ];
-      };
       # The einat uplink the sandboxes leave through
       networking.defaultGateway = nodes.router.networking.primaryIPAddress;
       # Ahead of the default route QEMU's router advertisements give eth0

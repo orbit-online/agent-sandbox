@@ -45,7 +45,10 @@ and Paseo.
   `etc/` of its glibc), `environment.nix` (the environment doc at the app's `environmentPath`, and memo), `network.nix`,
   `store.nix`, `theme.nix`, `dbus.nix` (and the tray feature), `permissions.nix` with `permissions-broker.nix` and `permissions-checks.nix`,
   `features.nix` (`features.<name>`: an `enable`, a `description` and a `note`, and a body of `permissions`
-  definitions merged in while it is on; the module's `kvm`, `audio`, `tray`, `keep-awake` and `request-send`, all off;
+  definitions merged in while it is on; the module's `kvm`, `audio`, `gpu`, `tray`, `keep-awake` and `request-send`,
+  all off; `gpu` switches nixpak's `gpu` in `core.nix` (`/dev/dri`, the host's graphics drivers bundled at
+  `/run/opengl-driver`, among the store roots only then) and binds NVIDIA's nodes if present, and the
+  `hardware.graphics` assertion holds only while a launcher has it on;
   the ones that are on listed in the broker's overview and in `sandbox-environment.md`),
   `request-send.nix`, and `launch.nix` (the launcher, the app's unit, the `.desktop` file). Modules in
   `agent-sandbox.launcherModules` join them on every launcher of every app, for a plugin's own options. The app ID,
@@ -561,7 +564,8 @@ modules and a user alice (the `home-manager` input exists only for it).
   (and the default launcher doesn't), the NixOS wrapper appears only when a user
   enables the module, setgid `sandbox-uplink`, the units of the sandbox network likewise (with dhcpcd and NetworkManager off
   `sbx-*`, and `uplinks` reaching both units and the udev rule), the users-group, subid, kernel (6.6 refused) and
-  graphics assertions fire, the netns assertion fires when `sandbox`
+  graphics assertions fire (`testGraphicsAssertion`: with `gpu` on the default launcher or another, not with it off on
+  all), the netns assertion fires when `sandbox`
   overrides `bubblewrap.network` or `pasta`, the `nameservers` assertion on what isn't an IPv4 or IPv6 address (an
   octet past 255, a newline, a prefix length), a launcher with `permissions.network.enable` off (no `--net` for its bwrap, `network`
   false in its config, the default launcher with both) and its assertion on standing port grants, the filesystem MCP roots,
@@ -626,8 +630,9 @@ modules and a user alice (the `home-manager` input exists only for it).
   segment, a relative path) or through `/proc` or `/var/run` (`testBindSpellings`), the same on `permissions.devices`
   (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
   its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
-  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither; the features (`testFeatures`: the module's five, all off, and what `kvm`,
-  `audio`, `tray` and `keep-awake` each add while on, an entry a feature adds turned off like any other;
+  at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither; the features (`testFeatures`: the module's six, all off, and what `kvm`,
+  `audio`, `gpu` (nixpak's `gpu`, the drivers among the store roots, NVIDIA's nodes), `tray` and `keep-awake` each add
+  while on, an entry a feature adds turned off like any other;
   `testOwnFeatures`: a consumer's feature with an entry of every kind merged into the launcher it is on alone, a
   `mkForce` inside it kept, nothing of it while off, and the broker's overview listing the ones that are on;
   `testFeatureAssertions`: a feature that is on needs a name of letters, digits and `-`, a description, and both it
@@ -638,7 +643,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   `writeShellApplication` scripts check themselves while building) and checks
   its closure: the import of `environment.md` (in the closure, all
   sections, no markers) and of another `environmentFile`, the binds (with their `src`), the scratchpad,
-  the devices (`/dev/kvm` once, from the `kvm` feature and `permissions.devices`), the features that are on (`kvm` with its description and note; none for `work`) and PATH in `sandbox-environment.md`, the patched asar's tray
+  the devices (`/dev/kvm` and `/dev/nvidiactl` once each, from the `kvm` and `gpu` features and `permissions.devices`), the features that are on (`gpu` and `kvm` with their descriptions and notes; none for `work`) and PATH in `sandbox-environment.md`, the patched asar's tray
   icon (by the colour scheme, also on GNOME), the notification patch (on a
   4.x-shaped asar: the native backend never picked, an app with two such places
   refused), the channel hook (on a 4.23118-shaped asar: `channels.js` only with `mcpChannels`, hooked into the
@@ -647,8 +652,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   xdg-dbus-proxy in the closure) with the bus address, the socket, `--config` and `--filter` as its argv for
   both launchers, work's config the portal's rules alone and its overview the same, and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
-  default overridden by its sandbox path, the devices' dev binds, the scratchpad's dev bind after
-  the `/tmp` tmpfs, `/nix/store` bound after `/nix`), the launcher's
+  default overridden by its sandbox path, the devices' dev binds, `gpu`'s `/dev/dri` and the drivers at
+  `/run/opengl-driver`, the scratchpad's dev bind after
+  the `/tmp` tmpfs, `/nix/store` bound after `/nix`; for `work`, without `gpu`, no GPU node or drivers in its args or
+  closure), the launcher's
   `homeDirs` in its launcher config and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
   set the pid, and when it can (in a pid namespace of the check's own) the app at its pid with neither it nor
   `app-run.sh`, which waits for it, holding a capability, and the `files` in the FHS env's bwrap (a directory's

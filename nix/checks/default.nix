@@ -43,7 +43,9 @@ let
   enabled = {
     enable = true;
     features.kvm.enable = true;
-    # /dev/kvm again, bound once
+    # The default launcher alone; work goes without
+    features.gpu.enable = true;
+    # /dev/kvm and gpu's /dev/nvidiactl again, each bound once
     permissions.devices = {
       "/dev/nvidiactl" = { };
       "/dev/kvm" = { };
@@ -702,16 +704,35 @@ let
         "agent-sandbox: the sandbox network needs Linux 6.8 or later, this machine has ${pkgs.linuxPackages_6_6.kernel.version}."
       ];
     };
-    testGraphicsAssertion = {
-      expr = map (a: a.message) (
-        failedAssertions (
-          system.extendModules { modules = [ { hardware.graphics.enable = lib.mkForce false; } ]; }
-        )
-      );
-      expected = [
-        "agent-sandbox.claude-desktop: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server."
-      ];
-    };
+    # hardware.graphics only while a launcher has the gpu feature on, the default one or another
+    testGraphicsAssertion =
+      let
+        without =
+          cfg:
+          map (a: a.message) (
+            failedAssertions (
+              (nixos cfg).extendModules { modules = [ { hardware.graphics.enable = lib.mkForce false; } ]; }
+            )
+          );
+        message = "agent-sandbox.claude-desktop: the gpu feature uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
+      in
+      {
+        expr = {
+          default = without enabled;
+          work = without (
+            lib.recursiveUpdate enabled {
+              features.gpu.enable = false;
+              launchers.work.features.gpu.enable = true;
+            }
+          );
+          none = without (lib.recursiveUpdate enabled { features.gpu.enable = false; });
+        };
+        expected = {
+          default = [ message ];
+          work = [ message ];
+          none = [ ];
+        };
+      };
     testUsersGroupAssertion = {
       expr = map (a: a.message) (lib.filter (a: !a.assertion) ownGroup.config.assertions);
       expected = [
@@ -2666,8 +2687,9 @@ let
       ];
     };
     # The module's features, all off unless turned on, and what each adds while it is on: kvm its device, audio the
-    # two sockets and /etc/alsa, the tray its bus entries, keep-awake its two calls; and what the Permissions window
-    # and environment.md list of them. An entry a feature adds is turned off like any other
+    # two sockets and /etc/alsa, gpu nixpak's gpu, the drivers among the store roots and NVIDIA's nodes, the tray its
+    # bus entries, keep-awake its two calls; and what the Permissions window and environment.md list of them. An
+    # entry a feature adds is turned off like any other
     testFeatures =
       let
         of =
@@ -2680,10 +2702,12 @@ let
             on = map (f: f.name) c.build.features;
             inherit (c.build) devices;
             alsa = lib.elem "alsa" c.build.etcEntries;
+            gpu = nixpak.gpu.enable;
+            drivers = lib.any (p: lib.hasSuffix "-graphics-drivers" "${p}") c.build.storeRoots;
             sockets = lib.attrNames (lib.filterAttrs (_: v: v == true) nixpak.bubblewrap.sockets);
             bus = lib.attrNames c.permissions.bus;
           };
-        every = lib.genAttrs [ "audio" "keep-awake" "kvm" "tray" ] (_: {
+        every = lib.genAttrs [ "audio" "gpu" "keep-awake" "kvm" "tray" ] (_: {
           enable = true;
         });
       in
@@ -2700,6 +2724,7 @@ let
             enable = true;
             features = every;
             permissions.devices."/dev/kvm".enable = false;
+            permissions.devices."/dev/nvidia0".enable = false;
           };
           keepAwake =
             (nixos {
@@ -2710,6 +2735,7 @@ let
         expected = {
           names = [
             "audio"
+            "gpu"
             "keep-awake"
             "kvm"
             "request-send"
@@ -2719,18 +2745,28 @@ let
             on = [ ];
             devices = [ ];
             alsa = false;
+            gpu = false;
+            drivers = false;
             sockets = [ "wayland" ];
             bus = [ "org.freedesktop.portal.Desktop" ];
           };
           on = {
             on = [
               "audio"
+              "gpu"
               "keep-awake"
               "kvm"
               "tray"
             ];
-            devices = [ "/dev/kvm" ];
+            devices = [
+              "/dev/kvm"
+              "/dev/nvidia-modeset"
+              "/dev/nvidia0"
+              "/dev/nvidiactl"
+            ];
             alsa = true;
+            gpu = true;
+            drivers = true;
             sockets = [
               "pipewire"
               "pulse"
@@ -2746,12 +2782,18 @@ let
           overridden = {
             on = [
               "audio"
+              "gpu"
               "keep-awake"
               "kvm"
               "tray"
             ];
-            devices = [ ];
+            devices = [
+              "/dev/nvidia-modeset"
+              "/dev/nvidiactl"
+            ];
             alsa = true;
+            gpu = true;
+            drivers = true;
             sockets = [
               "pipewire"
               "pulse"
@@ -2837,6 +2879,11 @@ let
           sockets = [ ];
           grants = [ ];
         };
+        gpu = {
+          name = "gpu";
+          description = "/dev/dri and the host's graphics drivers, and NVIDIA's device nodes where they exist";
+          note = "Exposes the ioctl interfaces of the host's GPU drivers: a driver bug is a way out of the sandbox.";
+        };
         kvm = {
           name = "kvm";
           description = "/dev/kvm, for VMs and NixOS tests in the sandbox";
@@ -2852,6 +2899,7 @@ let
           on = {
             default = {
               features = [
+                gpu
                 kvm
                 {
                   name = "notes";
@@ -2872,7 +2920,10 @@ let
           };
           off = {
             default = none // {
-              features = [ kvm ];
+              features = [
+                gpu
+                kvm
+              ];
               projectRw = true;
             };
             work = none;
@@ -3171,11 +3222,15 @@ in
             '- `/dev/kvm` (dev, if present)' \
             '- `/dev/nvidiactl` (dev, if present)' \
             '## Features' \
+            '- `/dev/nvidia0` (dev, if present)' \
+            '- `gpu`: /dev/dri and the host'"'"'s graphics drivers, and NVIDIA'"'"'s device nodes where they exist. Exposes the ioctl interfaces of the host'"'"'s GPU drivers: a driver bug is a way out of the sandbox.' \
             '- `kvm`: /dev/kvm, for VMs and NixOS tests in the sandbox. Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox.' \
             '`/srv/bin`, then the packages'; do
             grep -qxF -- "$line" "$doc" || { echo "environment.md lacks: $line" >&2; exit 1; }
           done
-          (( $(grep -cF '`/dev/kvm`' "$doc") == 1 )) || { echo "environment.md lists /dev/kvm twice" >&2; exit 1; }
+          for d in /dev/kvm /dev/nvidiactl; do
+            (( $(grep -cF "\`$d\`" "$doc") == 1 )) || { echo "environment.md lists $d twice" >&2; exit 1; }
+          done
           ! grep -F /srv/hidden "$doc" || { echo "environment.md lists the non-MCP ro bind" >&2; exit 1; }
           grep -qE '^coreutils, .*, nix, systemd\.$' "$doc" || { echo "environment.md lacks the PATH packages" >&2; exit 1; }
 
@@ -3235,7 +3290,15 @@ in
           need --bind-try /srv/claude /home/alice/.claude
           need --dev-bind-try /dev/kvm /dev/kvm
           need --dev-bind-try /dev/nvidiactl /dev/nvidiactl
-          (( $(jq '[.[] | select(. == "/dev/kvm")] | length' "$args") == 2 )) || { echo "bwrap args bind /dev/kvm twice" >&2; exit 1; }
+          need --dev-bind-try /dev/nvidia0 /dev/nvidia0
+          need --dev-bind-try /dev/nvidia-modeset /dev/nvidia-modeset
+          for d in /dev/kvm /dev/nvidiactl; do
+            (( $(jq --arg d "$d" '[.[] | select(. == $d)] | length' "$args") == 2 )) || { echo "bwrap args bind $d twice" >&2; exit 1; }
+          done
+          # The gpu feature: nixpak's gpu, /dev/dri and the drivers at /run/opengl-driver
+          need --dev-bind-try /dev/dri /dev/dri
+          jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and ($a[. + 1] | type == "string" and endswith("-graphics-drivers")) and $a[. + 2] == "/run/opengl-driver")' \
+            "$args" >/dev/null || { echo "bwrap args lack the graphics drivers at /run/opengl-driver" >&2; exit 1; }
           # After the /tmp tmpfs, the uid filled in by nixpak's launcher
           has --tmpfs /tmp || { echo "bwrap args lack the /tmp tmpfs" >&2; exit 1; }
           jq -e '. as $a | (index("--tmpfs") + 1) as $t | any(range($t; length); $a[.:. + 3] == ["--dev-bind-try",
@@ -3353,6 +3416,10 @@ in
             jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and $a[. + 2] == "/run/permissions")' "$workArgs" >/dev/null ||
             { echo "work's bwrap args lack the read-only /run/permissions" >&2; exit 1; }
           ! jq -e 'any(.[]; . == "/run/permissions")' "$args" >/dev/null || { echo "the default launcher binds /run/permissions" >&2; exit 1; }
+          # Without the gpu feature: no /dev/dri, NVIDIA node or drivers, and no drivers in the closure
+          ! jq -e 'any(.[]; type == "string" and (. == "/dev/dri" or startswith("/dev/nvidia") or . == "/run/opengl-driver"))' "$workArgs" >/dev/null ||
+            { echo "work's bwrap args bind the GPU without the gpu feature" >&2; exit 1; }
+          ! grep -q -- '-graphics-drivers$' "$workClosure/store-paths" || { echo "work's closure has the graphics drivers" >&2; exit 1; }
           jq -e '.permissions.dir == "claude-desktop-work-permissions" and .permissions.unit == "claude-desktop-work-permissions"' "$wcfg" >/dev/null ||
             { echo "work's launcher config lacks the broker" >&2; exit 1; }
           pcfg=$(jq -r .permissions.config "$wcfg")
@@ -3381,7 +3448,7 @@ in
             and (.overview.dbus["org.freedesktop.portal.Desktop"] | (.call | length) == 5 and .broadcast == ["org.freedesktop.portal.Settings.SettingChanged@/org/freedesktop/portal/desktop"]
               and .versions == {"org.freedesktop.portal.FileChooser@/org/freedesktop/portal/desktop": 1} and (has("policy") | not))
             and any(.overview.implicit[]; . == "Sockets: Wayland")
-            and any(.overview.implicit[]; startswith("GPU: /dev/dri"))' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
+            and all(.overview.implicit[]; startswith("GPU") | not)' "$pcfg" >/dev/null || { echo "work's broker config: $(<"$pcfg")" >&2; exit 1; }
           # No live D-Bus layer: no proxy takes rules from the broker, and no system-bus proxy or /run/dbus
           for a in "$args" "$workArgs"; do
             ! jq -e 'any(.[]; . == "/run/dbus")' "$a" >/dev/null || { echo "$a binds /run/dbus" >&2; exit 1; }

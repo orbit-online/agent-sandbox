@@ -209,7 +209,7 @@ in
     # The directories <sandbox>-state works in for the launcher: the sandbox's home, and those the app adds (the bind
     # sources of directories it keeps in the home)
     build.homeDirs = lib.mkBefore [ ids.home ];
-    build.storeRoots = [ graphicsDrivers ];
+    build.storeRoots = lib.optional config.features.gpu.enable graphicsDrivers;
     build.state = sl.script "confine.sh" {
       name = "${ids.sandbox}-state";
       vars = {
@@ -265,8 +265,9 @@ in
               imports = [ config.sandbox ] ++ config.build.nixpak;
               flatpak.appId = ids.appId;
               app.package = config.build.app;
+              # The gpu feature (features.nix)
               gpu = {
-                enable = true;
+                inherit (config.features.gpu) enable;
                 # Not "nixos": /run/opengl-driver links into the system closure
                 provider = "bundle";
                 bundlePackage = graphicsDrivers;

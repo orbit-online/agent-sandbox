@@ -161,8 +161,9 @@ in
           message = "agent-sandbox: the app's name ${app.name} must match [a-z][a-z0-9-]* and be at most ${toString sl.sandboxNameMax} characters, as the names of its sandboxes start with it";
         }
         {
-          assertion = osConfig.hardware.graphics.enable;
-          message = "agent-sandbox.${app.name}: the sandbox uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
+          # The gpu feature bundles them (core.nix)
+          assertion = osConfig.hardware.graphics.enable || !lib.any (l: l.features.gpu.enable) launchers;
+          message = "agent-sandbox.${app.name}: the gpu feature uses the host's graphics drivers, but hardware.graphics.enable is off on this machine. Enable it there if this is a desktop; the module doesn't, so it never pulls a graphics stack onto a server.";
         }
       ]
       ++ (app.assertions or (_: [ ])) { inherit lib sl config; }

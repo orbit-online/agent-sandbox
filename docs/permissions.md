@@ -278,6 +278,7 @@ description and note in the overview of the window (`features` there, Overview) 
 |---|---|---|
 | `kvm` | `permissions.devices."/dev/kvm"` | Exposes the KVM interface of the host kernel: a KVM bug is a way out of the sandbox |
 | `audio` | The PipeWire and PulseAudio sockets, and `/etc/alsa`. The sockets sit in `$XDG_RUNTIME_DIR`, which no bind names, so the module binds them itself and the body is empty | Unmediated: microphone, camera and screen-cast streams included |
+| `gpu` | NVIDIA's `/dev/nvidiactl`, `/dev/nvidia0` and `/dev/nvidia-modeset` in `permissions.devices`, bound if present; the module adds nixpak's `gpu` itself: `/dev/dri`, the PCI devices in `/sys` and the host's graphics drivers at `/run/opengl-driver` | Exposes the ioctl interfaces of the host's GPU drivers: a driver bug is a way out of the sandbox |
 | `tray` | Two `permissions.bus` entries: the name of the tray item, to own, and the registration with the watcher | Closing the window then hides the app instead of quitting it |
 | `keep-awake` | `permissions.bus."org.freedesktop.PowerManagement"`: `Inhibit` and `UnInhibit` of its Inhibit interface, which the app calls to keep the machine awake while a session works | The cookie caveat, below |
 | `request-send` | The capabilities `request-send` and `request-send-write` in `permissions.commands`, for the origins in its own option, `features.request-send.origins` | Needs the broker |
@@ -1103,7 +1104,7 @@ it's present or missing:
   with `lo` alone;
 - `implicit`: a few lines on what the module adds: the sockets (Wayland, and PipeWire and PulseAudio with the `audio`
   feature),
-  the GPU, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
+  the GPU with the `gpu` feature, what's bound read-only from the Nix store (the closure, `/run/current-system/sw`, `/etc` entries,
   `files`), `/tmp` with the scratchpad, and `/run/permissions`.
 
 It carries no consent: nothing in it can be changed from the window. A config change and a rebuild change it.

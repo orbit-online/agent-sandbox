@@ -49,7 +49,6 @@ Import both modules and enable the Home Manager one per user:
 
   # In the NixOS configuration
   imports = [ inputs.agent-sandbox.nixosModules.agent-sandbox ];
-  hardware.graphics.enable = true;
   home-manager.sharedModules = [ inputs.agent-sandbox.homeModules.claude-desktop ];
   home-manager.users.alice.agent-sandbox.claude-desktop = {
     enable = true;
@@ -83,9 +82,18 @@ that order). On request, through the broker (see Permissions): `permissions.comm
 Features bundle such entries behind a switch: `features.<name>.enable`, with a `description` and a `note` that the
 Permissions window and the sandbox's `/etc/claude/environment.md` show while it is on, and a body in the same
 `permissions` options. The module's own, all off: `kvm` (`/dev/kvm`, for VMs and NixOS tests inside), `audio` (the
-PipeWire and PulseAudio sockets: microphone, camera and screen-cast streams included), `tray` (a tray icon; closing
-the window then hides the app), `keep-awake` (the app keeping the machine awake while a session works; on Plasma a
-process in the sandbox can then release the holds of other apps too) and `request-send` (below). Add your own:
+PipeWire and PulseAudio sockets: microphone, camera and screen-cast streams included), `gpu` (below), `tray` (a tray
+icon; closing the window then hides the app), `keep-awake` (the app keeping the machine awake while a session works; on
+Plasma a process in the sandbox can then release the holds of other apps too) and `request-send` (below).
+
+`gpu` gives the app the GPU: `/dev/dri`, the host's graphics drivers from `hardware.graphics` (which must be on) at
+`/run/opengl-driver`, and NVIDIA's `/dev/nvidiactl`, `/dev/nvidia0` and `/dev/nvidia-modeset` where they exist,
+which its driver needs beside `/dev/dri`. That is a big widening: the GPU drivers' ioctl interfaces, among the largest
+in the kernel, are then in reach of everything in the sandbox, and a driver bug is a way out. Without it the app
+renders in software, with no WebGL (Paseo's terminal then falls back to a renderer that draws in its UI font). For
+less, leave it off and list the nodes you want in `permissions.devices`.
+
+Add your own:
 
 ```nix
 agent-sandbox.claude-desktop.features.notes = {
