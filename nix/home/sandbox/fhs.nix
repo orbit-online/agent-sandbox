@@ -49,7 +49,12 @@ let
       "ssl/certs"
       "pki"
     ]
-    ++ lib.optional config.features.audio.enable "alsa";
+    ++ lib.optional config.features.audio.enable "alsa"
+    # NVIDIA's EGL looks for its external platforms (egl-wayland, egl-gbm, xcb, xlib) in
+    # /etc/egl/egl_external_platform.d alone, which nixpkgs' nvidia module links to
+    # /run/opengl-driver/share/egl/egl_external_platform.d/. Bound as the directory egl, so that link resolves in the
+    # sandbox, to the drivers the gpu feature bundles there, never to the host's system closure
+    ++ lib.optional config.features.gpu.enable "egl";
   # Those NixOS generates, linked as in /etc/static (a source in /etc links within the tree, localtime to zoneinfo).
   # Bound from here, as the host's /etc binds the generation's store paths, which a host GC empties under a running
   # sandbox

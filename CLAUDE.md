@@ -47,7 +47,9 @@ and Paseo.
   `features.nix` (`features.<name>`: an `enable`, a `description` and a `note`, and a body of `permissions`
   definitions merged in while it is on; the module's `kvm`, `audio`, `gpu`, `cuda`, `tray`, `keep-awake` and
   `request-send`, all off; `gpu` switches nixpak's `gpu` in `core.nix` (`/dev/dri`, the host's graphics drivers
-  bundled at `/run/opengl-driver`, among the store roots only then) and binds NVIDIA's nodes if present, and the
+  bundled at `/run/opengl-driver`, among the store roots only then) and binds NVIDIA's nodes if present, `fhs.nix` takes
+  the host's `/etc/egl` (nixpkgs' nvidia module links `egl_external_platform.d` there into `/run/opengl-driver`, so
+  it resolves to the bundled drivers; NVIDIA's EGL looks for its Wayland, GBM and X11 platforms there alone), and the
   `hardware.graphics` assertion holds only while a launcher has it on; `cuda` binds `/dev/nvidia-uvm` if present and
   needs `gpu`, asserted;
   the ones that are on listed in the broker's overview and in `sandbox-environment.md`),
@@ -633,7 +635,7 @@ modules and a user alice (the `home-manager` input exists only for it).
   (`testStateDevices`), and on binds and devices whose source lies beneath a read-write bind's, the sandbox's home or
   its scratchpad (`testNestedBinds`: bwrap follows a link the sandbox put at a source; fine beneath a read-only bind,
   at the same source, beneath a disabled or another launcher's bind), a device that is off checked in neither; the features (`testFeatures`: the module's seven, all off, and what `kvm`,
-  `audio`, `gpu` (nixpak's `gpu`, the drivers among the store roots, NVIDIA's nodes), `cuda` (`/dev/nvidia-uvm`), `tray` and `keep-awake` each add
+  `audio`, `gpu` (nixpak's `gpu`, the drivers among the store roots, NVIDIA's nodes, `/etc/egl` bound), `cuda` (`/dev/nvidia-uvm`), `tray` and `keep-awake` each add
   while on, an entry a feature adds turned off like any other;
   `testOwnFeatures`: a consumer's feature with an entry of every kind merged into the launcher it is on alone, a
   `mkForce` inside it kept, nothing of it while off, and the broker's overview listing the ones that are on;
@@ -654,9 +656,10 @@ modules and a user alice (the `home-manager` input exists only for it).
   xdg-dbus-proxy in the closure) with the bus address, the socket, `--config` and `--filter` as its argv for
   both launchers, work's config the portal's rules alone and its overview the same, and nixpak's
   `bwrap-args.json` (own netns, no `--share-net`, the binds, a module
-  default overridden by its sandbox path, the devices' dev binds, `gpu`'s `/dev/dri` and the drivers at
-  `/run/opengl-driver`, the scratchpad's dev bind after
-  the `/tmp` tmpfs, `/nix/store` bound after `/nix`; for `work`, without `gpu`, no GPU node or drivers in its args or
+  default overridden by its sandbox path, the devices' dev binds, `gpu`'s `/dev/dri`, the drivers at
+  `/run/opengl-driver` and `/etc/egl` from the store with its link into them (the test system has the nvidia
+  module's entry), the scratchpad's dev bind after
+  the `/tmp` tmpfs, `/nix/store` bound after `/nix`; for `work`, without `gpu`, no GPU node, drivers or `/etc/egl` in its args or
   closure), the launcher's
   `homeDirs` in its launcher config and its state script's paths, `app-pid.sh` dropping ambient capabilities when it can't
   set the pid, and when it can (in a pid namespace of the check's own) the app at its pid with neither it nor

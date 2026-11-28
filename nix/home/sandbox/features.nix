@@ -71,8 +71,8 @@ in
         permissions.devices."/dev/kvm" = { };
       };
       # nixpak's gpu, switched in core.nix: /dev/dri, the PCI devices in /sys and the host's graphics drivers at
-      # /run/opengl-driver. NVIDIA's driver needs its own nodes beside /dev/dri; bound if present, so a Mesa machine
-      # gets /dev/dri alone
+      # /run/opengl-driver, and fhs.nix the host's /etc/egl (NVIDIA's EGL external platforms). NVIDIA's driver needs its
+      # own nodes beside /dev/dri; bound if present, so a Mesa machine gets /dev/dri alone
       gpu = {
         description = "/dev/dri and the host's graphics drivers, and NVIDIA's device nodes where they exist";
         note = "Exposes the ioctl interfaces of the host's GPU drivers: a driver bug is a way out of the sandbox.";

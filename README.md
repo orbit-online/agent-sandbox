@@ -87,8 +87,9 @@ icon; closing the window then hides the app), `keep-awake` (the app keeping the 
 Plasma a process in the sandbox can then release the holds of other apps too) and `request-send` (below).
 
 `gpu` gives the app the GPU: `/dev/dri`, the host's graphics drivers from `hardware.graphics` (which must be on) at
-`/run/opengl-driver`, and NVIDIA's `/dev/nvidiactl`, `/dev/nvidia0` and `/dev/nvidia-modeset` where they exist,
-which its driver needs beside `/dev/dri`. That is a big widening: the GPU drivers' ioctl interfaces, among the largest
+`/run/opengl-driver`, NVIDIA's `/dev/nvidiactl`, `/dev/nvidia0` and `/dev/nvidia-modeset` where they exist,
+which its driver needs beside `/dev/dri`, and the host's `/etc/egl`, where NVIDIA's EGL finds its Wayland, GBM and X11
+platforms (nixpkgs' nvidia module links `/etc/egl/egl_external_platform.d` into `/run/opengl-driver`). That is a big widening: the GPU drivers' ioctl interfaces, among the largest
 in the kernel, are then in reach of everything in the sandbox, and a driver bug is a way out. Without it the app
 renders in software, with no WebGL (Paseo's terminal then falls back to a renderer that draws in its UI font). For
 less, leave it off and list the nodes you want in `permissions.devices`.

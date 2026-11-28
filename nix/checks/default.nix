@@ -33,6 +33,9 @@ let
         (aliceModule cfg)
         {
           boot.loader.grub.enable = false;
+          # As nixpkgs' nvidia module links it, which the gpu feature takes into the sandbox's /etc. Not in aliceModule,
+          # which the VM test's workstation shares: no launcher there has gpu on
+          environment.etc."egl/egl_external_platform.d".source = "/run/opengl-driver/share/egl/egl_external_platform.d/";
           fileSystems."/" = {
             device = "none";
             fsType = "tmpfs";
@@ -2712,8 +2715,8 @@ let
       ];
     };
     # The module's features, all off unless turned on, and what each adds while it is on: kvm its device, audio the
-    # two sockets and /etc/alsa, gpu nixpak's gpu, the drivers among the store roots and NVIDIA's nodes, cuda
-    # /dev/nvidia-uvm, the tray its bus entries, keep-awake its two calls; and what the Permissions window and
+    # two sockets and /etc/alsa, gpu nixpak's gpu, the drivers among the store roots, NVIDIA's nodes and /etc/egl,
+    # cuda /dev/nvidia-uvm, the tray its bus entries, keep-awake its two calls; and what the Permissions window and
     # environment.md list of them. An entry a feature adds is turned off like any other
     testFeatures =
       let
@@ -2727,6 +2730,7 @@ let
             on = map (f: f.name) c.build.features;
             inherit (c.build) devices;
             alsa = lib.elem "alsa" c.build.etcEntries;
+            egl = lib.any (b: lib.isList b && lib.elemAt b 1 == "/etc/egl") nixpak.bubblewrap.bind.ro;
             gpu = nixpak.gpu.enable;
             drivers = lib.any (p: lib.hasSuffix "-graphics-drivers" "${p}") c.build.storeRoots;
             sockets = lib.attrNames (lib.filterAttrs (_: v: v == true) nixpak.bubblewrap.sockets);
@@ -2771,6 +2775,7 @@ let
             on = [ ];
             devices = [ ];
             alsa = false;
+            egl = false;
             gpu = false;
             drivers = false;
             sockets = [ "wayland" ];
@@ -2793,6 +2798,7 @@ let
               "/dev/nvidiactl"
             ];
             alsa = true;
+            egl = true;
             gpu = true;
             drivers = true;
             sockets = [
@@ -2822,6 +2828,7 @@ let
               "/dev/nvidiactl"
             ];
             alsa = true;
+            egl = true;
             gpu = true;
             drivers = true;
             sockets = [
@@ -3329,6 +3336,11 @@ in
           need --dev-bind-try /dev/dri /dev/dri
           jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and ($a[. + 1] | type == "string" and endswith("-graphics-drivers")) and $a[. + 2] == "/run/opengl-driver")' \
             "$args" >/dev/null || { echo "bwrap args lack the graphics drivers at /run/opengl-driver" >&2; exit 1; }
+          # and the host's /etc/egl, whose link to NVIDIA's external platforms resolves to those drivers in the sandbox
+          egl=$(jq -r '. as $a | range(length) | select($a[.] == "--ro-bind-try" and $a[. + 2] == "/etc/egl") | $a[. + 1]' "$args")
+          [[ $egl == /nix/store/*-etc/egl ]] || { echo "bwrap args lack /etc/egl from the store: $egl" >&2; exit 1; }
+          [[ $(readlink "$egl/egl_external_platform.d") == /run/opengl-driver/share/egl/egl_external_platform.d/ ]] ||
+            { echo "$egl/egl_external_platform.d doesn't link to /run/opengl-driver" >&2; exit 1; }
           # After the /tmp tmpfs, the uid filled in by nixpak's launcher
           has --tmpfs /tmp || { echo "bwrap args lack the /tmp tmpfs" >&2; exit 1; }
           jq -e '. as $a | (index("--tmpfs") + 1) as $t | any(range($t; length); $a[.:. + 3] == ["--dev-bind-try",
@@ -3446,8 +3458,8 @@ in
             jq -e '. as $a | any(range(length); $a[.] == "--ro-bind-try" and $a[. + 2] == "/run/permissions")' "$workArgs" >/dev/null ||
             { echo "work's bwrap args lack the read-only /run/permissions" >&2; exit 1; }
           ! jq -e 'any(.[]; . == "/run/permissions")' "$args" >/dev/null || { echo "the default launcher binds /run/permissions" >&2; exit 1; }
-          # Without the gpu feature: no /dev/dri, NVIDIA node or drivers, and no drivers in the closure
-          ! jq -e 'any(.[]; type == "string" and (. == "/dev/dri" or startswith("/dev/nvidia") or . == "/run/opengl-driver"))' "$workArgs" >/dev/null ||
+          # Without the gpu feature: no /dev/dri, NVIDIA node, drivers or /etc/egl, and no drivers in the closure
+          ! jq -e 'any(.[]; type == "string" and (. == "/dev/dri" or startswith("/dev/nvidia") or . == "/run/opengl-driver" or . == "/etc/egl"))' "$workArgs" >/dev/null ||
             { echo "work's bwrap args bind the GPU without the gpu feature" >&2; exit 1; }
           ! grep -q -- '-graphics-drivers$' "$workClosure/store-paths" || { echo "work's closure has the graphics drivers" >&2; exit 1; }
           jq -e '.permissions.dir == "claude-desktop-work-permissions" and .permissions.unit == "claude-desktop-work-permissions"' "$wcfg" >/dev/null ||
